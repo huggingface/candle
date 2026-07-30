@@ -255,70 +255,7 @@ fn simple_eval_(
         let tensor = get_tensor(t, t.name.as_str())?;
         values.insert(t.name.to_string(), tensor);
     }
-    for input in graph.input.iter() {
-        let input_type = match &input.r#type {
-            Some(input_type) => input_type,
-            None => continue,
-        };
-        let input_type = match &input_type.value {
-            Some(input_type) => input_type,
-            None => continue,
-        };
-        let tensor_type = match input_type {
-            onnx::type_proto::Value::TensorType(tt) => tt,
-            _ => continue,
-        };
-
-        let tensor = match values.get(&input.name) {
-            None => bail!("missing input {}", input.name),
-            Some(tensor) => tensor,
-        };
-        let dt = match DataType::try_from(tensor_type.elem_type) {
-            Ok(dt) => match dtype(dt) {
-                Some(dt) => dt,
-                None => {
-                    bail!("unsupported 'value' data-type {dt:?} for {}", input.name)
-                }
-            },
-            type_ => bail!("unsupported input type {type_:?}"),
-        };
-        match &tensor_type.shape {
-            None => continue,
-            Some(shape) => {
-                if shape.dim.len() != tensor.rank() {
-                    bail!(
-                        "unexpected rank for {}, got {:?}, expected {:?}",
-                        input.name,
-                        shape.dim,
-                        tensor.shape()
-                    )
-                }
-                for (idx, (d, &dim)) in shape.dim.iter().zip(tensor.dims().iter()).enumerate() {
-                    match &d.value {
-                        Some(onnx::tensor_shape_proto::dimension::Value::DimValue(v)) => {
-                            if *v as usize != dim {
-                                bail!(
-                                    "unexpected dim {idx} for {}, got {:?}, expected {:?}",
-                                    input.name,
-                                    shape.dim,
-                                    tensor.shape()
-                                )
-                            }
-                        }
-                        // We do not check equality constraints for the DimParam dimensions for now.
-                        Some(onnx::tensor_shape_proto::dimension::Value::DimParam(_)) | None => (),
-                    }
-                }
-            }
-        };
-        if dt != tensor.dtype() {
-            bail!(
-                "unexpected dtype for {}, got {:?}, expected {dt:?}",
-                input.name,
-                tensor.dtype()
-            )
-        }
-    }
+    validate_inputs(graph, values)?;
     // The nodes are topologically sorted so we can just process them in order.
     for node in graph.node.iter() {
         let get = |input_name: &str| match values.get(input_name) {
@@ -2558,6 +2495,63 @@ fn simple_eval_(
             Some(value) => Ok((output.name.clone(), value)),
         })
         .collect()
+}
+
+fn validate_inputs(graph: &onnx::GraphProto, values: &HashMap<String, Value>) -> Result<()> {
+    for input in &graph.input {
+        let Some(input_type) = &input.r#type else { continue };
+        let Some(input_type) = &input_type.value else { continue };
+        let onnx::type_proto::Value::TensorType(tensor_type) = input_type else { continue };
+
+        let Some(tensor) = values.get(&input.name) else { bail!("missing input {}", input.name) };
+        let dt = match DataType::try_from(tensor_type.elem_type) {
+            Ok(dt) => match dtype(dt) {
+                Some(dt) => dt,
+                None => {
+                    bail!("unsupported 'value' data-type {dt:?} for {}", input.name)
+                }
+            },
+            type_ => bail!("unsupported input type {type_:?}"),
+        };
+        match &tensor_type.shape {
+            None => continue,
+            Some(shape) => {
+                if shape.dim.len() != tensor.rank() {
+                    bail!(
+                        "unexpected rank for {}, got {:?}, expected {:?}",
+                        input.name,
+                        shape.dim,
+                        tensor.shape()
+                    )
+                }
+                for (idx, (d, &dim)) in shape.dim.iter().zip(tensor.dims().iter()).enumerate() {
+                    match &d.value {
+                        Some(onnx::tensor_shape_proto::dimension::Value::DimValue(v)) => {
+                            if *v as usize != dim {
+                                bail!(
+                                    "unexpected dim {idx} for {}, got {:?}, expected {:?}",
+                                    input.name,
+                                    shape.dim,
+                                    tensor.shape()
+                                )
+                            }
+                        }
+                        // We do not check equality constraints for the DimParam dimensions for now.
+                        Some(onnx::tensor_shape_proto::dimension::Value::DimParam(_)) | None => (),
+                    }
+                }
+            }
+        }
+        if dt != tensor.dtype() {
+            bail!(
+                "unexpected dtype for {}, got {:?}, expected {dt:?}",
+                input.name,
+                tensor.dtype()
+            )
+        }
+    }
+
+    Ok(())
 }
 
 fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Result<Vec<usize>> {
