@@ -35,7 +35,7 @@ class Encoder {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID + useWgpu] = await new ModelEncoder(
+      this.instance[modelID + useWgpu] = await ModelEncoder.load(
         weightsArrayU8,
         tokenizerArrayU8,
         configArrayU8,

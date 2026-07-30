@@ -22,7 +22,6 @@ pub struct ModelConditionalGeneration {
 
 #[wasm_bindgen]
 impl ModelConditionalGeneration {
-    #[wasm_bindgen(constructor)]
     pub async fn load(
         weights: Vec<u8>,
         tokenizer: Vec<u8>,
@@ -124,7 +123,6 @@ impl ModelConditionalGeneration {
 
 #[wasm_bindgen]
 impl ModelEncoder {
-    #[wasm_bindgen(constructor)]
     pub async fn load(
         weights: Vec<u8>,
         tokenizer: Vec<u8>,

@@ -52,7 +52,7 @@ class Moondream {
         fetchArrayBuffer(tokenizerURL),
       ]);
 
-      this.instance[modelID + useWgpu] = await new Model(
+      this.instance[modelID + useWgpu] = await Model.load(
         weightsArrayU8,
         tokenizerArrayU8,
         quantized,

@@ -14,7 +14,6 @@ pub struct Model {
 
 #[wasm_bindgen]
 impl Model {
-    #[wasm_bindgen(constructor)]
     pub async fn load(weights: Vec<u8>, tokenizer: Vec<u8>, config: Vec<u8>, use_wgpu : bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");

@@ -20,7 +20,6 @@ pub struct Model {
 
 #[wasm_bindgen]
 impl Model {
-    #[wasm_bindgen(constructor)]
     pub async fn new(weights: Vec<u8>, use_tiny: bool, use_wgpu : bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         let device = match use_wgpu{

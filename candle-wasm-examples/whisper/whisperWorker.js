@@ -47,7 +47,7 @@ class Whisper {
         fetchArrayBuffer(mel_filtersURL),
         fetchArrayBuffer(configURL),
       ]);
-      this.instance[modelID + useWgpu] = await new Decoder(
+      this.instance[modelID + useWgpu] = await Decoder.new(
         weightsArrayU8,
         tokenizerArrayU8,
         mel_filtersArrayU8,

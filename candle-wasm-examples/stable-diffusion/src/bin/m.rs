@@ -423,7 +423,6 @@ async fn text_embeddings(
 
 #[wasm_bindgen]
 impl Model {
-    #[wasm_bindgen(constructor)]
     pub async fn load(config: String) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         wasm_logger::init(wasm_logger::Config::new(log::Level::Info).message_on_new_line());

@@ -37,7 +37,7 @@ class ConditionalGeneration {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID + useWgpu] = await new ModelConditionalGeneration(
+      this.instance[modelID + useWgpu] = await ModelConditionalGeneration.load(
         weightsArrayU8,
         tokenizerArrayU8,
         configArrayU8,

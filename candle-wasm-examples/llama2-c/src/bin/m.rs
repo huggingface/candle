@@ -45,7 +45,6 @@ impl Model {
 
 #[wasm_bindgen]
 impl Model {
-    #[wasm_bindgen(constructor)]
     pub async fn new(weights: Vec<u8>, tokenizer: Vec<u8>, use_wgpu : bool) -> Result<Model, JsError> {
         log::info!("create Model, wgpu: {use_wgpu}");
         let device = match use_wgpu{

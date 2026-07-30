@@ -8,7 +8,6 @@ pub struct Decoder {
 
 #[wasm_bindgen]
 impl Decoder {
-    #[wasm_bindgen(constructor)]
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         weights: Vec<u8>,

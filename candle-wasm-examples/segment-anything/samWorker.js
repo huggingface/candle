@@ -31,7 +31,7 @@ class SAMModel {
         message: `Loading Model ${modelID}`,
       });
       const weightsArrayU8 = await fetchArrayBuffer(modelURL);
-      this.instance[modelID + useWgpu] = await new Model(
+      this.instance[modelID + useWgpu] = await Model.new(
         weightsArrayU8,
         /tiny|mobile/.test(modelID),
         useWgpu

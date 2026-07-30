@@ -33,7 +33,6 @@ pub struct ModelName {
 
 #[wasm_bindgen]
 impl Model {
-    #[wasm_bindgen(constructor)]
     pub async fn load(
         weights: Vec<u8>,
         tokenizer: Vec<u8>,

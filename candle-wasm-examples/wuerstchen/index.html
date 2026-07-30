@@ -74,7 +74,7 @@
 
         if(model == null){
           updateStatus("loading");
-          model = await new Model(
+          model = await Model.load(
             JSON.stringify(
               {use_gpu : true, 
               buffer_cached_max_allowed_size : 1024*1024*1024*8, 

@@ -28,7 +28,7 @@ class Llama2C {
         fetchArrayBuffer(tokenizerURL),
       ]);
 
-      this.instance[modelID + useWgpu] = new Model(weightsArrayU8, tokenizerArrayU8, useWgpu);
+      this.instance[modelID + useWgpu] = await Model.new(weightsArrayU8, tokenizerArrayU8, useWgpu);
     }
     return this.instance[modelID + useWgpu];
   }

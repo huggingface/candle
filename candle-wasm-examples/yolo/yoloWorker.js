@@ -27,9 +27,9 @@ class Yolo {
       const weightsArrayU8 = await fetchArrayBuffer(modelURL);
       if (/pose/.test(modelID)) {
         // if pose model, use ModelPose
-        this.instance[modelID + useWgpu] = await new ModelPose(weightsArrayU8, modelSize, useWgpu);
+        this.instance[modelID + useWgpu] = await ModelPose.new(weightsArrayU8, modelSize, useWgpu);
       } else {
-        this.instance[modelID + useWgpu] = await new Model(weightsArrayU8, modelSize, useWgpu);
+        this.instance[modelID + useWgpu] = await Model.new(weightsArrayU8, modelSize, useWgpu);
       }
     } else {
       self.postMessage({ status: "model already loaded" });
