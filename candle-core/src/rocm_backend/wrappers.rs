@@ -13,6 +13,20 @@ impl<T> SendSyncDeviceMemory<T> {
     pub fn new(len: usize) -> Result<Self, rocm_rs::hip::error::Error> {
         Ok(Self(DeviceMemory::new(len)?))
     }
+
+    /// Device pointer to element `offset`.
+    ///
+    /// `DeviceMemory::as_ptr` hands back a `*mut c_void`, so arithmetic on it
+    /// advances *bytes*. Every offset candle deals in — `Layout::start_offset`
+    /// above all — counts *elements*, so it has to be scaled by the element
+    /// size. Doing this by hand at each call site silently mis-addresses every
+    /// tensor whose dtype is wider than a byte.
+    ///
+    /// # Safety
+    /// `offset` must be within the allocation.
+    pub unsafe fn ptr_at(&self, offset: usize) -> *mut std::ffi::c_void {
+        self.0.as_ptr().add(offset * std::mem::size_of::<T>())
+    }
 }
 
 impl<T> Deref for SendSyncDeviceMemory<T> {

@@ -400,29 +400,29 @@ macro_rules! dispatch_miopen_conv {
         let device = $device.clone();
         let slice = match (&$self.slice, &$kernel.slice) {
             (RocmStorageSlice::F32(s), RocmStorageSlice::F32(w)) => {
-                let x_ptr = unsafe { s.as_ptr().add($l.start_offset()) } as *mut _;
-                let w_ptr = unsafe { w.as_ptr().add($kernel_l.start_offset()) } as *mut _;
+                let x_ptr = unsafe { s.ptr_at($l.start_offset()) } as *mut _;
+                let w_ptr = unsafe { w.ptr_at($kernel_l.start_offset()) } as *mut _;
                 let o = device.alloc_zeros::<f32>($dst_el)?;
                 $func::<f32>($handle, x_ptr, w_ptr, o.as_ptr() as *mut _, $($arg),*)?;
                 RocmStorageSlice::F32(o)
             }
             (RocmStorageSlice::F16(s), RocmStorageSlice::F16(w)) => {
-                let x_ptr = unsafe { s.as_ptr().add($l.start_offset()) } as *mut _;
-                let w_ptr = unsafe { w.as_ptr().add($kernel_l.start_offset()) } as *mut _;
+                let x_ptr = unsafe { s.ptr_at($l.start_offset()) } as *mut _;
+                let w_ptr = unsafe { w.ptr_at($kernel_l.start_offset()) } as *mut _;
                 let o = device.alloc_zeros::<f16>($dst_el)?;
                 $func::<f16>($handle, x_ptr, w_ptr, o.as_ptr() as *mut _, $($arg),*)?;
                 RocmStorageSlice::F16(o)
             }
             (RocmStorageSlice::BF16(s), RocmStorageSlice::BF16(w)) => {
-                let x_ptr = unsafe { s.as_ptr().add($l.start_offset()) } as *mut _;
-                let w_ptr = unsafe { w.as_ptr().add($kernel_l.start_offset()) } as *mut _;
+                let x_ptr = unsafe { s.ptr_at($l.start_offset()) } as *mut _;
+                let w_ptr = unsafe { w.ptr_at($kernel_l.start_offset()) } as *mut _;
                 let o = device.alloc_zeros::<bf16>($dst_el)?;
                 $func::<bf16>($handle, x_ptr, w_ptr, o.as_ptr() as *mut _, $($arg),*)?;
                 RocmStorageSlice::BF16(o)
             }
             (RocmStorageSlice::F64(s), RocmStorageSlice::F64(w)) => {
-                let x_ptr = unsafe { s.as_ptr().add($l.start_offset()) } as *mut _;
-                let w_ptr = unsafe { w.as_ptr().add($kernel_l.start_offset()) } as *mut _;
+                let x_ptr = unsafe { s.ptr_at($l.start_offset()) } as *mut _;
+                let w_ptr = unsafe { w.ptr_at($kernel_l.start_offset()) } as *mut _;
                 let o = device.alloc_zeros::<f64>($dst_el)?;
                 $func::<f64>($handle, x_ptr, w_ptr, o.as_ptr() as *mut _, $($arg),*)?;
                 RocmStorageSlice::F64(o)
@@ -665,7 +665,7 @@ impl<U: crate::op::UnaryOpT> Map1 for U {
         let (grid, block) = launch_config(elem_count);
 
         unsafe {
-            let src_ptr = src.as_ptr().add(layout.start_offset());
+            let src_ptr = src.ptr_at(layout.start_offset());
             let out_ptr = output.as_ptr();
             let ds_ptr: *const usize = ds
                 .as_ref()
@@ -711,8 +711,8 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
         let (grid, block) = launch_config(elem_count);
 
         unsafe {
-            let lhs_ptr = lhs.as_ptr().add(lhs_l.start_offset());
-            let rhs_ptr = rhs.as_ptr().add(rhs_l.start_offset());
+            let lhs_ptr = lhs.ptr_at(lhs_l.start_offset());
+            let rhs_ptr = rhs.ptr_at(rhs_l.start_offset());
             let out_ptr = output.as_ptr();
             let ds_ptr: *const usize = ds
                 .as_ref()
@@ -780,7 +780,7 @@ impl Affine {
         let add_val = T::from_f64(self.1);
 
         unsafe {
-            let src_ptr = src.as_ptr().add(layout.start_offset());
+            let src_ptr = src.ptr_at(layout.start_offset());
             let out_ptr = output.as_ptr();
             let ds_ptr: *const usize = ds
                 .as_ref()
@@ -848,7 +848,7 @@ impl Powf {
         let scalar_val = T::from_f64(self.0);
 
         unsafe {
-            let src_ptr = src.as_ptr().add(layout.start_offset());
+            let src_ptr = src.ptr_at(layout.start_offset());
             let out_ptr = output.as_ptr();
             let ds_ptr: *const usize = ds
                 .as_ref()
@@ -865,9 +865,11 @@ impl Powf {
                     &elem_count as *const usize as *mut std::ffi::c_void,
                     &dims.len() as *const usize as *mut std::ffi::c_void,
                     (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
+                    // UNARY_OP1 takes its scalar before the buffers, unlike
+                    // AFFINE_OP which takes them after.
+                    &scalar_val as *const T as *mut std::ffi::c_void,
                     (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
                     (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    &scalar_val as *const T as *mut std::ffi::c_void,
                 ],
             )?;
         }
@@ -915,7 +917,7 @@ impl Elu {
         let alpha_val = T::from_f64(self.0);
 
         unsafe {
-            let src_ptr = src.as_ptr().add(layout.start_offset());
+            let src_ptr = src.ptr_at(layout.start_offset());
             let out_ptr = output.as_ptr();
             let ds_ptr: *const usize = ds
                 .as_ref()
@@ -932,9 +934,11 @@ impl Elu {
                     &elem_count as *const usize as *mut std::ffi::c_void,
                     &dims.len() as *const usize as *mut std::ffi::c_void,
                     (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
+                    // UNARY_OP1 takes its scalar before the buffers, unlike
+                    // AFFINE_OP which takes them after.
+                    &alpha_val as *const T as *mut std::ffi::c_void,
                     (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
                     (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    &alpha_val as *const T as *mut std::ffi::c_void,
                 ],
             )?;
         }
@@ -1039,7 +1043,7 @@ impl FastReduce<'_> {
         let block = rocm_rs::hip::Dim3::from(block_dim as u32);
 
         unsafe {
-            let src_ptr = src.as_ptr().add(layout.start_offset());
+            let src_ptr = src.ptr_at(layout.start_offset());
             let out_ptr = output.as_ptr();
             let ds_ptr = ds.as_ptr() as *const usize;
 
@@ -1599,11 +1603,11 @@ impl BackendStorage for RocmStorage {
         };
 
         let (ids_prefix, ids_ptr) = match &idx.slice {
-            RocmStorageSlice::U32(s) => ("is_u32", unsafe { s.as_ptr().add(ids_l.start_offset()) }
+            RocmStorageSlice::U32(s) => ("is_u32", unsafe { s.ptr_at(ids_l.start_offset()) }
                 as *mut std::ffi::c_void),
-            RocmStorageSlice::U8(s) => ("is_u8", unsafe { s.as_ptr().add(ids_l.start_offset()) }
+            RocmStorageSlice::U8(s) => ("is_u8", unsafe { s.ptr_at(ids_l.start_offset()) }
                 as *mut std::ffi::c_void),
-            RocmStorageSlice::I64(s) => ("is_i64", unsafe { s.as_ptr().add(ids_l.start_offset()) }
+            RocmStorageSlice::I64(s) => ("is_i64", unsafe { s.ptr_at(ids_l.start_offset()) }
                 as *mut std::ffi::c_void),
             _ => crate::bail!("index_select ids should be u8, u32, or i64"),
         };
@@ -1817,8 +1821,8 @@ impl BackendStorage for RocmStorage {
                 let func_name = format!("ucopy_{}", $suffix);
                 let (src_ptr, dst_ptr) = unsafe {
                     (
-                        src_mem.as_ptr().add(src_l.start_offset()),
-                        dst_mem.as_ptr().add(dst_offset),
+                        src_mem.ptr_at(src_l.start_offset()),
+                        dst_mem.ptr_at(dst_offset),
                     )
                 };
                 let ds_ptr: *const usize = ds
@@ -1930,7 +1934,7 @@ impl BackendStorage for RocmStorage {
                     _ => crate::bail!("dtype mismatch in const_set"),
                 };
                 let func_name = format!("const_set_{}", $suffix);
-                let out_ptr = unsafe { mem.as_ptr().add(layout.start_offset()) };
+                let out_ptr = unsafe { mem.ptr_at(layout.start_offset()) };
                 let scalar_val: $ty = $val;
                 let ds_ptr: *const usize = ds
                     .as_ref()
