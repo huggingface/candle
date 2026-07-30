@@ -1782,55 +1782,130 @@ fn zero_dim(device: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(zeros, zeros_cpu, zeros_gpu, zeros_metal);
-test_device!(ones, ones_cpu, ones_gpu, ones_metal);
-test_device!(full, full_cpu, full_gpu, full_metal);
-test_device!(const_set, cs_cpu, cs_gpu, cs_metal);
-test_device!(arange, arange_cpu, arange_gpu, arange_metal);
-test_device!(add_mul, add_mul_cpu, add_mul_gpu, add_mul_metal);
-test_device!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu, tensor_2d_metal);
-test_device!(narrow, narrow_cpu, narrow_gpu, narrow_metal);
-test_device!(broadcast, broadcast_cpu, broadcast_gpu, broadcast_metal);
-test_device!(slice_set, ss_cpu, ss_gpu, ss_metal);
-test_device!(cat, cat_cpu, cat_gpu, cat_metal);
-test_device!(sum, sum_cpu, sum_gpu, sum_metal);
-test_device!(min, min_cpu, min_gpu, min_metal);
-test_device!(max, max_cpu, max_gpu, max_metal);
-test_device!(argmax, argmax_cpu, argmax_gpu, argmax_metal);
-test_device!(argmin, argmin_cpu, argmin_gpu, argmin_metal);
-test_device!(transpose, transpose_cpu, transpose_gpu, transpose_metal);
-test_device!(unary_op, unary_op_cpu, unary_op_gpu, unary_op_metal);
-test_device!(binary_op, binary_op_cpu, binary_op_gpu, binary_op_metal);
-test_device!(ternary_op, ternary_op_cpu, ternary_op_gpu, ternary_op_metal);
-test_device!(embeddings, embeddings_cpu, embeddings_gpu, embeddings_metal);
-test_device!(cmp, cmp_cpu, cmp_gpu, cmp_metal);
+test_device!(zeros, zeros_cpu, zeros_gpu, zeros_metal, zeros_rocm);
+test_device!(ones, ones_cpu, ones_gpu, ones_metal, ones_rocm);
+test_device!(full, full_cpu, full_gpu, full_metal, full_rocm);
+test_device!(const_set, cs_cpu, cs_gpu, cs_metal, cs_rocm);
+test_device!(arange, arange_cpu, arange_gpu, arange_metal, arange_rocm);
+test_device!(
+    add_mul,
+    add_mul_cpu,
+    add_mul_gpu,
+    add_mul_metal,
+    add_mul_rocm
+);
+test_device!(
+    tensor_2d,
+    tensor_2d_cpu,
+    tensor_2d_gpu,
+    tensor_2d_metal,
+    tensor_2d_rocm
+);
+test_device!(narrow, narrow_cpu, narrow_gpu, narrow_metal, narrow_rocm);
+test_device!(
+    broadcast,
+    broadcast_cpu,
+    broadcast_gpu,
+    broadcast_metal,
+    broadcast_rocm
+);
+test_device!(slice_set, ss_cpu, ss_gpu, ss_metal, ss_rocm);
+test_device!(cat, cat_cpu, cat_gpu, cat_metal, cat_rocm);
+test_device!(sum, sum_cpu, sum_gpu, sum_metal, sum_rocm);
+test_device!(min, min_cpu, min_gpu, min_metal, min_rocm);
+test_device!(max, max_cpu, max_gpu, max_metal, max_rocm);
+test_device!(argmax, argmax_cpu, argmax_gpu, argmax_metal, argmax_rocm);
+test_device!(argmin, argmin_cpu, argmin_gpu, argmin_metal, argmin_rocm);
+test_device!(
+    transpose,
+    transpose_cpu,
+    transpose_gpu,
+    transpose_metal,
+    transpose_rocm
+);
+test_device!(
+    unary_op,
+    unary_op_cpu,
+    unary_op_gpu,
+    unary_op_metal,
+    unary_op_rocm
+);
+test_device!(
+    binary_op,
+    binary_op_cpu,
+    binary_op_gpu,
+    binary_op_metal,
+    binary_op_rocm
+);
+test_device!(
+    ternary_op,
+    ternary_op_cpu,
+    ternary_op_gpu,
+    ternary_op_metal,
+    ternary_op_rocm
+);
+test_device!(
+    embeddings,
+    embeddings_cpu,
+    embeddings_gpu,
+    embeddings_metal,
+    embeddings_rocm
+);
+test_device!(cmp, cmp_cpu, cmp_gpu, cmp_metal, cmp_rocm);
 test_device!(
     broadcasting,
     broadcasting_cpu,
     broadcasting_gpu,
-    broadcasting_metal
+    broadcasting_metal,
+    broadcasting_rocm
 );
 test_device!(
     index_select,
     index_select_cpu,
     index_select_gpu,
-    index_select_metal
+    index_select_metal,
+    index_select_rocm
 );
-test_device!(index_add, index_add_cpu, index_add_gpu, index_add_metal);
-test_device!(gather, gather_cpu, gather_gpu, gather_metal);
-test_device!(scatter, scatter_cpu, scatter_gpu, scatter_metal);
+test_device!(
+    index_add,
+    index_add_cpu,
+    index_add_gpu,
+    index_add_metal,
+    index_add_rocm
+);
+test_device!(gather, gather_cpu, gather_gpu, gather_metal, gather_rocm);
+test_device!(
+    scatter,
+    scatter_cpu,
+    scatter_gpu,
+    scatter_metal,
+    scatter_rocm
+);
 test_device!(
     slice_scatter,
     slice_scatter_cpu,
     slice_scatter_gpu,
-    slice_scatter_metal
+    slice_scatter_metal,
+    slice_scatter_rocm
 );
-test_device!(randn, randn_cpu, randn_gpu, randn_metal);
-test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal);
-test_device!(asort, asort_cpu, asort_gpu, asort_metal);
-test_device!(asort_big, asort_big_cpu, asort_big_gpu, asort_big_metal);
-test_device!(var, var_cpu, var_gpu, var_metal);
-test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal);
+test_device!(randn, randn_cpu, randn_gpu, randn_metal, randn_rocm);
+test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal, clamp_rocm);
+test_device!(asort, asort_cpu, asort_gpu, asort_metal, asort_rocm);
+test_device!(
+    asort_big,
+    asort_big_cpu,
+    asort_big_gpu,
+    asort_big_metal,
+    asort_big_rocm
+);
+test_device!(var, var_cpu, var_gpu, var_metal, var_rocm);
+test_device!(
+    zero_dim,
+    zero_dim_cpu,
+    zero_dim_gpu,
+    zero_dim_metal,
+    zero_dim_rocm
+);
 
 fn tensor_send_sync(device: &Device) -> Result<()> {
     let tensor = Tensor::new(vec![1.0f32, 2.0, 3.0], device)?;
@@ -1865,7 +1940,8 @@ test_device!(
     tensor_send_sync,
     tensor_send_sync_cpu,
     tensor_send_sync_gpu,
-    tensor_send_sync_metal
+    tensor_send_sync_metal,
+    tensor_send_sync_rocm
 );
 
 // There was originally a bug on the CPU implementation for randn
