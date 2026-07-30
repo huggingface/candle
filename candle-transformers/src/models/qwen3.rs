@@ -404,13 +404,6 @@ impl DecoderLayer {
 }
 
 /// Builds the additive causal attention mask of shape `(1, 1, tgt, tgt + offset)`.
-///
-/// The mask values depend only on the query/key positions, never on the batch,
-/// so it is built with a leading batch dim of `1` and broadcast across the batch
-/// by `broadcast_add` in attention. Shaping this `b`-independent buffer as
-/// `(b, 1, tgt, tgt + offset)` claims `b×` the elements actually present, so every
-/// batch row but the first reads past the buffer and is masked incorrectly
-/// (see https://github.com/huggingface/candle/issues/3582).
 fn build_causal_mask(
     tgt: usize,
     offset: usize,
@@ -538,11 +531,7 @@ impl ModelForCausalLM {
 mod tests {
     use super::*;
 
-    // Regression test for https://github.com/huggingface/candle/issues/3582:
-    // the additive causal mask is independent of the batch dimension, so it must
-    // be built with a leading batch dim of 1 and broadcast across the batch.
-    // Shaping it `(b, 1, tgt, tgt + offset)` from a `b`-independent buffer claims
-    // `b×` the elements actually present, corrupting every batch row but the first.
+    // Regression test for https://github.com/huggingface/candle/issues/3582
     #[test]
     fn causal_mask_is_batch_independent_and_broadcasts() {
         let device = Device::Cpu;
