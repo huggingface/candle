@@ -195,13 +195,17 @@ async fn ones(device: &Device) -> Result<()> {
             half::f16::from_f32(1.0)], [half::f16::from_f32(1.0),
             half::f16::from_f32(1.0), half::f16::from_f32(1.0)]],
         );
+    }
+    if device.is_dtype_available(DType::BF16) {
         assert_eq!(
             Tensor::ones((2, 3), DType::BF16, device) ?.to_vec2_async::< half::bf16 > ().
             await ?, [[half::bf16::from_f32(1.0), half::bf16::from_f32(1.0),
             half::bf16::from_f32(1.0)], [half::bf16::from_f32(1.0),
             half::bf16::from_f32(1.0), half::bf16::from_f32(1.0)]],
         );
-        if !device.is_metal() {
+    }
+    if !device.is_metal() {
+        if device.is_dtype_available(DType::F8E4M3) {
             assert_eq!(
                 Tensor::ones((2, 3), DType::F8E4M3, device) ?.to_vec2_async::< F8E4M3 >
                 (). await ?, [[F8E4M3::from_f32(1.), F8E4M3::from_f32(1.),
@@ -356,6 +360,9 @@ async fn unary_op(device: &Device) -> Result<()> {
     if device.is_dtype_available(DType::F16) {
         let t_f16 = tensor.to_dtype(DType::F16)?.gelu()?.to_dtype(DType::F32)?;
         let max_diff = (tensor.gelu()? - t_f16)?.flatten_all()?.max(0)?;
+        wasm_bindgen_test::console_log!(
+            "max_diff: {:?}", max_diff.to_vec0_async::< f32 > (). await ?
+        );
         assert!(max_diff.to_vec0_async::< f32 > (). await ? < 5e-3);
         assert_eq!(
             to_vec2_round_async(& tensor.gelu_erf() ?, 4). await ?, [[- 0.004, 0.8413,

@@ -35,6 +35,7 @@ fn rand_normal(id: u32, mean: f32, std_: f32, seed : u32) -> f32 {
     let u2 = pseudo_random_float(2*id + 1, seed);
     return uniform_to_normal(mean, std_, u1, u2);
 }
+#endif
 
 const SQRT_TWO_OVER_PI_F32: f32 = 0.79788456080286535587989211986876373;
 
@@ -68,9 +69,6 @@ fn erf(x : f32) -> f32{
    }
 }
 
-
-#endif
-
 //all Const Operations
 fn set_const(operation : u32, id : u32){
     switch operation {
@@ -102,6 +100,13 @@ fn set_rand(operation : u32, id : u32, scalar1 : f32, scalar2 : f32, seed : u32)
     }
 }
 
+#ifdef f32
+#define f32_or_f16
+#endif
+#ifdef f16
+#define f32_or_f16
+#endif
+
 //all Unary Operations
 fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32){
     switch operation {
@@ -121,7 +126,7 @@ fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32)
             v_dest[id] = TODTYPE(f32(x) * scalar1 + scalar2);
         }
 
-#ifdef f32
+#ifdef f32_or_f16
         case 7u{  
             v_dest[id] = abs(x);
         }
@@ -224,7 +229,7 @@ fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32)
             v_dest[id] = 1 / x;
         }
         case 49u{//Gelu
-            v_dest[id] = 0.5 * x * (1.0 + tanh(SQRT_TWO_OVER_PI_F32 * x * (1.0 + 0.044715 * x * x)));
+            v_dest[id] = 0.5 * x * (1.0 + tanh(TODTYPE(SQRT_TWO_OVER_PI_F32) * x * (1.0 + 0.044715 * x * x)));
         }
         case 50u{
             //round away from zero, //wgsl round would be round to even
@@ -237,14 +242,27 @@ fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32)
             if (x > 0) {
                 v_dest[id] = x;
             } else {
-                v_dest[id] = (exp(x) - 1) * scalar1;
+                #ifdef f16
+                    v_dest[id] = f16((exp(x) - 1) * f16(scalar1));
+                #else 
+                    v_dest[id] = (exp(x) - 1) * scalar1;
+                #endif
+                
             }
         }
         case 53u{
+            #ifdef f16
+            v_dest[id] = f16(erf(f32(x)));
+            #else 
             v_dest[id] = erf(x);
+            #endif
         }
         case 54u{ //gelu_erf
-             v_dest[id] = (erf(x / sqrt(2.0)) + 1.) * 0.5 * x;
+        #ifdef f16
+            v_dest[id] = f16(erf(f32(x) / sqrt(2.0)) + 1.) * 0.5 * x;
+        #else 
+            v_dest[id] = (erf(x / sqrt(2.0)) + 1.) * 0.5 * x;
+        #endif
         }
 #endif
         case 100u{ //set
@@ -272,6 +290,11 @@ fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32)
 #ifdef f32
         case 107u{ //powf
             v_dest[id] = pow(x, scalar1);
+        }
+#endif
+#ifdef f16
+        case 107u{
+            v_dest[id] = TODTYPE(pow(f32(x), scalar1));
         }
 #endif
         default{

@@ -29,9 +29,10 @@ fn upsample1d(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let factor = f32(op_upsample1d_input_size_x) / f32(op_upsample1d_target_length);
-
-    let index = min(u32(f32(index_input) * factor), op_upsample1d_input_size_x - 1);
+    let index = min(
+        index_input * op_upsample1d_input_size_x / op_upsample1d_target_length,
+        op_upsample1d_input_size_x - 1
+    );
 
     v_dest[index_input + op_upsample1d_output_stride_batch * index_batch + op_upsample1d_ouput_stride_channel * index_channel] = v_input1[index * op_upsample1d_input_stride_x + op_upsample1d_input_stride_channel * index_channel + op_upsample1d_input_stride_batch * index_batch + op_upsample1d_input_offset];
 }
@@ -67,11 +68,15 @@ fn upsample2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    let factor_x = f32(op_upsample2d_input_size_x) / f32(op_upsample2d_target_length_x);
-    let index_x = min(u32(f32(index_input_x) * factor_x), op_upsample2d_input_size_x - 1);
+    let index_x = min(
+        index_input_x * op_upsample2d_input_size_x / op_upsample2d_target_length_x,
+        op_upsample2d_input_size_x - 1
+    );
 
-    let factor_y = f32(op_upsample2d_input_size_y) / f32(op_upsample2d_target_length_y);
-    let index_y = min(u32(f32(index_input_y) * factor_y), op_upsample2d_input_size_y - 1);
+    let index_y = min(
+        index_input_y * op_upsample2d_input_size_y / op_upsample2d_target_length_y,
+        op_upsample2d_input_size_y - 1
+    );
 
     for(var index_batch = 0u; index_batch < op_upsample2d_input_size_batch; index_batch++){
         v_dest[

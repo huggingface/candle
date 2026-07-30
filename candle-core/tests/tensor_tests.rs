@@ -271,6 +271,7 @@ fn unary_op(device: &Device) -> Result<()> {
     if device.is_dtype_available(DType::F16) {
         let t_f16 = tensor.to_dtype(DType::F16)?.gelu()?.to_dtype(DType::F32)?;
         let max_diff = (tensor.gelu()? - t_f16)?.flatten_all()?.max(0)?;
+        println!("max_diff: {:?}", max_diff.to_vec0::<f32>()?);
         assert!(max_diff.to_vec0::<f32>()? < 5e-3);
         assert_eq!(
             test_utils::to_vec2_round(&tensor.gelu_erf()?, 4)?,
