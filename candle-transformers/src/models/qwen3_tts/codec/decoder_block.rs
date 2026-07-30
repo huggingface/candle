@@ -7,10 +7,10 @@ use super::{CausalConv1d, CausalTransConv1d, SnakeBeta};
 
 /// Residual unit: SnakeBeta → dilated causal conv → SnakeBeta → 1×1 conv → residual.
 pub struct ResidualUnit {
-    act1: SnakeBeta,
-    conv1: CausalConv1d,
-    act2: SnakeBeta,
-    conv2: CausalConv1d,
+    pub(super) act1: SnakeBeta,
+    pub(super) conv1: CausalConv1d,
+    pub(super) act2: SnakeBeta,
+    pub(super) conv2: CausalConv1d,
 }
 
 impl ResidualUnit {
@@ -57,11 +57,11 @@ impl Module for ResidualUnit {
 
 /// BigVGAN-style decoder block: upsample + 3 residual units with dilation 1, 3, 9.
 pub struct DecoderBlock {
-    snake: SnakeBeta,
-    upsample: CausalTransConv1d,
-    res1: ResidualUnit,
-    res2: ResidualUnit,
-    res3: ResidualUnit,
+    pub(super) snake: SnakeBeta,
+    pub(super) upsample: CausalTransConv1d,
+    pub(super) res1: ResidualUnit,
+    pub(super) res2: ResidualUnit,
+    pub(super) res3: ResidualUnit,
 }
 
 impl DecoderBlock {

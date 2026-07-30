@@ -1,7 +1,21 @@
 //! Causal Transposed 1D Convolution — used for upsampling in the decoder.
 
-use candle::{Module, Result, Tensor};
+use candle::{Module, Result, Tensor, D};
 use candle_nn::{conv_transpose1d, ConvTranspose1d, ConvTranspose1dConfig, VarBuilder};
+
+/// Rolling overlap-add carry buffer for one [`CausalTransConv1d`] during
+/// streaming decode.
+///
+/// Each upsampled single-frame output is `stride` samples long in batch mode,
+/// but the transposed convolution actually produces `kernel_size` samples and
+/// the batch path trims the last `kernel_size - stride` from the right.  In
+/// streaming those trimmed samples must be carried over and added to the
+/// leading samples of the next frame.
+#[derive(Default)]
+pub struct CausalTransConv1dState {
+    /// `[B, C_out, right_trim]` overlap-add carry, or `None` before first frame.
+    pub carry: Option<Tensor>,
+}
 
 /// Causal transposed 1D convolution.
 ///
@@ -10,6 +24,7 @@ use candle_nn::{conv_transpose1d, ConvTranspose1d, ConvTranspose1dConfig, VarBui
 pub struct CausalTransConv1d {
     conv: ConvTranspose1d,
     right_trim: usize,
+    stride: usize,
 }
 
 impl CausalTransConv1d {
@@ -36,6 +51,7 @@ impl CausalTransConv1d {
         Ok(Self {
             conv,
             right_trim: kernel_size.saturating_sub(stride),
+            stride,
         })
     }
 
@@ -55,7 +71,42 @@ impl CausalTransConv1d {
         Ok(Self {
             conv,
             right_trim: kernel_size.saturating_sub(stride),
+            stride,
         })
+    }
+
+    /// Streaming forward: upsample one input frame and update `state`.
+    ///
+    /// For an input of `T` frames the output is `T * stride` samples.  The
+    /// `right_trim` overlap-add carry from the previous call is added to the
+    /// front of the output, and the new trailing carry is saved in `state`.
+    pub fn forward_with_state(
+        &self,
+        x: &Tensor,
+        state: &mut CausalTransConv1dState,
+    ) -> Result<Tensor> {
+        // Full transposed-conv output: [B, C_out, T*kernel_size]
+        let raw = self.conv.forward(x)?;
+        let raw_len = raw.dim(D::Minus1)?;
+        // Samples we emit this call
+        let emit_len = raw_len - self.right_trim;
+        let emit = raw.narrow(D::Minus1, 0, emit_len)?;
+        // Overlap-add: add carry from previous call to the leading right_trim
+        // samples of `emit`.
+        let out = if let Some(carry) = &state.carry {
+            let head = (emit.narrow(D::Minus1, 0, self.right_trim)? + carry)?;
+            let tail = emit.narrow(D::Minus1, self.right_trim, emit_len - self.right_trim)?;
+            Tensor::cat(&[&head, &tail], D::Minus1)?
+        } else {
+            emit
+        };
+        // Save new carry
+        state.carry = if self.right_trim > 0 {
+            Some(raw.narrow(D::Minus1, emit_len, self.right_trim)?)
+        } else {
+            None
+        };
+        Ok(out)
     }
 }
 

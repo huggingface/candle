@@ -21,7 +21,7 @@ use candle::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::qwen3_tts::{
     self,
-    codec::{Decoder12Hz, Decoder12HzConfig},
+    codec::{Decoder12Hz, Decoder12HzConfig, Decoder12HzState},
     compute_dtype_for_device, codes_to_tensor,
     config::ParsedModelConfig,
     talker::{
@@ -105,6 +105,11 @@ struct Args {
     /// Force CPU even if GPU is available
     #[arg(long)]
     cpu: bool,
+
+    /// Use streaming (incremental) decoder — emits audio one frame at a time.
+    /// Reduces latency; batch mode (default) has marginally better quality.
+    #[arg(long)]
+    streaming: bool,
 }
 
 // ── Device selection ──────────────────────────────────────────────────────────
@@ -695,6 +700,104 @@ fn generate_icl(
     Ok(audio)
 }
 
+/// Streaming generation loop.
+///
+/// Identical to `generate` but decodes each codec frame incrementally via
+/// [`Decoder12Hz::decode_frame`] instead of batching all frames at the end.
+/// Suitable for piping audio to a playback device frame-by-frame.
+fn generate_streaming(
+    model: &TalkerModel,
+    cp: &CodePredictor,
+    decoder: &Decoder12Hz,
+    input_ids: &[u32],
+    prefill_fn: impl Fn(&mut Vec<AnyKVCache>) -> candle::Result<(Tensor, Tensor)>,
+    args: &Args,
+    device: &Device,
+) -> anyhow::Result<Vec<f32>> {
+    let eos = codec_tokens::CODEC_EOS;
+    const MIN_NEW: usize = 2;
+    const REPEAT_STOP: usize = 10;
+
+    let (trailing, trailing_len, tts_pad) = build_trailing_text(model, input_ids)?;
+
+    let mut kv_caches = model.new_kv_caches(args.max_frames + 256);
+    let (hidden, logits) = prefill_fn(&mut kv_caches)?;
+    let prefill_len = hidden.dim(1)?;
+    let mut offset = prefill_len;
+    let mut last_hidden = hidden.i((.., prefill_len - 1..prefill_len, ..))?;
+
+    let logits_2d = logits.squeeze(1)?;
+    let mut rng = RngState::new(args.seed);
+    let mut seen: Vec<u32> = Vec::new();
+    let mut sem_token = sample_token(&logits_2d, args, &mut rng, &seen, 0, MIN_NEW, eos)?;
+    seen.push(sem_token);
+
+    let mut dec_state = decoder.new_streaming_state();
+    let mut audio_chunks: Vec<Vec<f32>> = Vec::new();
+    let mut cp_caches = cp.new_kv_caches();
+    let mut last_token = sem_token;
+    let mut repeat_count = 0usize;
+    let mut total_frames = 0usize;
+
+    for frame in 0..args.max_frames {
+        if sem_token == eos {
+            eprintln!("EOS at frame {frame}");
+            break;
+        }
+        if sem_token == last_token {
+            repeat_count += 1;
+            if repeat_count >= REPEAT_STOP && seen.len() >= MIN_NEW {
+                eprintln!("Stopping: token {sem_token} repeated {repeat_count} times");
+                break;
+            }
+        } else {
+            repeat_count = 0;
+        }
+        last_token = sem_token;
+
+        let sem_embed = model.get_codec_embedding(sem_token)?;
+        let acoustic_codes = cp.generate_acoustic_codes(&last_hidden, &sem_embed, &mut cp_caches)?;
+
+        // Build [1, 16, 1] frame tensor for streaming decode
+        let mut row: Vec<u32> = vec![sem_token];
+        let acoustics: Vec<u32> = acoustic_codes.to_vec1()?;
+        row.extend(&acoustics);
+        let frame_codes = Tensor::from_vec(row, (1usize, 16usize, 1usize), device)?;
+
+        // Decode this single frame immediately
+        let chunk = decoder.decode_frame(&frame_codes, &mut dec_state)?;
+        let samples: Vec<f32> = chunk.flatten_all()?.to_vec1()?;
+        audio_chunks.push(samples);
+        total_frames += 1;
+
+        if frame == args.max_frames - 1 { break; }
+
+        // Build next talker step input
+        let acoustic_sum = cp.get_acoustic_embeddings_sum_from_tensor(&acoustic_codes)?;
+        let summed = sem_embed.add(&acoustic_sum)?;
+        let text_add = if frame < trailing_len {
+            trailing.i((.., frame..frame + 1, ..))?  
+        } else {
+            tts_pad.clone()
+        };
+        let step_in = summed.add(&text_add)?;
+
+        let (h, new_logits) = model.generate_step_with_embed(&step_in, &mut kv_caches, offset)?;
+        offset += 1;
+        last_hidden = h;
+
+        let l2d = new_logits.squeeze(1)?;
+        let next = sample_token(&l2d, args, &mut rng, &seen, seen.len(), MIN_NEW, eos)?;
+        seen.push(next);
+        sem_token = next;
+    }
+
+    eprintln!("Generated {} codec frames (streaming)", total_frames);
+
+    let audio: Vec<f32> = audio_chunks.into_iter().flatten().collect();
+    Ok(audio)
+}
+
 // ── main ──────────────────────────────────────────────────────────────────────
 
 fn main() -> anyhow::Result<()> {
@@ -776,12 +879,12 @@ fn main() -> anyhow::Result<()> {
         // VoiceDesign
         let instruct_fmt = format!("<|im_start|>user\n{}<|im_end|>\n", instruct_text);
         let instruct_ids = tokenize(&tokenizer, &instruct_fmt)?;
-        generate(
-            &talker, &cp, &decoder,
-            &input_ids,
-            |kv| talker.prefill_voice_design(&input_ids, &instruct_ids, language, kv),
-            &args, &device,
-        )?
+        let prefill = |kv: &mut Vec<AnyKVCache>| talker.prefill_voice_design(&input_ids, &instruct_ids, language, kv);
+        if args.streaming {
+            generate_streaming(&talker, &cp, &decoder, &input_ids, prefill, &args, &device)?
+        } else {
+            generate(&talker, &cp, &decoder, &input_ids, prefill, &args, &device)?
+        }
     } else if let Some(ref ref_path) = args.ref_audio {
         // VoiceClone — two sub-modes:
         //   a) ICL: --ref-codes + --ref-text supplied → full in-context-learning
@@ -816,21 +919,21 @@ fn main() -> anyhow::Result<()> {
             eprintln!("Warning: no --ref-codes/--ref-text supplied; using zero speaker embed");
             eprintln!("For real voice cloning, encode the reference WAV with Mimi and pass --ref-codes.");
             let speaker_embed = Tensor::zeros((1, talker.config().hidden_size), dtype, &device)?;
-            generate(
-                &talker, &cp, &decoder,
-                &input_ids,
-                |kv| talker.prefill_voice_clone(&input_ids, &speaker_embed, language, false, kv),
-                &args, &device,
-            )?
+            let prefill = |kv: &mut Vec<AnyKVCache>| talker.prefill_voice_clone(&input_ids, &speaker_embed, language, false, kv);
+            if args.streaming {
+                generate_streaming(&talker, &cp, &decoder, &input_ids, prefill, &args, &device)?
+            } else {
+                generate(&talker, &cp, &decoder, &input_ids, prefill, &args, &device)?
+            }
         }
     } else {
         // CustomVoice
-        generate(
-            &talker, &cp, &decoder,
-            &input_ids,
-            |kv| talker.prefill_custom_voice(&input_ids, speaker, language, kv),
-            &args, &device,
-        )?
+        let prefill = |kv: &mut Vec<AnyKVCache>| talker.prefill_custom_voice(&input_ids, speaker, language, kv);
+        if args.streaming {
+            generate_streaming(&talker, &cp, &decoder, &input_ids, prefill, &args, &device)?
+        } else {
+            generate(&talker, &cp, &decoder, &input_ids, prefill, &args, &device)?
+        }
     };
 
     eprintln!(

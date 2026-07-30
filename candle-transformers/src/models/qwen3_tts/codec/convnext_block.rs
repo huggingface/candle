@@ -9,11 +9,11 @@ use super::CausalConv1d;
 
 /// ConvNeXt block: depthwise-conv → LayerNorm → expand → GELU → project → γ-scale → residual.
 pub struct ConvNeXtBlock {
-    dwconv: CausalConv1d,
-    norm: LayerNorm,
-    pwconv1: Linear,
-    pwconv2: Linear,
-    gamma: Tensor,
+    pub(super) dwconv: CausalConv1d,
+    pub(super) norm: LayerNorm,
+    pub(super) pwconv1: Linear,
+    pub(super) pwconv2: Linear,
+    pub(super) gamma: Tensor,
 }
 
 impl ConvNeXtBlock {
