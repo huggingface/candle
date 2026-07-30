@@ -238,9 +238,12 @@ impl QRocmStorage {
 
     /// `self` is the transposed weight matrix of shape `(n, k)`.
     ///
-    /// Dequantize, then run the regular GEMM. The dequantized weights are laid
-    /// out as `n` rows of `k`, so the `(k, n)` operand the GEMM wants is that
-    /// same buffer viewed with swapped strides.
+    /// For a single-token decode (`b*m == 1`) the fused DMMV kernel multiplies
+    /// straight against the packed weights, skipping the dequantize→GEMM
+    /// round-trip. Every other shape — and any dtype without a DMMV kernel or a
+    /// non-f32 activation — falls back to dequantize-then-GEMM: the dequantized
+    /// weights are laid out as `n` rows of `k`, so the `(k, n)` operand the GEMM
+    /// wants is that same buffer viewed with swapped strides.
     pub fn fwd(
         &self,
         self_shape: &Shape,
@@ -259,6 +262,43 @@ impl QRocmStorage {
                 layout.shape()
             )
         }
+
+        // Decode fast-path: a single f32 activation vector against the packed
+        // weights via the fused DMMV kernel. NOTE: numerically UNVERIFIED on
+        // RDNA3 — the WARP_SIZE the kernel is compiled for must equal the wave
+        // width. Falls through to the GEMM path for every unsupported case.
+        if b * m == 1 && kernels::has_dmmv_kernel(self.dtype) {
+            if let RocmStorageSlice::F32(y) = &storage.slice {
+                if let Some((o1, o2)) = layout.contiguous_offsets() {
+                    if o2 - o1 == k {
+                        let dst = kernels::mul_mat_vec(
+                            &self.data,
+                            self.len,
+                            y,
+                            o1,
+                            self.dtype,
+                            k,
+                            n,
+                            &self.device,
+                        )?;
+                        let mut out_shape = layout.shape().dims().to_vec();
+                        out_shape.pop();
+                        out_shape.push(n);
+                        return Ok((
+                            RocmStorage {
+                                slice: RocmStorageSlice::F32(dst),
+                                device: self.device.clone(),
+                            },
+                            out_shape.into(),
+                        ));
+                    }
+                }
+            }
+            // TODO(mmvq q8_1 fast-path): the faster q8_1 MMVQ variant
+            // (`mmvq_gguf.cu`) would also cover f16/bf16 activations and small
+            // batches; not wired yet, so those still take the GEMM fallback.
+        }
+
         let weights = self.dequantize(n * k)?;
         let weights = match storage.dtype() {
             DType::F32 => weights,

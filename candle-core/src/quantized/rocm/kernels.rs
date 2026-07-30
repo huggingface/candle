@@ -23,6 +23,14 @@ pub(crate) const MATRIX_ROW_PADDING: usize = 512;
 const DEQUANTIZE_BLOCK_SIZE: usize = 256;
 const GET_ROWS_BLOCK_SIZE: usize = 256;
 
+/// Warp width the `dequantize_mul_mat_vec_*` kernels are compiled for
+/// (`#define WARP_SIZE 32` in `quantized.cu`). RDNA3 runs wave32, so the block's
+/// x-dimension matches the wavefront; correctness on wave64 parts is the caller's
+/// to verify.
+const MMV_WARP_SIZE: usize = 32;
+/// Output rows handled per thread block (`GGML_CUDA_MMV_Y` in `cuda.rs`).
+const MMV_Y: usize = 1;
+
 /// `hipModuleLaunchKernel` takes an array of pointers *to* the argument values.
 fn arg<T>(v: &T) -> *mut c_void {
     v as *const T as *mut c_void
@@ -273,9 +281,124 @@ pub(crate) fn get_rows(
     Ok(dst)
 }
 
+/// Name of the fused dequantize+GEMV (DMMV) kernel for `dtype`, or an error for
+/// the dtypes `quantized.cu` ships no `dequantize_mul_mat_vec_*` for.
+///
+/// Mirrors `quantized/cuda.rs::dequantize_mul_mat_vec`'s name table exactly; the
+/// K-quant kernels drop the `_cuda` suffix, matching the source.
+fn dmmv_kernel_name(dtype: GgmlDType) -> Result<&'static str> {
+    let name = match dtype {
+        GgmlDType::Q4_0 => "dequantize_mul_mat_vec_q4_0_cuda",
+        GgmlDType::Q4_1 => "dequantize_mul_mat_vec_q4_1_cuda",
+        GgmlDType::Q5_0 => "dequantize_mul_mat_vec_q5_0_cuda",
+        GgmlDType::Q5_1 => "dequantize_mul_mat_vec_q5_1_cuda",
+        GgmlDType::Q8_0 => "dequantize_mul_mat_vec_q8_0_cuda",
+        GgmlDType::Q2K => "dequantize_mul_mat_vec_q2_k",
+        GgmlDType::Q3K => "dequantize_mul_mat_vec_q3_k",
+        GgmlDType::Q4K => "dequantize_mul_mat_vec_q4_k",
+        GgmlDType::Q5K => "dequantize_mul_mat_vec_q5_k",
+        GgmlDType::Q6K => "dequantize_mul_mat_vec_q6_k",
+        _ => crate::bail!("no ROCm dequantize_mul_mat_vec kernel for {dtype:?}"),
+    };
+    Ok(name)
+}
+
+/// True when `dtype` has a fused dequantize+GEMV (DMMV) kernel; the decode
+/// fast-path in [`crate::quantized::rocm`] only dispatches to `mul_mat_vec` for
+/// these.
+pub(crate) fn has_dmmv_kernel(dtype: GgmlDType) -> bool {
+    dmmv_kernel_name(dtype).is_ok()
+}
+
+/// Fused dequantize + matrix-vector product against the *packed* quantized
+/// weights — the decode fast-path.
+///
+/// Mirrors `quantized/cuda.rs::dequantize_mul_mat_vec`. `data` is the `(nrows,
+/// ncols)` quantized weight matrix (padded), `y` a single dense `ncols`-element
+/// f32 activation vector starting at element `y_offset`. The result is `nrows`
+/// f32 dot products. `data_len` is the *logical* payload length of `data` in
+/// bytes (the buffer itself carries `MATRIX_ROW_PADDING` extra elements).
+///
+/// ```text
+/// dequantize_mul_mat_vec_*(const void *vx, const dfloat/float *y,
+///                          float *dst, const int ncols, const int nrows)
+/// ```
+///
+/// The `q5_k` kernel omits the trailing `nrows` parameter; passing it anyway is
+/// harmless — the kernel simply never reads that slot — and keeps one arg shape
+/// for every dtype, exactly as `cuda.rs` does.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn mul_mat_vec(
+    data: &SendSyncDeviceMemory<u8>,
+    data_len: usize,
+    y: &SendSyncDeviceMemory<f32>,
+    y_offset: usize,
+    dtype: GgmlDType,
+    ncols: usize,
+    nrows: usize,
+    dev: &RocmDevice,
+) -> Result<SendSyncDeviceMemory<f32>> {
+    let data_elems = data_len / dtype.type_size() * dtype.block_size();
+    if data_elems < ncols * nrows {
+        crate::bail!("quantized dmmv: data holds {data_elems} elems, need {ncols}x{nrows}")
+    }
+    let name = dmmv_kernel_name(dtype)?;
+    let func = dev.get_or_load_func(name, &kernels::QUANTIZED)?;
+    let dst = dev.alloc::<f32>(nrows)?;
+    if nrows == 0 || ncols == 0 {
+        return Ok(dst);
+    }
+    let block_num_y = nrows.div_ceil(MMV_Y);
+    let src_ptr = data.as_ptr();
+    let y_ptr = unsafe { y.ptr_at(y_offset) };
+    let dst_ptr = dst.as_ptr();
+    let ncols_i = ncols as i32;
+    let nrows_i = nrows as i32;
+    let mut args = vec![
+        arg(&src_ptr),
+        arg(&y_ptr),
+        arg(&dst_ptr),
+        arg(&ncols_i),
+        arg(&nrows_i),
+    ];
+    func.launch(
+        Dim3::new_1d(block_num_y as u32),
+        Dim3::new_2d(MMV_WARP_SIZE as u32, MMV_Y as u32),
+        0,
+        Some(dev.stream()),
+        &mut args,
+    )
+    .map_err(|e| launch_err(name, e))?;
+    Ok(dst)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The DMMV kernel names must match `quantized.cu` byte for byte — the
+    /// K-quants drop the `_cuda` suffix and `has_dmmv_kernel` must agree with
+    /// which dtypes have a kernel at all.
+    #[test]
+    fn dmmv_kernel_names() -> Result<()> {
+        assert_eq!(
+            dmmv_kernel_name(GgmlDType::Q4_0)?,
+            "dequantize_mul_mat_vec_q4_0_cuda"
+        );
+        assert_eq!(
+            dmmv_kernel_name(GgmlDType::Q4K)?,
+            "dequantize_mul_mat_vec_q4_k"
+        );
+        assert_eq!(
+            dmmv_kernel_name(GgmlDType::Q6K)?,
+            "dequantize_mul_mat_vec_q6_k"
+        );
+        assert!(has_dmmv_kernel(GgmlDType::Q4K));
+        // No dmmv kernel is compiled for Q8K or the float dtypes.
+        assert!(!has_dmmv_kernel(GgmlDType::Q8K));
+        assert!(dmmv_kernel_name(GgmlDType::Q8K).is_err());
+        Ok(())
+    }
 
     /// `k` means different things per dtype; getting it wrong dequantizes only
     /// a fraction of the tensor (or reads past the end).

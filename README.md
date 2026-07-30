@@ -45,6 +45,13 @@ Having installed `candle` with Cuda support, simply define the `device` to be on
 + let device = Device::new_cuda(0)?;
 ```
 
+On an AMD GPU, build with the `rocm` feature and use:
+
+```diff
+- let device = Device::Cpu;
++ let device = Device::new_rocm(0)?;
+```
+
 For more advanced examples, please have a look at the following section.
 
 ## Check out our examples
@@ -150,6 +157,16 @@ cargo run --example quantized --release
 In order to use **CUDA** add `--features cuda` to the example command line. If
 you have cuDNN installed, use `--features cudnn` for even more speedups.
 
+For an **AMD GPU** add `--features rocm` instead. This needs a ROCm 6.2+
+installation with `hipcc` on `PATH` and `clang-offload-bundler` under
+`$ROCM_PATH` (default `/opt/rocm`). The kernels are the same
+`candle-kernels` sources the CUDA backend uses; they are compiled by `hipcc` at
+runtime on first use and cached under `~/.cache/candle-rocm`, so the first run
+of a given architecture pays a one-off compile (a few seconds per module, about
+70 s for the quantized module) and later runs load from the cache. If MIOpen is
+installed, `--features miopen` swaps convolutions onto it, the way `cudnn`
+layers over `cuda`.
+
 There are also some wasm examples for whisper and
 [llama2.c](https://github.com/karpathy/llama2.c). You can either build them with
 `trunk` or try them online:
@@ -211,6 +228,7 @@ If you have an addition to this list, please submit a pull request.
 - Backends.
     - Optimized CPU backend with optional MKL support for x86 and Accelerate for macs.
     - CUDA backend for efficiently running on GPUs, multiple GPU distribution via NCCL.
+    - ROCm/HIP backend for AMD GPUs, sharing the CUDA kernel sources, with optional MIOpen convolutions.
     - WASM support, run your models in a browser.
 - Included models.
     - Language Models.
@@ -288,6 +306,7 @@ Cheatsheet:
 - [candle-nn](./candle-nn/): Tools to build real models
 - [candle-examples](./candle-examples/): Examples of using the library in realistic settings
 - [candle-kernels](./candle-kernels/): CUDA custom kernels
+- [candle-rocm-kernels](./candle-rocm-kernels/): ROCm/HIP support, compiling the `candle-kernels` sources with `hipcc`
 - [candle-datasets](./candle-datasets/): Datasets and data loaders.
 - [candle-transformers](./candle-transformers): transformers-related utilities.
 - [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.
@@ -429,6 +448,37 @@ Make sure you link all native libraries that might be located outside a project 
 mdbook test candle-book -L .\target\debug\deps\ `
 -L native=$env:USERPROFILE\.cargo\registry\src\index.crates.io-6f17d22bba15001f\windows_x86_64_msvc-0.42.2\lib `
 -L native=$env:USERPROFILE\.cargo\registry\src\index.crates.io-6f17d22bba15001f\windows_x86_64_msvc-0.48.5\lib
+```
+
+#### ROCm errors
+
+```
+Kernel compilation failed: could not run hipcc: No such file or directory (os error 2). Is ROCm installed?
+```
+
+The ROCm backend compiles kernels at runtime, so `hipcc` must be on `PATH` at
+*run* time, not just at build time — add `/opt/rocm/bin` to `PATH`. The
+matching `clang-offload-bundler` is taken from `$ROCM_PATH` (default
+`/opt/rocm`), so point `ROCM_PATH` at your install if it lives elsewhere.
+
+```
+Kernel compilation failed: could not run rocm_agent_enumerator: ... Install ROCm or set CANDLE_ROCM_ARCH
+```
+or a launch failing with an "invalid device function"
+
+The target architecture is auto-detected with `rocm_agent_enumerator`. If that
+is unavailable, or the detected architecture does not match the GPU you are
+running on, set it explicitly:
+
+```bash
+CANDLE_ROCM_ARCH=gfx1101 cargo run --release --example bert --features rocm
+```
+
+If you edited a kernel source, or upgraded ROCm, and get load or launch errors
+from cached code objects, clear the on-disk cache:
+
+```bash
+make rocm-cache-clean   # or: rm -rf ~/.cache/candle-rocm
 ```
 
 #### Extremely slow model load time with WSL
