@@ -380,3 +380,31 @@ test_device!(
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);
+
+#[cfg(feature = "rocm")]
+#[test]
+fn sigmoid_rocm() -> Result<()> {
+    let device = Device::new_rocm(0)?;
+    sigmoid(&device)
+}
+
+#[cfg(feature = "rocm")]
+#[test]
+fn softmax_rocm() -> Result<()> {
+    let device = Device::new_rocm(0)?;
+    softmax(&device)
+}
+
+#[cfg(feature = "rocm")]
+#[test]
+fn rms_norm_rocm() -> Result<()> {
+    let device = Device::new_rocm(0)?;
+    rms_norm(&device)
+}
+
+#[cfg(feature = "rocm")]
+#[test]
+fn rms_norml_rocm() -> Result<()> {
+    let device = Device::new_rocm(0)?;
+    rms_norml(&device)
+}
