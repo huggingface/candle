@@ -1,6 +1,6 @@
 use crate::backend::BackendDevice;
 use crate::{CpuStorage, DType, Layout, Result, Shape};
-use candle_rocm_kernels::compile::KernelCache;
+use candle_rocm_kernels::KernelCache;
 use half::{bf16, f16};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -61,7 +61,7 @@ impl RocmDevice {
             SendSyncMIOpenHandle::new(&stream).map_err(|e| RocmError::MIOpen(e.to_string()))?;
 
         let kernel_manager =
-            Arc::new(Mutex::new(KernelCache::new(&device).map_err(|e| {
+            Arc::new(Mutex::new(KernelCache::new(None).map_err(|e| {
                 crate::Error::Msg(format!("Failed to create kernel cache: {}", e))
             })?));
 
@@ -135,15 +135,15 @@ impl RocmDevice {
     /// This is public so that candle-nn and other crates can launch custom kernels.
     pub fn get_or_load_func(
         &self,
-        kernel_name: &'static str,
-        source: &'static str,
+        kernel_name: &str,
+        module: &candle_rocm_kernels::Module,
     ) -> crate::Result<rocm_rs::hip::Function> {
         let kernel_manager = self
             .kernel_manager
             .lock()
             .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
         let module = kernel_manager
-            .get_or_load(kernel_name, source)
+            .get_or_load(module)
             .map_err(|e| crate::Error::Msg(e.to_string()))?;
         let func = module
             .get_function(kernel_name)

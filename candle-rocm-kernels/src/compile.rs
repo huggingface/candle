@@ -1,6 +1,11 @@
+//! Runtime compilation of the shared kernel sources with `hipcc`.
+//!
+//! A module is compiled once per (source, GPU architecture, ROCm version) and
+//! cached on disk, so the cost is paid on first use only.
+
 use crate::error::KernelError;
 use crate::wrappers::SendSyncModule;
-use rocm_rs::hip::Device;
+use crate::Module;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
@@ -8,396 +13,298 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-/// Single unified cache for compiled kernel modules.
-///
-/// Combines the functionality of the old CacheManager (disk cache)
-/// and KernelManager (module cache) into one simpler struct.
+/// Compiled-module cache: in memory for the process, on disk across runs.
 pub struct KernelCache {
     cache_dir: PathBuf,
+    src_dir: PathBuf,
     arch: String,
     rocm_version: String,
+    /// Keyed by module name, i.e. one entry per translation unit. Keying this
+    /// by *kernel* name would recompile the whole unit once per kernel.
     modules: Mutex<HashMap<&'static str, Arc<SendSyncModule>>>,
 }
 
 impl KernelCache {
-    /// Create a new KernelCache for the given device
-    pub fn new(device: &Device) -> Result<Self, KernelError> {
-        let arch = detect_gpu_arch(device)?;
+    pub fn new(arch: Option<String>) -> Result<Self, KernelError> {
+        let arch = match arch {
+            Some(arch) => arch,
+            None => detect_gpu_arch()?,
+        };
         let rocm_version = detect_rocm_version()?;
-        let cache_dir = get_cache_dir()?;
+        let cache_dir = base_cache_dir()?.join(format!("{arch}-{rocm_version}"));
+        let src_dir = cache_dir.join("src");
 
-        // Create cache directory structure: ~/.cache/candle-rocm/{arch}-{rocm_version}/
-        let arch_version = format!("{}-{}", arch, rocm_version);
-        let kernel_dir = cache_dir.join(&arch_version);
-        fs::create_dir_all(&kernel_dir).map_err(|e| {
-            KernelError::Io(format!(
-                "Failed to create cache directory {}: {}",
-                kernel_dir.display(),
-                e
-            ))
-        })?;
+        stage_headers(&src_dir)?;
 
         Ok(Self {
-            cache_dir: kernel_dir,
+            cache_dir,
+            src_dir,
             arch,
             rocm_version,
             modules: Mutex::new(HashMap::new()),
         })
     }
 
-    /// Get or compile a kernel module.
-    ///
-    /// This method checks the in-memory cache first, then the disk cache,
-    /// and compiles from source if needed.
-    pub fn get_or_load(
-        &self,
-        name: &'static str,
-        source: &'static str,
-    ) -> Result<Arc<SendSyncModule>, KernelError> {
-        // Check in-memory cache first
+    /// Return the loaded module, compiling it if this is the first use.
+    pub fn get_or_load(&self, module: &Module) -> Result<Arc<SendSyncModule>, KernelError> {
         {
-            let modules = self
-                .modules
-                .lock()
-                .map_err(|_| KernelError::Internal("Failed to lock modules cache".to_string()))?;
-            if let Some(module) = modules.get(name) {
-                return Ok(module.clone());
+            let modules = self.lock_modules()?;
+            if let Some(loaded) = modules.get(module.name()) {
+                return Ok(loaded.clone());
             }
         }
 
-        // Compute hash of source to version the cache
-        let source_hash = compute_source_hash(source);
-        let cache_file = self.cache_dir.join(format!("{}_{}.cso", name, source_hash));
+        let hash = source_hash(module.source());
+        let cache_file = self
+            .cache_dir
+            .join(format!("{}_{}.hsaco", module.name(), hash));
 
-        // Try to load from disk cache or compile
-        let binary = if cache_file.exists() {
-            fs::read(&cache_file).map_err(|e| {
-                KernelError::Io(format!(
-                    "Failed to read cached binary {}: {}",
-                    cache_file.display(),
-                    e
-                ))
-            })?
-        } else {
-            let binary = compile_kernel(name, source, &self.arch, &cache_file)?;
-            fs::write(&cache_file, &binary).map_err(|e| {
-                KernelError::Io(format!(
-                    "Failed to write cache file {}: {}",
-                    cache_file.display(),
-                    e
-                ))
-            })?;
-            binary
+        let binary = match fs::read(&cache_file) {
+            Ok(binary) => binary,
+            Err(_) => {
+                let binary = self.compile(module, &hash)?;
+                write_atomic(&cache_file, &binary)?;
+                binary
+            }
         };
 
-        // Load module from binary
-        let module = SendSyncModule::load_data(&binary).map_err(|e| {
+        let loaded = Arc::new(SendSyncModule::load_data(&binary).map_err(|e| {
             KernelError::Compilation(format!(
-                "Failed to load module {} from compiled binary: {}",
-                name, e
+                "failed to load module `{}` for {}: {e}",
+                module.name(),
+                self.arch
             ))
-        })?;
+        })?);
 
-        let module = Arc::new(module);
+        self.lock_modules()?.insert(module.name(), loaded.clone());
+        Ok(loaded)
+    }
 
-        // Store in memory cache
-        {
-            let mut modules = self
-                .modules
-                .lock()
-                .map_err(|_| KernelError::Internal("Failed to lock modules cache".to_string()))?;
-            modules.insert(name, module.clone());
+    fn lock_modules(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, HashMap<&'static str, Arc<SendSyncModule>>>, KernelError>
+    {
+        self.modules
+            .lock()
+            .map_err(|_| KernelError::Internal("kernel module cache mutex is poisoned".to_string()))
+    }
+
+    /// hipcc the source into a bundled code object, then unbundle it into the
+    /// single-architecture ELF that `hipModuleLoadData` expects.
+    fn compile(&self, module: &Module, hash: &str) -> Result<Vec<u8>, KernelError> {
+        let src_file = self.src_dir.join(format!("{}.cu", module.name()));
+        write_atomic(&src_file, module.source().as_bytes())?;
+
+        let shim_dir = self.src_dir.join("hip_shim");
+        let bundle = self
+            .cache_dir
+            .join(format!("{}_{}.bundle", module.name(), hash));
+
+        let output = Command::new("hipcc")
+            .arg("--genco")
+            .arg(format!("--offload-arch={}", self.arch))
+            .args(["-O3", "-std=c++17"])
+            // The shared sources gate f16 on >= 530 and bf16 on >= 800. fp8
+            // shares the 800 guard, and maps onto HIP's OCP fp8 type.
+            .arg("-D__CUDA_ARCH__=800")
+            .arg("-include")
+            .arg(shim_dir.join("hip_compat.h"))
+            // Shim first: its cuda_*.h shadow the CUDA toolkit headers.
+            .arg("-I")
+            .arg(&shim_dir)
+            .arg("-I")
+            .arg(&self.src_dir)
+            .arg("-o")
+            .arg(&bundle)
+            .arg(&src_file)
+            .output()
+            .map_err(|e| {
+                KernelError::Compilation(format!("could not run hipcc: {e}. Is ROCm installed?"))
+            })?;
+
+        if !output.status.success() {
+            return Err(KernelError::Compilation(format!(
+                "hipcc failed for `{}` ({}):\n{}",
+                module.name(),
+                self.arch,
+                String::from_utf8_lossy(&output.stderr)
+            )));
         }
 
-        Ok(module)
+        let binary = unbundle(&bundle, &self.arch);
+        let _ = fs::remove_file(&bundle);
+        binary
     }
 
-    /// Get the cache directory path
-    pub fn cache_dir(&self) -> &Path {
-        &self.cache_dir
-    }
-
-    /// Get GPU architecture
     pub fn arch(&self) -> &str {
         &self.arch
     }
 
-    /// Get ROCm version
     pub fn rocm_version(&self) -> &str {
         &self.rocm_version
     }
+
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
+    }
 }
 
-/// Detect the GPU architecture (e.g., "gfx908", "gfx90a", "gfx942")
-fn detect_gpu_arch(_device: &Device) -> Result<String, KernelError> {
-    // First try to get from environment variable (useful for testing/build machines)
+/// Extract the single-arch code object from a clang offload bundle.
+fn unbundle(bundle: &Path, arch: &str) -> Result<Vec<u8>, KernelError> {
+    let unbundled = bundle.with_extension("hsaco.tmp");
+    let output = Command::new(offload_bundler())
+        .arg("--unbundle")
+        .arg("--type=o")
+        .arg(format!("--targets=hipv4-amdgcn-amd-amdhsa--{arch}"))
+        .arg(format!("--input={}", bundle.display()))
+        .arg(format!("--output={}", unbundled.display()))
+        .output()
+        .map_err(|e| {
+            KernelError::Compilation(format!("could not run clang-offload-bundler: {e}"))
+        })?;
+
+    if !output.status.success() {
+        return Err(KernelError::Compilation(format!(
+            "clang-offload-bundler failed for {arch}:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    let binary = fs::read(&unbundled)
+        .map_err(|e| KernelError::Io(format!("could not read unbundled code object: {e}")));
+    let _ = fs::remove_file(&unbundled);
+    binary
+}
+
+/// Prefer ROCm's own bundler: a system clang's copy can be a different LLVM
+/// version than the hipcc that produced the bundle.
+fn offload_bundler() -> PathBuf {
+    let rocm = std::env::var("ROCM_PATH").unwrap_or_else(|_| "/opt/rocm".to_string());
+    for candidate in [
+        PathBuf::from(&rocm).join("llvm/bin/clang-offload-bundler"),
+        PathBuf::from(&rocm).join("bin/clang-offload-bundler"),
+    ] {
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    PathBuf::from("clang-offload-bundler")
+}
+
+/// Write the staged sources the compiler needs to `#include`.
+fn stage_headers(src_dir: &Path) -> Result<(), KernelError> {
+    for (rel_path, contents) in crate::HEADERS {
+        let path = src_dir.join(rel_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                KernelError::Io(format!("could not create {}: {e}", parent.display()))
+            })?;
+        }
+        // Staged files are content-addressed by the enclosing directory's arch
+        // and ROCm version, but the sources themselves change with the crate,
+        // so always rewrite rather than trusting an existing file.
+        write_atomic(&path, contents.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// Write via a unique temporary in the destination directory, then rename.
+/// Concurrent compilers (parallel test threads, several processes) would
+/// otherwise observe a half-written file.
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), KernelError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| KernelError::Io(format!("{} has no parent directory", path.display())))?;
+    fs::create_dir_all(parent)
+        .map_err(|e| KernelError::Io(format!("could not create {}: {e}", parent.display())))?;
+
+    let tmp = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("staged"),
+        std::process::id()
+    ));
+    fs::write(&tmp, contents)
+        .map_err(|e| KernelError::Io(format!("could not write {}: {e}", tmp.display())))?;
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        KernelError::Io(format!("could not place {}: {e}", path.display()))
+    })
+}
+
+/// Resolve the target architecture, e.g. "gfx1101".
+///
+/// Guessing here is worse than failing: a code object built for the wrong
+/// architecture loads with an opaque "invalid device function" much later.
+fn detect_gpu_arch() -> Result<String, KernelError> {
     if let Ok(arch) = std::env::var("CANDLE_ROCM_ARCH") {
         return Ok(arch);
     }
 
-    // Try to use rocminfo to detect the architecture
-    match Command::new("rocminfo").arg("-a").output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // Look for "Name:" line with gfxXXXX
-            for line in stdout.lines() {
-                if line.contains("Name:") && line.contains("gfx") {
-                    if let Some(start) = line.find("gfx") {
-                        let arch = &line[start..];
-                        // Extract just the gfxXXXX part
-                        let end = arch
-                            .find(|c: char| !c.is_alphanumeric())
-                            .unwrap_or(arch.len());
-                        return Ok(arch[..end].to_string());
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("Warning: Failed to run rocminfo: {}", e);
-        }
-    }
+    let output = Command::new("rocm_agent_enumerator")
+        .output()
+        .map_err(|e| {
+            KernelError::Compilation(format!(
+                "could not run rocm_agent_enumerator: {e}. Install ROCm or set CANDLE_ROCM_ARCH"
+            ))
+        })?;
 
-    // Try hipcc to get default arch
-    match Command::new("hipcc").args(&["--version"]).output() {
-        Ok(_) => {
-            eprintln!("Warning: Could not detect GPU architecture, defaulting to gfx908");
-            Ok("gfx908".to_string())
-        }
-        Err(e) => Err(KernelError::Compilation(format!(
-            "hipcc not found: {}. Please install ROCm or set CANDLE_ROCM_ARCH environment variable",
-            e
-        ))),
-    }
+    // The host agent reports itself as gfx000.
+    let arch = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("gfx") && *line != "gfx000")
+        .map(str::to_string);
+
+    arch.ok_or_else(|| {
+        KernelError::Compilation(
+            "no AMD GPU architecture detected; set CANDLE_ROCM_ARCH to build kernels anyway"
+                .to_string(),
+        )
+    })
 }
 
-/// Detect ROCm version
 fn detect_rocm_version() -> Result<String, KernelError> {
-    // Try to get from environment variable first
     if let Ok(version) = std::env::var("CANDLE_ROCM_VERSION") {
         return Ok(version);
     }
 
-    // Try to get from hipcc --version
-    match Command::new("hipcc").args(&["--version"]).output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // Parse version from output like "HIP version: 6.1.0"
-            for line in stdout.lines() {
-                if line.contains("HIP version:") || line.contains("HIP_VERSION:") {
-                    if let Some(v) = line.split(':').nth(1) {
-                        let version = v.trim().split('.').take(2).collect::<Vec<_>>().join(".");
-                        return Ok(version);
-                    }
-                }
-            }
-            // If we can't parse, return a default
-            Ok("6.0".to_string())
-        }
-        Err(e) => Err(KernelError::Compilation(format!(
-            "hipcc not found: {}. Please install ROCm or set CANDLE_ROCM_VERSION environment variable",
-            e
-        ))),
-    }
+    let output = Command::new("hipcc")
+        .arg("--version")
+        .output()
+        .map_err(|e| KernelError::Compilation(format!("could not run hipcc: {e}")))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let version = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("HIP version:"))
+        .map(|v| {
+            v.trim()
+                .split('.')
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(".")
+                // Drop any build suffix, e.g. "7.2-53211".
+                .split('-')
+                .next()
+                .unwrap_or("unknown")
+                .to_string()
+        });
+
+    version.ok_or_else(|| {
+        KernelError::Compilation("could not parse the HIP version from hipcc --version".to_string())
+    })
 }
 
-/// Get the base cache directory
-fn get_cache_dir() -> Result<PathBuf, KernelError> {
-    let home = dirs::cache_dir()
-        .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
-        .ok_or_else(|| KernelError::Internal("Could not determine cache directory".to_string()))?;
-
-    Ok(home.join("candle-rocm"))
+fn base_cache_dir() -> Result<PathBuf, KernelError> {
+    dirs::cache_dir()
+        .map(|dir| dir.join("candle-rocm"))
+        .ok_or_else(|| KernelError::Internal("could not determine a cache directory".to_string()))
 }
 
-/// Compute a hash of the source code
-fn compute_source_hash(source: &str) -> String {
+fn source_hash(source: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(source.as_bytes());
-    let result = hasher.finalize();
-    // Use first 16 characters of hex as hash
-    format!("{:x}", result)[..16].to_string()
-}
-
-/// Compile a kernel using hipcc
-fn compile_kernel(
-    name: &str,
-    source: &str,
-    arch: &str,
-    output_path: &Path,
-) -> Result<Vec<u8>, KernelError> {
-    let temp_dir = std::env::temp_dir();
-    let source_hash = compute_source_hash(source);
-    let source_file = temp_dir.join(format!("candle_{}_{}.hip", name, source_hash));
-    let obj_file = temp_dir.join(format!("candle_{}_{}.o", name, source_hash));
-    let fatbin_file = temp_dir.join(format!("candle_{}_{}.fatbin", name, source_hash));
-    let hsaco_file = temp_dir.join(format!("candle_{}_{}.hsaco", name, source_hash));
-
-    // Clean up temp files on any error
-    let _cleanup = TempFileCleanup {
-        files: vec![
-            source_file.clone(),
-            obj_file.clone(),
-            fatbin_file.clone(),
-            hsaco_file.clone(),
-        ],
-    };
-
-    fs::write(&source_file, source).map_err(|e| {
-        KernelError::Io(format!(
-            "Failed to write source file {}: {}",
-            source_file.display(),
-            e
-        ))
-    })?;
-
-    // Step 1: Compile HIP to object file
-    let output = Command::new("hipcc")
-        .args(&[
-            &format!("--offload-arch={}", arch),
-            "-O3",
-            "-fPIC",
-            "-c",
-            "-o",
-            obj_file.to_str().unwrap(),
-            source_file.to_str().unwrap(),
-        ])
-        .output()
-        .map_err(|e| {
-            KernelError::Compilation(format!("Failed to execute hipcc: {}. Is hipcc in PATH?", e))
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(KernelError::Compilation(format!(
-            "hipcc compilation failed for {}:\n{}",
-            name, stderr
-        )));
-    }
-
-    // Step 2: Extract fat binary from object
-    let extract_output = Command::new("objcopy")
-        .args(&[
-            "-O",
-            "binary",
-            "-j",
-            ".hip_fatbin",
-            obj_file.to_str().unwrap(),
-            fatbin_file.to_str().unwrap(),
-        ])
-        .output()
-        .map_err(|e| {
-            KernelError::Compilation(format!(
-                "Failed to execute objcopy: {}. Is binutils in PATH?",
-                e
-            ))
-        })?;
-
-    if !extract_output.status.success() {
-        let stderr = String::from_utf8_lossy(&extract_output.stderr);
-        return Err(KernelError::Compilation(format!(
-            "objcopy extraction failed for {}:\n{}",
-            name, stderr
-        )));
-    }
-
-    // Step 3: Unbundle the code object for specific architecture
-    let target = format!("hipv4-amdgcn-amd-amdhsa--{}", arch);
-    let bundler_path = find_rocm_tool("clang-offload-bundler")?;
-    let unbundle_output = Command::new(&bundler_path)
-        .args(&[
-            "--unbundle",
-            "--type=o",
-            "--input",
-            fatbin_file.to_str().unwrap(),
-            "--targets",
-            &target,
-            "--output",
-            hsaco_file.to_str().unwrap(),
-        ])
-        .output()
-        .map_err(|e| {
-            KernelError::Compilation(format!(
-                "Failed to execute clang-offload-bundler: {}. Is ROCm in PATH?",
-                e
-            ))
-        })?;
-
-    if !unbundle_output.status.success() {
-        let stderr = String::from_utf8_lossy(&unbundle_output.stderr);
-        return Err(KernelError::Compilation(format!(
-            "clang-offload-bundler extraction failed for {}:\n{}",
-            name, stderr
-        )));
-    }
-
-    // Read the final code object
-    let binary = fs::read(&hsaco_file).map_err(|e| {
-        KernelError::Io(format!(
-            "Failed to read code object {}: {}",
-            hsaco_file.display(),
-            e
-        ))
-    })?;
-
-    // Write to cache location
-    fs::write(output_path, &binary).map_err(|e| {
-        KernelError::Io(format!(
-            "Failed to write cache file {}: {}",
-            output_path.display(),
-            e
-        ))
-    })?;
-
-    Ok(binary)
-}
-
-/// Find an ROCm tool using hipcc
-fn find_rocm_tool(tool_name: &str) -> Result<String, KernelError> {
-    let output = Command::new("hipcc")
-        .args(&["--print-prog-name", tool_name])
-        .output()
-        .map_err(|e| KernelError::Compilation(format!("Failed to run hipcc: {}", e)))?;
-    if output.status.success() {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() && PathBuf::from(&path).exists() {
-            return Ok(path);
-        }
-    }
-    Err(KernelError::Compilation(format!(
-        "{} not found via hipcc. Is ROCm installed?",
-        tool_name
-    )))
-}
-
-/// Helper struct to clean up temporary files
-struct TempFileCleanup {
-    files: Vec<PathBuf>,
-}
-
-impl Drop for TempFileCleanup {
-    fn drop(&mut self) {
-        for file in &self.files {
-            let _ = fs::remove_file(file);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_source_hash() {
-        let source1 = "__global__ void test() {}";
-        let source2 = "__global__ void test() {}";
-        let source3 = "__global__ void test2() {}";
-
-        let hash1 = compute_source_hash(source1);
-        let hash2 = compute_source_hash(source2);
-        let hash3 = compute_source_hash(source3);
-
-        assert_eq!(hash1, hash2);
-        assert_ne!(hash1, hash3);
-    }
+    format!("{:x}", hasher.finalize())[..16].to_string()
 }

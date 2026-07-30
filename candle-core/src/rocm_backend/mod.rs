@@ -4,7 +4,6 @@ use crate::backend::BackendStorage;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, WithDType};
 pub use candle_rocm_kernels as kernels;
-use candle_rocm_kernels::kernel::KernelSource;
 use half::{bf16, f16};
 pub use rocm_rs;
 use rocm_rs::hip::bindings;
@@ -444,8 +443,7 @@ macro_rules! cast_launch {
         unsafe {
             launch_kernel(
                 &$dev,
-                candle_rocm_kernels::kernel::CastKernel::NAME,
-                candle_rocm_kernels::kernel::CastKernel::CODE,
+                &kernels::CAST,
                 &func_name,
                 $grid,
                 $block,
@@ -500,8 +498,7 @@ pub fn launch_config(num_elems: usize) -> (rocm_rs::hip::Dim3, rocm_rs::hip::Dim
 
 unsafe fn launch_kernel(
     dev: &RocmDevice,
-    module_name: &'static str,
-    module_source: &'static str,
+    module: &kernels::Module,
     func_name: &str,
     grid: rocm_rs::hip::Dim3,
     block: rocm_rs::hip::Dim3,
@@ -512,7 +509,7 @@ unsafe fn launch_kernel(
         .lock()
         .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
     let module = kernel_manager
-        .get_or_load(module_name, module_source)
+        .get_or_load(module)
         .map_err(|e| crate::Error::Msg(e.to_string()))?;
     let kernel = module
         .get_function(func_name)
@@ -658,7 +655,6 @@ impl<U: crate::op::UnaryOpT> Map1 for U {
         dev: &RocmDevice,
         layout: &Layout,
     ) -> Result<SendSyncDeviceMemory<T>> {
-        use candle_rocm_kernels::kernel::UnaryKernel;
         let shape = layout.shape();
         let dims = shape.dims();
         let elem_count = shape.elem_count();
@@ -678,8 +674,7 @@ impl<U: crate::op::UnaryOpT> Map1 for U {
 
             launch_kernel(
                 dev,
-                UnaryKernel::NAME,
-                UnaryKernel::CODE,
+                &kernels::UNARY,
                 &func_name,
                 grid,
                 block,
@@ -706,7 +701,6 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
         rhs_l: &Layout,
         dev: &RocmDevice,
     ) -> Result<SendSyncDeviceMemory<T>> {
-        use candle_rocm_kernels::kernel::BinaryKernel;
         let shape = lhs_l.shape();
         let dims = shape.dims();
         let elem_count = shape.elem_count();
@@ -727,8 +721,7 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
 
             launch_kernel(
                 dev,
-                BinaryKernel::NAME,
-                BinaryKernel::CODE,
+                &kernels::BINARY,
                 &func_name,
                 grid,
                 block,
@@ -774,7 +767,6 @@ impl Affine {
         dev: &RocmDevice,
         layout: &Layout,
     ) -> Result<SendSyncDeviceMemory<T>> {
-        use candle_rocm_kernels::kernel::AffineKernel;
         let shape = layout.shape();
         let dims = shape.dims();
         let elem_count = shape.elem_count();
@@ -797,8 +789,7 @@ impl Affine {
 
             launch_kernel(
                 dev,
-                AffineKernel::NAME,
-                AffineKernel::CODE,
+                &kernels::AFFINE,
                 &func_name,
                 grid,
                 block,
@@ -845,7 +836,6 @@ impl Powf {
         dev: &RocmDevice,
         layout: &Layout,
     ) -> Result<SendSyncDeviceMemory<T>> {
-        use candle_rocm_kernels::kernel::UnaryKernel;
         let shape = layout.shape();
         let dims = shape.dims();
         let elem_count = shape.elem_count();
@@ -867,8 +857,7 @@ impl Powf {
 
             launch_kernel(
                 dev,
-                UnaryKernel::NAME,
-                UnaryKernel::CODE,
+                &kernels::UNARY,
                 &func_name,
                 grid,
                 block,
@@ -914,7 +903,6 @@ impl Elu {
         dev: &RocmDevice,
         layout: &Layout,
     ) -> Result<SendSyncDeviceMemory<T>> {
-        use candle_rocm_kernels::kernel::UnaryKernel;
         let shape = layout.shape();
         let dims = shape.dims();
         let elem_count = shape.elem_count();
@@ -936,8 +924,7 @@ impl Elu {
 
             launch_kernel(
                 dev,
-                UnaryKernel::NAME,
-                UnaryKernel::CODE,
+                &kernels::UNARY,
                 &func_name,
                 grid,
                 block,
@@ -1014,7 +1001,6 @@ impl FastReduce<'_> {
         dev: &RocmDevice,
         layout: &Layout,
     ) -> Result<SendSyncDeviceMemory<T>> {
-        use candle_rocm_kernels::kernel::ReduceKernel;
         let src_dims = layout.shape().dims();
         let src_el: usize = src_dims.iter().product();
 
@@ -1059,8 +1045,7 @@ impl FastReduce<'_> {
 
             launch_kernel(
                 dev,
-                ReduceKernel::NAME,
-                ReduceKernel::CODE,
+                &kernels::REDUCE,
                 &func_name,
                 grid,
                 block,
@@ -1101,8 +1086,6 @@ fn index_select_typed<T: Copy + Send + Sync + WithDType + 'static>(
     dst_el: usize,
     device: &RocmDevice,
 ) -> Result<SendSyncDeviceMemory<T>> {
-    use candle_rocm_kernels::kernel::IndexingKernel;
-
     let func_name = kernel_name::<T>(ids_prefix);
     let output = device.alloc::<T>(dst_el)?;
     let num_dims = ds.count() / 2;
@@ -1114,8 +1097,7 @@ fn index_select_typed<T: Copy + Send + Sync + WithDType + 'static>(
 
         launch_kernel(
             device,
-            IndexingKernel::NAME,
-            IndexingKernel::CODE,
+            &kernels::INDEXING,
             &func_name,
             grid,
             block,
@@ -1846,8 +1828,7 @@ impl BackendStorage for RocmStorage {
                 unsafe {
                     launch_kernel(
                         &self.device,
-                        candle_rocm_kernels::kernel::UnaryKernel::NAME,
-                        candle_rocm_kernels::kernel::UnaryKernel::CODE,
+                        &kernels::UNARY,
                         &func_name,
                         grid,
                         block,
@@ -1958,8 +1939,7 @@ impl BackendStorage for RocmStorage {
                 unsafe {
                     launch_kernel(
                         &self.device,
-                        candle_rocm_kernels::kernel::FillKernel::NAME,
-                        candle_rocm_kernels::kernel::FillKernel::CODE,
+                        &kernels::FILL,
                         &func_name,
                         grid,
                         block,
