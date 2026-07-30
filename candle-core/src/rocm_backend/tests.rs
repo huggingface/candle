@@ -7,18 +7,19 @@
 use crate::{DType, Device, IndexOp, Result, Tensor, D};
 
 /// `None` when no ROCm device is available.
-fn device() -> Option<Device> {
+pub(super) fn device() -> Option<Device> {
     Device::new_rocm(0).ok()
 }
 
 macro_rules! rocm_device {
     () => {
-        match device() {
+        match crate::rocm_backend::tests::device() {
             Some(dev) => dev,
             None => return Ok(()),
         }
     };
 }
+pub(super) use rocm_device;
 
 /// `fast_argmin`/`fast_argmax` write `uint32_t`, never the input dtype. With an
 /// f64 input the old code allocated `dst_el` f64s and tagged the result F64,

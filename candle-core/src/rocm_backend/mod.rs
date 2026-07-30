@@ -1,6 +1,6 @@
 //! Implementation of Backend traits for ROCm device
 //!
-use crate::backend::BackendStorage;
+use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result};
 pub use candle_rocm_kernels as kernels;
@@ -13,10 +13,13 @@ mod device;
 mod error;
 mod miopen;
 mod ops_elementwise;
+mod ops_indexing;
 mod ops_reduce;
 mod ops_scalar;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_indexing;
 mod wrappers;
 pub use device::{DeviceId, RocmDevice};
 pub use error::{RocmError, WrapErr};
@@ -25,7 +28,8 @@ pub mod utils;
 pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, Map3, S};
 
 use ops_elementwise::{CloneBuffer, Cmp, WhereCond};
-use ops_reduce::{index_select_typed, FastReduce};
+use ops_indexing::{Gather, IndexAdd, IndexSelect, Scatter, ScatterKind};
+use ops_reduce::FastReduce;
 pub(crate) use ops_scalar::Affine;
 use ops_scalar::{Elu, Powf};
 
@@ -1006,170 +1010,75 @@ impl BackendStorage for RocmStorage {
         ))
     }
 
-    fn gather(&self, _l: &Layout, _idx: &Self, _il: &Layout, _dim: usize) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "gather not yet implemented for ROCm".to_string(),
-        ))
+    fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
+        let device = self.device.clone();
+        let slice = Gather(ids, ids_l, dim).map(&self.slice, &device, l)?;
+        Ok(Self { slice, device })
     }
 
     fn scatter_set(
         &mut self,
-        _l: &Layout,
-        _val: &Self,
-        _vl: &Layout,
-        _idx: &Self,
-        _il: &Layout,
-        _dim: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<()> {
-        Err(crate::Error::Msg(
-            "scatter_set not yet implemented for ROCm".to_string(),
-        ))
+        let device = self.device.clone();
+        Scatter::new(ids, ids_l, dim, ScatterKind::Set).map(
+            &mut self.slice,
+            l,
+            &src.slice,
+            src_l,
+            &device,
+        )
     }
 
     fn scatter_add_set(
         &mut self,
-        _l: &Layout,
-        _val: &Self,
-        _vl: &Layout,
-        _idx: &Self,
-        _il: &Layout,
-        _dim: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<()> {
-        Err(crate::Error::Msg(
-            "scatter_add_set not yet implemented for ROCm".to_string(),
-        ))
+        let device = self.device.clone();
+        Scatter::new(ids, ids_l, dim, ScatterKind::Add).map(
+            &mut self.slice,
+            l,
+            &src.slice,
+            src_l,
+            &device,
+        )
     }
 
-    fn index_select(&self, idx: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
+    fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
         let device = self.device.clone();
-        let left_size: usize = src_l.dims()[..dim].iter().product();
-        let right_size: usize = src_l.dims()[dim + 1..].iter().product();
-        let src_dim_size = src_l.dims()[dim];
-        let ids_dim_size = ids_l.shape().elem_count();
-        let dst_el = ids_dim_size * left_size * right_size;
-
-        let ids_dims = ids_l.shape().dims();
-        let ds = device.clone_htod(&[ids_dims, ids_l.stride()].concat())?;
-
-        let src_ptr = match src_l.contiguous_offsets() {
-            Some((o1, _)) => unsafe { self.slice.offset_ptr(o1) },
-            None => Err(crate::Error::RequiresContiguous { op: "index-select" }.bt())?,
-        };
-
-        let (ids_prefix, ids_ptr) = match &idx.slice {
-            RocmStorageSlice::U32(s) => ("is_u32", unsafe { s.ptr_at(ids_l.start_offset()) }
-                as *mut std::ffi::c_void),
-            RocmStorageSlice::U8(s) => ("is_u8", unsafe { s.ptr_at(ids_l.start_offset()) }
-                as *mut std::ffi::c_void),
-            RocmStorageSlice::I64(s) => ("is_i64", unsafe { s.ptr_at(ids_l.start_offset()) }
-                as *mut std::ffi::c_void),
-            _ => crate::bail!("index_select ids should be u8, u32, or i64"),
-        };
-
-        let slice = match &self.slice {
-            RocmStorageSlice::F32(_) => RocmStorageSlice::F32(index_select_typed::<f32>(
-                ids_prefix,
-                ids_ptr,
-                &ds,
-                src_ptr,
-                left_size,
-                src_dim_size,
-                ids_dim_size,
-                right_size,
-                dst_el,
-                &device,
-            )?),
-            RocmStorageSlice::F64(_) => RocmStorageSlice::F64(index_select_typed::<f64>(
-                ids_prefix,
-                ids_ptr,
-                &ds,
-                src_ptr,
-                left_size,
-                src_dim_size,
-                ids_dim_size,
-                right_size,
-                dst_el,
-                &device,
-            )?),
-            RocmStorageSlice::U8(_) => RocmStorageSlice::U8(index_select_typed::<u8>(
-                ids_prefix,
-                ids_ptr,
-                &ds,
-                src_ptr,
-                left_size,
-                src_dim_size,
-                ids_dim_size,
-                right_size,
-                dst_el,
-                &device,
-            )?),
-            RocmStorageSlice::U32(_) => RocmStorageSlice::U32(index_select_typed::<u32>(
-                ids_prefix,
-                ids_ptr,
-                &ds,
-                src_ptr,
-                left_size,
-                src_dim_size,
-                ids_dim_size,
-                right_size,
-                dst_el,
-                &device,
-            )?),
-            RocmStorageSlice::I64(_) => RocmStorageSlice::I64(index_select_typed::<i64>(
-                ids_prefix,
-                ids_ptr,
-                &ds,
-                src_ptr,
-                left_size,
-                src_dim_size,
-                ids_dim_size,
-                right_size,
-                dst_el,
-                &device,
-            )?),
-            RocmStorageSlice::BF16(_) => RocmStorageSlice::BF16(index_select_typed::<half::bf16>(
-                ids_prefix,
-                ids_ptr,
-                &ds,
-                src_ptr,
-                left_size,
-                src_dim_size,
-                ids_dim_size,
-                right_size,
-                dst_el,
-                &device,
-            )?),
-            RocmStorageSlice::F16(_) => RocmStorageSlice::F16(index_select_typed::<half::f16>(
-                ids_prefix,
-                ids_ptr,
-                &ds,
-                src_ptr,
-                left_size,
-                src_dim_size,
-                ids_dim_size,
-                right_size,
-                dst_el,
-                &device,
-            )?),
-            RocmStorageSlice::I16(_) | RocmStorageSlice::I32(_) | RocmStorageSlice::F8E4M3(_) => {
-                crate::bail!("index_select does not support this dtype for ROCm")
-            }
-        };
+        let slice = IndexSelect(ids, ids_l, dim).map(&self.slice, &device, l)?;
         Ok(Self { slice, device })
     }
 
     fn index_add(
         &self,
-        _l: &Layout,
-        _idx: &Self,
-        _il: &Layout,
-        _val: &Self,
-        _vl: &Layout,
-        _dim: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "index_add not yet implemented for ROCm".to_string(),
-        ))
+        let device = self.device.clone();
+        let mut acc = unsafe { device.alloc_uninit(l.shape(), self.dtype())? };
+        self.copy_strided_src(&mut acc, 0, l)?;
+        // `acc` is a freshly allocated buffer that `copy_strided_src` filled from
+        // element 0, so its layout is contiguous whatever `l` was. Handing `l`
+        // itself to the launcher (as the CUDA backend does) would apply `l`'s
+        // start offset to a buffer that does not have one.
+        let acc_l = Layout::contiguous(l.shape());
+        IndexAdd(ids, ids_l, dim).map(&mut acc.slice, &acc_l, &src.slice, src_l, &device)?;
+        Ok(acc)
     }
 
     fn matmul(
