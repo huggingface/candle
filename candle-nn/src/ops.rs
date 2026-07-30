@@ -877,7 +877,7 @@ impl candle::CustomOp2 for RmsNorm {
                     Some((o1, o2)) => (o1, o2),
                 };
 
-                let block_size = if n_cols < 1024 { 32 } else { 1024 };
+                let block_size: u32 = if n_cols < 1024 { 32 } else { 1024 };
                 let kernel_str = kernel_name::<T>("rmsnorm");
                 let func =
                     dev.get_or_load_func(&kernel_str, &candle::rocm_backend::kernels::REDUCE)?;
@@ -885,7 +885,7 @@ impl candle::CustomOp2 for RmsNorm {
 
                 // Launch config
                 let grid = rocm_rs::hip::Dim3::from((n_rows as u32, 1u32, 1u32));
-                let block = rocm_rs::hip::Dim3::from((block_size as u32, 1u32, 1u32));
+                let block = rocm_rs::hip::Dim3::from((block_size, 1u32, 1u32));
 
                 unsafe {
                     func.launch(
@@ -1214,6 +1214,9 @@ impl candle::CustomOp3 for LayerNorm {
             eps: f32,
         }
         impl S {
+            // Mirrors the layernorm kernel's parameter list (src/alpha/beta each
+            // come with their own layout).
+            #[allow(clippy::too_many_arguments)]
             fn f<T: Copy + Send + Sync + 'static>(
                 &self,
                 src: &SendSyncDeviceMemory<T>,
@@ -1242,14 +1245,14 @@ impl candle::CustomOp3 for LayerNorm {
                     Some((o1, o2)) => (o1, o2),
                 };
 
-                let block_size = if n_cols < 1024 { 32 } else { 1024 };
+                let block_size: u32 = if n_cols < 1024 { 32 } else { 1024 };
                 let kernel_str = kernel_name::<T>("layernorm");
                 let func =
                     dev.get_or_load_func(&kernel_str, &candle::rocm_backend::kernels::REDUCE)?;
                 let dst = dev.alloc::<T>(el)?;
 
                 let grid = rocm_rs::hip::Dim3::from((n_rows as u32, 1u32, 1u32));
-                let block = rocm_rs::hip::Dim3::from((block_size as u32, 1u32, 1u32));
+                let block = rocm_rs::hip::Dim3::from((block_size, 1u32, 1u32));
 
                 unsafe {
                     func.launch(

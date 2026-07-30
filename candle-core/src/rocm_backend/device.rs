@@ -1,5 +1,5 @@
 use crate::backend::BackendDevice;
-use crate::{CpuStorage, DType, Layout, Result, Shape};
+use crate::{CpuStorage, CpuStorageRef, DType, Result, Shape};
 use candle_rocm_kernels::KernelCache;
 use half::{bf16, f16};
 use std::sync::{Arc, Mutex, RwLock};
@@ -8,7 +8,7 @@ use super::wrappers::{
     SendSyncDeviceMemory, SendSyncMIOpenHandle, SendSyncPseudoRng, SendSyncRocblasHandle,
     SendSyncStream,
 };
-use super::{Affine, RocmError, RocmStorage, RocmStorageSlice};
+use super::{RocmError, RocmStorage, RocmStorageSlice};
 use rocm_rs::hip::Device as HipDevice;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -135,7 +135,7 @@ impl RocmDevice {
     ///
     /// The lock is deliberately not unwrapped: a failure inside any `rand_*`
     /// call would poison the mutex and turn every later call into a panic.
-    fn rocrand(&self) -> Result<std::sync::MutexGuard<'_, SendSyncPseudoRng>> {
+    pub(super) fn rocrand(&self) -> Result<std::sync::MutexGuard<'_, SendSyncPseudoRng>> {
         self.rocrand
             .lock()
             .map_err(|_| crate::Error::Msg("Failed to lock rocrand generator".to_string()))
@@ -215,72 +215,40 @@ macro_rules! dispatch_dtypes {
     };
 }
 
-macro_rules! dispatch_cpu_storage {
-    ($storage:expr, $self:expr, |$data:ident, $variant:ident| $body:expr) => {
-        match $storage {
-            CpuStorage::U8($data) => {
-                let mem = $self.clone_htod($data.as_slice())?;
-                let $variant = RocmStorageSlice::U8(mem);
-                $body
-            }
-            CpuStorage::U32($data) => {
-                let mem = $self.clone_htod($data.as_slice())?;
-                let $variant = RocmStorageSlice::U32(mem);
-                $body
-            }
-            CpuStorage::I16($data) => {
-                let mem = $self.clone_htod($data.as_slice())?;
-                let $variant = RocmStorageSlice::I16(mem);
-                $body
-            }
-            CpuStorage::I32($data) => {
-                let mem = $self.clone_htod($data.as_slice())?;
-                let $variant = RocmStorageSlice::I32(mem);
-                $body
-            }
-            CpuStorage::I64($data) => {
-                let mem = $self.clone_htod($data.as_slice())?;
-                let $variant = RocmStorageSlice::I64(mem);
-                $body
-            }
-            CpuStorage::BF16($data) => {
-                let mem = $self.clone_htod($data.as_slice())?;
-                let $variant = RocmStorageSlice::BF16(mem);
-                $body
-            }
-            CpuStorage::F16($data) => {
-                let mem = $self.clone_htod($data.as_slice())?;
-                let $variant = RocmStorageSlice::F16(mem);
-                $body
-            }
-            CpuStorage::F32($data) => {
-                let mem = $self.clone_htod($data.as_slice())?;
-                let $variant = RocmStorageSlice::F32(mem);
-                $body
-            }
-            CpuStorage::F64($data) => {
-                let mem = $self.clone_htod($data.as_slice())?;
-                let $variant = RocmStorageSlice::F64(mem);
-                $body
-            }
-            CpuStorage::F8E4M3($data) => {
-                // `RocmStorageSlice::F8E4M3` holds bytes, and `float8::F8E4M3` is
-                // a `repr(transparent)` wrapper over a single `u8` (asserted in
-                // `rocm_backend::mod`), so the slice can be viewed as bytes
+impl RocmDevice {
+    /// Single host-to-device path shared by `storage_from_slice` and
+    /// `storage_from_cpu_storage`.
+    fn slice_from_cpu_storage_ref(&self, data: CpuStorageRef<'_>) -> Result<RocmStorageSlice> {
+        let slice = match data {
+            CpuStorageRef::U8(data) => RocmStorageSlice::U8(self.clone_htod(data)?),
+            CpuStorageRef::U32(data) => RocmStorageSlice::U32(self.clone_htod(data)?),
+            CpuStorageRef::I16(data) => RocmStorageSlice::I16(self.clone_htod(data)?),
+            CpuStorageRef::I32(data) => RocmStorageSlice::I32(self.clone_htod(data)?),
+            CpuStorageRef::I64(data) => RocmStorageSlice::I64(self.clone_htod(data)?),
+            CpuStorageRef::BF16(data) => RocmStorageSlice::BF16(self.clone_htod(data)?),
+            CpuStorageRef::F16(data) => RocmStorageSlice::F16(self.clone_htod(data)?),
+            CpuStorageRef::F32(data) => RocmStorageSlice::F32(self.clone_htod(data)?),
+            CpuStorageRef::F64(data) => RocmStorageSlice::F64(self.clone_htod(data)?),
+            CpuStorageRef::F8E4M3(data) => {
+                // `RocmStorageSlice::F8E4M3` holds bytes, and `float8::F8E4M3`
+                // is a `repr(transparent)` wrapper over a single `u8` (asserted
+                // in `rocm_backend::mod`), so the slice can be viewed as bytes
                 // without a copy.
                 let bytes: &[u8] =
-                    unsafe { std::slice::from_raw_parts($data.as_ptr() as *const u8, $data.len()) };
-                let mem = $self.clone_htod(bytes)?;
-                let $variant = RocmStorageSlice::F8E4M3(mem);
-                $body
+                    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len()) };
+                RocmStorageSlice::F8E4M3(self.clone_htod(bytes)?)
             }
-            _ => {
+            CpuStorageRef::F6E2M3(_)
+            | CpuStorageRef::F6E3M2(_)
+            | CpuStorageRef::F4(_)
+            | CpuStorageRef::F8E8M0(_) => {
                 return Err(crate::Error::Msg(
-                    "CpuStorage variant not yet supported for ROCm".to_string(),
-                ));
+                    "F6E2M3/F6E3M2/F4/F8E8M0 storage is not yet supported for ROCm".to_string(),
+                ))
             }
-        }
-    };
+        };
+        Ok(slice)
+    }
 }
 
 impl BackendDevice for RocmDevice {
@@ -321,37 +289,32 @@ impl BackendDevice for RocmDevice {
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, data: &[T]) -> Result<Self::Storage> {
-        let mem = self.clone_htod(data)?;
-        let slice = match T::DTYPE {
-            DType::U8 => RocmStorageSlice::U8(unsafe { std::mem::transmute(mem) }),
-            DType::U32 => RocmStorageSlice::U32(unsafe { std::mem::transmute(mem) }),
-            DType::I16 => RocmStorageSlice::I16(unsafe { std::mem::transmute(mem) }),
-            DType::I32 => RocmStorageSlice::I32(unsafe { std::mem::transmute(mem) }),
-            DType::I64 => RocmStorageSlice::I64(unsafe { std::mem::transmute(mem) }),
-            DType::BF16 => RocmStorageSlice::BF16(unsafe { std::mem::transmute(mem) }),
-            DType::F16 => RocmStorageSlice::F16(unsafe { std::mem::transmute(mem) }),
-            DType::F32 => RocmStorageSlice::F32(unsafe { std::mem::transmute(mem) }),
-            DType::F64 => RocmStorageSlice::F64(unsafe { std::mem::transmute(mem) }),
-            DType::F8E4M3 => RocmStorageSlice::F8E4M3(unsafe { std::mem::transmute(mem) }),
-            dtype => {
-                return Err(crate::Error::Msg(format!(
-                    "DType {:?} not yet supported for ROCm storage_from_slice",
-                    dtype
-                )));
-            }
-        };
         Ok(RocmStorage {
-            slice,
+            slice: self.slice_from_cpu_storage_ref(T::cpu_storage_ref(data))?,
             device: self.clone(),
         })
     }
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
-        dispatch_cpu_storage!(storage, self, |data, slice| {
-            Ok(RocmStorage {
-                slice,
-                device: self.clone(),
-            })
+        let data = match storage {
+            CpuStorage::U8(v) => CpuStorageRef::U8(v),
+            CpuStorage::U32(v) => CpuStorageRef::U32(v),
+            CpuStorage::I16(v) => CpuStorageRef::I16(v),
+            CpuStorage::I32(v) => CpuStorageRef::I32(v),
+            CpuStorage::I64(v) => CpuStorageRef::I64(v),
+            CpuStorage::BF16(v) => CpuStorageRef::BF16(v),
+            CpuStorage::F16(v) => CpuStorageRef::F16(v),
+            CpuStorage::F32(v) => CpuStorageRef::F32(v),
+            CpuStorage::F64(v) => CpuStorageRef::F64(v),
+            CpuStorage::F8E4M3(v) => CpuStorageRef::F8E4M3(v),
+            CpuStorage::F6E2M3(v) => CpuStorageRef::F6E2M3(v),
+            CpuStorage::F6E3M2(v) => CpuStorageRef::F6E3M2(v),
+            CpuStorage::F4(v) => CpuStorageRef::F4(v),
+            CpuStorage::F8E8M0(v) => CpuStorageRef::F8E8M0(v),
+        };
+        Ok(RocmStorage {
+            slice: self.slice_from_cpu_storage_ref(data)?,
+            device: self.clone(),
         })
     }
 
@@ -360,51 +323,7 @@ impl BackendDevice for RocmDevice {
     }
 
     fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, hi: f64) -> Result<Self::Storage> {
-        let elem_count = shape.elem_count();
-        let mut rocrand = self.rocrand()?;
-        let slice = match dtype {
-            DType::U8
-            | DType::U32
-            | DType::I16
-            | DType::I32
-            | DType::I64
-            | DType::F16
-            | DType::BF16
-            | DType::F8E4M3
-            | DType::F6E2M3
-            | DType::F6E3M2
-            | DType::F4
-            | DType::F8E8M0 => {
-                return Err(crate::Error::Msg(format!(
-                    "dtype {:?} not supported for rocm rand_uniform",
-                    dtype
-                )));
-            }
-            DType::F32 => {
-                let mut data = self.alloc::<f32>(elem_count)?;
-                rocrand.generate_uniform(&mut data).map_err(|e| {
-                    crate::Error::Msg(format!("rocrand generate_uniform failed: {}", e))
-                })?;
-                RocmStorageSlice::F32(data)
-            }
-            DType::F64 => {
-                let mut data = self.alloc::<f64>(elem_count)?;
-                rocrand.generate_uniform_double(&mut data).map_err(|e| {
-                    crate::Error::Msg(format!("rocrand generate_uniform_double failed: {}", e))
-                })?;
-                RocmStorageSlice::F64(data)
-            }
-        };
-        let slice = if lo == 0. && hi == 1.0 {
-            slice
-        } else {
-            let layout = Layout::contiguous(shape);
-            Affine(hi - lo, lo).map(&slice, self, &layout)?
-        };
-        Ok(RocmStorage {
-            slice,
-            device: self.clone(),
-        })
+        self.rand_uniform_impl(shape, dtype, lo, hi)
     }
 
     fn rand_normal(
@@ -414,55 +333,7 @@ impl BackendDevice for RocmDevice {
         mean: f64,
         std: f64,
     ) -> Result<Self::Storage> {
-        let elem_count = shape.elem_count();
-        let mut rocrand = self.rocrand()?;
-        // rocrand can only generate an even number of normal values.
-        let elem_count_round = if elem_count % 2 == 1 {
-            elem_count + 1
-        } else {
-            elem_count
-        };
-        let slice = match dtype {
-            DType::U8
-            | DType::U32
-            | DType::I16
-            | DType::I32
-            | DType::I64
-            | DType::F16
-            | DType::BF16
-            | DType::F8E4M3
-            | DType::F6E2M3
-            | DType::F6E3M2
-            | DType::F4
-            | DType::F8E8M0 => {
-                return Err(crate::Error::Msg(format!(
-                    "dtype {:?} not supported for rocm rand_normal",
-                    dtype
-                )));
-            }
-            DType::F32 => {
-                let mut data = self.alloc::<f32>(elem_count_round)?;
-                rocrand
-                    .generate_normal(&mut data, mean as f32, std as f32)
-                    .map_err(|e| {
-                        crate::Error::Msg(format!("rocrand generate_normal failed: {}", e))
-                    })?;
-                RocmStorageSlice::F32(data)
-            }
-            DType::F64 => {
-                let mut data = self.alloc::<f64>(elem_count_round)?;
-                rocrand
-                    .generate_normal_double(&mut data, mean, std)
-                    .map_err(|e| {
-                        crate::Error::Msg(format!("rocrand generate_normal_double failed: {}", e))
-                    })?;
-                RocmStorageSlice::F64(data)
-            }
-        };
-        Ok(RocmStorage {
-            slice,
-            device: self.clone(),
-        })
+        self.rand_normal_impl(shape, dtype, mean, std)
     }
 
     fn set_seed(&self, seed: u64) -> Result<()> {

@@ -23,6 +23,7 @@ pub fn miopen_dtype<T: Copy>() -> crate::Result<DataType> {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // mirrors the MIOpen C convolution signature
 pub fn conv2d_forward<T: Copy>(
     handle: &Handle,
     x_ptr: *mut std::ffi::c_void,
@@ -104,7 +105,7 @@ pub fn conv2d_forward<T: Copy>(
     };
     let workspace_ptr = workspace
         .as_ref()
-        .map(|w| w.as_ptr() as *mut std::ffi::c_void)
+        .map(|w| w.as_ptr())
         .unwrap_or(std::ptr::null_mut());
 
     unsafe {
@@ -155,6 +156,7 @@ pub fn conv2d_forward<T: Copy>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // mirrors the MIOpen C convolution signature
 pub fn conv_transpose1d_forward<T: Copy>(
     handle: &Handle,
     x_ptr: *mut std::ffi::c_void,
@@ -232,7 +234,7 @@ pub fn conv_transpose1d_forward<T: Copy>(
     };
     let workspace_ptr = workspace
         .as_ref()
-        .map(|w| w.as_ptr() as *mut std::ffi::c_void)
+        .map(|w| w.as_ptr())
         .unwrap_or(std::ptr::null_mut());
 
     unsafe {
