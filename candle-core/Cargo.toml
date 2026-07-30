@@ -34,17 +34,16 @@ thiserror = { workspace = true }
 yoke = { workspace = true }
 zerocopy = { workspace = true }
 zip = { workspace = true }
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokenizers = { workspace = true, features = ["onig"] }
 
-#Wgpu Dependencies:
-#wgpu = { workspace = true, optional = true }
+# WGPU dependencies
 bytemuck = { workspace = true, optional = true }
-tracing = {workspace = true, optional = true, features = ["release_max_level_off"]}
-
+tracing = { workspace = true, optional = true, features = ["release_max_level_off"] }
 pollster = { workspace = true, optional = true }
 candle-wgpu-kernels = { workspace = true, optional = true }
 wgpu-compute-layer = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokenizers = { workspace = true, features = ["onig"] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 candle-ug = { workspace = true, optional = true }
