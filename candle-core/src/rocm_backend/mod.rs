@@ -16,10 +16,13 @@ mod ops_elementwise;
 mod ops_indexing;
 mod ops_reduce;
 mod ops_scalar;
+mod rng;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_indexing;
+#[cfg(test)]
+mod tests_rng;
 #[cfg(test)]
 mod tests_sort;
 mod wrappers;
@@ -161,8 +164,8 @@ fn gemm_config<T: Copy>(
         (k as i32, Operation::Transpose)
     } else {
         return Err(RocmError::MatMulNonContiguous {
-            lhs_stride: lhs_l.clone(),
-            rhs_stride: rhs_l.clone(),
+            lhs_stride: Box::new(lhs_l.clone()),
+            rhs_stride: Box::new(rhs_l.clone()),
             mnk: (m, n, k),
         });
     };
@@ -173,8 +176,8 @@ fn gemm_config<T: Copy>(
         (m as i32, Operation::Transpose)
     } else {
         return Err(RocmError::MatMulNonContiguous {
-            lhs_stride: lhs_l.clone(),
-            rhs_stride: rhs_l.clone(),
+            lhs_stride: Box::new(lhs_l.clone()),
+            rhs_stride: Box::new(rhs_l.clone()),
             mnk: (m, n, k),
         });
     };
@@ -200,8 +203,8 @@ fn gemm_config<T: Copy>(
         [] => m * k,
         _ => {
             return Err(RocmError::MatMulNonContiguous {
-                lhs_stride: lhs_l.clone(),
-                rhs_stride: rhs_l.clone(),
+                lhs_stride: Box::new(lhs_l.clone()),
+                rhs_stride: Box::new(rhs_l.clone()),
                 mnk: (m, n, k),
             })
         }
@@ -214,8 +217,8 @@ fn gemm_config<T: Copy>(
         [] => n * k,
         _ => {
             return Err(RocmError::MatMulNonContiguous {
-                lhs_stride: lhs_l.clone(),
-                rhs_stride: rhs_l.clone(),
+                lhs_stride: Box::new(lhs_l.clone()),
+                rhs_stride: Box::new(rhs_l.clone()),
                 mnk: (m, n, k),
             })
         }
@@ -593,11 +596,11 @@ fn dims_and_strides(
     let strides = layout.stride();
     let mut data = Vec::with_capacity(dims.len() + n_strides * dims.len());
     for &d in dims {
-        data.push(d as usize);
+        data.push(d);
     }
     for _ in 0..n_strides {
         for &s in strides {
-            data.push(s as usize);
+            data.push(s);
         }
     }
     Ok(Some(dev.clone_htod(&data)?))
@@ -614,13 +617,13 @@ fn dims_and_strides_pair(
     let dims = l1.shape().dims();
     let mut data = Vec::with_capacity(dims.len() * 3);
     for &d in dims {
-        data.push(d as usize);
+        data.push(d);
     }
     for &s in l1.stride() {
-        data.push(s as usize);
+        data.push(s);
     }
     for &s in l2.stride() {
-        data.push(s as usize);
+        data.push(s);
     }
     Ok(Some(dev.clone_htod(&data)?))
 }
@@ -661,20 +664,20 @@ impl BackendStorage for RocmStorage {
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         match &self.slice {
-            RocmStorageSlice::U8(s) => Ok(CpuStorage::U8(self.device.clone_dtoh(s)?.into())),
-            RocmStorageSlice::U32(s) => Ok(CpuStorage::U32(self.device.clone_dtoh(s)?.into())),
-            RocmStorageSlice::I16(s) => Ok(CpuStorage::I16(self.device.clone_dtoh(s)?.into())),
-            RocmStorageSlice::I32(s) => Ok(CpuStorage::I32(self.device.clone_dtoh(s)?.into())),
-            RocmStorageSlice::I64(s) => Ok(CpuStorage::I64(self.device.clone_dtoh(s)?.into())),
-            RocmStorageSlice::BF16(s) => Ok(CpuStorage::BF16(self.device.clone_dtoh(s)?.into())),
-            RocmStorageSlice::F16(s) => Ok(CpuStorage::F16(self.device.clone_dtoh(s)?.into())),
-            RocmStorageSlice::F32(s) => Ok(CpuStorage::F32(self.device.clone_dtoh(s)?.into())),
-            RocmStorageSlice::F64(s) => Ok(CpuStorage::F64(self.device.clone_dtoh(s)?.into())),
+            RocmStorageSlice::U8(s) => Ok(CpuStorage::U8(self.device.clone_dtoh(s)?)),
+            RocmStorageSlice::U32(s) => Ok(CpuStorage::U32(self.device.clone_dtoh(s)?)),
+            RocmStorageSlice::I16(s) => Ok(CpuStorage::I16(self.device.clone_dtoh(s)?)),
+            RocmStorageSlice::I32(s) => Ok(CpuStorage::I32(self.device.clone_dtoh(s)?)),
+            RocmStorageSlice::I64(s) => Ok(CpuStorage::I64(self.device.clone_dtoh(s)?)),
+            RocmStorageSlice::BF16(s) => Ok(CpuStorage::BF16(self.device.clone_dtoh(s)?)),
+            RocmStorageSlice::F16(s) => Ok(CpuStorage::F16(self.device.clone_dtoh(s)?)),
+            RocmStorageSlice::F32(s) => Ok(CpuStorage::F32(self.device.clone_dtoh(s)?)),
+            RocmStorageSlice::F64(s) => Ok(CpuStorage::F64(self.device.clone_dtoh(s)?)),
             RocmStorageSlice::F8E4M3(s) => {
                 let bytes = self.device.clone_dtoh(s)?;
                 let v: Vec<float8::F8E4M3> =
                     bytes.into_iter().map(float8::F8E4M3::from_bits).collect();
-                Ok(CpuStorage::F8E4M3(v.into()))
+                Ok(CpuStorage::F8E4M3(v))
             }
         }
     }
@@ -811,11 +814,19 @@ impl BackendStorage for RocmStorage {
                 f64,
                 F64
             ),
+            // Still real: the shared `cast.cu` declares no `CAST_OP` with an
+            // int16_t/int32_t source or destination (the only i32 entries are
+            // the fp8 pair below), so there is no kernel to launch.
             DType::I16 | DType::I32 => {
                 return Err(crate::Error::Msg(
                     "i16/i32 dtypes are not supported for to_dtype on ROCm".to_string(),
                 ))
             }
+            // `cast.cu` does ship the f8e4m3 casts, but they are named
+            // `cast_*_f8_e4m3` while `DType::as_str` yields `f8e4m3` and
+            // `cast_launch!` derives the destination suffix from the Rust type
+            // (F8E4M3 is stored as `u8` here). Wiring that up is a separate
+            // change; the other four dtypes have no kernels at all.
             DType::F8E4M3 | DType::F4 | DType::F6E2M3 | DType::F6E3M2 | DType::F8E8M0 => {
                 return Err(crate::Error::Msg(format!(
                     "{:?} dtype is not supported for to_dtype on ROCm",

@@ -27,10 +27,12 @@ pub enum RocmError {
     #[error("internal error: {0}")]
     Internal(String),
 
+    // The two layouts are boxed to keep `RocmError` (and every `Result` built on
+    // it) small; inline they make this variant ~136 bytes.
     #[error("matmul is only supported for contiguous tensors lstride: {lhs_stride:?} rstride: {rhs_stride:?} mnk: {mnk:?}")]
     MatMulNonContiguous {
-        lhs_stride: Layout,
-        rhs_stride: Layout,
+        lhs_stride: Box<Layout>,
+        rhs_stride: Box<Layout>,
         mnk: (usize, usize, usize),
     },
 }
