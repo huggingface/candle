@@ -43,16 +43,8 @@
         return FROM_BITS(res);                                                 \
     }
 
-__device__ __forceinline__ unsigned short __candle_bf16_as_ushort(__hip_bfloat16 h) {
-    return *reinterpret_cast<unsigned short *>(&h);
-}
-
-__device__ __forceinline__ __hip_bfloat16 __candle_ushort_as_bf16(unsigned short u) {
-    return *reinterpret_cast<__hip_bfloat16 *>(&u);
-}
-
 CANDLE_HIP_ATOMIC_ADD_16(__half, __half_as_ushort, __ushort_as_half)
-CANDLE_HIP_ATOMIC_ADD_16(__hip_bfloat16, __candle_bf16_as_ushort, __candle_ushort_as_bf16)
+CANDLE_HIP_ATOMIC_ADD_16(__hip_bfloat16, __bfloat16_as_ushort, __ushort_as_bfloat16)
 
 #undef CANDLE_HIP_ATOMIC_ADD_16
 
@@ -100,4 +92,16 @@ __device__ __forceinline__ unsigned int __vsubss4(unsigned int a, unsigned int b
 #define __shfl_sync(mask, var, src_lane, width) __shfl(var, src_lane, width)
 #define __shfl_up_sync(mask, var, delta, width) __shfl_up(var, delta, width)
 #define __shfl_down_sync(mask, var, delta, width) __shfl_down(var, delta, width)
-#define __syncwarp() __builtin_amdgcn_wave_barrier()
+
+// __syncwarp gets the same treatment, for the same reason. HIP does define it
+// (amd_warp_sync_functions.h) and its unmasked form is the one to use: it
+// brackets the wave barrier with release/acquire wavefront fences, which a bare
+// __builtin_amdgcn_wave_barrier() -- a scheduling barrier with no memory
+// ordering -- does not. The forwarding helper is defined before the macro so it
+// binds to that HIP function; the macro must not expand to anything weaker.
+//
+// The macro is variadic so both CUDA spellings work: HIP's masked overload
+// static_asserts on a 32-bit mask exactly as __shfl_xor_sync does, so
+// __syncwarp(0xffffffff) fails to compile without it.
+__device__ __forceinline__ void __candle_syncwarp() { __syncwarp(); }
+#define __syncwarp(...) __candle_syncwarp()

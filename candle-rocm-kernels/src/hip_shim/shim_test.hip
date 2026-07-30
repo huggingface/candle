@@ -14,6 +14,20 @@ __global__ void shfl_sum(const float *in, float *out) {
     if (threadIdx.x % 32 == 0) out[threadIdx.x / 32] = v;
 }
 
+// --- __syncwarp: HIP's own definition must not be shadowed -----------------
+// The shim deliberately does not define __syncwarp. A `#define __syncwarp()`
+// would replace HIP's fenced version with a scheduling-only barrier *and* make
+// the masked spelling a compile error, so using both spellings here is a
+// compile-time regression guard.
+__global__ void syncwarp_both_spellings(int *out) {
+    __shared__ int scratch[32];
+    scratch[threadIdx.x] = (int)threadIdx.x;
+    __syncwarp();
+    int v = scratch[threadIdx.x ^ 1];
+    __syncwarp(0xffffffff);
+    out[threadIdx.x] = v;
+}
+
 // --- 16-bit atomicAdd: every thread adds 1.0 to one accumulator ------------
 __global__ void atomic_add_half(__half *acc) {
     atomicAdd(acc, __float2half(1.0f));
@@ -66,6 +80,16 @@ int main() {
         snprintf(name, sizeof(name), "shfl_xor_sync group %d", g);
         CHECK(fabsf(h_out[g] - want) < 1e-3f, name);
     }
+
+    // One wave exchanging through shared memory across both __syncwarp forms.
+    int *d_sw;
+    HIP_CHECK(hipMalloc(&d_sw, 32 * sizeof(int)));
+    hipLaunchKernelGGL(syncwarp_both_spellings, dim3(1), dim3(32), 0, 0, d_sw);
+    int h_sw[32];
+    HIP_CHECK(hipMemcpy(h_sw, d_sw, 32 * sizeof(int), hipMemcpyDeviceToHost));
+    int sw_ok = 1;
+    for (int i = 0; i < 32; ++i) sw_ok &= (h_sw[i] == (i ^ 1));
+    CHECK(sw_ok, "__syncwarp both spellings");
 
     // 1024 threads each adding 1.0 -> 1024.0, exactly representable in both.
     __half *d_h;

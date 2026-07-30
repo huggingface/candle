@@ -46,9 +46,10 @@ ROCm is the AMD GPU backend. Make sure ROCm 6.2 or newer is installed and on
 - `rocminfo | grep gfx` should print your GPU architecture, e.g. `gfx1101`.
 
 Unlike CUDA, the kernels are not compiled during `cargo build`: `hipcc` compiles
-them on first use and caches the result under `~/.cache/candle-rocm`, so the
-same binary runs on any architecture. Set `CANDLE_ROCM_ARCH=<arch>` if
-auto-detection is unavailable or picks the wrong GPU.
+them on first use and caches the result under `~/.cache/candle-rocm`
+(`CANDLE_ROCM_CACHE_DIR` overrides it), so the same binary runs on any
+architecture. The architecture is read from the device you open; set
+`CANDLE_ROCM_ARCH=<arch>` if that is unavailable or reports the wrong GPU.
 
 Add the `candle-core` crate with the rocm feature:
 

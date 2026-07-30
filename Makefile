@@ -8,7 +8,9 @@ CARGO ?= cargo
 export CARGO_BUILD_JOBS ?= 4
 
 # ROCm test tuning. Kernels are compiled by hipcc on first use and cached on
-# disk; until that cache is race-free the ROCm suites run single-threaded.
+# disk. That cache is now locked per entry, so concurrent compilers are safe;
+# the suites still default to one thread so that GPU memory use and the
+# attribution of a failure stay predictable. Override with ROCM_TEST_THREADS.
 ROCM_FILTER ?= _rocm
 ROCM_TEST_THREADS ?= 1
 ROCM_CRATES := -p candle-core -p candle-nn -p candle-transformers -p candle-examples
@@ -84,9 +86,12 @@ rocm-info:
 	rocminfo | grep -E '^\s*(Name|Marketing Name|Uuid):' || true
 	hipcc --version | head -3
 
-# Compiled HIP code objects are cached here; a stale entry after editing a
-# kernel source is the most common bring-up failure.
+# Compiled HIP code objects are cached here. The cache key covers the sources,
+# the shim headers, the compile flags and the toolchain, so editing any of them
+# already invalidates the entry; this target is for clearing a cache some crash
+# left behind. CANDLE_ROCM_FORCE_RECOMPILE=1 does the same for a single run.
+ROCM_CACHE_DIR ?= $(if $(CANDLE_ROCM_CACHE_DIR),$(CANDLE_ROCM_CACHE_DIR),$(HOME)/.cache/candle-rocm)
 rocm-cache-clean:
-	rm -rf $(HOME)/.cache/candle-rocm
+	rm -rf $(ROCM_CACHE_DIR)
 
 all: fmt-check clippy test
