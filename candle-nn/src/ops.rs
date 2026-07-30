@@ -144,11 +144,9 @@ impl candle::CustomOp1 for Sigmoid {
         use candle::rocm_backend::{
             kernel_name, launch_config, utils::Map1, RocmStorageSlice, SendSyncDeviceMemory,
         };
-        use candle_rocm_kernels::kernel::UnaryKernel;
-        use candle_rocm_kernels::KernelSource;
 
         struct S {
-            kernel_name: &'static str,
+            kernel_name: String,
         }
 
         impl Map1 for S {
@@ -172,7 +170,8 @@ impl candle::CustomOp1 for Sigmoid {
                 };
 
                 // Load the kernel
-                let func = dev.get_or_load_func(self.kernel_name, UnaryKernel::CODE)?;
+                let func =
+                    dev.get_or_load_func(&self.kernel_name, &candle::rocm_backend::kernels::UNARY)?;
 
                 // Allocate output
                 let out = dev.alloc::<T>(el_count)?;
@@ -206,14 +205,10 @@ impl candle::CustomOp1 for Sigmoid {
         }
 
         // Create kernel names for each dtype
-        let kernel_name_f16: &'static str =
-            Box::leak(kernel_name::<half::f16>("usigmoid").into_boxed_str());
-        let kernel_name_bf16: &'static str =
-            Box::leak(kernel_name::<half::bf16>("usigmoid").into_boxed_str());
-        let kernel_name_f32: &'static str =
-            Box::leak(kernel_name::<f32>("usigmoid").into_boxed_str());
-        let kernel_name_f64: &'static str =
-            Box::leak(kernel_name::<f64>("usigmoid").into_boxed_str());
+        let kernel_name_f16 = kernel_name::<half::f16>("usigmoid");
+        let kernel_name_bf16 = kernel_name::<half::bf16>("usigmoid");
+        let kernel_name_f32 = kernel_name::<f32>("usigmoid");
+        let kernel_name_f64 = kernel_name::<f64>("usigmoid");
 
         let dev = storage.device();
         let slice = match &storage.slice {
@@ -548,8 +543,6 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         storage: &candle::RocmStorage,
         layout: &Layout,
     ) -> Result<(candle::RocmStorage, Shape)> {
-        use candle::rocm_backend::kernels::kernel::KernelSource;
-        use candle::rocm_backend::kernels::ReduceKernel;
         use candle::rocm_backend::{kernel_name, rocm_rs, SendSyncDeviceMemory};
         use candle::RocmDevice;
 
@@ -572,8 +565,9 @@ impl candle::CustomOp1 for SoftmaxLastDim {
                     Some((o1, o2)) => (o1, o2),
                 };
 
-                let kernel_str = Box::leak(kernel_name::<T>("softmax").into_boxed_str());
-                let func = dev.get_or_load_func(kernel_str, ReduceKernel::CODE)?;
+                let kernel_str = kernel_name::<T>("softmax");
+                let func =
+                    dev.get_or_load_func(&kernel_str, &candle::rocm_backend::kernels::REDUCE)?;
                 // SAFETY: Set later by running the kernel.
                 let dst = dev.alloc::<T>(el)?;
 
@@ -854,8 +848,6 @@ impl candle::CustomOp2 for RmsNorm {
         s2: &candle::RocmStorage,
         l2: &Layout,
     ) -> Result<(candle::RocmStorage, Shape)> {
-        use candle::rocm_backend::kernels::kernel::KernelSource;
-        use candle::rocm_backend::kernels::ReduceKernel;
         use candle::rocm_backend::{kernel_name, rocm_rs, SendSyncDeviceMemory};
         use candle::RocmDevice;
 
@@ -886,8 +878,9 @@ impl candle::CustomOp2 for RmsNorm {
                 };
 
                 let block_size = if n_cols < 1024 { 32 } else { 1024 };
-                let kernel_str = Box::leak(kernel_name::<T>("rmsnorm").into_boxed_str());
-                let func = dev.get_or_load_func(kernel_str, ReduceKernel::CODE)?;
+                let kernel_str = kernel_name::<T>("rmsnorm");
+                let func =
+                    dev.get_or_load_func(&kernel_str, &candle::rocm_backend::kernels::REDUCE)?;
                 let dst = dev.alloc::<T>(el)?;
 
                 // Launch config
@@ -1214,8 +1207,6 @@ impl candle::CustomOp3 for LayerNorm {
         s3: &candle::RocmStorage,
         l3: &Layout,
     ) -> Result<(candle::RocmStorage, Shape)> {
-        use candle::rocm_backend::kernels::kernel::KernelSource;
-        use candle::rocm_backend::kernels::ReduceKernel;
         use candle::rocm_backend::{kernel_name, rocm_rs, SendSyncDeviceMemory};
         use candle::RocmDevice;
 
@@ -1252,8 +1243,9 @@ impl candle::CustomOp3 for LayerNorm {
                 };
 
                 let block_size = if n_cols < 1024 { 32 } else { 1024 };
-                let kernel_str = Box::leak(kernel_name::<T>("layernorm").into_boxed_str());
-                let func = dev.get_or_load_func(kernel_str, ReduceKernel::CODE)?;
+                let kernel_str = kernel_name::<T>("layernorm");
+                let func =
+                    dev.get_or_load_func(&kernel_str, &candle::rocm_backend::kernels::REDUCE)?;
                 let dst = dev.alloc::<T>(el)?;
 
                 let grid = rocm_rs::hip::Dim3::from((n_rows as u32, 1u32, 1u32));
