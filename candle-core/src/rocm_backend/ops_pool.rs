@@ -22,7 +22,7 @@ fn pool_info(
     dev: &RocmDevice,
     l: &Layout,
     op: &'static str,
-) -> Result<(SendSyncDeviceMemory<usize>, Vec<usize>)> {
+) -> Result<(super::ParamBuffer, Vec<usize>)> {
     let dims = l.shape().dims();
     if dims.len() != 4 {
         crate::bail!("unexpected input shape for {op} {dims:?}")
@@ -64,7 +64,7 @@ impl Map1 for Pool2D {
         unsafe {
             let inp_ptr = inp.ptr_at(inp_l.start_offset());
             let out_ptr = out.as_ptr();
-            let ds_ptr = ds.as_ptr() as *const usize;
+            let ds_ptr = ds.as_ptr();
             launch_dense(
                 dev,
                 &kernels::CONV,
@@ -104,7 +104,7 @@ impl Map1 for UpsampleNearest2D {
         unsafe {
             let inp_ptr = inp.ptr_at(inp_l.start_offset());
             let out_ptr = out.as_ptr();
-            let ds_ptr = ds.as_ptr() as *const usize;
+            let ds_ptr = ds.as_ptr();
             launch_dense(
                 dev,
                 &kernels::CONV,
@@ -152,7 +152,7 @@ impl Map1 for UpsampleBilinear2D {
         unsafe {
             let inp_ptr = inp.ptr_at(inp_l.start_offset());
             let out_ptr = out.as_ptr();
-            let ds_ptr = ds.as_ptr() as *const usize;
+            let ds_ptr = ds.as_ptr();
             launch_dense(
                 dev,
                 &kernels::CONV,

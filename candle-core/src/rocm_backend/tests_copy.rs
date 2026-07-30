@@ -93,7 +93,7 @@ fn copy_strided_src_still_copies_in_full() -> Result<()> {
     Ok(())
 }
 
-/// `launch_config(0)` used to yield `gridDim.x == 0`, which
+/// `launch_config(dev, 0)` used to yield `gridDim.x == 0`, which
 /// `hipModuleLaunchKernel` rejects — so every elementwise op on an empty tensor
 /// errored instead of being a no-op.
 #[test]

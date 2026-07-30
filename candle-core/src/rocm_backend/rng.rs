@@ -6,8 +6,45 @@
 use crate::backend::BackendStorage;
 use crate::{DType, Layout, Result, Shape};
 
-use super::wrappers::SendSyncDeviceMemory;
+use super::alloc::SendSyncDeviceMemory;
 use super::{Affine, RocmDevice, RocmStorage, RocmStorageSlice};
+use rocm_rs::rocrand::bindings;
+use rocm_rs::rocrand::Generator;
+
+/// Calls a raw rocrand generator entry point against a device buffer.
+///
+/// `rocm-rs`' typed `generate_*` wrappers take its own `DeviceMemory`, which
+/// this backend no longer allocates — its `Drop` calls the blocking `hipFree`.
+/// The wrappers do nothing but unwrap the pointer and the count, so going
+/// straight to the C entry point costs nothing and keeps the buffers
+/// stream-ordered.
+///
+/// rocrand is left on the null stream, as before. `RocmDevice`'s own stream is
+/// blocking (`hipStreamCreate` with flags 0), so the null stream legacy-
+/// synchronises with it in both directions: the generator kernel runs after the
+/// buffer's stream-ordered allocation and before anything the device stream
+/// queues afterwards.
+///
+/// # Safety
+/// `call` must be handed the pointer and element count of `data` and must write
+/// no more than that.
+unsafe fn generate<T, F>(
+    rng: &super::wrappers::SendSyncPseudoRng,
+    data: &SendSyncDeviceMemory<T>,
+    what: &str,
+    call: F,
+) -> Result<()>
+where
+    F: FnOnce(bindings::rocrand_generator, *mut T, usize) -> bindings::rocrand_status,
+{
+    let status = call(rng.as_ptr(), data.as_ptr() as *mut T, data.count());
+    if status != bindings::rocrand_status_ROCRAND_STATUS_SUCCESS {
+        return Err(crate::Error::Msg(format!(
+            "rocrand {what} failed with status {status}"
+        )));
+    }
+    Ok(())
+}
 
 /// rocrand only implements the float and double generators, so f16/bf16 are
 /// produced in f32 and cast down afterwards.
@@ -78,19 +115,26 @@ impl RocmDevice {
         let layout = Layout::contiguous(shape);
         let slice = match generation_dtype(dtype) {
             DType::F32 => {
-                let mut data = self.alloc::<f32>(elem_count)?;
-                self.rocrand()?.generate_uniform(&mut data).map_err(|e| {
-                    crate::Error::Msg(format!("rocrand generate_uniform failed: {}", e))
-                })?;
+                let data = self.alloc::<f32>(elem_count)?;
+                // SAFETY: `generate` passes the buffer's own pointer and count.
+                unsafe {
+                    generate(&*self.rocrand()?, &data, "generate_uniform", |g, p, n| {
+                        bindings::rocrand_generate_uniform(g, p, n)
+                    })?
+                };
                 RocmStorageSlice::F32(data)
             }
             DType::F64 => {
-                let mut data = self.alloc::<f64>(elem_count)?;
-                self.rocrand()?
-                    .generate_uniform_double(&mut data)
-                    .map_err(|e| {
-                        crate::Error::Msg(format!("rocrand generate_uniform_double failed: {}", e))
-                    })?;
+                let data = self.alloc::<f64>(elem_count)?;
+                // SAFETY: as above.
+                unsafe {
+                    generate(
+                        &*self.rocrand()?,
+                        &data,
+                        "generate_uniform_double",
+                        |g, p, n| bindings::rocrand_generate_uniform_double(g, p, n),
+                    )?
+                };
                 RocmStorageSlice::F64(data)
             }
             dtype => {
@@ -123,21 +167,26 @@ impl RocmDevice {
         let elem_count_round = elem_count.next_multiple_of(2);
         let slice = match generation_dtype(dtype) {
             DType::F32 => {
-                let mut data = self.alloc::<f32>(elem_count_round)?;
-                self.rocrand()?
-                    .generate_normal(&mut data, mean as f32, std as f32)
-                    .map_err(|e| {
-                        crate::Error::Msg(format!("rocrand generate_normal failed: {}", e))
-                    })?;
+                let data = self.alloc::<f32>(elem_count_round)?;
+                // SAFETY: `generate` passes the buffer's own pointer and count.
+                unsafe {
+                    generate(&*self.rocrand()?, &data, "generate_normal", |g, p, n| {
+                        bindings::rocrand_generate_normal(g, p, n, mean as f32, std as f32)
+                    })?
+                };
                 RocmStorageSlice::F32(self.shrink_to(data, elem_count)?)
             }
             DType::F64 => {
-                let mut data = self.alloc::<f64>(elem_count_round)?;
-                self.rocrand()?
-                    .generate_normal_double(&mut data, mean, std)
-                    .map_err(|e| {
-                        crate::Error::Msg(format!("rocrand generate_normal_double failed: {}", e))
-                    })?;
+                let data = self.alloc::<f64>(elem_count_round)?;
+                // SAFETY: as above.
+                unsafe {
+                    generate(
+                        &*self.rocrand()?,
+                        &data,
+                        "generate_normal_double",
+                        |g, p, n| bindings::rocrand_generate_normal_double(g, p, n, mean, std),
+                    )?
+                };
                 RocmStorageSlice::F64(self.shrink_to(data, elem_count)?)
             }
             dtype => {

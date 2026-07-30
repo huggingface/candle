@@ -76,7 +76,7 @@ impl Map1 for IndexSelect<'_> {
         let dst_el = ids_dim_size * left_size * right_size;
 
         let output = dev.alloc::<T>(dst_el)?;
-        let (grid, block) = launch_config(dst_el);
+        let (grid, block) = launch_config(dev, dst_el);
         unsafe {
             let out_ptr = output.as_ptr();
             let ds_ptr = ds.as_ptr() as *const usize;
@@ -129,7 +129,7 @@ impl Map1 for Gather<'_> {
         let ids_dim_sz = ids_l.dims()[dim];
 
         let output = dev.alloc::<T>(el)?;
-        let (grid, block) = launch_config(el);
+        let (grid, block) = launch_config(dev, el);
         unsafe {
             let out_ptr = output.as_ptr();
             launch_kernel(
@@ -222,7 +222,7 @@ impl Map2InPlace for Scatter<'_> {
         let src_dim_sz = src_l.dims()[dim];
         let dst_dim_sz = dst_l.dims()[dim];
 
-        let (grid, block) = launch_config(left_sz * right_sz);
+        let (grid, block) = launch_config(dev, left_sz * right_sz);
         unsafe {
             launch_kernel(
                 dev,
@@ -273,7 +273,7 @@ impl Map2InPlace for IndexAdd<'_> {
         let dst_dim_sz = dst_l.dims()[dim];
         let ids_dim_sz = ids_l.dims()[0];
 
-        let (grid, block) = launch_config(left_sz * right_sz);
+        let (grid, block) = launch_config(dev, left_sz * right_sz);
         unsafe {
             launch_kernel(
                 dev,

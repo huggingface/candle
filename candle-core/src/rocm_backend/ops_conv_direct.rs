@@ -44,7 +44,7 @@ impl Map2 for Conv1D<'_> {
             let inp_ptr = inp.ptr_at(inp_l.start_offset());
             let k_ptr = k.ptr_at(k_l.start_offset());
             let out_ptr = out.as_ptr();
-            let ds_ptr = ds.as_ptr() as *const usize;
+            let ds_ptr = ds.as_ptr();
             launch_dense(
                 dev,
                 &kernels::CONV,
@@ -95,7 +95,7 @@ impl Map2 for Conv2D<'_> {
             let inp_ptr = inp.ptr_at(inp_l.start_offset());
             let k_ptr = k.ptr_at(k_l.start_offset());
             let out_ptr = out.as_ptr();
-            let ds_ptr = ds.as_ptr() as *const usize;
+            let ds_ptr = ds.as_ptr();
             launch_dense(
                 dev,
                 &kernels::CONV,
@@ -145,7 +145,7 @@ impl Map2 for ConvTranspose1D<'_> {
             let inp_ptr = inp.ptr_at(inp_l.start_offset());
             let k_ptr = k.ptr_at(k_l.start_offset());
             let out_ptr = out.as_ptr();
-            let ds_ptr = ds.as_ptr() as *const usize;
+            let ds_ptr = ds.as_ptr();
             launch_dense(
                 dev,
                 &kernels::CONV,
@@ -198,7 +198,7 @@ impl Map2 for ConvTranspose2D<'_> {
             let inp_ptr = inp.ptr_at(inp_l.start_offset());
             let k_ptr = k.ptr_at(k_l.start_offset());
             let out_ptr = out.as_ptr();
-            let ds_ptr = ds.as_ptr() as *const usize;
+            let ds_ptr = ds.as_ptr();
             launch_dense(
                 dev,
                 &kernels::CONV,
