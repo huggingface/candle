@@ -177,7 +177,7 @@ impl candle::CustomOp1 for Sigmoid {
                 let out = dev.alloc::<T>(el_count)?;
 
                 unsafe {
-                    let src_ptr = src.as_ptr().add(layout.start_offset());
+                    let src_ptr = src.ptr_at(layout.start_offset());
                     let out_ptr = out.as_ptr();
                     let ds_ptr: *const usize = ds
                         .as_ref()
@@ -582,7 +582,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
                         0,
                         Some(dev.stream()),
                         &mut [
-                            &(src.0.as_ptr().add(start)) as *const *mut std::ffi::c_void
+                            &(src.ptr_at(start)) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
                             &(dst.0.as_ptr()) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
@@ -894,11 +894,11 @@ impl candle::CustomOp2 for RmsNorm {
                         0,
                         Some(dev.stream()),
                         &mut [
-                            &(src.0.as_ptr().add(src_start)) as *const *mut std::ffi::c_void
+                            &(src.ptr_at(src_start)) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
                             &(dst.0.as_ptr()) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
-                            &(alpha.0.as_ptr().add(alpha_start)) as *const *mut std::ffi::c_void
+                            &(alpha.ptr_at(alpha_start)) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
                             &(n_cols as i32) as *const i32 as *mut std::ffi::c_void,
                             &(block_size as i32) as *const i32 as *mut std::ffi::c_void,
@@ -1258,13 +1258,13 @@ impl candle::CustomOp3 for LayerNorm {
                         0,
                         Some(dev.stream()),
                         &mut [
-                            &(src.0.as_ptr().add(src_start)) as *const *mut std::ffi::c_void
+                            &(src.ptr_at(src_start)) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
                             &(dst.0.as_ptr()) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
-                            &(alpha.0.as_ptr().add(alpha_start)) as *const *mut std::ffi::c_void
+                            &(alpha.ptr_at(alpha_start)) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
-                            &(beta.0.as_ptr().add(beta_start)) as *const *mut std::ffi::c_void
+                            &(beta.ptr_at(beta_start)) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
                             &(n_cols as i32) as *const i32 as *mut std::ffi::c_void,
                             &(block_size as i32) as *const i32 as *mut std::ffi::c_void,
