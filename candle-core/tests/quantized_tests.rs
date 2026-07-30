@@ -144,10 +144,17 @@ fn quantized_matmul(device: &Device) -> Result<()> {
                 [341876.0, 994283.0, 1655709.0, 2301518.0]
             ]
         ),
+        // ROCm dequantizes the weights and runs the regular GEMM, so it lands on
+        // the same values as Metal rather than on the CUDA q8_1 ones.
         #[cfg(feature = "rocm")]
-        Device::Rocm(_) => {
-            candle_core::bail!("quantized tensors are not supported on the ROCm backend yet")
-        }
+        Device::Rocm(_) => assert_eq!(
+            to_vec2_round(&res, 0)?,
+            &[
+                [84946.0, 214126.0, 344757.0, 473798.0],
+                [213458.0, 604350.0, 1000469.0, 1387990.0],
+                [341970.0, 994574.0, 1656181.0, 2302182.0]
+            ]
+        ),
     }
     test_matmul(device, (1, 3, 4, 256), GgmlDType::Q4_0)?;
     Ok(())
@@ -212,10 +219,16 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
                 [-196472.0, 63012.0, 324585.0, 587902.0]
             ]
         ),
+        // See `quantized_matmul`: ROCm goes through dequantize + GEMM.
         #[cfg(feature = "rocm")]
-        Device::Rocm(_) => {
-            candle_core::bail!("quantized tensors are not supported on the ROCm backend yet")
-        }
+        Device::Rocm(_) => assert_eq!(
+            to_vec2_round(&res, 0)?,
+            &[
+                [243666.0, -19714.0, -285433.0, -550452.0],
+                [23782.0, 21654.0, 19400.0, 18369.0],
+                [-196102.0, 63022.0, 324233.0, 587192.0]
+            ]
+        ),
     }
     let lhs2 = Tensor::stack(&[&lhs, &lhs], 0)?;
     let res2 = matmul.forward(&lhs2)?;
