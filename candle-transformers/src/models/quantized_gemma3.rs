@@ -57,8 +57,8 @@ impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let gate = self.feed_forward_gate.forward(xs)?;
         let up = self.feed_forward_up.forward(xs)?;
-        let silu = candle_nn::ops::silu(&gate)?;
-        let gated = (silu * up)?;
+        let gate = gate.apply(&candle_nn::Activation::GeluPytorchTanh)?;
+        let gated = (gate * up)?;
         self.feed_forward_down.forward(&gated)
     }
 }
@@ -434,6 +434,16 @@ impl ModelWeights {
             span,
             span_output,
         })
+    }
+
+    /// Clear the KV cache across all layers.
+    ///
+    /// Call this between independent conversations to free cached attention
+    /// state without recreating the model.
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.kv_cache = None;
+        }
     }
 
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
