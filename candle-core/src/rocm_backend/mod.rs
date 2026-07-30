@@ -1072,10 +1072,19 @@ impl BackendStorage for RocmStorage {
         let device = self.device.clone();
         let mut acc = unsafe { device.alloc_uninit(l.shape(), self.dtype())? };
         self.copy_strided_src(&mut acc, 0, l)?;
-        // `acc` is a freshly allocated buffer that `copy_strided_src` filled from
-        // element 0, so its layout is contiguous whatever `l` was. Handing `l`
-        // itself to the launcher (as the CUDA backend does) would apply `l`'s
-        // start offset to a buffer that does not have one.
+        // DELIBERATE DIVERGENCE FROM cuda_backend.
+        //
+        // `acc` was just allocated and `copy_strided_src` filled it from element
+        // 0, so it is contiguous with no start offset regardless of what `l`
+        // describes. cuda_backend passes `l` itself here, which re-applies
+        // `l.start_offset()` to a buffer that does not carry one, so
+        // `index_add` on a narrowed tensor accumulates into the wrong rows there
+        // (`[[1,2,3],[14,5,26]]` instead of `[[11,2,23],[34,5,46]]`).
+        //
+        // The CUDA path is the outlier: metal_backend does not apply this layout
+        // at all, and `Tensor::scatter` builds `Layout::contiguous(shape)` for
+        // the same situation. Pinned by
+        // `index_add_handles_a_source_with_a_start_offset`; worth fixing upstream.
         let acc_l = Layout::contiguous(l.shape());
         IndexAdd(ids, ids_l, dim).map(&mut acc.slice, &acc_l, &src.slice, src_l, &device)?;
         Ok(acc)
