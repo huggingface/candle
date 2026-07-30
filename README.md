@@ -150,6 +150,26 @@ cargo run --example quantized --release
 In order to use **CUDA** add `--features cuda` to the example command line. If
 you have cuDNN installed, use `--features cudnn` for even more speedups.
 
+### Nix development shell
+
+If you use Nix with flakes enabled, you can enter a CPU-focused Rust
+development environment with the tooling used by common Candle workflows:
+
+```bash
+nix develop
+cargo check --workspace
+```
+
+Additional shells are available for optional workflows:
+
+```bash
+nix develop .#pyo3
+nix develop .#wasm
+```
+
+The Nix shell is intended for local development and CI parity. CUDA and NCCL
+setups still depend on your system driver/toolkit installation.
+
 There are also some wasm examples for whisper and
 [llama2.c](https://github.com/karpathy/llama2.c). You can either build them with
 `trunk` or try them online:
