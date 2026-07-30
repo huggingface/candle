@@ -5,6 +5,7 @@
 //! 1-D convolution's padding/stride/dilation belong to.
 
 use super::*;
+use crate::{Device, Result, Tensor};
 use half::{bf16, f16};
 
 fn code<T: Copy>() -> u32 {
@@ -65,4 +66,44 @@ fn conv1d_spec_puts_the_length_parameters_on_w() {
     // With h = 1, k_h = 1 and no h padding the output height stays 1; a
     // pad_h of 1 would make MIOpen produce three rows instead.
     assert_eq!(spec.out_h, (spec.i_h + 2 * spec.pad_h - spec.k_h) + 1);
+}
+
+/// MIOpen ships no double-precision convolution solver, so `dispatch` must let
+/// f64 fall through to `ops_conv` rather than hand MIOpen a dtype it rejects.
+/// With an `F64` arm in the dispatch, `--features miopen` turned every working
+/// f64 convolution into a hard error.
+#[test]
+fn f64_convolution_falls_back_to_ops_conv() -> Result<()> {
+    let dev = match crate::rocm_backend::tests::device() {
+        Some(dev) => dev,
+        None => return Ok(()),
+    };
+    let inp: Vec<f64> = (0..24).map(|i| (i as f64 * 0.37).sin()).collect();
+    let ker: Vec<f64> = (0..8).map(|i| (i as f64 * 0.71).cos()).collect();
+
+    let run = |d: &Device| -> Result<Vec<f64>> {
+        let x = Tensor::from_slice(&inp, (1, 2, 3, 4), d)?;
+        let w = Tensor::from_slice(&ker, (1, 2, 2, 2), d)?;
+        x.conv2d(&w, 1, 1, 1, 1)?.flatten_all()?.to_vec1::<f64>()
+    };
+    let (got, want) = (run(&dev)?, run(&Device::Cpu)?);
+    assert_eq!(got.len(), want.len());
+    for (i, (g, c)) in got.iter().zip(want.iter()).enumerate() {
+        assert!((g - c).abs() < 1e-10, "element {i}: gpu {g} vs cpu {c}");
+    }
+
+    // conv1d takes the same dispatch.
+    let run1d = |d: &Device| -> Result<Vec<f64>> {
+        let x = Tensor::from_slice(&inp, (1, 2, 12), d)?;
+        let w = Tensor::from_slice(&ker, (1, 2, 4), d)?;
+        x.conv1d(&w, 1, 1, 1, 1)?.flatten_all()?.to_vec1::<f64>()
+    };
+    let (got, want) = (run1d(&dev)?, run1d(&Device::Cpu)?);
+    for (i, (g, c)) in got.iter().zip(want.iter()).enumerate() {
+        assert!(
+            (g - c).abs() < 1e-10,
+            "conv1d element {i}: gpu {g} vs cpu {c}"
+        );
+    }
+    Ok(())
 }

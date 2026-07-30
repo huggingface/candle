@@ -26,6 +26,8 @@ mod tests;
 #[cfg(test)]
 mod tests_conv;
 #[cfg(test)]
+mod tests_copy;
+#[cfg(test)]
 mod tests_indexing;
 #[cfg(test)]
 mod tests_rng;
@@ -121,6 +123,23 @@ impl RocmStorageSlice {
 
     unsafe fn offset_ptr(&self, offset: usize) -> *mut std::ffi::c_void {
         self.as_ptr().add(offset * self.elem_size())
+    }
+
+    /// Number of elements the underlying allocation holds.
+    fn count(&self) -> usize {
+        match self {
+            RocmStorageSlice::U8(m) => m.count(),
+            RocmStorageSlice::U32(m) => m.count(),
+            RocmStorageSlice::I16(m) => m.count(),
+            RocmStorageSlice::I32(m) => m.count(),
+            RocmStorageSlice::I64(m) => m.count(),
+            RocmStorageSlice::BF16(m) => m.count(),
+            RocmStorageSlice::F16(m) => m.count(),
+            RocmStorageSlice::F32(m) => m.count(),
+            RocmStorageSlice::F64(m) => m.count(),
+            // One byte per element, so the u8 count is the element count.
+            RocmStorageSlice::F8E4M3(m) => m.count(),
+        }
     }
 }
 
@@ -220,10 +239,17 @@ pub fn kernel_name<T: Copy + Send + Sync + 'static>(kernel: &str) -> String {
 /// A kernel that instead maps one thread to one element and returns early would
 /// silently leave the tail of its output untouched. Size the grid by hand for
 /// those — `rope` in `reduce.cu` is one such kernel.
+///
+/// The grid is never zero: `hipModuleLaunchKernel` rejects `gridDim.x == 0`, so
+/// an elementwise op on an empty tensor would error instead of being a no-op.
+/// The block count is also computed *before* narrowing to `u32` — casting first
+/// makes any element count that is an exact multiple of 2^32 round to zero.
 pub fn launch_config(num_elems: usize) -> (rocm_rs::hip::Dim3, rocm_rs::hip::Dim3) {
     const BLOCK_SIZE: u32 = 256;
-    let num_blocks = (num_elems as u32).div_ceil(BLOCK_SIZE);
-    let grid_dim = num_blocks.min(65535);
+    let num_blocks = num_elems.div_ceil(BLOCK_SIZE as usize);
+    let grid_dim = u32::try_from(num_blocks)
+        .unwrap_or(u32::MAX)
+        .clamp(1, 65535);
     (
         rocm_rs::hip::Dim3::from(grid_dim),
         rocm_rs::hip::Dim3::from(BLOCK_SIZE),
@@ -238,6 +264,7 @@ unsafe fn launch_kernel(
     block: rocm_rs::hip::Dim3,
     args: &mut [*mut std::ffi::c_void],
 ) -> Result<()> {
+    dev.bind()?;
     let kernel_manager = dev
         .kernel_manager()
         .lock()
@@ -744,40 +771,32 @@ impl BackendStorage for RocmStorage {
         if el_count == 0 {
             return Ok(());
         }
+        if self.dtype() != dst.dtype() {
+            crate::bail!("dtype mismatch in copy_strided_src");
+        }
+        self.device.bind()?;
+
+        // Callers over-request: `Tensor::cat` and the autograd accumulators size
+        // the copy from the *source shape*, which can run past the end of either
+        // allocation once start offsets are applied. cuda_backend clamps for the
+        // same reason (`slice_src_and_dst`); without it this memcpy walks off the
+        // end of a device buffer.
+        let dst_avail = dst.slice.count().saturating_sub(dst_offset);
 
         if src_l.is_contiguous() {
-            let (src_ptr, el_size) = match &self.slice {
-                RocmStorageSlice::U8(s) => (s.as_ptr(), 1usize),
-                RocmStorageSlice::U32(s) => (s.as_ptr(), 4),
-                RocmStorageSlice::I16(s) => (s.as_ptr(), 2),
-                RocmStorageSlice::I32(s) => (s.as_ptr(), 4),
-                RocmStorageSlice::I64(s) => (s.as_ptr(), 8),
-                RocmStorageSlice::BF16(s) => (s.as_ptr(), 2),
-                RocmStorageSlice::F16(s) => (s.as_ptr(), 2),
-                RocmStorageSlice::F32(s) => (s.as_ptr(), 4),
-                RocmStorageSlice::F64(s) => (s.as_ptr(), 8),
-                RocmStorageSlice::F8E4M3(s) => (s.as_ptr(), 1),
-            };
-            let (dst_ptr, _) = match &mut dst.slice {
-                RocmStorageSlice::U8(s) => (s.as_ptr(), 1usize),
-                RocmStorageSlice::U32(s) => (s.as_ptr(), 4),
-                RocmStorageSlice::I16(s) => (s.as_ptr(), 2),
-                RocmStorageSlice::I32(s) => (s.as_ptr(), 4),
-                RocmStorageSlice::I64(s) => (s.as_ptr(), 8),
-                RocmStorageSlice::BF16(s) => (s.as_ptr(), 2),
-                RocmStorageSlice::F16(s) => (s.as_ptr(), 2),
-                RocmStorageSlice::F32(s) => (s.as_ptr(), 4),
-                RocmStorageSlice::F64(s) => (s.as_ptr(), 8),
-                RocmStorageSlice::F8E4M3(s) => (s.as_ptr(), 1),
-            };
-            let src_ptr = unsafe { src_ptr.add(src_l.start_offset() * el_size) };
-            let dst_ptr = unsafe { dst_ptr.add(dst_offset * el_size) };
-            let byte_count = el_count * el_size;
+            let src_avail = self.slice.count().saturating_sub(src_l.start_offset());
+            let to_copy = el_count.min(src_avail).min(dst_avail);
+            if to_copy == 0 {
+                return Ok(());
+            }
+            let el_size = self.slice.elem_size();
+            let src_ptr = unsafe { self.slice.offset_ptr(src_l.start_offset()) };
+            let dst_ptr = unsafe { dst.slice.offset_ptr(dst_offset) };
             let result = unsafe {
                 bindings::hipMemcpy(
                     dst_ptr,
                     src_ptr,
-                    byte_count,
+                    to_copy * el_size,
                     bindings::hipMemcpyKind_hipMemcpyDeviceToDevice,
                 )
             };
@@ -787,6 +806,13 @@ impl BackendStorage for RocmStorage {
             return Ok(());
         }
 
+        // Same destination clamp. The source side is deliberately *not* clamped
+        // here: a broadcast layout carries stride 0 and legitimately reads far
+        // fewer elements than it writes.
+        let el_count = el_count.min(dst_avail);
+        if el_count == 0 {
+            return Ok(());
+        }
         let (grid, block) = launch_config(el_count);
         let ds = dims_and_strides(&self.device, src_l, 1)?;
 
@@ -836,9 +862,12 @@ impl BackendStorage for RocmStorage {
             RocmStorageSlice::F16(_) => copy_strided!(F16, "f16", f16),
             RocmStorageSlice::F32(_) => copy_strided!(F32, "f32", f32),
             RocmStorageSlice::F64(_) => copy_strided!(F64, "f64", f64),
-            RocmStorageSlice::F8E4M3(_) => {
-                crate::bail!("copy_strided_src not supported for F8E4M3 on ROCm")
-            }
+            // `unary.cu` gates `ucopy_f8_e4m3` on `__CUDA_ARCH__ >= 890` while the
+            // ROCm module is compiled at 800, so that symbol is not in the
+            // binary. F8E4M3 is exactly one byte and its payload is already held
+            // as `u8`, so `ucopy_u8` moves the identical bytes — this is the same
+            // reasoning `try_clone` uses for its raw buffer copy.
+            RocmStorageSlice::F8E4M3(_) => copy_strided!(F8E4M3, "u8", u8),
         }
 
         Ok(())
@@ -857,6 +886,7 @@ impl BackendStorage for RocmStorage {
         if d1 == 0 || d2 == 0 {
             return Ok(());
         }
+        self.device.bind()?;
         let (src_ptr, dst_ptr, el_size) = match (&self.slice, &mut dst.slice) {
             (RocmStorageSlice::U8(s), RocmStorageSlice::U8(d)) => (s.as_ptr(), d.as_ptr(), 1usize),
             (RocmStorageSlice::U32(s), RocmStorageSlice::U32(d)) => (s.as_ptr(), d.as_ptr(), 4),

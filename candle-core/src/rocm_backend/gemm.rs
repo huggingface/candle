@@ -322,6 +322,7 @@ pub(super) fn matmul(
     rhs_l: &Layout,
 ) -> Result<RocmStorage> {
     use rocm_rs::rocblas::ffi;
+    lhs.device.bind()?;
     dispatch_matmul!(
         lhs,
         rhs,

@@ -85,12 +85,28 @@ impl RocmDevice {
         self.id
     }
 
+    /// Makes this device current for the calling thread.
+    ///
+    /// HIP's current device is thread-local and `hipMalloc`/`hipModuleLaunchKernel`
+    /// resolve it from that TLS slot — `rocm-rs`' `HipDevice` carries no device
+    /// handle into either. So a second `RocmDevice::new(1)` leaves device 1
+    /// current for the constructing thread, and a `RocmStorage` used from a
+    /// worker thread would allocate on that thread's default device. Every entry
+    /// point that allocates, copies or launches re-binds first; `hipSetDevice` on
+    /// the already-current device is a TLS store plus a bounds check.
+    pub(crate) fn bind(&self) -> Result<()> {
+        self.device.set_current()?;
+        Ok(())
+    }
+
     pub fn alloc<T>(&self, len: usize) -> Result<SendSyncDeviceMemory<T>> {
+        self.bind()?;
         SendSyncDeviceMemory::new(len)
             .map_err(|e| crate::Error::Msg(format!("Failed to allocate ROCm memory: {}", e)))
     }
 
     pub fn alloc_zeros<T: Default + Clone>(&self, len: usize) -> Result<SendSyncDeviceMemory<T>> {
+        self.bind()?;
         let mut mem = SendSyncDeviceMemory::new(len)
             .map_err(|e| crate::Error::Msg(format!("Failed to allocate ROCm memory: {}", e)))?;
         mem.memset(0)
@@ -99,6 +115,7 @@ impl RocmDevice {
     }
 
     pub fn clone_htod<T: Clone>(&self, src: &[T]) -> Result<SendSyncDeviceMemory<T>> {
+        self.bind()?;
         let count = src.len();
         let mut dst = SendSyncDeviceMemory::new(count)
             .map_err(|e| crate::Error::Msg(format!("Failed to allocate ROCm memory: {}", e)))?;
@@ -108,6 +125,7 @@ impl RocmDevice {
     }
 
     pub fn clone_dtoh<T: Default + Clone>(&self, src: &SendSyncDeviceMemory<T>) -> Result<Vec<T>> {
+        self.bind()?;
         let count = src.count();
         let mut dst: Vec<T> = vec![T::default(); count];
         src.copy_to_host(&mut dst)
@@ -153,6 +171,7 @@ impl RocmDevice {
         kernel_name: &str,
         module: &candle_rocm_kernels::Module,
     ) -> crate::Result<rocm_rs::hip::Function> {
+        self.bind()?;
         let kernel_manager = self
             .kernel_manager
             .lock()

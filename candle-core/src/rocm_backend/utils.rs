@@ -58,6 +58,12 @@ pub trait Map2 {
             (S::F16(a), S::F16(b)) => S::F16(self.f(a, l1, b, l2, d)?),
             (S::F32(a), S::F32(b)) => S::F32(self.f(a, l1, b, l2, d)?),
             (S::F64(a), S::F64(b)) => S::F64(self.f(a, l1, b, l2, d)?),
+            // Shares the u8 storage, so a generic `f` would silently resolve to
+            // the u8 kernels. Reject it here rather than let it fall through to
+            // the mismatch arm, which reads as a caller bug it is not.
+            (S::F8E4M3(_), S::F8E4M3(_)) => {
+                crate::bail!("Map2 does not support F8E4M3 for ROCm")
+            }
             _ => crate::bail!("dtype mismatch in binary op"),
         };
         Ok(out)
@@ -199,6 +205,11 @@ pub trait Map3 {
             (S::F16(a), S::F16(b), S::F16(c)) => S::F16(self.f(a, l1, b, l2, c, l3, d)?),
             (S::F32(a), S::F32(b), S::F32(c)) => S::F32(self.f(a, l1, b, l2, c, l3, d)?),
             (S::F64(a), S::F64(b), S::F64(c)) => S::F64(self.f(a, l1, b, l2, c, l3, d)?),
+            // Same as `Map2`: F8E4M3 shares the u8 storage, so it is unsupported
+            // rather than a dtype mismatch.
+            (S::F8E4M3(_), S::F8E4M3(_), S::F8E4M3(_)) => {
+                crate::bail!("Map3 does not support F8E4M3 for ROCm")
+            }
             _ => crate::bail!("dtype mismatch in ternary op"),
         };
         Ok(out)

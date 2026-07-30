@@ -16,8 +16,12 @@
 //!   `new_4d`, which declares a packed layout, so a strided or offset view has
 //!   to be routed to the fallback rather than handed over as if contiguous.
 //!
-//! [`assert_output_dim`] turns any future recurrence of the first class of bug
-//! into an error instead of a silently zeroed tensor.
+//! [`assert_output_dim`] catches any future recurrence of the first class of bug
+//! instead of returning a silently zeroed tensor. It — like every other MIOpen
+//! failure — routes the convolution back to [`super::ops_conv`] with a one-time
+//! warning rather than erroring: this feature is a *fast path*, and turning a
+//! convolution that works without `--features miopen` into a hard error with it
+//! is never the right answer.
 
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -88,31 +92,40 @@ struct AlgoKey {
     spec: Conv2dSpec,
 }
 
-fn algo_cache() -> &'static Mutex<HashMap<AlgoKey, (ConvFwdAlgorithm, usize)>> {
-    static CACHE: OnceLock<Mutex<HashMap<AlgoKey, (ConvFwdAlgorithm, usize)>>> = OnceLock::new();
+/// The workspace lives in the cache next to the algorithm that needs it.
+///
+/// Allocating it per call and dropping it right after the *asynchronous*
+/// `convolution_forward` enqueue was only safe because `hipFree` implicitly
+/// synchronises the whole device — correct by accident, at the price of a full
+/// device sync per convolution. Keeping it here also means the alloc happens
+/// once per problem shape instead of once per forward pass.
+struct CachedAlgo {
+    algo: ConvFwdAlgorithm,
+    workspace_size: usize,
+    workspace: Option<rocm_rs::hip::DeviceMemory<u8>>,
+}
+
+// The buffer is only ever reached through the cache mutex, and the HIP
+// allocation itself is not thread-affine.
+unsafe impl Send for CachedAlgo {}
+
+fn algo_cache() -> &'static Mutex<HashMap<AlgoKey, CachedAlgo>> {
+    static CACHE: OnceLock<Mutex<HashMap<AlgoKey, CachedAlgo>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn cached_algo(key: &AlgoKey) -> Result<Option<(ConvFwdAlgorithm, usize)>> {
-    let cache = algo_cache()
+fn lock_algo_cache() -> Result<std::sync::MutexGuard<'static, HashMap<AlgoKey, CachedAlgo>>> {
+    algo_cache()
         .lock()
-        .map_err(|_| crate::Error::Msg("MIOpen algorithm cache is poisoned".to_string()))?;
-    Ok(cache.get(key).copied())
-}
-
-fn store_algo(key: AlgoKey, value: (ConvFwdAlgorithm, usize)) -> Result<()> {
-    let mut cache = algo_cache()
-        .lock()
-        .map_err(|_| crate::Error::Msg("MIOpen algorithm cache is poisoned".to_string()))?;
-    cache.insert(key, value);
-    Ok(())
+        .map_err(|_| crate::Error::Msg("MIOpen algorithm cache is poisoned".to_string()))
 }
 
 fn miopen_err(what: &str, e: impl std::fmt::Display) -> crate::Error {
     crate::Error::Msg(format!("MIOpen {what} failed: {e}"))
 }
 
-/// Rejects a convolution whose declared output disagrees with MIOpen's.
+/// Rejects a convolution whose declared output disagrees with MIOpen's, which
+/// sends it to the `ops_conv` fallback.
 fn assert_output_dim(
     conv: &ConvolutionDescriptor,
     x: &TensorDescriptor,
@@ -177,9 +190,14 @@ unsafe fn forward<T: Copy + 'static>(
         spec,
     };
 
-    let (algo, workspace_size) = match cached_algo(&key)? {
-        Some(hit) => hit,
-        None => {
+    // The guard is held across the enqueue so the cached workspace cannot be
+    // freed or handed to a second convolution while this one is still queued.
+    // `convolution_forward` only enqueues, so this serialises host-side work,
+    // not GPU execution.
+    let mut cache = lock_algo_cache()?;
+    let entry = match cache.entry(key) {
+        std::collections::hash_map::Entry::Occupied(hit) => hit.into_mut(),
+        std::collections::hash_map::Entry::Vacant(slot) => {
             let workspace_size =
                 rocm_rs::miopen::convolution::get_convolution_forward_workspace_size(
                     handle, &w_desc, &x_desc, &conv_desc, &y_desc,
@@ -201,16 +219,18 @@ unsafe fn forward<T: Copy + 'static>(
                 false,
             )
             .map_err(|e| miopen_err("find_convolution_forward_algorithm", e))?;
-            let found = match perf.first() {
-                Some(p) => (p.__bindgen_anon_1.fwd_algo, workspace_size),
+            let algo = match perf.first() {
+                Some(p) => p.__bindgen_anon_1.fwd_algo,
                 None => crate::bail!("MIOpen found no forward algorithm for {spec:?}"),
             };
-            store_algo(key, found)?;
-            found
+            slot.insert(CachedAlgo {
+                algo,
+                workspace_size,
+                workspace,
+            })
         }
     };
 
-    let workspace = alloc_workspace(workspace_size)?;
     let alpha: [u8; 4] = 1.0f32.to_le_bytes();
     let beta: [u8; 4] = 0.0f32.to_le_bytes();
     rocm_rs::miopen::convolution::convolution_forward(
@@ -221,12 +241,12 @@ unsafe fn forward<T: Copy + 'static>(
         &w_desc,
         w_ptr,
         &conv_desc,
-        algo,
+        entry.algo,
         &beta,
         &y_desc,
         y_ptr,
-        workspace_ptr(&workspace),
-        workspace_size,
+        workspace_ptr(&entry.workspace),
+        entry.workspace_size,
     )
     .map_err(|e| miopen_err("convolution_forward", e))
 }
@@ -269,7 +289,21 @@ unsafe fn run_one<T: Copy + Send + Sync + 'static>(
     Ok(out)
 }
 
-/// `None` for any dtype pair MIOpen does not take, so the caller can fall back.
+/// Warns once that MIOpen declined a problem and `ops_conv` took over.
+fn warn_fallback(e: &crate::Error) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        eprintln!("candle: MIOpen convolution unavailable, falling back to im2col+GEMM: {e}");
+    });
+}
+
+/// `None` whenever `ops_conv` has to take over.
+///
+/// That covers both a dtype pair MIOpen has no solver for — f64 above all, it
+/// ships no double-precision convolution — and any problem MIOpen *declines* at
+/// runtime. A MIOpen failure is a reason to fall back, not a hard error: the
+/// portable path computes the same answer, and `--features miopen` must never
+/// turn a working convolution into an error.
 fn dispatch(
     inp: &RocmStorage,
     l: &Layout,
@@ -277,19 +311,24 @@ fn dispatch(
     kernel_l: &Layout,
     dst_el: usize,
     spec: Conv2dSpec,
-) -> Result<Option<S>> {
+) -> Option<S> {
     let dev = inp.device();
     let (xo, wo) = (l.start_offset(), kernel_l.start_offset());
     let slice = unsafe {
         match (&inp.slice, &kernel.slice) {
-            (S::F32(x), S::F32(w)) => Some(S::F32(run_one(dev, x, xo, w, wo, dst_el, spec)?)),
-            (S::F64(x), S::F64(w)) => Some(S::F64(run_one(dev, x, xo, w, wo, dst_el, spec)?)),
-            (S::F16(x), S::F16(w)) => Some(S::F16(run_one(dev, x, xo, w, wo, dst_el, spec)?)),
-            (S::BF16(x), S::BF16(w)) => Some(S::BF16(run_one(dev, x, xo, w, wo, dst_el, spec)?)),
-            _ => None,
+            (S::F32(x), S::F32(w)) => run_one(dev, x, xo, w, wo, dst_el, spec).map(S::F32),
+            (S::F16(x), S::F16(w)) => run_one(dev, x, xo, w, wo, dst_el, spec).map(S::F16),
+            (S::BF16(x), S::BF16(w)) => run_one(dev, x, xo, w, wo, dst_el, spec).map(S::BF16),
+            _ => return None,
         }
     };
-    Ok(slice)
+    match slice {
+        Ok(slice) => Some(slice),
+        Err(e) => {
+            warn_fallback(&e);
+            None
+        }
+    }
 }
 
 /// MIOpen reads packed tensors only, so anything strided goes to the fallback.
@@ -326,7 +365,7 @@ pub(super) fn conv1d(
         dil_w: params.dilation,
     };
     let dst_el = params.b_size * params.c_out * params.l_out();
-    match dispatch(inp, l, kernel, kernel_l, dst_el, spec)? {
+    match dispatch(inp, l, kernel, kernel_l, dst_el, spec) {
         Some(slice) => Ok(RocmStorage {
             slice,
             device: inp.device().clone(),
@@ -363,7 +402,7 @@ pub(super) fn conv2d(
         dil_w: params.dilation,
     };
     let dst_el = params.b_size * params.c_out * spec.out_h * spec.out_w;
-    match dispatch(inp, l, kernel, kernel_l, dst_el, spec)? {
+    match dispatch(inp, l, kernel, kernel_l, dst_el, spec) {
         Some(slice) => Ok(RocmStorage {
             slice,
             device: inp.device().clone(),
