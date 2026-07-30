@@ -4,10 +4,16 @@
 //! `candle-kernels/src/quantized.cu` sources, so the on-device layout — padded
 //! rows above all — has to match byte for byte.
 //!
-//! Matrix multiplication currently dequantizes the weights and hands the result
-//! to the regular rocBLAS GEMM. That is slower than the DMMV/MMVQ/MMQ kernels
-//! the CUDA backend picks between, but it is correct for every dtype and needs
-//! no quantized matmul kernel of its own.
+//! Matrix multiplication takes one of two paths. A single-token decode
+//! (`b * m == 1`) with an f32 activation and a dtype that has a fused
+//! dequantize-and-GEMV kernel goes through DMMV, straight against the packed
+//! weights. Everything else — prefill, batched decode, non-f32 activations,
+//! Q8_1 — dequantizes into a dense buffer and defers to the rocBLAS GEMM, which
+//! is correct for every dtype but materialises the whole weight matrix.
+//!
+//! The MMVQ and MMQ kernels the CUDA backend also picks between are compiled
+//! into the module but not yet wired up; they would cover f16/bf16 activations
+//! and small batches, and would remove the dense dequantize from prefill.
 
 use super::{GgmlDType, QStorage};
 use crate::backend::{BackendDevice, BackendStorage};
@@ -264,9 +270,11 @@ impl QRocmStorage {
         }
 
         // Decode fast-path: a single f32 activation vector against the packed
-        // weights via the fused DMMV kernel. NOTE: numerically UNVERIFIED on
-        // RDNA3 — the WARP_SIZE the kernel is compiled for must equal the wave
-        // width. Falls through to the GEMM path for every unsupported case.
+        // weights via the fused DMMV kernel. The kernels reduce with
+        // `__shfl_xor(width = 32)` and index only lanes below 32, so they are
+        // correct on a 32-lane RDNA wavefront; `dmmv_decode_matches_a_dequantized_matmul`
+        // pins that on hardware for all ten dtypes. Falls through to the GEMM
+        // path for every unsupported case.
         if b * m == 1 && kernels::has_dmmv_kernel(self.dtype) {
             if let RocmStorageSlice::F32(y) = &storage.slice {
                 if let Some((o1, o2)) = layout.contiguous_offsets() {

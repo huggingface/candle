@@ -241,3 +241,59 @@ fn deq_reads_unaligned_buffers() -> Result<()> {
     assert!(deq::<BlockQ4K>(&bytes[..10], 1, &mut got).is_err());
     Ok(())
 }
+
+/// The `b * m == 1` decode fast-path in [`QRocmStorage::fwd`] dispatches to the
+/// fused DMMV kernel instead of dequantize-then-GEMM, so it is a *separate*
+/// numerical path from the one `fwd_matches_a_dequantized_matmul` covers — and
+/// it is the only path a token-by-token generation loop ever takes.
+///
+/// The kernels reduce with `__shfl_xor(width = 32)` and index lanes below 32,
+/// which is what makes them correct on a 32-lane RDNA wavefront; this pins that
+/// down on real hardware for every dtype that has a DMMV kernel.
+#[test]
+fn dmmv_decode_matches_a_dequantized_matmul() -> Result<()> {
+    let dev = rocm_device!();
+    let device = Device::Rocm(dev.clone());
+
+    for dtype in [
+        GgmlDType::Q4_0,
+        GgmlDType::Q4_1,
+        GgmlDType::Q5_0,
+        GgmlDType::Q5_1,
+        GgmlDType::Q8_0,
+        GgmlDType::Q2K,
+        GgmlDType::Q3K,
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+    ] {
+        // A k of 4096 exercises more than one iteration of the kernel's column
+        // loop; n of 128 spans several workgroups.
+        for (k, n) in [(256usize, 4usize), (4096usize, 128usize)] {
+            let lhs: Vec<f32> = (0..k).map(|i| (i as f32 / 53.).sin()).collect();
+            let rhs: Vec<f32> = (0..n * k).map(|i| (i as f32 / 71.).cos()).collect();
+            // Shape (1, k) is the decode shape: b * m == 1.
+            let lhs = Tensor::from_slice(&lhs, (1, k), &device)?;
+            let rhs = Tensor::from_slice(&rhs, (n, k), &device)?;
+
+            let qt = crate::quantized::QTensor::quantize(&rhs, dtype)?;
+            let want = lhs
+                .matmul(&qt.dequantize(&device)?.t()?)?
+                .to_vec2::<f32>()?;
+            let got = crate::quantized::QMatMul::from_qtensor(qt)?
+                .forward(&lhs)?
+                .to_vec2::<f32>()?;
+
+            assert_eq!(got.len(), 1, "{dtype:?} k={k} n={n}");
+            assert_eq!(got[0].len(), n, "{dtype:?} k={k} n={n}");
+            for (i, (a, b)) in got[0].iter().zip(want[0].iter()).enumerate() {
+                let tol = 2e-3 * b.abs().max(1.0);
+                assert!(
+                    (a - b).abs() <= tol,
+                    "{dtype:?} k={k} n={n} col {i}: dmmv {a} vs dequantized {b}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
