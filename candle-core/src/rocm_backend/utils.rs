@@ -1,5 +1,6 @@
 //! Helper functions to plug ROCm kernels in candle.
 use crate::{Layout, Result};
+use rocm_rs::hip::Dim3;
 
 use super::wrappers::SendSyncDeviceMemory;
 use super::{RocmDevice, RocmStorageSlice};
@@ -202,6 +203,52 @@ pub trait Map3 {
         };
         Ok(out)
     }
+}
+
+/// Grid and block for a kernel that maps one thread to one output element.
+///
+/// `launch_config` caps the grid at 65535 blocks, which is only sound for the
+/// grid-stride elementwise kernels. Everything in `conv.cu` instead returns
+/// early past the end of its output, so a capped grid would silently leave the
+/// tail untouched; this sizes the grid in full.
+pub(crate) fn dense_grid(dst_el: usize) -> Result<(Dim3, Dim3)> {
+    const BLOCK: usize = 256;
+    let blocks = u32::try_from(dst_el.div_ceil(BLOCK).max(1))
+        .map_err(|_| crate::Error::Msg(format!("output of {dst_el} elements is too large")))?;
+    Ok((Dim3::from(blocks), Dim3::from(BLOCK as u32)))
+}
+
+/// Launches `func_name` over `dst_el` elements with an uncapped grid.
+///
+/// # Safety
+/// `args` must match the kernel's parameter list exactly.
+pub(crate) unsafe fn launch_dense(
+    dev: &RocmDevice,
+    module: &super::kernels::Module,
+    func_name: &str,
+    dst_el: usize,
+    args: &mut [*mut std::ffi::c_void],
+) -> Result<()> {
+    let func = dev.get_or_load_func(func_name, module)?;
+    let (grid, block) = dense_grid(dst_el)?;
+    func.launch(grid, block, 0, Some(dev.stream()), args)
+        .map_err(|e| crate::Error::Msg(format!("{func_name} launch failed: {e}")))
+}
+
+/// Concatenates `parts` and uploads them as a kernel `info` buffer.
+///
+/// The conv, pool and upsample kernels dereference `info` unconditionally, so
+/// unlike the elementwise ops there is no null shortcut for a contiguous
+/// layout.
+pub(crate) fn info_buffer(
+    dev: &RocmDevice,
+    parts: &[&[usize]],
+) -> Result<SendSyncDeviceMemory<usize>> {
+    let mut data = Vec::new();
+    for part in parts {
+        data.extend_from_slice(part);
+    }
+    dev.clone_htod(&data)
 }
 
 #[cfg(test)]

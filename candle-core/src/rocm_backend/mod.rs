@@ -7,18 +7,24 @@ pub use candle_rocm_kernels as kernels;
 use half::{bf16, f16};
 pub use rocm_rs;
 use rocm_rs::hip::bindings;
-use rocm_rs::rocblas::{self, level3::GemmStridedBatchedType, types::Operation};
 
 mod device;
 mod error;
+mod gemm;
+#[cfg(feature = "miopen")]
 mod miopen;
+mod ops_conv;
+mod ops_conv_direct;
 mod ops_elementwise;
 mod ops_indexing;
+mod ops_pool;
 mod ops_reduce;
 mod ops_scalar;
 mod rng;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_conv;
 #[cfg(test)]
 mod tests_indexing;
 #[cfg(test)]
@@ -121,343 +127,6 @@ impl RocmStorageSlice {
 pub struct RocmStorage {
     pub slice: RocmStorageSlice,
     pub device: RocmDevice,
-}
-
-struct GemmConfig<T> {
-    alpha: T,
-    beta: T,
-    m: i32,
-    n: i32,
-    k: i32,
-    lda: i32,
-    ldb: i32,
-    ldc: i32,
-    transa: Operation,
-    transb: Operation,
-}
-
-struct StridedBatchedConfig<T> {
-    batch_size: i32,
-    gemm: GemmConfig<T>,
-    stride_a: i64,
-    stride_b: i64,
-    stride_c: i64,
-}
-
-fn gemm_config<T: Copy>(
-    alpha: T,
-    beta: T,
-    (b, m, n, k): (usize, usize, usize, usize),
-    lhs_l: &Layout,
-    rhs_l: &Layout,
-) -> std::result::Result<StridedBatchedConfig<T>, RocmError> {
-    let lhs_stride = lhs_l.stride();
-    let rhs_stride = rhs_l.stride();
-    let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
-    let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
-    let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
-    let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
-
-    let (lda, transa) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
-        (n as i32, Operation::None)
-    } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
-        (k as i32, Operation::Transpose)
-    } else {
-        return Err(RocmError::MatMulNonContiguous {
-            lhs_stride: Box::new(lhs_l.clone()),
-            rhs_stride: Box::new(rhs_l.clone()),
-            mnk: (m, n, k),
-        });
-    };
-
-    let (ldb, transb) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
-        (k as i32, Operation::None)
-    } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
-        (m as i32, Operation::Transpose)
-    } else {
-        return Err(RocmError::MatMulNonContiguous {
-            lhs_stride: Box::new(lhs_l.clone()),
-            rhs_stride: Box::new(rhs_l.clone()),
-            mnk: (m, n, k),
-        });
-    };
-
-    let gemm = GemmConfig {
-        alpha,
-        beta,
-        m: n as i32,
-        n: m as i32,
-        k: k as i32,
-        lda,
-        ldb,
-        ldc: n as i32,
-        transa,
-        transb,
-    };
-
-    let stride_b: usize = match lhs_stride[..lhs_stride.len() - 2] {
-        [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
-        [_, stride] if lhs_l.dims()[0] == 1 => stride,
-        [stride, _] if lhs_l.dims()[1] == 1 => stride,
-        [stride] => stride,
-        [] => m * k,
-        _ => {
-            return Err(RocmError::MatMulNonContiguous {
-                lhs_stride: Box::new(lhs_l.clone()),
-                rhs_stride: Box::new(rhs_l.clone()),
-                mnk: (m, n, k),
-            })
-        }
-    };
-    let stride_a: usize = match rhs_stride[..rhs_stride.len() - 2] {
-        [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
-        [_, stride] if rhs_l.dims()[0] == 1 => stride,
-        [stride, _] if rhs_l.dims()[1] == 1 => stride,
-        [stride] => stride,
-        [] => n * k,
-        _ => {
-            return Err(RocmError::MatMulNonContiguous {
-                lhs_stride: Box::new(lhs_l.clone()),
-                rhs_stride: Box::new(rhs_l.clone()),
-                mnk: (m, n, k),
-            })
-        }
-    };
-    Ok(StridedBatchedConfig {
-        batch_size: b as i32,
-        gemm,
-        stride_a: stride_a as i64,
-        stride_b: stride_b as i64,
-        stride_c: (m * n) as i64,
-    })
-}
-
-unsafe fn gemm_strided_batched<T: GemmStridedBatchedType>(
-    blas: &rocblas::Handle,
-    cfg: StridedBatchedConfig<T>,
-    a: *const std::ffi::c_void,
-    b: *const std::ffi::c_void,
-    c: *mut std::ffi::c_void,
-) -> std::result::Result<(), RocmError> {
-    rocblas::gemm_strided_batched(
-        blas,
-        cfg.gemm.transa,
-        cfg.gemm.transb,
-        cfg.gemm.m,
-        cfg.gemm.n,
-        cfg.gemm.k,
-        &cfg.gemm.alpha,
-        a as *const T,
-        cfg.gemm.lda,
-        cfg.stride_a,
-        b as *const T,
-        cfg.gemm.ldb,
-        cfg.stride_b,
-        &cfg.gemm.beta,
-        c as *mut T,
-        cfg.gemm.ldc,
-        cfg.stride_c,
-        cfg.batch_size,
-    )
-    .map_err(|e| RocmError::Rocblas(e.to_string()))
-}
-
-struct GemmExConfig {
-    alpha: f32,
-    beta: f32,
-    m: i32,
-    n: i32,
-    k: i32,
-    lda: i32,
-    ldb: i32,
-    ldc: i32,
-    transa: Operation,
-    transb: Operation,
-}
-
-struct StridedBatchedExConfig {
-    batch_size: i32,
-    gemm: GemmExConfig,
-    stride_a: i64,
-    stride_b: i64,
-    stride_c: i64,
-}
-
-fn gemm_ex_config(
-    alpha: f32,
-    beta: f32,
-    (b, m, n, k): (usize, usize, usize, usize),
-    lhs_l: &Layout,
-    rhs_l: &Layout,
-) -> std::result::Result<StridedBatchedExConfig, RocmError> {
-    let inner = gemm_config(alpha, beta, (b, m, n, k), lhs_l, rhs_l)?;
-    Ok(StridedBatchedExConfig {
-        batch_size: inner.batch_size,
-        gemm: GemmExConfig {
-            alpha: inner.gemm.alpha,
-            beta: inner.gemm.beta,
-            m: inner.gemm.m,
-            n: inner.gemm.n,
-            k: inner.gemm.k,
-            lda: inner.gemm.lda,
-            ldb: inner.gemm.ldb,
-            ldc: inner.gemm.ldc,
-            transa: inner.gemm.transa,
-            transb: inner.gemm.transb,
-        },
-        stride_a: inner.stride_a,
-        stride_b: inner.stride_b,
-        stride_c: inner.stride_c,
-    })
-}
-
-unsafe fn gemm_strided_batched_ex(
-    blas: &rocblas::Handle,
-    cfg: StridedBatchedExConfig,
-    a: *const std::ffi::c_void,
-    b: *const std::ffi::c_void,
-    c: *mut std::ffi::c_void,
-    datatype: rocm_rs::rocblas::ffi::rocblas_datatype,
-) -> std::result::Result<(), RocmError> {
-    use rocm_rs::rocblas::ffi;
-    use rocm_rs::rocblas::utils::GemmAlgo;
-
-    let status = unsafe {
-        rocblas_gemm_strided_batched_ex(
-            blas.as_raw(),
-            cfg.gemm.transa.into(),
-            cfg.gemm.transb.into(),
-            cfg.gemm.m,
-            cfg.gemm.n,
-            cfg.gemm.k,
-            &cfg.gemm.alpha as *const f32 as *const std::ffi::c_void,
-            a,
-            datatype,
-            cfg.gemm.lda,
-            cfg.stride_a,
-            b,
-            datatype,
-            cfg.gemm.ldb,
-            cfg.stride_b,
-            &cfg.gemm.beta as *const f32 as *const std::ffi::c_void,
-            c,
-            datatype,
-            cfg.gemm.ldc,
-            cfg.stride_c,
-            c,
-            datatype,
-            cfg.gemm.ldc,
-            cfg.stride_c,
-            cfg.batch_size,
-            ffi::rocblas_datatype__rocblas_datatype_f32_r,
-            GemmAlgo::Standard.into(),
-            0,
-            0,
-        )
-    };
-    if status != ffi::rocblas_status__rocblas_status_success {
-        return Err(RocmError::Rocblas(format!(
-            "rocblas_gemm_strided_batched_ex failed with status {}",
-            status
-        )));
-    }
-    Ok(())
-}
-
-extern "C" {
-    fn rocblas_gemm_strided_batched_ex(
-        handle: rocm_rs::rocblas::ffi::rocblas_handle,
-        transA: rocm_rs::rocblas::ffi::rocblas_operation,
-        transB: rocm_rs::rocblas::ffi::rocblas_operation,
-        m: rocm_rs::rocblas::ffi::rocblas_int,
-        n: rocm_rs::rocblas::ffi::rocblas_int,
-        k: rocm_rs::rocblas::ffi::rocblas_int,
-        alpha: *const std::ffi::c_void,
-        a: *const std::ffi::c_void,
-        a_type: rocm_rs::rocblas::ffi::rocblas_datatype,
-        lda: rocm_rs::rocblas::ffi::rocblas_int,
-        stride_a: rocm_rs::rocblas::ffi::rocblas_stride,
-        b: *const std::ffi::c_void,
-        b_type: rocm_rs::rocblas::ffi::rocblas_datatype,
-        ldb: rocm_rs::rocblas::ffi::rocblas_int,
-        stride_b: rocm_rs::rocblas::ffi::rocblas_stride,
-        beta: *const std::ffi::c_void,
-        c: *const std::ffi::c_void,
-        c_type: rocm_rs::rocblas::ffi::rocblas_datatype,
-        ldc: rocm_rs::rocblas::ffi::rocblas_int,
-        stride_c: rocm_rs::rocblas::ffi::rocblas_stride,
-        d: *mut std::ffi::c_void,
-        d_type: rocm_rs::rocblas::ffi::rocblas_datatype,
-        ldd: rocm_rs::rocblas::ffi::rocblas_int,
-        stride_d: rocm_rs::rocblas::ffi::rocblas_stride,
-        batch_count: rocm_rs::rocblas::ffi::rocblas_int,
-        compute_type: rocm_rs::rocblas::ffi::rocblas_datatype,
-        algo: rocm_rs::rocblas::ffi::rocblas_gemm_algo,
-        solution_index: i32,
-        flags: u32,
-    ) -> rocm_rs::rocblas::ffi::rocblas_status;
-}
-
-macro_rules! dispatch_matmul {
-    ($self:expr, $rhs:expr, $b:expr, $m:expr, $n:expr, $k:expr, $lhs_l:expr, $rhs_l:expr, $dev:expr,
-     $(($variant:ident, $rust_ty:ty, $alpha:expr, $zero:expr, $cfg_fn:expr, $gemm_fn:expr $(, $ex_datatype:expr)?)),+ $(,)?) => {{
-        let elem_count = $b * $m * $n;
-        let lhs_ptr = unsafe { $self.slice.offset_ptr($lhs_l.start_offset()) };
-        let rhs_ptr = unsafe { $rhs.slice.offset_ptr($rhs_l.start_offset()) };
-        let device = $dev.clone();
-        let slice = match (&$self.slice, &$rhs.slice) {
-            $(
-                (RocmStorageSlice::$variant(_), RocmStorageSlice::$variant(_)) => {
-                    let cfg = $cfg_fn($alpha, $zero, ($b, $m, $n, $k), $lhs_l, $rhs_l)?;
-                    let out = $dev.alloc::<$rust_ty>(elem_count)?;
-                    unsafe { $gemm_fn(&$dev.blas, cfg, rhs_ptr, lhs_ptr, out.as_ptr() $(, $ex_datatype)?)?; }
-                    RocmStorageSlice::$variant(out)
-                }
-            )+
-            _ => return Err(RocmError::Internal("dtype mismatch in matmul".into()).into()),
-        };
-        Ok(Self { slice, device })
-    }};
-}
-
-macro_rules! dispatch_miopen_conv {
-    ($self:expr, $kernel:expr, $l:expr, $kernel_l:expr, $dst_el:expr, $device:expr, $handle:expr, $func:ident, $($arg:expr),* $(,)?) => {{
-        let device = $device.clone();
-        let slice = match (&$self.slice, &$kernel.slice) {
-            (RocmStorageSlice::F32(s), RocmStorageSlice::F32(w)) => {
-                let x_ptr = unsafe { s.ptr_at($l.start_offset()) } as *mut _;
-                let w_ptr = unsafe { w.ptr_at($kernel_l.start_offset()) } as *mut _;
-                let o = device.alloc_zeros::<f32>($dst_el)?;
-                $func::<f32>($handle, x_ptr, w_ptr, o.as_ptr() as *mut _, $($arg),*)?;
-                RocmStorageSlice::F32(o)
-            }
-            (RocmStorageSlice::F16(s), RocmStorageSlice::F16(w)) => {
-                let x_ptr = unsafe { s.ptr_at($l.start_offset()) } as *mut _;
-                let w_ptr = unsafe { w.ptr_at($kernel_l.start_offset()) } as *mut _;
-                let o = device.alloc_zeros::<f16>($dst_el)?;
-                $func::<f16>($handle, x_ptr, w_ptr, o.as_ptr() as *mut _, $($arg),*)?;
-                RocmStorageSlice::F16(o)
-            }
-            (RocmStorageSlice::BF16(s), RocmStorageSlice::BF16(w)) => {
-                let x_ptr = unsafe { s.ptr_at($l.start_offset()) } as *mut _;
-                let w_ptr = unsafe { w.ptr_at($kernel_l.start_offset()) } as *mut _;
-                let o = device.alloc_zeros::<bf16>($dst_el)?;
-                $func::<bf16>($handle, x_ptr, w_ptr, o.as_ptr() as *mut _, $($arg),*)?;
-                RocmStorageSlice::BF16(o)
-            }
-            (RocmStorageSlice::F64(s), RocmStorageSlice::F64(w)) => {
-                let x_ptr = unsafe { s.ptr_at($l.start_offset()) } as *mut _;
-                let w_ptr = unsafe { w.ptr_at($kernel_l.start_offset()) } as *mut _;
-                let o = device.alloc_zeros::<f64>($dst_el)?;
-                $func::<f64>($handle, x_ptr, w_ptr, o.as_ptr() as *mut _, $($arg),*)?;
-                RocmStorageSlice::F64(o)
-            }
-            _ => return Err(crate::Error::Msg(
-                "conv only supports f32, f16, bf16, f64 for ROCm".to_string(),
-            )),
-        };
-        Ok(Self { slice, device })
-    }};
 }
 
 macro_rules! cast_launch {
@@ -856,6 +525,7 @@ impl BackendStorage for RocmStorage {
         Ok(Self { slice, device })
     }
 
+    #[cfg(not(feature = "miopen"))]
     fn conv1d(
         &self,
         l: &Layout,
@@ -863,37 +533,18 @@ impl BackendStorage for RocmStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConv1D,
     ) -> Result<Self> {
-        use crate::rocm_backend::miopen::conv2d_forward;
+        ops_conv::conv1d(self, l, kernel, kernel_l, params)
+    }
 
-        let device = self.device();
-        let miopen_handle = device.miopen();
-        let dst_el = params.b_size * params.c_out * params.l_out();
-
-        dispatch_miopen_conv!(
-            self,
-            kernel,
-            l,
-            kernel_l,
-            dst_el,
-            device,
-            &miopen_handle.0,
-            conv2d_forward,
-            params.b_size,
-            params.c_in,
-            params.c_out,
-            1,
-            params.l_in,
-            1,
-            params.k_size,
-            1,
-            params.l_out(),
-            params.padding,
-            0,
-            params.stride,
-            1,
-            params.dilation,
-            1,
-        )
+    #[cfg(feature = "miopen")]
+    fn conv1d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv1D,
+    ) -> Result<Self> {
+        miopen::conv1d(self, l, kernel, kernel_l, params)
     }
 
     fn conv_transpose1d(
@@ -903,34 +554,10 @@ impl BackendStorage for RocmStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConvTranspose1D,
     ) -> Result<Self> {
-        use crate::rocm_backend::miopen::conv_transpose1d_forward;
-
-        let device = self.device();
-        let miopen_handle = device.miopen();
-        let dst_el = params.b_size * params.c_out * params.l_out();
-
-        dispatch_miopen_conv!(
-            self,
-            kernel,
-            l,
-            kernel_l,
-            dst_el,
-            device,
-            &miopen_handle.0,
-            conv_transpose1d_forward,
-            params.b_size,
-            params.c_in,
-            params.c_out,
-            params.l_in,
-            params.k_size,
-            params.l_out(),
-            params.padding,
-            params.output_padding,
-            params.stride,
-            params.dilation,
-        )
+        ops_conv::conv_transpose1d(self, l, kernel, kernel_l, params)
     }
 
+    #[cfg(not(feature = "miopen"))]
     fn conv2d(
         &self,
         l: &Layout,
@@ -938,89 +565,86 @@ impl BackendStorage for RocmStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
-        use crate::rocm_backend::miopen::conv2d_forward;
+        ops_conv::conv2d(self, l, kernel, kernel_l, params)
+    }
 
-        let device = self.device();
-        let miopen_handle = device.miopen();
-        let out_h = params.out_h();
-        let out_w = params.out_w();
-        let dst_el = params.b_size * params.c_out * out_h * out_w;
-
-        dispatch_miopen_conv!(
-            self,
-            kernel,
-            l,
-            kernel_l,
-            dst_el,
-            device,
-            &miopen_handle.0,
-            conv2d_forward,
-            params.b_size,
-            params.c_in,
-            params.c_out,
-            params.i_h,
-            params.i_w,
-            params.k_h,
-            params.k_w,
-            out_h,
-            out_w,
-            params.padding,
-            params.padding,
-            params.stride,
-            params.stride,
-            params.dilation,
-            params.dilation,
-        )
+    #[cfg(feature = "miopen")]
+    fn conv2d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv2D,
+    ) -> Result<Self> {
+        miopen::conv2d(self, l, kernel, kernel_l, params)
     }
 
     fn conv_transpose2d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kl: &Layout,
-        _params: &crate::conv::ParamsConvTranspose2D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose2D,
     ) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "conv_transpose2d not yet implemented for ROCm".to_string(),
-        ))
+        ops_conv::conv_transpose2d(self, l, kernel, kernel_l, params)
     }
 
-    fn avg_pool2d(&self, _l: &Layout, _k: (usize, usize), _s: (usize, usize)) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "avg_pool2d not yet implemented for ROCm".to_string(),
-        ))
+    fn avg_pool2d(&self, l: &Layout, k: (usize, usize), stride: (usize, usize)) -> Result<Self> {
+        let device = self.device.clone();
+        let slice = ops_pool::Pool2D {
+            w_k: k.0,
+            h_k: k.1,
+            w_stride: stride.0,
+            h_stride: stride.1,
+            op: ops_pool::PoolOp::Avg,
+        }
+        .map(&self.slice, &device, l)?;
+        Ok(Self { slice, device })
     }
 
-    fn max_pool2d(&self, _l: &Layout, _k: (usize, usize), _s: (usize, usize)) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "max_pool2d not yet implemented for ROCm".to_string(),
-        ))
+    fn max_pool2d(&self, l: &Layout, k: (usize, usize), stride: (usize, usize)) -> Result<Self> {
+        let device = self.device.clone();
+        let slice = ops_pool::Pool2D {
+            w_k: k.0,
+            h_k: k.1,
+            w_stride: stride.0,
+            h_stride: stride.1,
+            op: ops_pool::PoolOp::Max,
+        }
+        .map(&self.slice, &device, l)?;
+        Ok(Self { slice, device })
     }
 
+    /// `conv.cu` ships no 1-D upsample kernel; cuda_backend bails here too.
     fn upsample_nearest1d(&self, _l: &Layout, _sz: usize) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "upsample_nearest1d not yet implemented for ROCm".to_string(),
-        ))
+        crate::bail!("upsample-nearest1d is not supported on rocm")
     }
 
-    fn upsample_nearest2d(&self, _l: &Layout, _w: usize, _h: usize) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "upsample_nearest2d not yet implemented for ROCm".to_string(),
-        ))
+    fn upsample_nearest2d(&self, l: &Layout, out_w: usize, out_h: usize) -> Result<Self> {
+        let device = self.device.clone();
+        let slice = ops_pool::UpsampleNearest2D(out_w, out_h).map(&self.slice, &device, l)?;
+        Ok(Self { slice, device })
     }
 
     fn upsample_bilinear2d(
         &self,
-        _l: &Layout,
-        _w: usize,
-        _h: usize,
-        _align: bool,
-        _fh: Option<f64>,
-        _fv: Option<f64>,
+        l: &Layout,
+        out_h: usize,
+        out_w: usize,
+        align_corners: bool,
+        scale_h: Option<f64>,
+        scale_w: Option<f64>,
     ) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "upsample_bilinear2d not yet implemented for ROCm".to_string(),
-        ))
+        let device = self.device.clone();
+        let slice = ops_pool::UpsampleBilinear2D {
+            out_w,
+            out_h,
+            align_corners,
+            scale_h_factor: scale_h,
+            scale_w_factor: scale_w,
+        }
+        .map(&self.slice, &device, l)?;
+        Ok(Self { slice, device })
     }
 
     fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
@@ -1110,38 +734,7 @@ impl BackendStorage for RocmStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        use rocm_rs::rocblas::ffi;
-        dispatch_matmul!(
-            self,
-            rhs,
-            b,
-            m,
-            n,
-            k,
-            lhs_l,
-            rhs_l,
-            &self.device,
-            (F32, f32, 1.0f32, 0.0f32, gemm_config, gemm_strided_batched),
-            (F64, f64, 1.0f64, 0.0f64, gemm_config, gemm_strided_batched),
-            (
-                F16,
-                f16,
-                1.0f32,
-                0.0f32,
-                gemm_ex_config,
-                gemm_strided_batched_ex,
-                ffi::rocblas_datatype__rocblas_datatype_f16_r
-            ),
-            (
-                BF16,
-                bf16,
-                1.0f32,
-                0.0f32,
-                gemm_ex_config,
-                gemm_strided_batched_ex,
-                ffi::rocblas_datatype__rocblas_datatype_bf16_r
-            ),
-        )
+        gemm::matmul(self, rhs, (b, m, n, k), lhs_l, rhs_l)
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
