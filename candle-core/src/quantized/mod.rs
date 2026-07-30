@@ -770,6 +770,12 @@ impl QTensor {
                 }
                 _ => unreachable!("ids were moved to the QTensor device"),
             },
+            QStorage::Wgpu(storage) => match &*ids.storage() {
+                Storage::Wgpu(ids_storage) => {
+                    Storage::Wgpu(storage.embedding(rows, hidden, ids_storage, ids.layout())?)
+                }
+                _ => unreachable!("ids were moved to the QTensor device"),
+            },
         };
         let none = crate::op::BackpropOp::none();
         Ok(crate::tensor::from_storage(storage, out_shape, none, false))

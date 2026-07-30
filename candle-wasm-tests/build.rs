@@ -1,9 +1,9 @@
 use quote::quote;
-use syn::visit_mut::VisitMut;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use syn::visit_mut::VisitMut;
 use syn::{Expr, ItemFn};
 
 fn write_file(file_path: &std::path::PathBuf, content: &str) -> io::Result<()> {
@@ -43,7 +43,7 @@ fn copy_test_folders(source_dir: &str, crate_replace: &str) -> io::Result<Vec<(S
             let content = fs::read_to_string(&path)?;
 
             // Process the content.
-            let new_content = process_content(&content, crate_replace);
+            let new_content = process_content(&content, crate_replace, &path);
 
             let header = r#"
 // ============================================================================
@@ -120,13 +120,34 @@ fn make_fn_async_same_name_same_file<'h>(
     function_name: &str,
 ) -> std::borrow::Cow<'h, str> {
     let re = Regex::new(&format!(
-        "(?<![\\.\\:\\w_]){function_name}(<[^>]+>)?{BALANCED_PARENTHESES}(?!\\s*[-{{])"
+        "(?<![\\.\\:\\w_]){function_name}(<[^>]+>)?{BALANCED_PARENTHESES}(?!\\s*(?:[-{{]|\\.await))"
     ))
     .unwrap();
     re.replace_all(content, &format!("{function_name}$1$2.await"))
 }
 
-fn process_content(content: &str, crate_replace: &str) -> String {
+fn parse_error_context(content: &str, line: usize, column: usize) -> String {
+    let lines: Vec<_> = content.lines().collect();
+    let line = line.clamp(1, lines.len().max(1));
+    let first_line = line.saturating_sub(2).max(1);
+    let last_line = (line + 2).min(lines.len());
+    let line_number_width = last_line.to_string().len();
+    let mut context = String::new();
+
+    for line_number in first_line..=last_line {
+        let source_line = lines.get(line_number - 1).copied().unwrap_or("");
+        context.push_str(&format!(
+            "{line_number:>line_number_width$} | {source_line}\n"
+        ));
+        if line_number == line {
+            context.push_str(&format!("{:line_number_width$} | {:column$}^\n", "", ""));
+        }
+    }
+
+    context
+}
+
+fn process_content(content: &str, crate_replace: &str, source_path: &Path) -> String {
     let global_start = "#![allow(unused_imports, unexpected_cfgs, unused_parens)]".to_string();
 
     let header = "
@@ -159,7 +180,12 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
     transformed_content = make_fn_async(&transformed_content, "to_device").to_string();
     transformed_content = make_fn_async(&transformed_content, "sample").to_string();
     transformed_content = make_fn_async(&transformed_content, "one_hot").to_string();
-    transformed_content = make_fn_async_base(&transformed_content, "quantized::QTensor::quantize", "candle_wasm_tests::quantize_async").to_string();
+    transformed_content = make_fn_async_base(
+        &transformed_content,
+        "quantized::QTensor::quantize",
+        "candle_wasm_tests::quantize_async",
+    )
+    .to_string();
     transformed_content =
         make_fn_async_same_name(&transformed_content, "to_vec0_round").to_string();
     transformed_content =
@@ -178,51 +204,95 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
         "candle_nn::encoding::one_hot",
         "candle_nn::encoding::one_hot_async",
     );
-    transformed_content = transformed_content.replace("crate::k_quants", &format!("{crate_replace}::quantized::k_quants"));
+    transformed_content = transformed_content.replace(
+        "crate::k_quants",
+        &format!("{crate_replace}::quantized::k_quants"),
+    );
     transformed_content = transformed_content.replace("crate::", &format!("{crate_replace}::"));
     transformed_content =
         transformed_content.replace("test_device!", "candle_wasm_tests::test_device!");
 
     transformed_content = transformed_content.replace("fn $fn_name", "async fn $fn_name");
-    transformed_content = transformed_content.replace("println!", "wasm_bindgen_test::console_log!"); 
+    transformed_content =
+        transformed_content.replace("println!", "wasm_bindgen_test::console_log!");
     transformed_content = make_fn_async(&transformed_content, "synchronize").to_string();
-
 
     transformed_content = transformed_content.replace(". await", ".await");
 
     match syn::parse_file(&transformed_content) {
-        Ok(syntax_tree) => {
-            let (mut new_output, converted_functions) =
-                convert_to_async_if_await(syntax_tree, content);
+        Ok(_) => {
+            let mut new_output = transformed_content;
+            loop {
+                let syntax_tree = syn::parse_file(&new_output)
+                    .expect("async propagation produced invalid Rust syntax");
+                let (output, converted_functions) =
+                    convert_to_async_if_await(syntax_tree, content);
+                new_output = output;
 
-            for function in converted_functions {
-                new_output = make_fn_async_same_name_same_file(&new_output, &function).to_string();
+                if converted_functions.is_empty() {
+                    break;
+                }
+                for function in converted_functions {
+                    new_output =
+                        make_fn_async_same_name_same_file(&new_output, &function).to_string();
+                }
             }
 
-            let re_fix_async_loop = Regex::new(r"let\s*v\s*=[^;]+?\.to_vec1_async[^;]+;").unwrap();
+            let re_fix_async_loop = Regex::new(
+                r"let\s+v\s*=\s*\(0\s*\.\.\s*100\)[^;]*?Tensor::(randn|rand)[^;]*?\.to_vec1_async[^;]+;",
+            )
+            .unwrap();
             new_output = re_fix_async_loop
                 .replace_all(
                     &new_output,
                     "
             let mut v = Vec::new();
             for _ in 0..100 {
-                let t = Tensor::randn(0f32, 1f32, N, device)?;
+                let t = Tensor::$1(0f32, 1f32, N, device)?;
                 let vec = t.to_vec1_async::<f32>().await?;
                 v.push(vec);
             }
             ",
                 )
                 .to_string();
-            
+
             new_output = new_output.replace("std::thread::spawn(async move || ", "(");
             let re_remove_thread_join = Regex::new(r".join\(\)\s*\.\s*unwrap\(\)").unwrap();
-            new_output = re_remove_thread_join.replace_all(&new_output, "").to_string();
-            
+            new_output = re_remove_thread_join
+                .replace_all(&new_output, "")
+                .to_string();
+
             new_output
         }
         Err(err) => {
-            println!("{transformed_content}");
-            panic!("{}", err)
+            let start = err.span().start();
+            let debug_path = std::env::var_os("OUT_DIR").map(|out_dir| {
+                let file_name = source_path
+                    .file_name()
+                    .unwrap_or_else(|| std::ffi::OsStr::new("transformed.rs"));
+                let path = PathBuf::from(out_dir).join(file_name);
+                if let Err(write_err) = fs::write(&path, &transformed_content) {
+                    eprintln!(
+                        "warning: failed to write transformed source to {}: {write_err}",
+                        path.display()
+                    );
+                }
+                path
+            });
+            let debug_path = debug_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<OUT_DIR unavailable>".to_string());
+
+            panic!(
+                "failed to parse transformed source from {} at {}:{}: {}\n\n{}\nfull transformed source: {}",
+                source_path.display(),
+                start.line,
+                start.column + 1,
+                err,
+                parse_error_context(&transformed_content, start.line, start.column),
+                debug_path,
+            )
         }
     }
 }
@@ -231,20 +301,41 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
 fn convert_to_async_if_await(mut file: syn::File, code: &str) -> (String, Vec<String>) {
     let mut converted_functions = vec![];
 
-    // Traverse file
-    for item in file.items.iter_mut() {
-        if let syn::Item::Fn(func) = item {
-            let mut visitor = AwaitMarker::new(code, func);
+    fn visit_items(items: &mut [syn::Item], code: &str, converted_functions: &mut Vec<String>) {
+        for item in items {
+            match item {
+                syn::Item::Fn(func) => {
+                    let mut visitor = AwaitMarker::new(code, func);
+                    visitor.visit_block_mut(&mut func.block);
 
-            visitor.visit_item_fn_mut(func);
-
-            if visitor.should_make_fn_async() {
-                func.sig.asyncness = Some(syn::token::Async::default());
-                converted_functions.push(func.sig.ident.to_string());
+                    if func.sig.asyncness.is_none() && visitor.should_make_fn_async() {
+                        func.sig.asyncness = Some(syn::token::Async::default());
+                        converted_functions.push(func.sig.ident.to_string());
+                    }
+                    if func.attrs.iter().any(|attr| attr.path().is_ident("test")) {
+                        func.attrs.retain(|attr| !attr.path().is_ident("test"));
+                        func.attrs.push(syn::parse_quote!(
+                            #[cfg_attr(
+                                target_arch = "wasm32",
+                                wasm_bindgen_test::wasm_bindgen_test
+                            )]
+                        ));
+                        func.attrs.push(syn::parse_quote!(
+                            #[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+                        ));
+                    }
+                }
+                syn::Item::Mod(module) => {
+                    if let Some((_, items)) = &mut module.content {
+                        visit_items(items, code, converted_functions);
+                    }
+                }
+                _ => {}
             }
         }
     }
 
+    visit_items(&mut file.items, code, &mut converted_functions);
     (prettyplease::unparse(&file), converted_functions)
 }
 struct AwaitMarker {
@@ -255,7 +346,6 @@ struct AwaitMarker {
 
 impl AwaitMarker {
     fn new(code: &str, func: &ItemFn) -> Self {
-
         let mut force_async = false;
         if func.attrs.iter().any(|c| {
             let name = c.path();
@@ -266,7 +356,7 @@ impl AwaitMarker {
 
         let func_name = func.sig.ident.to_string();
 
-        if !force_async{
+        if !force_async {
             force_async = fancy_regex::Regex::new(&format!(
                 "test_device![\\n\\r\\s]*\\([\\n\\r\\s]*{func_name}[\\n\\r\\s]*,"
             ))
@@ -304,9 +394,7 @@ impl VisitMut for AwaitMarker {
                 self.inside_closure -= 1;
 
                 // Detect if closure body contains `.await`
-                let contains_await = quote::quote!(#closure.body)
-                    .to_string()
-                    .contains(". await");
+                let contains_await = quote::quote!(#closure.body).to_string().contains(". await");
 
                 if contains_await {
                     closure.asyncness = Some(Default::default());

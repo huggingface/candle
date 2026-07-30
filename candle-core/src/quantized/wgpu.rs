@@ -17,7 +17,7 @@ use crate::{
     },
     DType, Result, Shape, WgpuDevice, WgpuStorage,
 };
-use wgpu_compute_layer::cache::BufferReferenceId;
+use wgpu_compute_layer::cache::{BindgroupAlignmentLayout, BufferReferenceId};
 
 pub struct QWgpuStorage {
     dtype: GgmlDType,
@@ -49,6 +49,114 @@ impl QWgpuStorage {
 
     pub fn storage_size_in_bytes(&self) -> usize {
         self.storage.size_in_bytes()
+    }
+
+    pub fn embedding(
+        &self,
+        rows: usize,
+        hidden: usize,
+        ids: &WgpuStorage,
+        ids_l: &crate::Layout,
+    ) -> Result<WgpuStorage> {
+        if ids.dtype() != DType::U32 {
+            crate::bail!("quantized embedding expects u32 ids, got {:?}", ids.dtype())
+        }
+        if !ids_l.is_contiguous() {
+            crate::bail!("quantized embedding requires contiguous ids")
+        }
+        if !hidden.is_multiple_of(self.dtype.block_size()) {
+            crate::bail!(
+                "quantized embedding hidden size {hidden} is not divisible by block size {}",
+                self.dtype.block_size()
+            )
+        }
+        let expected_size = rows * hidden * self.dtype.type_size() / self.dtype.block_size();
+        if self.storage_size_in_bytes() != expected_size {
+            crate::bail!(
+                "quantized tensor has {} bytes, expected {expected_size}",
+                self.storage_size_in_bytes()
+            )
+        }
+
+        let pipeline = match self.dtype() {
+            GgmlDType::Q4_0 => candle_wgpu_kernels::Pipelines::Q40(
+                candle_wgpu_kernels::DType::F32,
+                candle_wgpu_kernels::quantized::q4_0::Functions::Embedding,
+            ),
+            GgmlDType::Q4_1 => candle_wgpu_kernels::Pipelines::Q41(
+                candle_wgpu_kernels::DType::F32,
+                candle_wgpu_kernels::quantized::q4_1::Functions::Embedding,
+            ),
+            GgmlDType::Q5_0 => candle_wgpu_kernels::Pipelines::Q50(
+                candle_wgpu_kernels::DType::F32,
+                candle_wgpu_kernels::quantized::q5_0::Functions::Embedding,
+            ),
+            GgmlDType::Q5_1 => candle_wgpu_kernels::Pipelines::Q51(
+                candle_wgpu_kernels::DType::F32,
+                candle_wgpu_kernels::quantized::q5_1::Functions::Embedding,
+            ),
+            GgmlDType::Q8_0 => candle_wgpu_kernels::Pipelines::Q80(
+                candle_wgpu_kernels::DType::F32,
+                candle_wgpu_kernels::quantized::q8_0::Functions::Embedding,
+            ),
+            GgmlDType::Q8_1 => candle_wgpu_kernels::Pipelines::Q81(
+                candle_wgpu_kernels::DType::F32,
+                candle_wgpu_kernels::quantized::q8_1::Functions::Embedding,
+            ),
+            GgmlDType::Q2K => candle_wgpu_kernels::Pipelines::Q2K(
+                candle_wgpu_kernels::DType::F32,
+                candle_wgpu_kernels::quantized::q2_k::Functions::Embedding,
+            ),
+            GgmlDType::Q3K => candle_wgpu_kernels::Pipelines::Q3K(
+                candle_wgpu_kernels::DType::F32,
+                candle_wgpu_kernels::quantized::q3_k::Functions::Embedding,
+            ),
+            GgmlDType::Q4K => candle_wgpu_kernels::Pipelines::Q4K(
+                candle_wgpu_kernels::DType::F32,
+                candle_wgpu_kernels::quantized::q4_k::Functions::Embedding,
+            ),
+            GgmlDType::Q5K => candle_wgpu_kernels::Pipelines::Q5K(
+                candle_wgpu_kernels::DType::F32,
+                candle_wgpu_kernels::quantized::q5_k::Functions::Embedding,
+            ),
+            GgmlDType::Q6K => candle_wgpu_kernels::Pipelines::Q6K(
+                candle_wgpu_kernels::DType::F32,
+                candle_wgpu_kernels::quantized::q6_k::Functions::Embedding,
+            ),
+            GgmlDType::Q8K => candle_wgpu_kernels::Pipelines::Q8K(
+                candle_wgpu_kernels::DType::F32,
+                candle_wgpu_kernels::quantized::q8_k::Functions::Embedding,
+            ),
+            dtype => crate::bail!("quantized WGPU embedding is not implemented for {dtype:?}"),
+        };
+
+        let ids_len = ids_l.shape().elem_count();
+        let row_blocks = hidden / self.dtype.block_size();
+        let output_blocks = ids_len * row_blocks;
+        let dev = self.device();
+        let dst = dev.alloc_uninit_size(DType::F32, ids_len * hidden);
+        let mut queue = dev.get_queue();
+        queue.add(ids_len);
+        queue.add(row_blocks);
+        queue.add(rows);
+        let pipeline = queue.get_pipeline(pipeline);
+        let bind_group = dev.create_bind_group_input2_with_alignment(
+            dst.buffer(),
+            ids.buffer(),
+            self.buffer(),
+            BindgroupAlignmentLayout::Bindgroup2(
+                DType::F32.into(),
+                DType::U32.into(),
+                DType::U32.into(),
+            ),
+        );
+        queue.enqueue_64(
+            pipeline,
+            bind_group,
+            output_blocks as u32,
+            ids_len * hidden,
+        );
+        Ok(dst)
     }
 
     pub fn dequantize(&self, elem_count: usize) -> Result<WgpuStorage> {

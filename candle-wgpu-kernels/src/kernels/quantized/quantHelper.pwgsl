@@ -72,6 +72,11 @@ LOAD_INFO(op_matmul, 7)
 LOAD_INFO(op_dequantize, 1)
 #define op_dequantize_size               op_dequantize[0]
 
+LOAD_INFO(op_embedding, 3)
+#define op_embedding_ids_len             op_embedding[0]
+#define op_embedding_row_blocks          op_embedding[1]
+#define op_embedding_rows                op_embedding[2]
+
 #ifndef SGEMM
 @compute @workgroup_size(64,1,1)
 fn dequantize_block_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -82,6 +87,34 @@ fn dequantize_block_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) 
 
         for(var tid = 0u; tid < TID_SIZE; tid += 1u){
             LOAD_SINGLE(v_input1_u32, tid)
+        }
+    }
+}
+
+@compute @workgroup_size(64,1,1)
+fn embedding(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let output_block = global_id.x;
+    let output_blocks = op_embedding_ids_len * op_embedding_row_blocks;
+    if (output_block >= output_blocks) {
+        return;
+    }
+
+    let output_row = output_block / op_embedding_row_blocks;
+    let row_block = output_block % op_embedding_row_blocks;
+    let row = v_input1_u32[output_row];
+    let output_offset = output_block * BLOCK_SIZE;
+
+    if (row < op_embedding_rows) {
+        let block_index = row * op_embedding_row_blocks + row_block;
+        #define CALLBACK(idx,value, idx2) v_dest_f32[output_offset + (idx)] = value;
+        LOAD_HEADER(v_input2_u32)
+
+        for (var tid = 0u; tid < TID_SIZE; tid += 1u) {
+            LOAD_SINGLE(v_input2_u32, tid)
+        }
+    } else {
+        for (var idx = 0u; idx < BLOCK_SIZE; idx += 1u) {
+            v_dest_f32[output_offset + idx] = 0.0;
         }
     }
 }
