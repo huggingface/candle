@@ -666,12 +666,27 @@ impl Mlp {
     }
 }
 
-#[derive(Debug, Clone)]
+/// A transformer's feed-forward computation within a Llama block.
+///
+/// Implement this trait to replace a block's dense MLP while retaining Candle's
+/// attention, RoPE, causal masking, KV cache, norms, and residual wiring. The
+/// factory passed to [`Llama::load_with_mlp_factory`] receives the layer index
+/// and a [`VarBuilder`] rooted at that layer's `mlp` prefix.
+pub trait BlockMlp: Send + Sync {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor>;
+}
+
+impl BlockMlp for Mlp {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        Self::forward(self, xs)
+    }
+}
+
 struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
-    mlp: Mlp,
+    mlp: Box<dyn BlockMlp>,
     span: tracing::Span,
 }
 
@@ -692,10 +707,9 @@ impl Block {
         Ok(x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder, cfg: &Config, mlp: Box<dyn BlockMlp>) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "block");
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg)?;
-        let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
         let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
@@ -712,7 +726,6 @@ impl Block {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
@@ -755,7 +768,28 @@ impl Llama {
         logits.to_dtype(DType::F32)
     }
 
+    /// Loads the standard dense Llama architecture.
+    ///
+    /// This is identical to [`Llama::load_with_mlp_factory`] with the built-in
+    /// dense MLP factory.
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+        Self::load_with_mlp_factory(vb, cfg, |_, vb| Ok(Box::new(Mlp::load(vb, cfg)?)))
+    }
+
+    /// Loads Llama while supplying the feed-forward computation for each block.
+    ///
+    /// `mlp_factory` is called once per transformer layer with its zero-based
+    /// index and a [`VarBuilder`] rooted at `model.layers.{index}.mlp`. The
+    /// supplied MLP may own weights on devices other than the rest of the model.
+    /// All non-MLP computation remains Candle's normal Llama implementation.
+    pub fn load_with_mlp_factory<F>(
+        vb: VarBuilder,
+        cfg: &Config,
+        mlp_factory: F,
+    ) -> Result<Self>
+    where
+        F: for<'a> Fn(usize, VarBuilder<'a>) -> Result<Box<dyn BlockMlp>>,
+    {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = if cfg.tie_word_embeddings {
             Linear::from_weights(wte.embeddings().clone(), None)
@@ -764,8 +798,12 @@ impl Llama {
         };
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
-            .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), cfg).unwrap())
-            .collect();
+            .map(|i| {
+                let block_vb = vb.pp(format!("model.layers.{i}"));
+                let mlp = mlp_factory(i, block_vb.pp("mlp"))?;
+                Block::load(block_vb, cfg, mlp)
+            })
+            .collect::<Result<_>>()?;
 
         Ok(Self {
             wte,
@@ -779,6 +817,7 @@ impl Llama {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     fn tiny_config() -> Config {
         Config {
@@ -965,6 +1004,43 @@ mod tests {
         let k = Tensor::zeros((1, num_kv_heads, 1, head_dim), DType::F32, &device)?;
         let v = Tensor::zeros((1, num_kv_heads, 1, head_dim), DType::F32, &device)?;
         assert!(paged.write_new_kv(&k, &v, 2).is_err());
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct ZeroMlp {
+        forward_calls: Arc<Mutex<usize>>,
+    }
+
+    impl BlockMlp for ZeroMlp {
+        fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+            *self.forward_calls.lock().unwrap() += 1;
+            Tensor::zeros(xs.dims(), xs.dtype(), xs.device())
+        }
+    }
+
+    #[test]
+    fn load_with_mlp_factory_builds_one_mlp_per_block() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let layers = Arc::new(Mutex::new(Vec::new()));
+        let factory_layers = Arc::clone(&layers);
+        let forward_calls = Arc::new(Mutex::new(0));
+        let factory_forward_calls = Arc::clone(&forward_calls);
+        let vb = VarBuilder::zeros(DType::F32, &device);
+
+        let model = Llama::load_with_mlp_factory(vb, &cfg, move |layer, _mlp_vb| {
+            factory_layers.lock().unwrap().push(layer);
+            Ok(Box::new(ZeroMlp {
+                forward_calls: Arc::clone(&factory_forward_calls),
+            }))
+        })?;
+
+        assert_eq!(*layers.lock().unwrap(), vec![0, 1]);
+        let mut cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        let tokens = Tensor::zeros((1, 1), DType::U32, &device)?;
+        model.forward(&tokens, 0, &mut cache)?;
+        assert_eq!(*forward_calls.lock().unwrap(), cfg.num_hidden_layers);
         Ok(())
     }
 
