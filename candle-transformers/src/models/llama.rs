@@ -7,7 +7,7 @@
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use std::{collections::HashMap, f32::consts::PI};
+use std::{collections::HashMap, f32::consts::PI, sync::Arc};
 
 pub const DEFAULT_MAX_SEQ_LEN: usize = 4096;
 
@@ -228,21 +228,21 @@ impl PagedKvCache {
             .broadcast_as((b_sz * seq_len, num_kv_heads, head_dim))?
             .contiguous()?;
 
-        let k_flat = k
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
-        let v_flat = v
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
+        let k_flat =
+            k.transpose(1, 2)?
+                .contiguous()?
+                .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
+        let v_flat =
+            v.transpose(1, 2)?
+                .contiguous()?
+                .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
 
-        let key_flat = self
-            .key_cache
-            .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
-        let value_flat = self
-            .value_cache
-            .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
+        let key_flat =
+            self.key_cache
+                .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
+        let value_flat =
+            self.value_cache
+                .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
         key_flat.scatter_set(&indices, &k_flat, 0)?;
         value_flat.scatter_set(&indices, &v_flat, 0)?;
         Ok(())
@@ -573,14 +573,13 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         paged.write_new_kv(k, v, index_pos)?;
 
-        let q = q
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
+        let q = q.transpose(1, 2)?.contiguous()?.reshape((
+            b_sz * seq_len,
+            self.num_attention_heads,
+            self.head_dim,
+        ))?;
         let seqlens_q = Tensor::new(
-            (0..=b_sz)
-                .map(|i| (i * seq_len) as u32)
-                .collect::<Vec<_>>(),
+            (0..=b_sz).map(|i| (i * seq_len) as u32).collect::<Vec<_>>(),
             q.device(),
         )?;
         let max_seqlen_k = paged.block_table.dim(1)? * paged.page_block_size;
@@ -682,12 +681,25 @@ impl BlockMlp for Mlp {
     }
 }
 
+#[derive(Clone)]
 struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
-    mlp: Box<dyn BlockMlp>,
+    mlp: Arc<dyn BlockMlp>,
     span: tracing::Span,
+}
+
+impl std::fmt::Debug for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Block")
+            .field("rms_1", &self.rms_1)
+            .field("attn", &self.attn)
+            .field("rms_2", &self.rms_2)
+            .field("mlp", &"dyn BlockMlp")
+            .field("span", &self.span)
+            .finish()
+    }
 }
 
 impl Block {
@@ -720,12 +732,13 @@ impl Block {
             rms_1,
             attn,
             rms_2,
-            mlp,
+            mlp: Arc::from(mlp),
             span,
         })
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
@@ -782,11 +795,7 @@ impl Llama {
     /// index and a [`VarBuilder`] rooted at `model.layers.{index}.mlp`. The
     /// supplied MLP may own weights on devices other than the rest of the model.
     /// All non-MLP computation remains Candle's normal Llama implementation.
-    pub fn load_with_mlp_factory<F>(
-        vb: VarBuilder,
-        cfg: &Config,
-        mlp_factory: F,
-    ) -> Result<Self>
+    pub fn load_with_mlp_factory<F>(vb: VarBuilder, cfg: &Config, mlp_factory: F) -> Result<Self>
     where
         F: for<'a> Fn(usize, VarBuilder<'a>) -> Result<Box<dyn BlockMlp>>,
     {
