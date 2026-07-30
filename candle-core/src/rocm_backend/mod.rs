@@ -20,6 +20,8 @@ mod ops_scalar;
 mod tests;
 #[cfg(test)]
 mod tests_indexing;
+#[cfg(test)]
+mod tests_sort;
 mod wrappers;
 pub use device::{DeviceId, RocmDevice};
 pub use error::{RocmError, WrapErr};

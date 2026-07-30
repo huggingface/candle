@@ -107,6 +107,76 @@ mod cuda {
     }
 }
 
+#[cfg(feature = "rocm")]
+mod rocm {
+    use super::*;
+    use crate::rocm_backend::rocm_rs::hip::Dim3;
+    use crate::rocm_backend::{
+        kernels, try_kernel_name, Map1Any, RocmDevice, SendSyncDeviceMemory, S,
+    };
+    use std::ffi::c_void;
+
+    /// Upper bound on the threads per block, on AMD as on NVIDIA.
+    const MAX_BLOCK_DIM: usize = 1024;
+
+    impl Map1Any for ArgSort {
+        fn f<T: Copy + Send + Sync + 'static, W: Fn(SendSyncDeviceMemory<T>) -> S>(
+            &self,
+            src: &SendSyncDeviceMemory<T>,
+            dev: &RocmDevice,
+            layout: &crate::Layout,
+            // `asort_*` writes `uint32_t` whatever the input dtype is, so the
+            // same-dtype re-wrap is never the right answer here.
+            _wrap: W,
+        ) -> Result<S> {
+            let start_offset = match layout.contiguous_offsets() {
+                None => crate::bail!("input has to be contiguous"),
+                Some((o1, _)) => o1,
+            };
+            let elem_count = layout.shape().elem_count();
+            let ncols = self.last_dim;
+            let nrows = elem_count / ncols;
+            let ncols_pad = next_power_of_2(ncols);
+
+            let name = if self.asc { "asort_asc" } else { "asort_desc" };
+            let func = dev.get_or_load_func(&try_kernel_name::<T>(name)?, &kernels::SORT)?;
+            let dst = dev.alloc::<u32>(elem_count)?;
+
+            // `k_argsort` is a per-row bitonic sort, not a grid-stride loop: one
+            // block owns one row and its `extern __shared__ int dst_row[]`
+            // scratch, so the grid must be sized by `nrows` rather than through
+            // `launch_config`. Threads beyond `MAX_BLOCK_DIM` are folded into the
+            // kernel's own `col += blockDim.x` stride.
+            let grid = Dim3::from(nrows as u32);
+            let block = Dim3::from(ncols_pad.min(MAX_BLOCK_DIM) as u32);
+            let shared_mem_bytes = (ncols_pad * std::mem::size_of::<u32>()) as u32;
+
+            // ASORT_OP takes (const T *x, uint32_t *dst, int ncols, int ncols_pad)
+            // — none of the usual (numel, num_dims, dims_and_strides) prefix.
+            let ncols = ncols as i32;
+            let ncols_pad = ncols_pad as i32;
+            unsafe {
+                let src_ptr = src.ptr_at(start_offset);
+                let dst_ptr = dst.as_ptr();
+                func.launch(
+                    grid,
+                    block,
+                    shared_mem_bytes,
+                    Some(dev.stream()),
+                    &mut [
+                        (&src_ptr) as *const *mut c_void as *mut c_void,
+                        (&dst_ptr) as *const *mut c_void as *mut c_void,
+                        &ncols as *const i32 as *mut c_void,
+                        &ncols_pad as *const i32 as *mut c_void,
+                    ],
+                )
+            }
+            .map_err(|e| crate::Error::Msg(format!("argsort kernel launch failed: {e}")))?;
+            Ok(S::U32(dst))
+        }
+    }
+}
+
 impl crate::CustomOp1 for ArgSort {
     fn name(&self) -> &'static str {
         "argsort"
@@ -163,6 +233,23 @@ impl crate::CustomOp1 for ArgSort {
         let dev = storage.device();
         let slice = self.map(&storage.slice, dev, layout)?;
         let dst = crate::cuda_backend::CudaStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, layout.shape().clone()))
+    }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        storage: &crate::RocmStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::RocmStorage, crate::Shape)> {
+        use crate::backend::BackendStorage;
+        use crate::rocm_backend::Map1Any;
+        let dev = storage.device();
+        let slice = self.map(&storage.slice, dev, layout)?;
+        let dst = crate::rocm_backend::RocmStorage {
             slice,
             device: dev.clone(),
         };
