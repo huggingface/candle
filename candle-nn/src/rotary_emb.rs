@@ -48,7 +48,7 @@ fn rocm_rope_launch<T: Copy + Send + Sync + 'static>(
         // SAFETY: `offset` is an in-bounds element index of a contiguous layout.
         ptrs.push(unsafe { mem.ptr_at(offset) });
     }
-    ptrs.push(dst.0.as_ptr());
+    ptrs.push(dst.as_ptr());
 
     // Kernel params are passed by address, so `ptrs`/`params` must outlive the launch.
     let mut args: Vec<*mut std::ffi::c_void> = Vec::with_capacity(ptrs.len() + params.len());

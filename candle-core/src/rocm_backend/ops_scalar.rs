@@ -5,7 +5,7 @@
 //! `candle-kernels/src` before touching either argument list.
 
 use super::{
-    dims_and_strides, kernels, launch_config, launch_kernel, try_kernel_name, RocmDevice,
+    dims_and_strides, kernels, launch_config_layout, launch_kernel, try_kernel_name, RocmDevice,
     RocmStorageSlice, SendSyncDeviceMemory,
 };
 use crate::{Layout, Result, WithDType};
@@ -49,7 +49,7 @@ impl Affine {
         let func_name = try_kernel_name::<T>("affine")?;
         let ds = dims_and_strides(dev, layout, 1)?;
         let output = dev.alloc::<T>(elem_count)?;
-        let (grid, block) = launch_config(elem_count);
+        let (grid, block) = launch_config_layout(dev, elem_count, ds.is_null());
 
         let mul_val = T::from_f64(self.0);
         let add_val = T::from_f64(self.1);
@@ -57,10 +57,7 @@ impl Affine {
         unsafe {
             let src_ptr = src.ptr_at(layout.start_offset());
             let out_ptr = output.as_ptr();
-            let ds_ptr: *const usize = ds
-                .as_ref()
-                .map(|d| d.as_ptr() as *const usize)
-                .unwrap_or(std::ptr::null());
+            let ds_ptr: *const usize = ds.as_ptr();
 
             launch_kernel(
                 dev,
@@ -123,17 +120,14 @@ impl Powf {
         let func_name = try_kernel_name::<T>("upowf")?;
         let ds = dims_and_strides(dev, layout, 1)?;
         let output = dev.alloc::<T>(elem_count)?;
-        let (grid, block) = launch_config(elem_count);
+        let (grid, block) = launch_config_layout(dev, elem_count, ds.is_null());
 
         let scalar_val = T::from_f64(self.0);
 
         unsafe {
             let src_ptr = src.ptr_at(layout.start_offset());
             let out_ptr = output.as_ptr();
-            let ds_ptr: *const usize = ds
-                .as_ref()
-                .map(|d| d.as_ptr() as *const usize)
-                .unwrap_or(std::ptr::null());
+            let ds_ptr: *const usize = ds.as_ptr();
 
             launch_kernel(
                 dev,
@@ -197,17 +191,14 @@ impl Elu {
         let func_name = try_kernel_name::<T>("uelu")?;
         let ds = dims_and_strides(dev, layout, 1)?;
         let output = dev.alloc::<T>(elem_count)?;
-        let (grid, block) = launch_config(elem_count);
+        let (grid, block) = launch_config_layout(dev, elem_count, ds.is_null());
 
         let alpha_val = T::from_f64(self.0);
 
         unsafe {
             let src_ptr = src.ptr_at(layout.start_offset());
             let out_ptr = output.as_ptr();
-            let ds_ptr: *const usize = ds
-                .as_ref()
-                .map(|d| d.as_ptr() as *const usize)
-                .unwrap_or(std::ptr::null());
+            let ds_ptr: *const usize = ds.as_ptr();
 
             launch_kernel(
                 dev,

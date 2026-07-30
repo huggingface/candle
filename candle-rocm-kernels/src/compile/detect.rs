@@ -1,7 +1,9 @@
 //! GPU architecture and ROCm toolchain detection.
 
 use crate::error::KernelError;
+use std::collections::HashMap;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 /// Resolve the target architecture for device `ordinal`, e.g. "gfx1101".
 ///
@@ -13,9 +15,19 @@ use std::process::Command;
 ///
 /// Guessing here is worse than failing, so a device that reports something
 /// other than a `gfx*` target is an error rather than a fallback.
+/// Memoised per ordinal: `RocmDevice::new` runs on every test and short-lived
+/// process, and the answer cannot change while the process lives.
 pub(crate) fn gpu_arch(ordinal: usize) -> Result<String, KernelError> {
     if let Ok(arch) = std::env::var("CANDLE_ROCM_ARCH") {
         return Ok(arch);
+    }
+
+    static ARCHES: OnceLock<Mutex<HashMap<usize, String>>> = OnceLock::new();
+    let arches = ARCHES.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(cached) = arches.lock() {
+        if let Some(arch) = cached.get(&ordinal) {
+            return Ok(arch.clone());
+        }
     }
 
     let arch = gcn_arch_name(ordinal)?;
@@ -24,6 +36,9 @@ pub(crate) fn gpu_arch(ordinal: usize) -> Result<String, KernelError> {
             "device {ordinal} reports architecture `{arch}`, which is not an AMD GPU target; \
              set CANDLE_ROCM_ARCH to build kernels anyway"
         )));
+    }
+    if let Ok(mut cached) = arches.lock() {
+        cached.insert(ordinal, arch.clone());
     }
     Ok(arch)
 }
@@ -67,11 +82,23 @@ fn gcn_arch_name(ordinal: usize) -> Result<String, KernelError> {
 /// `hipcc --version` output is what goes into the cache key: a patch-level LLVM
 /// bump inside one minor release can change the code-object ABI, so keying on
 /// "7.2" alone would reuse objects the new loader may reject.
+///
+/// Memoised, because the answer costs a process spawn — around 80 ms of the
+/// ~90 ms every `RocmDevice::new` used to take — and cannot change under a
+/// running process.
 pub(crate) fn rocm_version() -> Result<(String, String), KernelError> {
     if let Ok(version) = std::env::var("CANDLE_ROCM_VERSION") {
         return Ok((version.clone(), version));
     }
 
+    static VERSION: OnceLock<Result<(String, String), String>> = OnceLock::new();
+    VERSION
+        .get_or_init(|| probe_rocm_version().map_err(|e| e.to_string()))
+        .clone()
+        .map_err(KernelError::Compilation)
+}
+
+fn probe_rocm_version() -> Result<(String, String), KernelError> {
     let output = Command::new("hipcc")
         .arg("--version")
         .output()

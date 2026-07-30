@@ -8,9 +8,12 @@ use half::{bf16, f16};
 pub use rocm_rs;
 use rocm_rs::hip::bindings;
 
+mod alloc;
 mod device;
+mod device_backend;
 mod error;
 mod gemm;
+mod launch;
 #[cfg(feature = "miopen")]
 mod miopen;
 mod ops_conv;
@@ -20,9 +23,12 @@ mod ops_indexing;
 mod ops_pool;
 mod ops_reduce;
 mod ops_scalar;
+mod params;
 mod rng;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_alloc;
 #[cfg(test)]
 mod tests_conv;
 #[cfg(test)]
@@ -34,17 +40,23 @@ mod tests_rng;
 #[cfg(test)]
 mod tests_sort;
 mod wrappers;
+pub use alloc::SendSyncDeviceMemory;
 pub use device::{DeviceId, RocmDevice};
 pub use error::{RocmError, WrapErr};
-pub use wrappers::SendSyncDeviceMemory;
+pub use launch::{
+    kernel_name, launch_config, launch_config_for, launch_config_layout, try_kernel_name,
+};
+pub use params::{params_from_vec, ParamBuffer};
 pub mod utils;
 pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, Map3, S};
 
+use launch::launch_kernel;
 use ops_elementwise::{CloneBuffer, Cmp, WhereCond};
 use ops_indexing::{Gather, IndexAdd, IndexSelect, Scatter, ScatterKind};
 use ops_reduce::FastReduce;
 pub(crate) use ops_scalar::Affine;
 use ops_scalar::{Elu, Powf};
+use params::{dims_and_strides, dims_and_strides_pair, ParamCache};
 
 pub enum RocmStorageSlice {
     U8(SendSyncDeviceMemory<u8>),
@@ -173,157 +185,6 @@ macro_rules! cast_launch {
     }};
 }
 
-/// Kernel-name suffix candle-kernels uses for the Rust type `T`.
-///
-/// `bf16` has to be probed before `f16` — `half::bf16`'s type name contains
-/// both.
-fn dtype_suffix<T: Copy + Send + Sync + 'static>() -> Option<&'static str> {
-    let type_name = std::any::type_name::<T>();
-    let suffix = if type_name.contains("f32") {
-        "f32"
-    } else if type_name.contains("f64") {
-        "f64"
-    } else if type_name.contains("u8") {
-        "u8"
-    } else if type_name.contains("u32") {
-        "u32"
-    } else if type_name.contains("i64") {
-        "i64"
-    } else if type_name.contains("bf16") {
-        "bf16"
-    } else if type_name.contains("f16") {
-        "f16"
-    } else if type_name.contains("i16") {
-        "i16"
-    } else if type_name.contains("i32") {
-        "i32"
-    } else {
-        return None;
-    };
-    Some(suffix)
-}
-
-/// Name of the `kernel` variant compiled for `T`, or an error when candle
-/// ships no kernels for that dtype.
-pub fn try_kernel_name<T: Copy + Send + Sync + 'static>(kernel: &str) -> Result<String> {
-    match dtype_suffix::<T>() {
-        Some(suffix) => Ok(format!("{}_{}", kernel, suffix)),
-        None => Err(RocmError::Internal(format!(
-            "unsupported dtype {} for kernel {}",
-            std::any::type_name::<T>(),
-            kernel
-        ))
-        .into()),
-    }
-}
-
-/// Infallible variant kept for the public API used by candle-nn.
-///
-/// An unsupported dtype yields a name no module defines, so the caller gets a
-/// "kernel not found" error at launch instead of aborting the process.
-pub fn kernel_name<T: Copy + Send + Sync + 'static>(kernel: &str) -> String {
-    let suffix = dtype_suffix::<T>().unwrap_or("unsupported_dtype");
-    format!("{}_{}", kernel, suffix)
-}
-
-/// Grid and block dimensions for an elementwise kernel over `num_elems`.
-///
-/// The grid is capped at 65535 blocks, so for large inputs it launches *fewer*
-/// threads than there are elements. That is only sound for kernels written as a
-/// grid-stride loop, which every elementwise kernel in `candle-kernels` is:
-///
-/// ```text
-/// for (i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x)
-/// ```
-///
-/// A kernel that instead maps one thread to one element and returns early would
-/// silently leave the tail of its output untouched. Size the grid by hand for
-/// those — `rope` in `reduce.cu` is one such kernel.
-///
-/// The grid is never zero: `hipModuleLaunchKernel` rejects `gridDim.x == 0`, so
-/// an elementwise op on an empty tensor would error instead of being a no-op.
-/// The block count is also computed *before* narrowing to `u32` — casting first
-/// makes any element count that is an exact multiple of 2^32 round to zero.
-pub fn launch_config(num_elems: usize) -> (rocm_rs::hip::Dim3, rocm_rs::hip::Dim3) {
-    const BLOCK_SIZE: u32 = 256;
-    let num_blocks = num_elems.div_ceil(BLOCK_SIZE as usize);
-    let grid_dim = u32::try_from(num_blocks)
-        .unwrap_or(u32::MAX)
-        .clamp(1, 65535);
-    (
-        rocm_rs::hip::Dim3::from(grid_dim),
-        rocm_rs::hip::Dim3::from(BLOCK_SIZE),
-    )
-}
-
-unsafe fn launch_kernel(
-    dev: &RocmDevice,
-    module: &kernels::Module,
-    func_name: &str,
-    grid: rocm_rs::hip::Dim3,
-    block: rocm_rs::hip::Dim3,
-    args: &mut [*mut std::ffi::c_void],
-) -> Result<()> {
-    dev.bind()?;
-    let kernel_manager = dev
-        .kernel_manager()
-        .lock()
-        .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
-    let module = kernel_manager
-        .get_or_load(module)
-        .map_err(|e| crate::Error::Msg(e.to_string()))?;
-    let kernel = module
-        .get_function(func_name)
-        .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e)))?;
-    kernel
-        .launch(grid, block, 0, Some(&dev.stream), args)
-        .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))
-}
-
-fn dims_and_strides(
-    dev: &RocmDevice,
-    layout: &Layout,
-    n_strides: usize,
-) -> Result<Option<SendSyncDeviceMemory<usize>>> {
-    if layout.is_contiguous() {
-        return Ok(None);
-    }
-    let dims = layout.shape().dims();
-    let strides = layout.stride();
-    let mut data = Vec::with_capacity(dims.len() + n_strides * dims.len());
-    for &d in dims {
-        data.push(d);
-    }
-    for _ in 0..n_strides {
-        for &s in strides {
-            data.push(s);
-        }
-    }
-    Ok(Some(dev.clone_htod(&data)?))
-}
-
-fn dims_and_strides_pair(
-    dev: &RocmDevice,
-    l1: &Layout,
-    l2: &Layout,
-) -> Result<Option<SendSyncDeviceMemory<usize>>> {
-    if l1.is_contiguous() && l2.is_contiguous() {
-        return Ok(None);
-    }
-    let dims = l1.shape().dims();
-    let mut data = Vec::with_capacity(dims.len() * 3);
-    for &d in dims {
-        data.push(d);
-    }
-    for &s in l1.stride() {
-        data.push(s);
-    }
-    for &s in l2.stride() {
-        data.push(s);
-    }
-    Ok(Some(dev.clone_htod(&data)?))
-}
-
 impl std::fmt::Debug for RocmStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -418,11 +279,8 @@ impl BackendStorage for RocmStorage {
         let start_o = layout.start_offset();
         let src_ptr = unsafe { self.slice.offset_ptr(start_o) };
 
-        let (grid, block) = launch_config(el);
-        let ds_ptr: *const usize = ds
-            .as_ref()
-            .map(|d| d.as_ptr() as *const usize)
-            .unwrap_or(std::ptr::null());
+        let (grid, block) = launch_config_layout(&dev, el, ds.is_null());
+        let ds_ptr: *const usize = ds.as_ptr();
 
         let src_dtype = self.slice.dtype();
         let slice = match dtype {
@@ -792,16 +650,19 @@ impl BackendStorage for RocmStorage {
             let el_size = self.slice.elem_size();
             let src_ptr = unsafe { self.slice.offset_ptr(src_l.start_offset()) };
             let dst_ptr = unsafe { dst.slice.offset_ptr(dst_offset) };
+            // Stream-ordered: the copy is sequenced against the kernels that
+            // produced `src` and consume `dst`, so the host never has to wait.
             let result = unsafe {
-                bindings::hipMemcpy(
+                bindings::hipMemcpyAsync(
                     dst_ptr,
                     src_ptr,
                     to_copy * el_size,
                     bindings::hipMemcpyKind_hipMemcpyDeviceToDevice,
+                    self.device.stream().as_raw(),
                 )
             };
             if result != bindings::hipError_t_hipSuccess {
-                crate::bail!("hipMemcpy failed with error {}", result);
+                crate::bail!("hipMemcpyAsync failed with error {}", result);
             }
             return Ok(());
         }
@@ -813,7 +674,8 @@ impl BackendStorage for RocmStorage {
         if el_count == 0 {
             return Ok(());
         }
-        let (grid, block) = launch_config(el_count);
+        // This branch is only reached for a non-contiguous source.
+        let (grid, block) = launch_config_layout(&self.device, el_count, false);
         let ds = dims_and_strides(&self.device, src_l, 1)?;
 
         macro_rules! copy_strided {
@@ -829,10 +691,7 @@ impl BackendStorage for RocmStorage {
                         dst_mem.ptr_at(dst_offset),
                     )
                 };
-                let ds_ptr: *const usize = ds
-                    .as_ref()
-                    .map(|d| d.as_ptr() as *const usize)
-                    .unwrap_or(std::ptr::null());
+                let ds_ptr: *const usize = ds.as_ptr();
                 unsafe {
                     launch_kernel(
                         &self.device,
@@ -907,8 +766,9 @@ impl BackendStorage for RocmStorage {
         let width = d2 * el_size;
         let spitch = src_s1 * el_size;
         let dpitch = dst_s1 * el_size;
+        // Stream-ordered, like the contiguous path in `copy_strided_src`.
         let result = unsafe {
-            bindings::hipMemcpy2D(
+            bindings::hipMemcpy2DAsync(
                 dst_ptr,
                 dpitch,
                 src_ptr,
@@ -916,10 +776,11 @@ impl BackendStorage for RocmStorage {
                 width,
                 d1,
                 bindings::hipMemcpyKind_hipMemcpyDeviceToDevice,
+                self.device.stream().as_raw(),
             )
         };
         if result != bindings::hipError_t_hipSuccess {
-            crate::bail!("hipMemcpy2D failed with error {}", result);
+            crate::bail!("hipMemcpy2DAsync failed with error {}", result);
         }
         Ok(())
     }
@@ -932,8 +793,8 @@ impl BackendStorage for RocmStorage {
             return Ok(());
         }
 
-        let (grid, block) = launch_config(el_count);
         let ds = dims_and_strides(&self.device, layout, 1)?;
+        let (grid, block) = launch_config_layout(&self.device, el_count, ds.is_null());
 
         macro_rules! const_set {
             ($variant:ident, $suffix:expr, $ty:ty, $val:expr) => {{
@@ -944,10 +805,7 @@ impl BackendStorage for RocmStorage {
                 let func_name = format!("const_set_{}", $suffix);
                 let out_ptr = unsafe { mem.ptr_at(layout.start_offset()) };
                 let scalar_val: $ty = $val;
-                let ds_ptr: *const usize = ds
-                    .as_ref()
-                    .map(|d| d.as_ptr() as *const usize)
-                    .unwrap_or(std::ptr::null());
+                let ds_ptr: *const usize = ds.as_ptr();
                 unsafe {
                     launch_kernel(
                         &self.device,

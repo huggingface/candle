@@ -2,7 +2,7 @@
 use crate::{Layout, Result};
 use rocm_rs::hip::Dim3;
 
-use super::wrappers::SendSyncDeviceMemory;
+use super::alloc::SendSyncDeviceMemory;
 use super::{RocmDevice, RocmStorageSlice};
 
 pub type S = RocmStorageSlice;
@@ -218,10 +218,10 @@ pub trait Map3 {
 
 /// Grid and block for a kernel that maps one thread to one output element.
 ///
-/// `launch_config` caps the grid at 65535 blocks, which is only sound for the
-/// grid-stride elementwise kernels. Everything in `conv.cu` instead returns
-/// early past the end of its output, so a capped grid would silently leave the
-/// tail untouched; this sizes the grid in full.
+/// `launch_config` may cap the grid, which is only sound for the grid-stride
+/// elementwise kernels. Everything in `conv.cu` instead returns early past the
+/// end of its output, so a capped grid would silently leave the tail untouched;
+/// this sizes the grid in full and errors rather than clamping.
 pub(crate) fn dense_grid(dst_el: usize) -> Result<(Dim3, Dim3)> {
     const BLOCK: usize = 256;
     let blocks = u32::try_from(dst_el.div_ceil(BLOCK).max(1))
@@ -250,16 +250,15 @@ pub(crate) unsafe fn launch_dense(
 ///
 /// The conv, pool and upsample kernels dereference `info` unconditionally, so
 /// unlike the elementwise ops there is no null shortcut for a contiguous
-/// layout.
-pub(crate) fn info_buffer(
-    dev: &RocmDevice,
-    parts: &[&[usize]],
-) -> Result<SendSyncDeviceMemory<usize>> {
-    let mut data = Vec::new();
+/// layout — which is exactly why routing this through the parameter cache
+/// matters more here than anywhere else. Conv and pool shapes are fixed for the
+/// life of a model, so after the first forward pass every call is a hit.
+pub(crate) fn info_buffer(dev: &RocmDevice, parts: &[&[usize]]) -> Result<super::ParamBuffer> {
+    let mut data = Vec::with_capacity(parts.iter().map(|p| p.len()).sum());
     for part in parts {
         data.extend_from_slice(part);
     }
-    dev.clone_htod(&data)
+    super::params_from_vec(dev, data)
 }
 
 #[cfg(test)]

@@ -159,14 +159,16 @@ impl candle::CustomOp1 for Sigmoid {
                 let shape = layout.shape();
                 let dims = shape.dims();
                 let el_count = shape.elem_count();
-                let (grid, block) = launch_config(el_count);
+                let (grid, block) = launch_config(dev, el_count);
 
-                // Prepare dimensions and strides for non-contiguous tensors
+                // Prepare dimensions and strides for non-contiguous tensors.
+                // Routed through the backend's parameter cache: the same
+                // (dims, strides) recur on every token of an inference loop.
                 let ds = if layout.is_contiguous() {
                     None
                 } else {
                     let data: Vec<usize> = [layout.dims(), layout.stride()].concat();
-                    Some(dev.clone_htod(&data)?)
+                    Some(candle::rocm_backend::params_from_vec(dev, data)?)
                 };
 
                 // Load the kernel
@@ -179,10 +181,7 @@ impl candle::CustomOp1 for Sigmoid {
                 unsafe {
                     let src_ptr = src.ptr_at(layout.start_offset());
                     let out_ptr = out.as_ptr();
-                    let ds_ptr: *const usize = ds
-                        .as_ref()
-                        .map(|d| d.as_ptr() as *const usize)
-                        .unwrap_or(std::ptr::null());
+                    let ds_ptr: *const usize = ds.as_ref().map_or(std::ptr::null(), |d| d.as_ptr());
 
                     func.launch(
                         grid,
@@ -584,7 +583,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
                         &mut [
                             &(src.ptr_at(start)) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
-                            &(dst.0.as_ptr()) as *const *mut std::ffi::c_void
+                            &(dst.as_ptr()) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
                             &(n_cols as i32) as *const i32 as *mut std::ffi::c_void,
                         ],
@@ -899,7 +898,7 @@ impl candle::CustomOp2 for RmsNorm {
                         &mut [
                             &(src.ptr_at(src_start)) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
-                            &(dst.0.as_ptr()) as *const *mut std::ffi::c_void
+                            &(dst.as_ptr()) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
                             &(alpha.ptr_at(alpha_start)) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
@@ -1272,7 +1271,7 @@ impl candle::CustomOp3 for LayerNorm {
                         &mut [
                             &(src.ptr_at(src_start)) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
-                            &(dst.0.as_ptr()) as *const *mut std::ffi::c_void
+                            &(dst.as_ptr()) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,
                             &(alpha.ptr_at(alpha_start)) as *const *mut std::ffi::c_void
                                 as *mut std::ffi::c_void,

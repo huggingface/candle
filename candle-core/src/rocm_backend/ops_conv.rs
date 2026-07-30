@@ -11,8 +11,9 @@
 //!
 //! Every kernel here maps one thread to one output element and returns early
 //! past the end, so they launch through [`launch_dense`], which sizes the grid
-//! in full rather than reusing `launch_config` — that helper's 65535-block cap
-//! is only sound for grid-stride loops.
+//! in full rather than reusing `launch_config` — that helper is free to launch
+//! fewer threads than there are elements, which is only sound for grid-stride
+//! loops.
 
 use std::ffi::c_void;
 
@@ -51,7 +52,7 @@ impl Map1 for Im2Col1D {
         unsafe {
             let src_ptr = src.ptr_at(layout.start_offset());
             let dst_ptr = dst.as_ptr();
-            let ds_ptr = ds.as_ptr() as *const usize;
+            let ds_ptr = ds.as_ptr();
             launch_dense(
                 dev,
                 &kernels::CONV,
@@ -106,7 +107,7 @@ impl Map1 for Im2Col {
         unsafe {
             let src_ptr = src.ptr_at(layout.start_offset());
             let dst_ptr = dst.as_ptr();
-            let ds_ptr = ds.as_ptr() as *const usize;
+            let ds_ptr = ds.as_ptr();
             launch_dense(
                 dev,
                 &kernels::CONV,
