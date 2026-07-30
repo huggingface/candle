@@ -68,6 +68,12 @@ struct Args {
     #[arg(long)]
     ref_text: Option<String>,
 
+    /// Pre-encoded reference codec codes for ICL voice cloning.
+    /// Shape must be [T_frames, 16] u32, stored as a safetensors file
+    /// (key "codes").  Encode with the Mimi encoder or use a pre-built file.
+    #[arg(long)]
+    ref_codes: Option<PathBuf>,
+
     /// Output WAV file path
     #[arg(long, default_value = "output.wav")]
     output: PathBuf,
@@ -563,6 +569,132 @@ fn generate(
     Ok(audio)
 }
 
+/// Sum codec embeddings for all 16 groups from reference codes.
+///
+/// Group 0 (semantic) → talker codec embedding table.
+/// Groups 1–15 (acoustic) → code-predictor per-group embedding tables.
+/// Result: `[1, T_frames, talker.hidden_size]`.
+fn sum_ref_codec_embeddings(
+    talker: &TalkerModel,
+    cp: &CodePredictor,
+    ref_codes: &Tensor, // [T_frames, 16] u32
+) -> candle::Result<Tensor> {
+    let mut summed = talker.embed_ref_semantic_codes(ref_codes)?; // [1, T, H]
+    for group in 1usize..16 {
+        let group_codes = ref_codes.i((.., group))?.contiguous()?;
+        let group_embed = cp.embed_codes_for_group(group - 1, &group_codes)?;
+        summed = summed.broadcast_add(&group_embed)?;
+    }
+    Ok(summed)
+}
+
+/// Full generation loop for ICL voice cloning.
+///
+/// Does a two-phase prefill:
+/// 1. `prefill_voice_clone(icl_mode=true)` — installs role + codec structure in KV cache.
+/// 2. `prefill_icl(icl_embed)` — runs reference audio + text through the transformer.
+/// Then generates tokens with the same loop as `generate`.
+fn generate_icl(
+    model: &TalkerModel,
+    cp: &CodePredictor,
+    decoder: &Decoder12Hz,
+    input_ids: &[u32],
+    ref_text_ids: &[u32],
+    ref_codec_embeds: &Tensor,
+    language: Language,
+    args: &Args,
+    device: &Device,
+) -> anyhow::Result<Vec<f32>> {
+    let eos = codec_tokens::CODEC_EOS;
+    const MIN_NEW: usize = 2;
+    const REPEAT_STOP: usize = 10;
+
+    let (trailing, trailing_len, tts_pad) = build_trailing_text(model, input_ids)?;
+
+    let mut kv_caches = model.new_kv_caches(args.max_frames + 512);
+
+    // Phase 1: voice-clone structure prefill (icl_mode=true — omits first text token)
+    let speaker_embed = Tensor::zeros((1, model.config().hidden_size), candle::DType::F32, device)?;
+    let (_phase1_hidden, _phase1_logits) =
+        model.prefill_voice_clone(input_ids, &speaker_embed, language, true, &mut kv_caches)?;
+    let phase1_len = _phase1_hidden.dim(1)?;
+    let mut offset = phase1_len;
+
+    // Phase 2: ICL prefill — reference audio + text
+    let (icl_embed, _icl_trailing) =
+        model.build_icl_prompt(input_ids, ref_text_ids, ref_codec_embeds)?;
+    let icl_len = icl_embed.dim(1)?;
+    eprintln!("ICL embed: {} frames ({} phase1 + {} icl)", offset + icl_len, offset, icl_len);
+
+    let (last_hidden, logits) = model.prefill_icl(&icl_embed, &mut kv_caches, offset)?;
+    offset += icl_len;
+
+    // Generation loop (identical to generate())
+    let logits_2d = logits.squeeze(1)?;
+    let mut rng = RngState::new(args.seed);
+    let mut seen: Vec<u32> = Vec::new();
+    let mut sem_token = sample_token(&logits_2d, args, &mut rng, &seen, 0, MIN_NEW, eos)?;
+    seen.push(sem_token);
+
+    let mut all_codes: Vec<Vec<u32>> = Vec::new();
+    let mut cp_caches = cp.new_kv_caches();
+    let mut last_hidden = last_hidden;
+    let mut last_token = sem_token;
+    let mut repeat_count = 0usize;
+
+    for frame in 0..args.max_frames {
+        if sem_token == eos {
+            eprintln!("EOS at frame {frame}");
+            break;
+        }
+        if sem_token == last_token {
+            repeat_count += 1;
+            if repeat_count >= REPEAT_STOP && seen.len() >= MIN_NEW {
+                eprintln!("Stopping: token {sem_token} repeated {repeat_count} times");
+                break;
+            }
+        } else {
+            repeat_count = 0;
+        }
+        last_token = sem_token;
+
+        let sem_embed = model.get_codec_embedding(sem_token)?;
+        let acoustic_codes = cp.generate_acoustic_codes(&last_hidden, &sem_embed, &mut cp_caches)?;
+
+        let acoustics: Vec<u32> = acoustic_codes.to_vec1()?;
+        let mut frame_codes = vec![sem_token];
+        frame_codes.extend(&acoustics);
+        all_codes.push(frame_codes);
+
+        if frame == args.max_frames - 1 { break; }
+
+        let acoustic_sum = cp.get_acoustic_embeddings_sum_from_tensor(&acoustic_codes)?;
+        let summed = sem_embed.add(&acoustic_sum)?;
+        let text_add = if frame < trailing_len {
+            trailing.i((.., frame..frame + 1, ..))?  
+        } else {
+            tts_pad.clone()
+        };
+        let step_in = summed.add(&text_add)?;
+
+        let (h, new_logits) = model.generate_step_with_embed(&step_in, &mut kv_caches, offset)?;
+        offset += 1;
+        last_hidden = h;
+
+        let l2d = new_logits.squeeze(1)?;
+        let next = sample_token(&l2d, args, &mut rng, &seen, seen.len(), MIN_NEW, eos)?;
+        seen.push(next);
+        sem_token = next;
+    }
+
+    eprintln!("Generated {} codec frames", all_codes.len());
+
+    let codes_tensor = codes_to_tensor(&all_codes, device)?;
+    let waveform = decoder.decode(&codes_tensor)?;
+    let audio: Vec<f32> = waveform.flatten_all()?.to_vec1()?;
+    Ok(audio)
+}
+
 // ── main ──────────────────────────────────────────────────────────────────────
 
 fn main() -> anyhow::Result<()> {
@@ -651,21 +783,46 @@ fn main() -> anyhow::Result<()> {
             &args, &device,
         )?
     } else if let Some(ref ref_path) = args.ref_audio {
-        // VoiceClone — load reference audio, build x-vector-only prefill
+        // VoiceClone — two sub-modes:
+        //   a) ICL: --ref-codes + --ref-text supplied → full in-context-learning
+        //   b) Fallback: zero speaker embedding (low quality without encoder)
         let (ref_samples, ref_sr) = load_wav_f32(ref_path)?;
         eprintln!("Reference audio: {} samples @ {} Hz", ref_samples.len(), ref_sr);
-        // For x_vector_only we need a speaker embedding from the encoder.
-        // The full ECAPA-TDNN encoder is not included in this minimal example;
-        // we fall back to a zero embedding so the example compiles and runs
-        // (audio quality will be unpredictable without a real embedding).
         let _ = ref_samples;
-        let speaker_embed = Tensor::zeros((1, talker.config().hidden_size), dtype, &device)?;
-        generate(
-            &talker, &cp, &decoder,
-            &input_ids,
-            |kv| talker.prefill_voice_clone(&input_ids, &speaker_embed, language, false, kv),
-            &args, &device,
-        )?
+
+        if let (Some(ref codes_path), Some(ref ref_text)) = (&args.ref_codes, &args.ref_text) {
+            // ICL path: load pre-encoded codec codes
+            eprintln!("ICL voice clone: loading ref codes from {}", codes_path.display());
+            let raw = candle::safetensors::load(codes_path, &device)?;
+            let ref_codes = raw
+                .get("codes")
+                .ok_or_else(|| anyhow::anyhow!("ref codes file must contain key \"codes\""))?
+                .to_dtype(DType::U32)?;
+            eprintln!("Ref codes shape: {:?}", ref_codes.shape());
+
+            let ref_text_ids = tokenize(&tokenizer, ref_text)?;
+            let ref_codec_embeds = sum_ref_codec_embeddings(&talker, &cp, &ref_codes)?;
+
+            generate_icl(
+                &talker, &cp, &decoder,
+                &input_ids,
+                &ref_text_ids,
+                &ref_codec_embeds,
+                language,
+                &args, &device,
+            )?
+        } else {
+            // Fallback: no encoder available — zero speaker embed
+            eprintln!("Warning: no --ref-codes/--ref-text supplied; using zero speaker embed");
+            eprintln!("For real voice cloning, encode the reference WAV with Mimi and pass --ref-codes.");
+            let speaker_embed = Tensor::zeros((1, talker.config().hidden_size), dtype, &device)?;
+            generate(
+                &talker, &cp, &decoder,
+                &input_ids,
+                |kv| talker.prefill_voice_clone(&input_ids, &speaker_embed, language, false, kv),
+                &args, &device,
+            )?
+        }
     } else {
         // CustomVoice
         generate(

@@ -820,6 +820,23 @@ impl TalkerModel {
         self.codec_head.forward(h)
     }
 
+    /// Build summed codec embeddings from reference codes for ICL voice cloning.
+    ///
+    /// `ref_codes` — shape `[T_frames, 16]` of u32 token ids (group 0 = semantic,
+    /// groups 1–15 = acoustic). Each group's embedding is looked up from the
+    /// talker's codec embedding table and summed into a `[1, T_frames, hidden]`
+    /// tensor suitable for passing to [`build_icl_prompt`].
+    ///
+    /// The acoustic groups (1–15) must be embedded by the caller using
+    /// `CodePredictor::embed_codes_for_group` and summed in — this function
+    /// only handles the semantic group (group 0) that lives in the talker.
+    /// See `sum_ref_codec_embeddings_full` in the example for the full sum.
+    pub fn embed_ref_semantic_codes(&self, ref_codes: &Tensor) -> Result<Tensor> {
+        // ref_codes: [T_frames, 16] u32
+        let semantic = ref_codes.i((.., 0))?.contiguous()?; // [T_frames]
+        self.get_codec_embedding_batch(&semantic) // [1, T_frames, hidden]
+    }
+
     // ── Private helpers ─────────────────────────────────────────────────────
 
     fn build_role_prefix(&self) -> Result<Tensor> {
@@ -864,7 +881,90 @@ impl TalkerModel {
         self.text_projection.forward(&e)
     }
 
-    fn run_prefill(
+    /// Build ICL (in-context learning) prompt for voice cloning.
+    ///
+    /// Aligns reference text + codec embeddings element-wise (streaming mode).
+    /// The longer sequence is either truncated (codec) or the remainder becomes
+    /// the trailing text embedding returned alongside the ICL embed.
+    ///
+    /// Returns `(icl_embed [1, T, H], trailing_text_embed [1, T_trail, H])`.
+    pub fn build_icl_prompt(
+        &self,
+        target_text_ids: &[u32],
+        ref_text_ids: &[u32],
+        ref_codec_embeds: &Tensor, // [1, T_ref, hidden]
+    ) -> Result<(Tensor, Tensor)> {
+        use codec_tokens::*;
+        use tts_tokens::*;
+
+        // All text: [ref_text, target_text, tts_eos] → projected
+        let mut all_text_ids: Vec<u32> =
+            Vec::with_capacity(ref_text_ids.len() + target_text_ids.len() + 1);
+        all_text_ids.extend_from_slice(ref_text_ids);
+        all_text_ids.extend_from_slice(target_text_ids);
+        all_text_ids.push(TTS_EOS);
+        let text_embed = self.get_projected_text_embeddings(&all_text_ids)?; // [1, N_text, H]
+        let n_text = text_embed.dim(1)?;
+
+        // Codec: prepend codec_bos then ref codec frames
+        let bos_id = Tensor::new(&[CODEC_BOS], &self.device)?;
+        let bos_embed = self.codec_embedding.forward(&bos_id)?.unsqueeze(0)?;
+        let codec_embed = Tensor::cat(&[&bos_embed, ref_codec_embeds], 1)?; // [1, T_ref+1, H]
+        let n_codec = codec_embed.dim(1)?;
+
+        let tts_pad_embed = self.get_tts_pad_embed()?;
+
+        // Streaming: element-wise overlay — text and codec are zipped.
+        if n_text > n_codec {
+            let text_head = text_embed.i((.., ..n_codec, ..))?;
+            let icl_embed = text_head.add(&codec_embed)?;
+            let trailing = text_embed.i((.., n_codec.., ..))?;
+            Ok((icl_embed, trailing))
+        } else {
+            let pad_count = n_codec - n_text;
+            let padded_text = if pad_count > 0 {
+                let pad =
+                    tts_pad_embed.broadcast_as((1, pad_count, self.config.hidden_size))?;
+                Tensor::cat(&[&text_embed, &pad], 1)?
+            } else {
+                text_embed
+            };
+            let icl_embed = padded_text.add(&codec_embed)?;
+            Ok((icl_embed, tts_pad_embed))
+        }
+    }
+
+    /// Run the transformer layers over an already-built ICL embedding, updating
+    /// KV caches from `offset`, and return the last hidden state + codec logits.
+    ///
+    /// This is the in-context-learning prefill step for voice cloning: the ICL
+    /// embed produced by [`build_icl_prompt`] is fed through the model so that
+    /// the reference audio and text are available in the KV cache for generation.
+    pub fn prefill_icl(
+        &self,
+        icl_embed: &Tensor,
+        kv_caches: &mut [AnyKVCache],
+        offset: usize,
+    ) -> Result<(Tensor, Tensor)> {
+        let icl_len = icl_embed.dim(1)?;
+        let mask = create_causal_mask(icl_len, offset, &self.device)?;
+        let mut hidden = icl_embed.clone();
+        for (i, layer) in self.layers.iter().enumerate() {
+            hidden = layer.forward(
+                &hidden,
+                &self.rope,
+                Some(&mask.to_dtype(hidden.dtype())?),
+                Some(&mut kv_caches[i]),
+                offset,
+            )?;
+        }
+        hidden = self.norm.forward(&hidden)?;
+        let last = hidden.i((.., icl_len - 1..icl_len, ..))?;
+        let logits = self.codec_head.forward(&last)?;
+        Ok((last, logits))
+    }
+
+    pub fn run_prefill(
         &self,
         mut hidden: Tensor,
         kv_caches: &mut [AnyKVCache],
