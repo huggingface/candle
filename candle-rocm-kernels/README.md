@@ -79,11 +79,16 @@ for the wrong architecture would otherwise surface much later as an opaque
 ROCm 6.2 or newer, with `hipcc` and `clang-offload-bundler` available at
 runtime.
 
-`rocm-rs` supplies the HIP, rocBLAS and MIOpen bindings and is used with
+`rocm-rs` supplies the HIP and rocBLAS bindings and is used with
 `default-features = false`. Its default `gpu-sort` feature builds an amdgcn
 kernel through a proc macro that shells out to a nested nightly `-Zbuild-std`
 cargo invocation; candle never calls that sort, and the feature prevents the
 crate from building on a stable toolchain.
+
+Its `miopen` feature is off by default too. `candle-core`'s own `miopen`
+feature turns it back on and swaps `conv1d`/`conv2d` onto MIOpen, the way
+`cudnn` layers over `cuda`; the plain `rocm` build convolves with `im2col` plus
+a rocBLAS GEMM and never links libMIOpen.
 
 ## Testing the shim
 

@@ -4,9 +4,10 @@ use candle_rocm_kernels::KernelCache;
 use half::{bf16, f16};
 use std::sync::{Arc, Mutex, RwLock};
 
+#[cfg(feature = "miopen")]
+use super::wrappers::SendSyncMIOpenHandle;
 use super::wrappers::{
-    SendSyncDeviceMemory, SendSyncMIOpenHandle, SendSyncPseudoRng, SendSyncRocblasHandle,
-    SendSyncStream,
+    SendSyncDeviceMemory, SendSyncPseudoRng, SendSyncRocblasHandle, SendSyncStream,
 };
 use super::{RocmError, RocmStorage, RocmStorageSlice};
 use rocm_rs::hip::Device as HipDevice;
@@ -30,6 +31,7 @@ pub struct RocmDevice {
     rocrand: Arc<Mutex<SendSyncPseudoRng>>,
     seed_value: Arc<RwLock<u64>>,
     pub(crate) blas: Arc<SendSyncRocblasHandle>,
+    #[cfg(feature = "miopen")]
     pub(crate) miopen: Arc<SendSyncMIOpenHandle>,
     kernel_manager: Arc<Mutex<KernelCache>>,
 }
@@ -57,6 +59,7 @@ impl RocmDevice {
         blas.set_stream(&stream)
             .map_err(|e| RocmError::Rocblas(e.to_string()))?;
 
+        #[cfg(feature = "miopen")]
         let miopen =
             SendSyncMIOpenHandle::new(&stream).map_err(|e| RocmError::MIOpen(e.to_string()))?;
 
@@ -72,6 +75,7 @@ impl RocmDevice {
             rocrand: Arc::new(Mutex::new(rocrand)),
             seed_value: Arc::new(RwLock::new(seed)),
             blas: Arc::new(blas),
+            #[cfg(feature = "miopen")]
             miopen: Arc::new(miopen),
             kernel_manager,
         })
@@ -121,7 +125,8 @@ impl RocmDevice {
         &self.kernel_manager
     }
 
-    pub(crate) fn miopen(&self) -> &Arc<SendSyncMIOpenHandle> {
+    #[cfg(feature = "miopen")]
+    pub(crate) fn miopen(&self) -> &SendSyncMIOpenHandle {
         &self.miopen
     }
 
