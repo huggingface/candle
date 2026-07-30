@@ -34,11 +34,6 @@ impl Map1Any for FastReduce<'_> {
             dims.push(src_dims[dim_idx]);
             stride.push(layout.stride()[dim_idx]);
         }
-        let el_to_sum_per_block = src_el / dst_el;
-        // The reduction loop needs the shared array fully initialized, which
-        // requires the thread count to be a power of two.
-        let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
-
         let (name, check_empty, return_index) = match self.1 {
             ReduceOp::Sum => ("fast_sum", false, false),
             ReduceOp::Min => ("fast_min", true, false),
@@ -49,6 +44,22 @@ impl Map1Any for FastReduce<'_> {
         if check_empty && layout.shape().elem_count() == 0 {
             Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
         }
+        // An empty output (summing over a dim of an already-empty tensor) has
+        // nothing to write: `src_el / dst_el` below would divide by zero, and the
+        // launch would need a zero grid, which HIP rejects.
+        if dst_el == 0 {
+            let empty = dev.alloc::<T>(0)?;
+            return Ok(if return_index {
+                S::U32(dev.alloc::<u32>(0)?)
+            } else {
+                wrap(empty)
+            });
+        }
+
+        let el_to_sum_per_block = src_el / dst_el;
+        // The reduction loop needs the shared array fully initialized, which
+        // requires the thread count to be a power of two.
+        let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
 
         let func_name = try_kernel_name::<T>(name)?;
 
@@ -56,7 +67,8 @@ impl Map1Any for FastReduce<'_> {
         let ds = dev.clone_htod(&ds_data)?;
 
         // `fast_*` maps one block to one output element, so the grid is sized by
-        // the output rather than through `launch_config`.
+        // the output rather than through `launch_config`. `hipModuleLaunchKernel`
+        // rejects a zero grid, and `dst_el` is known non-zero by this point.
         let grid = rocm_rs::hip::Dim3::from(dst_el as u32);
         let block = rocm_rs::hip::Dim3::from(block_dim as u32);
 

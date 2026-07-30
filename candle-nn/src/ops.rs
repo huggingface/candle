@@ -598,6 +598,9 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         use candle::backend::BackendStorage;
         let dev = storage.device();
         let slice = match &storage.slice {
+            candle::rocm_backend::RocmStorageSlice::BF16(s) => {
+                candle::rocm_backend::RocmStorageSlice::BF16(S.f(s, dev, layout)?)
+            }
             candle::rocm_backend::RocmStorageSlice::F16(s) => {
                 candle::rocm_backend::RocmStorageSlice::F16(S.f(s, dev, layout)?)
             }
@@ -914,6 +917,12 @@ impl candle::CustomOp2 for RmsNorm {
         use candle::backend::BackendStorage;
         let dev = s1.device();
         let slice = match (&s1.slice, &s2.slice) {
+            (
+                candle::rocm_backend::RocmStorageSlice::BF16(s),
+                candle::rocm_backend::RocmStorageSlice::BF16(a),
+            ) => candle::rocm_backend::RocmStorageSlice::BF16(
+                S { eps: self.eps }.f(s, l1, a, l2, dev)?,
+            ),
             (
                 candle::rocm_backend::RocmStorageSlice::F16(s),
                 candle::rocm_backend::RocmStorageSlice::F16(a),
@@ -1283,6 +1292,13 @@ impl candle::CustomOp3 for LayerNorm {
         use candle::backend::BackendStorage;
         let dev = s1.device();
         let slice = match (&s1.slice, &s2.slice, &s3.slice) {
+            (
+                candle::rocm_backend::RocmStorageSlice::BF16(s),
+                candle::rocm_backend::RocmStorageSlice::BF16(a),
+                candle::rocm_backend::RocmStorageSlice::BF16(b),
+            ) => candle::rocm_backend::RocmStorageSlice::BF16(
+                S { eps: self.eps }.f(s, l1, a, l2, b, l3, dev)?,
+            ),
             (
                 candle::rocm_backend::RocmStorageSlice::F16(s),
                 candle::rocm_backend::RocmStorageSlice::F16(a),
@@ -1735,3 +1751,9 @@ pub fn sdpa(
         },
     )
 }
+
+/// ROCm-only dtype coverage; `tests/ops.rs` is shared with the other backends
+/// and would run any case added there on the CPU too.
+#[cfg(all(test, feature = "rocm"))]
+#[path = "tests_ops_rocm.rs"]
+mod rocm_tests;
