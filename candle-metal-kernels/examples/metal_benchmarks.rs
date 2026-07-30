@@ -1,12 +1,11 @@
 use anyhow::Result;
 use candle_metal_kernels::{
-    metal::{create_command_buffer, CommandSemaphore, Device},
+    metal::{Commands, Device, ResidencySet},
     GemmDType, RESOURCE_OPTIONS,
 };
 /// This example contains some simple benchmarks so that it's easy to run them in perf etc.
 use clap::{Parser, Subcommand};
 use half::f16;
-use std::sync::Arc;
 
 fn run_gemm(f32: bool, n: usize) -> Result<()> {
     const WARMUP_ITERS: usize = 2;
@@ -16,7 +15,7 @@ fn run_gemm(f32: bool, n: usize) -> Result<()> {
 
     let (b, m, n, k) = (1, n, n, n);
     let kernels = candle_metal_kernels::Kernels::new();
-    let command_queue = device.new_command_queue().unwrap();
+    let residency_set = std::sync::Arc::new(ResidencySet::new(&device));
     let options = RESOURCE_OPTIONS;
 
     let (lhs, rhs) = if f32 {
@@ -66,12 +65,13 @@ fn run_gemm(f32: bool, n: usize) -> Result<()> {
     let mut sum_dt = 0f64;
     let mut iters = 0usize;
     for idx in 0.. {
-        let semaphore = Arc::new(CommandSemaphore::new());
-        let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+        let command_queue = device.new_command_queue().unwrap();
+        let commands = Commands::new(command_queue, &residency_set).unwrap();
+        let encoder = commands.command_encoder().unwrap();
         let start_time = std::time::Instant::now();
         candle_metal_kernels::call_mlx_gemm(
             &device,
-            &command_buffer,
+            &encoder,
             &kernels,
             dtype,
             (b, m, n, k),
@@ -83,8 +83,8 @@ fn run_gemm(f32: bool, n: usize) -> Result<()> {
             &rhs,
             &output,
         )?;
-        command_buffer.commit();
-        command_buffer.wait_until_completed();
+        drop(encoder);
+        commands.wait_until_completed().unwrap();
         let dt = start_time.elapsed().as_secs_f64();
         if idx < WARMUP_ITERS {
             continue;

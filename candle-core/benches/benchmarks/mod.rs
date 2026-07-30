@@ -1,5 +1,7 @@
 pub(crate) mod affine;
 pub(crate) mod broadcast;
+pub(crate) mod cat;
+pub(crate) mod contiguous;
 pub(crate) mod binary;
 pub(crate) mod conv2d;
 pub(crate) mod conv_transpose2d;
@@ -11,6 +13,7 @@ pub(crate) mod qmatmul;
 pub(crate) mod random;
 pub(crate) mod reduce;
 pub(crate) mod unary;
+pub(crate) mod vec_dot;
 pub(crate) mod where_cond;
 
 use candle_core::{backend::BackendDevice, Device, Result};

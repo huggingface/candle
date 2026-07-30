@@ -18,6 +18,7 @@
 #![cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))] //for wasm32 and wgpu, async functions may be used instead of sync functions. 
                                                                                //this will allow the deprecated warnings inside this crate
 pub mod activation;
+pub mod attention;
 pub mod batch_norm;
 pub mod conv;
 pub mod cpu_flash_attention;
@@ -39,6 +40,10 @@ pub mod sampling;
 pub mod sequential;
 pub mod var_builder;
 pub mod var_map;
+/// Re-export of [`attention::varlen`] for backward compatibility.
+pub mod varlen_attention {
+    pub use crate::attention::varlen::*;
+}
 
 pub use activation::{prelu, Activation, PReLU};
 pub use batch_norm::{batch_norm, BatchNorm, BatchNormConfig};

@@ -42,6 +42,17 @@ struct strided_indexer {
     }
 };
 
+struct scalar_indexer {
+    METAL_FUNC uint operator()(
+        uint idx,
+        constant size_t &num_dims,
+        constant size_t *dims,
+        constant size_t *strides
+    ) {
+        return 0;
+    }
+};
+
 template<uint Y>
 constexpr uint div_ceil(uint x) {
     return x / Y + (x % Y > 0);
@@ -112,7 +123,12 @@ template <
     init_kernel(#op_name "_" #tname, binary_kernel, t, u, binary_op)                                                        \
     init_kernel(#op_name "_" #tname "_strided", binary_kernel_strided, t, u, binary_op)                                     \
     init_kernel(#op_name "_" #tname "_lstrided", binary_kernel_strided, t, u, binary_op, strided_indexer, cont_indexer)     \
-    init_kernel(#op_name "_" #tname "_rstrided", binary_kernel_strided, t, u, binary_op, cont_indexer, strided_indexer)
+    init_kernel(#op_name "_" #tname "_rstrided", binary_kernel_strided, t, u, binary_op, cont_indexer, strided_indexer)     \
+    init_kernel(#op_name "_" #tname "_scalar", binary_kernel_strided, t, u, binary_op, scalar_indexer, scalar_indexer)      \
+    init_kernel(#op_name "_" #tname "_cs", binary_kernel_strided, t, u, binary_op, cont_indexer, scalar_indexer)            \
+    init_kernel(#op_name "_" #tname "_sc", binary_kernel_strided, t, u, binary_op, scalar_indexer, cont_indexer)            \
+    init_kernel(#op_name "_" #tname "_rss", binary_kernel_strided, t, u, binary_op, scalar_indexer, strided_indexer)        \
+    init_kernel(#op_name "_" #tname "_lss", binary_kernel_strided, t, u, binary_op, strided_indexer, scalar_indexer)
 
 #if defined(__HAVE_BFLOAT__)
 #define init_binary(bop)                            \

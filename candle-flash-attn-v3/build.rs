@@ -24,6 +24,8 @@ const KERNEL_FILES: &[&str] = &[
     "flash_fwd_hdim128_bf16_sm90.cu",
     "flash_fwd_hdim256_fp16_sm90.cu",
     "flash_fwd_hdim256_bf16_sm90.cu",
+    "flash_fwd_hdim512_fp16_sm90.cu",
+    "flash_fwd_hdim512_bf16_sm90.cu",
     // "flash_bwd_hdim64_fp16_sm90.cu",
     // "flash_bwd_hdim96_fp16_sm90.cu",
     // "flash_bwd_hdim128_fp16_sm90.cu",
@@ -49,6 +51,11 @@ const KERNEL_FILES: &[&str] = &[
     "flash_fwd_hdim256_fp16_gqa8_sm90.cu",
     "flash_fwd_hdim256_fp16_gqa16_sm90.cu",
     "flash_fwd_hdim256_fp16_gqa32_sm90.cu",
+    "flash_fwd_hdim512_fp16_gqa2_sm90.cu",
+    "flash_fwd_hdim512_fp16_gqa4_sm90.cu",
+    "flash_fwd_hdim512_fp16_gqa8_sm90.cu",
+    "flash_fwd_hdim512_fp16_gqa16_sm90.cu",
+    "flash_fwd_hdim512_fp16_gqa32_sm90.cu",
     "flash_fwd_hdim64_bf16_gqa2_sm90.cu",
     "flash_fwd_hdim64_bf16_gqa4_sm90.cu",
     "flash_fwd_hdim64_bf16_gqa8_sm90.cu",
@@ -64,6 +71,11 @@ const KERNEL_FILES: &[&str] = &[
     "flash_fwd_hdim256_bf16_gqa8_sm90.cu",
     "flash_fwd_hdim256_bf16_gqa16_sm90.cu",
     "flash_fwd_hdim256_bf16_gqa32_sm90.cu",
+    "flash_fwd_hdim512_bf16_gqa2_sm90.cu",
+    "flash_fwd_hdim512_bf16_gqa4_sm90.cu",
+    "flash_fwd_hdim512_bf16_gqa8_sm90.cu",
+    "flash_fwd_hdim512_bf16_gqa16_sm90.cu",
+    "flash_fwd_hdim512_bf16_gqa32_sm90.cu",
     // "flash_fwd_hdim64_e4m3_gqa2_sm90.cu",
     // "flash_fwd_hdim64_e4m3_gqa4_sm90.cu",
     // "flash_fwd_hdim64_e4m3_gqa8_sm90.cu",
@@ -86,6 +98,8 @@ const CUTLASS_COMMIT: &str = "4c42f73fdab5787e3bb57717f35a8cb1b3c0dc6d";
 fn main() -> Result<()> {
     // Telling Cargo that if any of these files changes, rebuild.
     println!("cargo:rerun-if-changed=build.rs");
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let is_target_msvc = target.contains("msvc");
     println!("cargo:rerun-if-env-changed=CUDA_COMPUTE_CAP");
     println!("cargo:rerun-if-env-changed=CANDLE_NVCC_CCBIN");
 
@@ -142,6 +156,10 @@ fn main() -> Result<()> {
         .arg("--verbose")
         .thread_percentage(0.5); // Use up to 50% of available threads
 
+    if !is_target_msvc {
+        builder = builder.arg("-Xcompiler").arg("-fPIC");
+    }
+
     let compute_cap = builder.get_compute_cap().unwrap_or(80);
     assert!(compute_cap >= 90, "Compute capability must be >=90 (90a)");
 
@@ -159,7 +177,9 @@ fn main() -> Result<()> {
 
     // Link required system libs
     println!("cargo:rustc-link-lib=dylib=cudart");
-    println!("cargo:rustc-link-lib=dylib=stdc++");
+    if !is_target_msvc {
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+    }
 
     Ok(())
 }

@@ -20,6 +20,8 @@ fn layer_norm() -> Result<()> {
         1e-8,
     );
     let ln = LayerNorm::new(w, b, 1e-8);
+    assert_eq!(ln.eps(), 1e-8);
+    assert!(ln.remove_mean());
 
     let two = Tensor::new(&[[[2f32]]], device)?;
     let res = ln.forward(&two)?.flatten_all()?;
@@ -51,5 +53,11 @@ fn layer_norm() -> Result<()> {
         test_utils::to_vec3_round(&std, 4)?,
         [[[1.7321], [1.7321], [1.7321]]]
     );
+
+    // Verify that rms_norm sets remove_mean to false.
+    let rms = LayerNorm::rms_norm(Tensor::new(&[1f32], device)?, 1e-5);
+    assert_eq!(rms.eps(), 1e-5);
+    assert!(!rms.remove_mean());
+
     Ok(())
 }

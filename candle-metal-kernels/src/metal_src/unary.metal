@@ -275,3 +275,6 @@ init_unary(copy, uid, i64, int64_t);
 init_copy2d(i64, int64_t);
 init_const_set(i64, int64_t);
 #endif
+
+init_copy2d(i32, int32_t);
+init_copy2d(i16, int16_t);

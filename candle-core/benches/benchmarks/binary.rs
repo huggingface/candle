@@ -8,7 +8,7 @@ fn run(lhs: &Tensor, rhs: &Tensor) -> Tensor {
     lhs.mul(rhs).unwrap()
 }
 
-fn run_unary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
+fn run_binary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
     let b = 1;
     let m = 1024;
     let k = 1024;
@@ -50,7 +50,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         for dtype in [DType::F32, DType::BF16, DType::F16] {
             let name = format!("binary_mul_{dtype:?}");
             if device.is_dtype_available(dtype) {
-                run_unary_benchmark(c, &device, dtype, &name);
+                run_binary_benchmark(c, &device, dtype, &name);
             }
         }
     }

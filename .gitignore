@@ -47,6 +47,7 @@ out.wav
 bria.mp3
 bria.safetensors
 bria.wav
+bench_results/
 
 #generated wgpu shader files
 **/generated/*.pwgsl_generated_*.wgsl

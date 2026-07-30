@@ -87,6 +87,12 @@ pub enum StridedBlocks<'a> {
         start_offset: usize,
         len: usize,
     },
+    UniformBlocks {
+        start_offset: usize,
+        block_len: usize,
+        count: usize,
+        src_stride: usize,
+    },
     MultipleBlocks {
         block_start_index: StridedIndex<'a>,
         block_len: usize,

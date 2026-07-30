@@ -6,6 +6,12 @@ use candle::{DType, Device, Module, Result, Tensor};
 use candle_nn::{kv_cache::ConcatKvCache, Activation, VarBuilder};
 use std::sync::Arc;
 
+#[cfg(feature = "flash-attn")]
+use candle_flash_attn;
+
+#[cfg(not(feature = "flash-attn"))]
+use candle_nn::attention::{flash_attn, AttnMask};
+
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
@@ -202,8 +208,8 @@ impl Qwen3Attention {
             .reshape((b, l, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        // 3. Per‑head RMSNorm
-        let q_flat = q.flatten(0, 2)?; // (B*H, L, D) -> (BHL, D) after transpose later
+        // 3. Per-head RMSNorm
+        let q_flat = q.flatten(0, 2)?;
         let k_flat = k.flatten(0, 2)?;
         let q_flat = self.q_norm.forward(&q_flat)?;
         let k_flat = self.k_norm.forward(&k_flat)?;
@@ -216,11 +222,121 @@ impl Qwen3Attention {
         // 5. Accumulate KV cache
         let (k, v) = self.kv_cache.append(&k, &v)?;
 
-        // 6. GQA repeat_kv
-        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
+        // 6. Attention dispatch: auto-select best available path
+        //    - CPU (no flash-attn feature): fused CPU flash kernel
+        //    - GPU (flash-attn feature):    CUDA flash attention
+        //    - Fallback:                    standard matmul attention
+        let on_cpu = x.device().is_cpu();
 
-        // 7. Attention score
+        #[cfg(not(feature = "flash-attn"))]
+        if on_cpu {
+            return self.forward_cpu_flash_attn(&q, &k, &v, offset, b, l);
+        }
+        #[cfg(feature = "flash-attn")]
+        if !on_cpu {
+            return self.forward_flash_attn(&q, &k, &v, offset, b, l);
+        }
+
+        self.forward_standard_attn(&q, &k, &v, attn_mask, b, l)
+    }
+
+    /// GPU flash attention path (requires flash-attn feature)
+    #[cfg(feature = "flash-attn")]
+    fn forward_flash_attn(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        _offset: usize,
+        b: usize,
+        l: usize,
+    ) -> Result<Tensor> {
+        // Flash attention expects (B, S, H, D) format
+        let q = q.transpose(1, 2)?.contiguous()?;
+        let k = k.transpose(1, 2)?.contiguous()?;
+        let v = v.transpose(1, 2)?.contiguous()?;
+
+        let scale = 1.0 / (self.head_dim as f32).sqrt();
+        let causal = l > 1;
+        let ctx = candle_flash_attn::flash_attn(&q, &k, &v, scale, causal)?;
+
+        // Output: (B, S, H, D) -> (B, L, hidden_size)
+        ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
+    }
+
+    /// CPU flash attention - optimized fused kernel for CPU
+    ///
+    /// The `flash_attn` dispatcher in candle-nn automatically selects:
+    /// - B=1: single-batch optimized kernels (direct slice access)
+    /// - B>1: packed varlen path (avoids batch-dim stride overhead)
+    #[cfg(not(feature = "flash-attn"))]
+    fn forward_cpu_flash_attn(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        offset: usize,
+        b: usize,
+        l: usize,
+    ) -> Result<Tensor> {
+        // CPU flash attention expects (B, S, H, D) format
+        let q = q.transpose(1, 2)?.contiguous()?;
+        let k = k.transpose(1, 2)?.contiguous()?;
+        let v = v.transpose(1, 2)?.contiguous()?;
+
+        let scale = 1.0 / (self.head_dim as f32).sqrt();
+
+        let ctx = match q.dtype() {
+            DType::F32 => flash_attn::<f32>(
+                &q,
+                &k,
+                &v,
+                scale,
+                AttnMask::causal_with_offset(offset),
+                None,
+                None,
+            )?,
+            // bf16/f16: the CPU kernels run in f32, so upcast the inputs, run, and
+            // narrow the result back to the model dtype. f64 is rejected in
+            // `Model::new`, so it can never reach this match.
+            other => {
+                let q_f32 = q.to_dtype(DType::F32)?;
+                let k_f32 = k.to_dtype(DType::F32)?;
+                let v_f32 = v.to_dtype(DType::F32)?;
+                let ctx_f32 = flash_attn::<f32>(
+                    &q_f32,
+                    &k_f32,
+                    &v_f32,
+                    scale,
+                    AttnMask::causal_with_offset(offset),
+                    None,
+                    None,
+                )?;
+                ctx_f32.to_dtype(other)?
+            }
+        };
+
+        // Output from CPU flash attention is (B, H, S, D), transpose to (B, S, H, D)
+        let ctx = ctx.transpose(1, 2)?;
+
+        ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
+    }
+
+    /// Standard matmul-based attention (works on any device)
+    fn forward_standard_attn(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        attn_mask: Option<&Tensor>,
+        b: usize,
+        l: usize,
+    ) -> Result<Tensor> {
+        // GQA repeat_kv
+        let k = repeat_kv(k.clone(), self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v.clone(), self.num_kv_groups)?.contiguous()?;
+
+        // Attention score
         let scale = 1.0 / (self.head_dim as f64).sqrt();
         let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
         if let Some(m) = attn_mask {
@@ -229,7 +345,7 @@ impl Qwen3Attention {
         let probs = candle_nn::ops::softmax_last_dim(&scores)?;
         let ctx = probs.matmul(&v)?; // (B, H, L, D)
 
-        // 8. Output proj
+        // Output proj
         ctx.transpose(1, 2)?
             .reshape((b, l, self.hidden_size))?
             .apply(&self.o_proj)
@@ -280,6 +396,37 @@ impl DecoderLayer {
     }
 }
 
+/// Builds the additive causal attention mask of shape `(1, 1, tgt, tgt + offset)`.
+fn build_causal_mask(
+    tgt: usize,
+    offset: usize,
+    sw: Option<usize>,
+    device: &Device,
+    dtype: DType,
+) -> Result<Tensor> {
+    let minf = f32::NEG_INFINITY;
+    let mask: Vec<_> = (0..tgt)
+        .flat_map(|i| {
+            (0..(tgt + offset)).map(move |j| {
+                let past_ok = j <= i + offset;
+                // Within the window iff `(i + offset) - j <= w`, rearranged to
+                // `j + w >= i + offset` to stay in `usize` (no signed casts, no
+                // subtraction underflow when `j > i + offset`).
+                let sw_ok = match sw {
+                    Some(w) => j + w >= i + offset,
+                    None => true,
+                };
+                if past_ok && sw_ok {
+                    0.
+                } else {
+                    minf
+                }
+            })
+        })
+        .collect();
+    Tensor::from_slice(&mask, (1, 1, tgt, tgt + offset), device)?.to_dtype(dtype)
+}
+
 #[derive(Debug, Clone)]
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
@@ -291,6 +438,14 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        // f64 is not a target for Qwen3 (CPU flash runs in f32, GPU flash in f16/bf16).
+        // Reject it here, at the single point where the model dtype is set, so no f64
+        // tensor can ever reach the attention kernels and the inner paths never branch on it.
+        if vb.dtype() == DType::F64 {
+            candle::bail!(
+                "Qwen3 does not support f64; load weights as f32 or bf16 (CPU) or f16/bf16 (GPU)"
+            );
+        }
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let rotary = Arc::new(Qwen3RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
@@ -314,41 +469,26 @@ impl Model {
         }
     }
 
-    fn causal_mask(
-        &self,
-        b: usize,
-        tgt: usize,
-        offset: usize,
-        sw: Option<usize>,
-    ) -> Result<Tensor> {
-        let minf = f32::NEG_INFINITY;
-        let mask: Vec<_> = (0..tgt)
-            .flat_map(|i| {
-                (0..(tgt + offset)).map(move |j| {
-                    let past_ok = j <= i + offset;
-                    let sw_ok = match sw {
-                        Some(w) => (i + offset) as i64 - j as i64 <= w as i64,
-                        None => true,
-                    };
-                    if past_ok && sw_ok {
-                        0.
-                    } else {
-                        minf
-                    }
-                })
-            })
-            .collect();
-        Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
-    }
-
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
-        let (b, l) = input.dims2()?;
+        let (_b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
 
-        let causal = if l == 1 {
-            None
+        // Build causal mask only for the standard attention fallback path.
+        // Both CPU flash and GPU flash handle masking internally.
+        #[cfg(not(feature = "flash-attn"))]
+        let needs_mask = !self.device.is_cpu() && l > 1;
+        #[cfg(feature = "flash-attn")]
+        let needs_mask = self.device.is_cpu() && l > 1;
+        let causal = if needs_mask {
+            Some(build_causal_mask(
+                l,
+                offset,
+                None,
+                &self.device,
+                self.dtype,
+            )?)
         } else {
-            Some(self.causal_mask(b, l, offset, None)?)
+            None
         };
 
         for layer in &mut self.layers {
@@ -385,5 +525,65 @@ impl ModelForCausalLM {
 
     pub fn clear_kv_cache(&mut self) {
         self.base.clear_kv_cache();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression test for https://github.com/huggingface/candle/issues/3582
+    #[test]
+    fn causal_mask_is_batch_independent_and_broadcasts() {
+        let device = Device::Cpu;
+        let neg = f32::NEG_INFINITY;
+
+        let mask = build_causal_mask(3, 0, None, &device, DType::F32).unwrap();
+        assert_eq!(
+            mask.dims(),
+            &[1, 1, 3, 3],
+            "mask must carry a leading batch dim of 1 so broadcast_add applies it to every row",
+        );
+
+        // Broadcasting onto a 2-sequence batch must mask both rows identically and causally.
+        let scores = Tensor::zeros((2, 1, 3, 3), DType::F32, &device).unwrap();
+        let masked = scores
+            .broadcast_add(&mask)
+            .unwrap()
+            .squeeze(1)
+            .unwrap()
+            .to_vec3::<f32>()
+            .unwrap();
+
+        assert_eq!(
+            masked[0], masked[1],
+            "both batch rows must receive the same causal mask",
+        );
+        assert_eq!(masked[0][0], vec![0.0, neg, neg]);
+        assert_eq!(masked[0][1], vec![0.0, 0.0, neg]);
+        assert_eq!(masked[0][2], vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn causal_mask_respects_sliding_window() {
+        // With a sliding window of `w`, query i may attend to key j only when it is
+        // both causal (j <= i + offset) and within the window (i + offset - j <= w).
+        let device = Device::Cpu;
+        let neg = f32::NEG_INFINITY;
+
+        let mask = build_causal_mask(4, 0, Some(1), &device, DType::F32)
+            .unwrap()
+            .squeeze(0)
+            .unwrap()
+            .squeeze(0)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+
+        // window = 1: each query sees itself and the single preceding position.
+        assert_eq!(mask[0], vec![0.0, neg, neg, neg]);
+        assert_eq!(mask[1], vec![0.0, 0.0, neg, neg]);
+        assert_eq!(mask[2], vec![neg, 0.0, 0.0, neg]);
+        assert_eq!(mask[3], vec![neg, neg, 0.0, 0.0]);
     }
 }

@@ -220,7 +220,11 @@ impl crate::CustomOp1 for ArgSort {
         let ncols = self.last_dim;
         let nrows = el / ncols;
         let src = crate::metal_backend::buffer_o(storage.buffer(), layout, storage.dtype());
-        let dst = device.new_buffer(el, DType::U32, "asort")?;
+        let dst = device
+            .new_buffer_builder()
+            .with_size_for(el, DType::U32)
+            .with_label("asort")
+            .build()?;
         let mut ncols_pad = 1;
         while ncols_pad < ncols {
             ncols_pad *= 2;

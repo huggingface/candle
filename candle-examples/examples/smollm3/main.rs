@@ -216,6 +216,10 @@ struct Args {
     /// Enable tracing (generates a trace-timestamp.json file)
     #[arg(long)]
     tracing: bool,
+
+    /// Use CPU flash attention (fused kernel, no mask materialization)
+    #[arg(long)]
+    use_flash_attn: bool,
 }
 
 impl Args {
@@ -261,7 +265,7 @@ fn load_quantized_model(args: &Args, device: &Device) -> Result<SmolLM3Model> {
     };
 
     println!("Loading quantized model from {:?}...", model_path);
-    let model = QuantizedModelForCausalLM::from_gguf(&model_path, device)?;
+    let model = QuantizedModelForCausalLM::from_gguf(&model_path, device, args.use_flash_attn)?;
     Ok(SmolLM3Model::Quantized(model))
 }
 

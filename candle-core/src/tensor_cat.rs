@@ -58,8 +58,11 @@ impl Tensor {
                 }
             }
         }
-        let all_contiguous = args.iter().all(|v| v.as_ref().is_contiguous());
-        if all_contiguous {
+        let all_copy2d_compat = args.iter().all(|v| {
+            let t = v.as_ref();
+            t.is_contiguous() || t.layout().outer_stride_for_dim(dim).is_some()
+        });
+        if all_copy2d_compat {
             Self::cat_contiguous(args, dim)
         } else if dim == 0 {
             Self::cat0(args)
@@ -222,15 +225,13 @@ impl Tensor {
             let d2 = block_size * arg_dims[dim];
             let dst_s = block_size * cat_target_dim_len;
             let src_o = arg.layout().start_offset();
-            arg.storage().copy2d(
-                &mut storage,
-                d1,
-                d2,
-                /* src_s */ d2,
-                dst_s,
-                src_o,
-                dst_o,
-            )?;
+            let src_s = if arg.is_contiguous() {
+                d2
+            } else {
+                arg.layout().outer_stride_for_dim(dim).unwrap_or(d2)
+            };
+            arg.storage()
+                .copy2d(&mut storage, d1, d2, src_s, dst_s, src_o, dst_o)?;
             dst_o += d2;
         }
         Ok(crate::tensor::from_storage(storage, shape, op, false))
@@ -242,7 +243,7 @@ impl Tensor {
     /// has to be greater than or equal to `offset` plus the `src` size.
     ///
     /// Note that this modifies `self` in place and as such is not compatible with
-    /// back-propagation.  
+    /// back-propagation.
     pub fn slice_set<D: Dim>(&self, src: &Self, dim: D, offset: usize) -> Result<()> {
         let dim = dim.to_index(self.shape(), "slice-set")?;
         if !self.is_contiguous() || !src.is_contiguous() {

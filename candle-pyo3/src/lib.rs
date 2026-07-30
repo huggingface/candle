@@ -229,6 +229,9 @@ trait MapDType {
                     t.dtype()
                 )))
             }
+            dtype => Err(PyErr::new::<PyTypeError, _>(format!(
+                "{dtype:?} dtype is not supported in Python interface",
+            ))),
         }
     }
 }

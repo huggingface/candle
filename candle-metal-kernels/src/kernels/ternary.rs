@@ -1,10 +1,9 @@
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{get_tile_size, linear_split};
 use crate::{
-    set_params, Buffer, ComputeCommandEncoder, ConstantValues, Device, Kernels, MetalKernelError,
-    Source, Value,
+    debug_group, set_params, Buffer, ComputeCommandEncoder, ConstantValues, Device, Kernels,
+    MetalKernelError, Output, Source, Value,
 };
-use objc2_metal::MTLResourceUsage;
+use crate::{get_tile_size, linear_split};
 
 #[allow(clippy::too_many_arguments)]
 pub fn call_where_cond(
@@ -39,6 +38,7 @@ pub fn call_where_cond(
 
     let size: usize = shape.iter().product();
     let rank = shape.len();
+    debug_group!(encoder, "where {name} elems={size}");
 
     set_params!(
         encoder,
@@ -52,7 +52,7 @@ pub fn call_where_cond(
             &cond,
             &left,
             &right,
-            output
+            Output::new(output)
         )
     );
 
@@ -60,10 +60,6 @@ pub fn call_where_cond(
     let tiles = size.div_ceil(tile_size);
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
 
-    encoder.use_resource(cond.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(left.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(right.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }

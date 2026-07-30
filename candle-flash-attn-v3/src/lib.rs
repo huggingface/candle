@@ -10,7 +10,7 @@
 mod ffi;
 
 use candle::backend::BackendStorage;
-use candle::cuda_backend::cudarc::driver::DevicePtr;
+use candle::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
 
@@ -85,11 +85,15 @@ impl FlashAttn {
         if expected_kv != v_l.shape().dims4()? {
             candle::bail!("shape mismatch q {:?} and v {:?}", q_l.shape(), v_l.shape())
         }
-        if head_size_og > 256 {
-            candle::bail!("only supports head dimension at most 256 (got {head_size_og})")
+        if head_size_og > 512 {
+            candle::bail!("only supports head dimension at most 512 (got {head_size_og})")
         }
-        if !(head_size_og == 256 || head_size_og == 128 || head_size_og == 64) {
-            candle::bail!("only supports head dimension 64, 128 and 256 (got {head_size_og})")
+        if !(head_size_og == 512
+            || head_size_og == 256
+            || head_size_og == 128
+            || head_size_og == 64)
+        {
+            candle::bail!("only supports head dimension 64, 128, 256 and 512 (got {head_size_og})")
         }
         if head_size_og % 8 != 0 {
             // TODO: Handle head sizes that are not a multiple of 8 via some padding.
@@ -98,7 +102,7 @@ impl FlashAttn {
         if num_heads % num_heads_k != 0 {
             candle::bail!("number of k/v heads {num_heads_k} must divide number of heads in query {num_heads}")
         }
-        let use_gqa_packing = match num_heads_k / num_heads {
+        let use_gqa_packing = match num_heads / num_heads_k {
             2 | 4 | 8 | 16 | 32 => self.use_gqa_packing as i32,
             _ => 0,
         };
@@ -157,8 +161,8 @@ impl FlashAttn {
         let seqlen_k_rounded = round_multiple(seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-        let dst = unsafe { dev.alloc::<T>(elem_count) }?;
-        let softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
+        let mut dst = unsafe { dev.alloc::<T>(elem_count) }?;
+        let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -180,9 +184,9 @@ impl FlashAttn {
             let (q_ptr, _guard) = q.device_ptr(&stream);
             let (k_ptr, _guard) = k.device_ptr(&stream);
             let (v_ptr, _guard) = v.device_ptr(&stream);
-            let (dst_ptr, _guard) = dst.device_ptr(&stream);
-            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr(&stream);
-            ffi::run_mha(
+            let (dst_ptr, _guard) = dst.device_ptr_mut(&stream);
+            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr_mut(&stream);
+            ffi::run_mha_v3(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
                 v_ptr as *const core::ffi::c_void,
@@ -509,11 +513,15 @@ impl FlashAttnVarLen {
         if expected_kv != v_l.shape().dims3()? {
             candle::bail!("shape mismatch q {:?} and v {:?}", q_l.shape(), v_l.shape())
         }
-        if head_size_og > 256 {
-            candle::bail!("only supports head dimension at most 256 (got {head_size_og})")
+        if head_size_og > 512 {
+            candle::bail!("only supports head dimension at most 512 (got {head_size_og})")
         }
-        if !(head_size_og == 256 || head_size_og == 128 || head_size_og == 64) {
-            candle::bail!("only supports head dimension 64, 128 and 256 (got {head_size_og})")
+        if !(head_size_og == 512
+            || head_size_og == 256
+            || head_size_og == 128
+            || head_size_og == 64)
+        {
+            candle::bail!("only supports head dimension 64, 128, 256 and 512 (got {head_size_og})")
         }
         if head_size_og % 8 != 0 {
             // TODO: Handle head sizes that are not a multiple of 8 via some padding.
@@ -522,7 +530,7 @@ impl FlashAttnVarLen {
         if num_heads % num_heads_k != 0 {
             candle::bail!("number of k/v heads {num_heads_k} must divide number of heads in query {num_heads}")
         }
-        let use_gqa_packing = match num_heads_k / num_heads {
+        let use_gqa_packing = match num_heads / num_heads_k {
             2 | 4 | 8 | 16 | 32 => self.use_gqa_packing as i32,
             _ => 0,
         };
@@ -598,8 +606,8 @@ impl FlashAttnVarLen {
         let seqlen_k_rounded = round_multiple(self.max_seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-        let dst = unsafe { dev.alloc::<T>(elem_count) }?;
-        let softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q)?;
+        let mut dst = unsafe { dev.alloc::<T>(elem_count) }?;
+        let mut softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -620,11 +628,11 @@ impl FlashAttnVarLen {
             let (q_ptr, _guard) = q.device_ptr(&stream);
             let (k_ptr, _guard) = k.device_ptr(&stream);
             let (v_ptr, _guard) = v.device_ptr(&stream);
-            let (dst_ptr, _guard) = dst.device_ptr(&stream);
-            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr(&stream);
+            let (dst_ptr, _guard) = dst.device_ptr_mut(&stream);
+            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr_mut(&stream);
             let (seqlens_q_ptr, _guard) = seqlens_q.device_ptr(&stream);
             let (seqlens_k_ptr, _guard) = seqlens_k.device_ptr(&stream);
-            ffi::run_mha(
+            ffi::run_mha_v3(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
                 v_ptr as *const core::ffi::c_void,
