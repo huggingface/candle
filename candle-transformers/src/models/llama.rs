@@ -1053,6 +1053,30 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn custom_dense_mlp_matches_standard_llama_bit_for_bit() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        // Both models read the same initialized weights, mirroring a checkpoint
+        // load while exercising the public factory path for every MLP.
+        let varmap = candle_nn::VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let dense = Llama::load(vb.clone(), &cfg)?;
+        let custom =
+            Llama::load_with_mlp_factory(vb, &cfg, |_, vb| Ok(Box::new(Mlp::load(vb, &cfg)?)))?;
+        let tokens = Tensor::from_vec(vec![1u32, 2, 3], (1, 3), &device)?;
+        let mut dense_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        let mut custom_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+
+        let dense_logits = dense.forward(&tokens, 0, &mut dense_cache)?;
+        let custom_logits = custom.forward(&tokens, 0, &mut custom_cache)?;
+        assert_eq!(
+            dense_logits.to_vec2::<f32>()?,
+            custom_logits.to_vec2::<f32>()?
+        );
+        Ok(())
+    }
+
     // Requires a CUDA device and the `flash-attn` feature (which compiles the real
     // `flash_attn_varlen_paged_windowed` kernel); not runnable on the CPU-only sandbox
     // this crate is normally developed in. Exercises the actual GPU code path end to
