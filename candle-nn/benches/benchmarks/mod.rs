@@ -29,6 +29,11 @@ impl BenchDevice for Device {
                 #[cfg(not(feature = "metal"))]
                 panic!("Metal device without metal feature enabled: {device:?}")
             }
+            #[cfg(feature = "rocm")]
+            Device::Rocm(device) => {
+                use candle::backend::BackendDevice;
+                Ok(device.synchronize()?)
+            }
         }
     }
 
@@ -46,6 +51,8 @@ impl BenchDevice for Device {
             }
             Device::Cuda(_) => format!("cuda_{}", name.into()),
             Device::Metal(_) => format!("metal_{}", name.into()),
+            #[cfg(feature = "rocm")]
+            Device::Rocm(_) => format!("rocm_{}", name.into()),
         }
     }
 }
@@ -57,13 +64,14 @@ struct BenchDeviceHandler {
 impl BenchDeviceHandler {
     pub fn new() -> Result<Self> {
         let mut devices = Vec::new();
-        if cfg!(feature = "metal") {
-            devices.push(Device::new_metal(0)?);
-        } else if cfg!(feature = "cuda") {
-            devices.push(Device::new_cuda(0)?);
-        } else {
-            devices.push(Device::Cpu);
-        }
+        #[cfg(feature = "metal")]
+        devices.push(Device::new_metal(0)?);
+        #[cfg(all(feature = "cuda", not(feature = "metal")))]
+        devices.push(Device::new_cuda(0)?);
+        #[cfg(all(feature = "rocm", not(feature = "metal"), not(feature = "cuda")))]
+        devices.push(Device::new_rocm(0)?);
+        #[cfg(not(any(feature = "metal", feature = "cuda", feature = "rocm")))]
+        devices.push(Device::Cpu);
         Ok(Self { devices })
     }
 }

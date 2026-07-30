@@ -4,128 +4,105 @@ ROCm/HIP kernel support for the Candle deep learning framework.
 
 ## Overview
 
-This crate provides ROCm (AMD GPU) kernel support for Candle. Unlike CUDA which can embed PTX directly, ROCm/HIP requires ahead-of-time (AOT) compilation for specific GPU architectures.
+This crate does not ship kernels of its own. It embeds the **shared**
+`candle-kernels/src/*.cu` sources — the very same ones the CUDA backend uses —
+and compiles them with `hipcc`.
 
-## Architecture
+Everything CUDA-specific is bridged by a small shim in `src/hip_shim/`, which
+works by *shadowing* the CUDA header names the sources `#include`. Because the
+shim sits on its own include path ahead of `candle-kernels/src`, not a single
+line of the shared sources is edited, and nothing here can affect the CUDA
+build.
 
-### AOT Cache System
+Keeping one set of sources matters. An earlier version of this crate
+hand-wrote HIP kernels, and they silently drifted from their CUDA
+counterparts: `utan` where candle calls `utanh` (breaking `tanh` on every
+dtype), a `bminimum` that dropped NaN handling, a `UNARY_OP` missing its
+in-place path, and a `BINARY_OP` missing the out-type parameter that
+comparison operators need.
 
-We use an **Ahead-of-Time (AOT) compilation cache** approach:
+## What the shim provides
 
-1. **Source Code**: HIP kernels are shipped as source code (`.hip` files)
-2. **On-Demand Compilation**: First time a kernel is needed, it's compiled using `hipcc`
-3. **Caching**: Compiled binaries are cached for reuse
-4. **Future Runs**: Load cached binaries directly (no recompilation)
+| Shim header | Purpose |
+|---|---|
+| `hip_compat.h` | Force-included. 16-bit `atomicAdd`, `__dp4a`, `__vsubss4`, `*_sync` shuffle wrappers |
+| `cuda_fp16.h` | `#include <hip/hip_fp16.h>` |
+| `cuda_bf16.h` | HIP bf16, plus the `__nv_bfloat16` alias and `__hmax_nan`/`__hmin_nan` |
+| `cuda_fp8.h` | Maps `__nv_fp8_e4m3` onto HIP's OCP `__hip_fp8_e4m3` |
+| `cuda.h` | Empty; the driver API is unused in device code |
+| `cuda/std/limits` | Aliases `cuda::std` onto `std` for `reduce.cu` |
 
-### Cache Location
+Sources are compiled with `-D__CUDA_ARCH__=800`, which enables the f16
+(`>= 530`) and bf16 (`>= 800`) kernels. fp8 shares the `>= 800` guard, so those
+kernels are built too, but the backend never launches them — every F8E4M3 path
+in `candle-core/src/rocm_backend` returns an error.
 
-Compiled binaries are stored at:
+## Compilation and caching
+
+Compilation happens at runtime, on first use of a module, so one binary runs on
+any GPU architecture without a rebuild. Results are cached on disk:
 
 ```
 ~/.cache/candle-rocm/{arch}-{rocm_version}/
+    {module}_{source_hash}.hsaco
+    src/                     # staged sources and shim headers
 ```
 
-For example:
-- `~/.cache/candle-rocm/gfx908-6.1/binary_a1b2c3d4.cso`
-- `~/.cache/candle-rocm/gfx942-6.2/binary_a1b2c3d4.cso`
+`{source_hash}` is the first 16 hex characters of the source's SHA-256, so
+editing one kernel invalidates only its module. Cache writes go through a
+uniquely named temporary followed by a rename, so concurrent processes cannot
+observe a half-written file.
 
-Where:
-- `{arch}` = GPU architecture (gfx908, gfx90a, gfx942, etc.)
-- `{rocm_version}` = ROCm version (6.0, 6.1, 6.2, etc.)
-- `{hash}` = SHA256 hash of source code (first 16 chars)
+The pipeline is `hipcc --genco` followed by `clang-offload-bundler --unbundle`,
+which yields the single-architecture code object that `hipModuleLoadData`
+expects. The bundler is taken from `$ROCM_PATH` (default `/opt/rocm`) rather
+than whichever `clang` happens to come first on `PATH`, since a mismatched LLVM
+version cannot read the bundle.
 
-### Key Components
+Expect roughly 3–5 s per module on first use. `quantized.cu` is the outlier at
+about 70 s, being 4,845 lines.
 
-#### CacheManager (`src/cache.rs`)
+## Environment variables
 
-Manages the AOT compilation cache:
+| Variable | Effect |
+|---|---|
+| `CANDLE_ROCM_ARCH` | Target architecture, e.g. `gfx1101`. Otherwise detected with `rocm_agent_enumerator` |
+| `CANDLE_ROCM_VERSION` | Overrides the version parsed from `hipcc --version` |
+| `ROCM_PATH` | ROCm install root, default `/opt/rocm` |
 
-- **GPU Detection**: Automatically detects GPU architecture using `rocminfo` or falls back to environment variable `CANDLE_ROCM_ARCH`
-- **Version Detection**: Detects ROCm version using `hipcc --version` or environment variable `CANDLE_ROCM_VERSION`
-- **Compilation**: Invokes `hipcc` with appropriate flags:
-  ```bash
-  hipcc --offload-arch={arch} -O3 -fPIC -c -o output.o input.hip
-  ```
-- **Caching**: Stores compiled `.cso` (code object) files with source hash versioning
-
-Usage:
-```rust
-use candle_rocm_kernels::CacheManager;
-use rocm_rs::hip::Device;
-
-let device = Device::new(0)?;
-let cache = CacheManager::new(&device)?;
-let binary = cache.get_or_compile("binary", source_code)?;
-```
-
-#### KernelManager (`src/manager.rs`)
-
-Higher-level manager that:
-
-- Wraps CacheManager
-- Loads compiled binaries as `rocm_rs::hip::Module`
-- Returns `Arc<Module>` for thread-safe sharing
-- Maintains in-memory module cache
-
-Usage:
-```rust
-use candle_rocm_kernels::KernelManager;
-use candle_rocm_kernels::source::Source;
-
-let device = Device::new(0)?;
-let manager = KernelManager::new(&device)?;
-let module = manager.get_or_compile_module(Source::Binary)?;
-```
-
-### Environment Variables
-
-- `CANDLE_ROCM_ARCH` - Override GPU architecture detection (e.g., "gfx908")
-- `CANDLE_ROCM_VERSION` - Override ROCm version detection (e.g., "6.1")
+Architecture detection fails loudly rather than guessing. A code object built
+for the wrong architecture would otherwise surface much later as an opaque
+"invalid device function".
 
 ## Requirements
 
-- ROCm/HIP installed (provides `hipcc`)
-- AMD GPU with supported architecture
+ROCm 6.2 or newer, with `hipcc` and `clang-offload-bundler` available at
+runtime.
 
-## Kernel Types
+`rocm-rs` supplies the HIP, rocBLAS and MIOpen bindings and is used with
+`default-features = false`. Its default `gpu-sort` feature builds an amdgcn
+kernel through a proc macro that shells out to a nested nightly `-Zbuild-std`
+cargo invocation; candle never calls that sort, and the feature prevents the
+crate from building on a stable toolchain.
 
-Currently supports:
-- **Binary operations**: Add, Sub, Mul, Div, Minimum, Maximum
+## Testing the shim
 
-## Building
-
-```bash
-cd candle-rocm-kernels
-cargo build
+```
+make rocm-shim-test
 ```
 
-Note: First build will compile dependencies. No GPU required for building, but `hipcc` must be in PATH if you want to compile kernels.
+Compiles every shared module for the local GPU and runs
+`src/hip_shim/shim_test.hip`, which exercises the only hand-written device code
+in the project — the 16-bit `atomicAdd` CAS loops (aligned, unaligned, and
+neighbour preservation) and the `*_sync` shuffle wrappers — on real hardware.
 
-## Testing
+## Layout
 
-```bash
-cargo test
 ```
-
-## Implementation Notes
-
-### Why AOT instead of JIT?
-
-The `rocm-rs` crate (v0.5) doesn't support runtime compilation. It only supports:
-- `Module::load(path)` - Load from file
-- `Module::load_data(bytes)` - Load from bytes
-
-This makes JIT compilation (via hiprtc) unavailable, so we compile ahead-of-time on first run.
-
-### Supported GPU Architectures
-
-Common AMD GPU architectures:
-- CDNA2: gfx90a (MI200 series)
-- CDNA3: gfx942 (MI300 series)
-- RDNA3: gfx1100, gfx1101, gfx1102 (RX 7000 series)
-
-The system will try to auto-detect, but you can override with `CANDLE_ROCM_ARCH`.
-
-## License
-
-MIT OR Apache-2.0
+src/
+  lib.rs           Id / Module / the eleven module constants
+  compile.rs       runtime hipcc invocation, disk and in-memory caches
+  error.rs         KernelError
+  wrappers.rs      Send + Sync wrapper around rocm-rs' Module
+  hip_shim/        the CUDA-to-HIP bridge; the only HIP-specific code here
+```
