@@ -1,12 +1,10 @@
-//! Launchers for the reduction and index-select kernels in `reduce.cu` /
-//! `indexing.cu`.
+//! Launchers for the reduction kernels in `candle-kernels/src/reduce.cu`.
 
 use super::{
-    kernels, launch_config, launch_kernel, try_kernel_name, Map1Any, RocmDevice,
-    SendSyncDeviceMemory, S,
+    kernels, launch_kernel, try_kernel_name, Map1Any, RocmDevice, SendSyncDeviceMemory, S,
 };
 use crate::op::ReduceOp;
-use crate::{Layout, Result, WithDType};
+use crate::{Layout, Result};
 
 pub(super) struct FastReduce<'a>(pub &'a [usize], pub ReduceOp);
 
@@ -96,49 +94,4 @@ impl Map1Any for FastReduce<'_> {
             Ok(wrap(output))
         }
     }
-}
-
-pub(super) fn index_select_typed<T: Copy + Send + Sync + WithDType + 'static>(
-    ids_prefix: &str,
-    ids_ptr: *mut std::ffi::c_void,
-    ds: &SendSyncDeviceMemory<usize>,
-    src_ptr: *mut std::ffi::c_void,
-    left_size: usize,
-    src_dim_size: usize,
-    ids_dim_size: usize,
-    right_size: usize,
-    dst_el: usize,
-    device: &RocmDevice,
-) -> Result<SendSyncDeviceMemory<T>> {
-    let func_name = try_kernel_name::<T>(ids_prefix)?;
-    let output = device.alloc::<T>(dst_el)?;
-    let num_dims = ds.count() / 2;
-    let (grid, block) = launch_config(dst_el);
-
-    unsafe {
-        let out_ptr = output.as_ptr();
-        let ds_ptr = ds.as_ptr() as *const usize;
-
-        launch_kernel(
-            device,
-            &kernels::INDEXING,
-            &func_name,
-            grid,
-            block,
-            &mut [
-                &dst_el as *const usize as *mut std::ffi::c_void,
-                &num_dims as *const usize as *mut std::ffi::c_void,
-                (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                (&ids_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                &left_size as *const usize as *mut std::ffi::c_void,
-                &src_dim_size as *const usize as *mut std::ffi::c_void,
-                &ids_dim_size as *const usize as *mut std::ffi::c_void,
-                &right_size as *const usize as *mut std::ffi::c_void,
-            ],
-        )?;
-    }
-
-    Ok(output)
 }
