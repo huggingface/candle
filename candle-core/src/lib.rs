@@ -76,6 +76,8 @@ pub mod npy;
 pub mod op;
 pub mod pickle;
 pub mod quantized;
+#[cfg(feature = "rocm")]
+pub mod rocm_backend;
 pub mod safetensors;
 pub mod scalar;
 pub mod shape;
@@ -117,6 +119,9 @@ pub use cuda_backend as cuda;
 pub use dummy_cuda_backend as cuda;
 
 pub use cuda::{CudaDevice, CudaStorage};
+
+#[cfg(feature = "rocm")]
+pub use rocm_backend::{RocmDevice, RocmStorage};
 
 #[cfg(feature = "metal")]
 pub use metal_backend::{MetalDevice, MetalError, MetalStorage};
