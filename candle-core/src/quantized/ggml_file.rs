@@ -131,9 +131,7 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
         Device::Metal(metal) => super::metal::load_quantized(metal, data)?,
         Device::Cuda(cuda) => super::cuda::load_quantized(cuda, data)?,
         #[cfg(feature = "rocm")]
-        Device::Rocm(_) => {
-            crate::bail!("quantized tensors are not supported on the ROCm backend yet")
-        }
+        Device::Rocm(rocm) => super::rocm::load_quantized(rocm, data)?,
     };
     super::QTensor::new(data, dims)
 }
