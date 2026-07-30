@@ -25,9 +25,10 @@ pub mod kv_cache;
 pub mod talker;
 pub mod code_predictor;
 
-pub use codec::{Decoder12Hz, Decoder12HzConfig};
+pub use codec::{Decoder12Hz, Decoder12HzConfig, Decoder12HzState, DecoderKVCache};
 pub use config::{ModelType, ParsedModelConfig, Qwen3TTSConfig};
-pub use kv_cache::{AnyKVCache, KVCache};
+pub use kv_cache::{AnyKVCache, CircularKVCache, KVCache, KVUpdateResult, PreAllocKVCache,
+                   create_window_causal_mask};
 pub use talker::{Language, Speaker, TalkerConfig, TalkerModel};
 pub use code_predictor::{CodePredictor, CodePredictorConfig};
 

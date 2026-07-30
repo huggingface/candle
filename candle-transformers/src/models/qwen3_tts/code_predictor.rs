@@ -177,10 +177,20 @@ impl CPAttention {
         let q = apply_rope_local(&q, &cos_s, &sin_s)?;
         let k = apply_rope_local(&k, &cos_s, &sin_s)?;
 
-        let (k, v) = if let Some(c) = kv_cache {
-            c.update(&k, &v)?
+        let (k, v, mask) = if let Some(c) = kv_cache {
+            let res = c.update(&k, &v)?;
+            let mask = if res.window_start > 0 {
+                let win_len = res.k.dim(2)?;
+                let m = super::kv_cache::create_window_causal_mask(
+                    offset, s, res.window_start, win_len, res.k.device())?
+                    .to_dtype(res.k.dtype())?;
+                Some(m)
+            } else {
+                mask.cloned()
+            };
+            (res.k, res.v, mask)
         } else {
-            (k, v)
+            (k, v, mask.cloned())
         };
 
         let n_rep = self.num_heads / self.num_kv;

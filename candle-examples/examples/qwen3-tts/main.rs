@@ -110,6 +110,13 @@ struct Args {
     /// Reduces latency; batch mode (default) has marginally better quality.
     #[arg(long)]
     streaming: bool,
+
+    /// Sliding-window KV cache size for the talker transformer.
+    /// When set, uses CircularKVCache instead of the default unbounded cache,
+    /// capping memory at O(window) rather than O(N). Typical values: 512–2048.
+    /// Has no effect during prefill (prefill always uses full context).
+    #[arg(long)]
+    window: Option<usize>,
 }
 
 // ── Device selection ──────────────────────────────────────────────────────────
@@ -478,6 +485,16 @@ fn build_trailing_text(
     Ok((trailing, len, pad))
 }
 
+/// Allocate talker KV caches according to `--window`.
+/// With `--window N` uses `CircularKVCache` (O(N) memory);
+/// otherwise falls back to the default unbounded cache.
+fn make_kv_caches(model: &TalkerModel, args: &Args, capacity: usize) -> Vec<AnyKVCache> {
+    match args.window {
+        Some(w) => model.new_kv_caches_windowed(w),
+        None    => model.new_kv_caches(capacity),
+    }
+}
+
 // ── Main generation loop ──────────────────────────────────────────────────────
 
 fn generate(
@@ -495,7 +512,7 @@ fn generate(
 
     let (trailing, trailing_len, tts_pad) = build_trailing_text(model, input_ids)?;
 
-    let mut kv_caches = model.new_kv_caches(args.max_frames + 256);
+    let mut kv_caches = make_kv_caches(model, args, args.max_frames + 256);
     let (hidden, logits) = prefill_fn(&mut kv_caches)?;
     let prefill_len = hidden.dim(1)?;
     let mut offset = prefill_len;
@@ -616,7 +633,7 @@ fn generate_icl(
 
     let (trailing, trailing_len, tts_pad) = build_trailing_text(model, input_ids)?;
 
-    let mut kv_caches = model.new_kv_caches(args.max_frames + 512);
+    let mut kv_caches = make_kv_caches(model, args, args.max_frames + 512);
 
     // Phase 1: voice-clone structure prefill (icl_mode=true — omits first text token)
     let speaker_embed = Tensor::zeros((1, model.config().hidden_size), candle::DType::F32, device)?;
@@ -720,7 +737,7 @@ fn generate_streaming(
 
     let (trailing, trailing_len, tts_pad) = build_trailing_text(model, input_ids)?;
 
-    let mut kv_caches = model.new_kv_caches(args.max_frames + 256);
+    let mut kv_caches = make_kv_caches(model, args, args.max_frames + 256);
     let (hidden, logits) = prefill_fn(&mut kv_caches)?;
     let prefill_len = hidden.dim(1)?;
     let mut offset = prefill_len;

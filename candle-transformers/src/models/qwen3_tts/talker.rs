@@ -14,7 +14,7 @@ use candle::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::{embedding, linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 
 use super::config::{ParsedModelConfig, Qwen3TTSConfig};
-use super::kv_cache::{AnyKVCache, KVCache, PreAllocKVCache};
+use super::kv_cache::{AnyKVCache, CircularKVCache, KVCache, PreAllocKVCache};
 use super::create_causal_mask;
 
 // ── Token constants ──────────────────────────────────────────────────────────
@@ -390,10 +390,22 @@ impl Attention {
 
         let (q, k) = rope.apply(&q, &k, offset)?;
 
-        let (k, v) = if let Some(cache) = kv_cache {
-            cache.update(&k, &v)?
+        let (k, v, mask) = if let Some(cache) = kv_cache {
+            let res = cache.update(&k, &v)?;
+            // For circular caches window_start > 0 once the buffer wraps:
+            // rebuild the causal mask to correctly reflect absolute positions.
+            let mask = if res.window_start > 0 {
+                let win_len = res.k.dim(2)?;
+                let m = super::kv_cache::create_window_causal_mask(
+                    offset, s, res.window_start, win_len, res.k.device())?
+                    .to_dtype(res.k.dtype())?;
+                Some(m)
+            } else {
+                mask.cloned()
+            };
+            (res.k, res.v, mask)
         } else {
-            (k, v)
+            (k, v, mask.cloned())
         };
 
         let k = self.repeat_kv(&k)?;
@@ -800,6 +812,35 @@ impl TalkerModel {
                 } else {
                     AnyKVCache::Concat(KVCache::new())
                 }
+            })
+            .collect()
+    }
+
+    /// Allocate sliding-window KV caches for every transformer layer.
+    ///
+    /// Equivalent to `new_kv_caches` but each layer uses a [`CircularKVCache`]
+    /// with a fixed `window` capacity instead of growing unboundedly.  Tokens
+    /// older than `window` positions are evicted from attention, reducing
+    /// memory from O(N) to O(window).
+    ///
+    /// Pass `prefill_len + window` as the effective context when the model has
+    /// a fixed-length prefix (role / instruct embeddings) that must never be
+    /// evicted.  For pure generation with no persistent prefix, `window` is
+    /// the number of recent frames to retain.
+    pub fn new_kv_caches_windowed(&self, window: usize) -> Vec<AnyKVCache> {
+        let dtype = self.codec_head.weight().dtype();
+        (0..self.config.num_hidden_layers)
+            .map(|_| {
+                CircularKVCache::new(
+                    1,
+                    self.config.num_key_value_heads,
+                    window,
+                    self.config.head_dim,
+                    dtype,
+                    &self.device,
+                )
+                .map(AnyKVCache::Circular)
+                .unwrap_or_else(|_| AnyKVCache::Concat(KVCache::new()))
             })
             .collect()
     }
