@@ -3,6 +3,66 @@
 use candle::{CpuStorage, Layout, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
+/// The `(buffer, layout)` pairs every rope kernel reads, in kernel argument order.
+#[cfg(feature = "rocm")]
+type RocmRopeInputs<'a, T> = [(
+    &'a candle::rocm_backend::SendSyncDeviceMemory<T>,
+    &'a Layout,
+); 3];
+
+/// Shared launcher for the three ROCm rope kernels (`rope`, `rope_i`, `rope_thd`).
+///
+/// All three take `src, cos, sin, dst` followed by a variable number of `uint32_t`
+/// shape parameters (see `ROPE_OP` in `candle-kernels/src/reduce.cu`), so only
+/// `params` differs between them.
+#[cfg(feature = "rocm")]
+fn rocm_rope_launch<T: Copy + Send + Sync + 'static>(
+    name: &str,
+    inputs: RocmRopeInputs<T>,
+    el: usize,
+    params: &[u32],
+    dev: &candle::RocmDevice,
+) -> Result<candle::rocm_backend::SendSyncDeviceMemory<T>> {
+    use candle::rocm_backend::{kernel_name, rocm_rs};
+
+    let func = dev.get_or_load_func(
+        &kernel_name::<T>(name),
+        &candle::rocm_backend::kernels::REDUCE,
+    )?;
+    // SAFETY: Set later by running the kernel.
+    let dst = dev.alloc::<T>(el)?;
+
+    // The rope kernels are not grid-stride: every one of the `el / 2` pairs needs
+    // its own thread, so the grid has to cover them all.
+    const BLOCK_SIZE: u32 = 256;
+    let n_threads = (el / 2) as u32;
+    let grid = rocm_rs::hip::Dim3::from(n_threads.div_ceil(BLOCK_SIZE));
+    let block = rocm_rs::hip::Dim3::from(BLOCK_SIZE);
+
+    let mut ptrs: Vec<*mut std::ffi::c_void> = Vec::with_capacity(4);
+    for ((mem, layout), what) in inputs.iter().zip(["src", "cos", "sin"]) {
+        let offset = match layout.contiguous_offsets() {
+            None => candle::bail!("{what} input has to be contiguous"),
+            Some((o1, _o2)) => o1,
+        };
+        // SAFETY: `offset` is an in-bounds element index of a contiguous layout.
+        ptrs.push(unsafe { mem.ptr_at(offset) });
+    }
+    ptrs.push(dst.0.as_ptr());
+
+    // Kernel params are passed by address, so `ptrs`/`params` must outlive the launch.
+    let mut args: Vec<*mut std::ffi::c_void> = Vec::with_capacity(ptrs.len() + params.len());
+    for p in ptrs.iter() {
+        args.push(p as *const *mut std::ffi::c_void as *mut std::ffi::c_void);
+    }
+    for p in params {
+        args.push(p as *const u32 as *mut std::ffi::c_void);
+    }
+    func.launch(grid, block, 0, Some(dev.stream()), &mut args)
+        .map_err(|e| candle::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+    Ok(dst)
+}
+
 /// Interleaved variant of rotary embeddings.
 /// The x0 and x1 value are interleaved on the n_embd (= head_dim) dimension.
 /// The resulting y0 and y1 are also interleaved with:
@@ -243,6 +303,61 @@ impl candle::CustomOp3 for RotaryEmbI {
         .map_err(candle::Error::wrap)?;
         let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
         Ok((out, l_src.shape().clone()))
+    }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        s1: &candle::RocmStorage,
+        l1: &Layout,
+        s2: &candle::RocmStorage,
+        l2: &Layout,
+        s3: &candle::RocmStorage,
+        l3: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        use candle::rocm_backend::{RocmStorageSlice as S, SendSyncDeviceMemory};
+        use candle::RocmDevice;
+
+        fn inner<T: Copy + Send + Sync + 'static>(
+            src: &SendSyncDeviceMemory<T>,
+            l_src: &Layout,
+            cos: &SendSyncDeviceMemory<T>,
+            l_cos: &Layout,
+            sin: &SendSyncDeviceMemory<T>,
+            l_sin: &Layout,
+            dev: &RocmDevice,
+        ) -> Result<SendSyncDeviceMemory<T>> {
+            let (b, h, t, d) = l_src.shape().dims4()?;
+            let stride_b = if l_cos.dims().len() == 3 && l_sin.dims().len() == 3 {
+                (h * t * d) as u32
+            } else {
+                0u32
+            };
+            let el = b * h * t * d;
+            let params = [(b * h) as u32, (t * d) as u32, stride_b];
+            let inputs = [(src, l_src), (cos, l_cos), (sin, l_sin)];
+            rocm_rope_launch("rope_i", inputs, el, &params, dev)
+        }
+
+        use candle::backend::BackendStorage;
+        let dev = s1.device();
+        let slice = match (&s1.slice, &s2.slice, &s3.slice) {
+            (S::BF16(s1), S::BF16(s2), S::BF16(s3)) => S::BF16(inner(s1, l1, s2, l2, s3, l3, dev)?),
+            (S::F16(s1), S::F16(s2), S::F16(s3)) => S::F16(inner(s1, l1, s2, l2, s3, l3, dev)?),
+            (S::F32(s1), S::F32(s2), S::F32(s3)) => S::F32(inner(s1, l1, s2, l2, s3, l3, dev)?),
+            (S::F64(s1), S::F64(s2), S::F64(s3)) => S::F64(inner(s1, l1, s2, l2, s3, l3, dev)?),
+            _ => candle::bail!(
+                "unsupported dtype for rope {:?} {:?} {:?}",
+                s1.dtype(),
+                s2.dtype(),
+                s3.dtype()
+            ),
+        };
+        let dst = candle::rocm_backend::RocmStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, l1.shape().clone()))
     }
 }
 
@@ -550,6 +665,61 @@ impl candle::CustomOp3 for RotaryEmb {
         let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
         Ok((out, l_src.shape().clone()))
     }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        s1: &candle::RocmStorage,
+        l1: &Layout,
+        s2: &candle::RocmStorage,
+        l2: &Layout,
+        s3: &candle::RocmStorage,
+        l3: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        use candle::rocm_backend::{RocmStorageSlice as S, SendSyncDeviceMemory};
+        use candle::RocmDevice;
+
+        fn inner<T: Copy + Send + Sync + 'static>(
+            src: &SendSyncDeviceMemory<T>,
+            l_src: &Layout,
+            cos: &SendSyncDeviceMemory<T>,
+            l_cos: &Layout,
+            sin: &SendSyncDeviceMemory<T>,
+            l_sin: &Layout,
+            dev: &RocmDevice,
+        ) -> Result<SendSyncDeviceMemory<T>> {
+            let (b, h, t, d) = l_src.shape().dims4()?;
+            let stride_b = if l_cos.dims().len() == 3 && l_sin.dims().len() == 3 {
+                (h * t * d) as u32
+            } else {
+                0u32
+            };
+            let el = b * h * t * d;
+            let params = [(b * h) as u32, (t * d) as u32, d as u32, stride_b];
+            let inputs = [(src, l_src), (cos, l_cos), (sin, l_sin)];
+            rocm_rope_launch("rope", inputs, el, &params, dev)
+        }
+
+        use candle::backend::BackendStorage;
+        let dev = s1.device();
+        let slice = match (&s1.slice, &s2.slice, &s3.slice) {
+            (S::BF16(s1), S::BF16(s2), S::BF16(s3)) => S::BF16(inner(s1, l1, s2, l2, s3, l3, dev)?),
+            (S::F16(s1), S::F16(s2), S::F16(s3)) => S::F16(inner(s1, l1, s2, l2, s3, l3, dev)?),
+            (S::F32(s1), S::F32(s2), S::F32(s3)) => S::F32(inner(s1, l1, s2, l2, s3, l3, dev)?),
+            (S::F64(s1), S::F64(s2), S::F64(s3)) => S::F64(inner(s1, l1, s2, l2, s3, l3, dev)?),
+            _ => candle::bail!(
+                "unsupported dtype for rope {:?} {:?} {:?}",
+                s1.dtype(),
+                s2.dtype(),
+                s3.dtype()
+            ),
+        };
+        let dst = candle::rocm_backend::RocmStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, l1.shape().clone()))
+    }
 }
 
 pub fn rope(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
@@ -825,6 +995,61 @@ impl candle::CustomOp3 for RotaryEmbThd {
         let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
         Ok((out, l_src.shape().clone()))
     }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        s1: &candle::RocmStorage,
+        l1: &Layout,
+        s2: &candle::RocmStorage,
+        l2: &Layout,
+        s3: &candle::RocmStorage,
+        l3: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        use candle::rocm_backend::{RocmStorageSlice as S, SendSyncDeviceMemory};
+        use candle::RocmDevice;
+
+        fn inner<T: Copy + Send + Sync + 'static>(
+            src: &SendSyncDeviceMemory<T>,
+            l_src: &Layout,
+            cos: &SendSyncDeviceMemory<T>,
+            l_cos: &Layout,
+            sin: &SendSyncDeviceMemory<T>,
+            l_sin: &Layout,
+            dev: &RocmDevice,
+        ) -> Result<SendSyncDeviceMemory<T>> {
+            let (b, t, h, d) = l_src.shape().dims4()?;
+            let stride_b = if l_cos.dims().len() == 3 && l_sin.dims().len() == 3 {
+                (h * t * d) as u32
+            } else {
+                0u32
+            };
+            let el = b * h * t * d;
+            let params = [b as u32, t as u32, h as u32, d as u32, stride_b];
+            let inputs = [(src, l_src), (cos, l_cos), (sin, l_sin)];
+            rocm_rope_launch("rope_thd", inputs, el, &params, dev)
+        }
+
+        use candle::backend::BackendStorage;
+        let dev = s1.device();
+        let slice = match (&s1.slice, &s2.slice, &s3.slice) {
+            (S::BF16(s1), S::BF16(s2), S::BF16(s3)) => S::BF16(inner(s1, l1, s2, l2, s3, l3, dev)?),
+            (S::F16(s1), S::F16(s2), S::F16(s3)) => S::F16(inner(s1, l1, s2, l2, s3, l3, dev)?),
+            (S::F32(s1), S::F32(s2), S::F32(s3)) => S::F32(inner(s1, l1, s2, l2, s3, l3, dev)?),
+            (S::F64(s1), S::F64(s2), S::F64(s3)) => S::F64(inner(s1, l1, s2, l2, s3, l3, dev)?),
+            _ => candle::bail!(
+                "unsupported dtype for rope {:?} {:?} {:?}",
+                s1.dtype(),
+                s2.dtype(),
+                s3.dtype()
+            ),
+        };
+        let dst = candle::rocm_backend::RocmStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, l1.shape().clone()))
+    }
 }
 
 pub fn rope_thd(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
@@ -853,4 +1078,56 @@ pub fn rope_thd(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
         candle::bail!("sin has to be contiguous in rope")
     }
     xs.apply_op3_no_bwd(cos, sin, &RotaryEmbThd)
+}
+
+#[cfg(all(test, feature = "rocm"))]
+mod rocm_tests {
+    use candle::{DType, Device, Result, Tensor};
+
+    fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f32> {
+        let lhs = lhs.to_device(&Device::Cpu)?.to_dtype(DType::F32)?;
+        let rhs = rhs.to_device(&Device::Cpu)?.to_dtype(DType::F32)?;
+        (lhs - rhs)?.abs()?.flatten_all()?.max(0)?.to_vec0::<f32>()
+    }
+
+    /// The device tests in `tests/ops.rs` only exercise f32, so cover the other three
+    /// dtypes the ROCm dispatch claims to support against the CPU reference.
+    #[test]
+    fn rope_dtype_coverage() -> Result<()> {
+        let dev = Device::new_rocm(0)?;
+        let (b, t, h, d) = (2, 4, 3, 8);
+        let cpu = Device::Cpu;
+        let src = Tensor::rand(0f32, 1f32, (b, t, h, d), &cpu)?;
+        let cos = Tensor::rand(0f32, 1f32, (t, d / 2), &cpu)?;
+        let sin = Tensor::rand(0f32, 1f32, (t, d / 2), &cpu)?;
+        for (dtype, tol) in [
+            (DType::BF16, 5e-2f32),
+            (DType::F16, 5e-3),
+            (DType::F32, 1e-5),
+            (DType::F64, 1e-5),
+        ] {
+            let (src, cos, sin) = (
+                src.to_dtype(dtype)?,
+                cos.to_dtype(dtype)?,
+                sin.to_dtype(dtype)?,
+            );
+            let (gsrc, gcos, gsin) = (
+                src.to_device(&dev)?,
+                cos.to_device(&dev)?,
+                sin.to_device(&dev)?,
+            );
+            for (name, f) in [
+                (
+                    "rope",
+                    super::rope as fn(&Tensor, &Tensor, &Tensor) -> Result<Tensor>,
+                ),
+                ("rope_i", super::rope_i),
+                ("rope_thd", super::rope_thd),
+            ] {
+                let diff = max_abs_diff(&f(&gsrc, &gcos, &gsin)?, &f(&src, &cos, &sin)?)?;
+                assert!(diff <= tol, "{name} {dtype:?}: max abs diff {diff} > {tol}");
+            }
+        }
+        Ok(())
+    }
 }
