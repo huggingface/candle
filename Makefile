@@ -2,7 +2,7 @@
         check check-cuda check-rocm check-all \
         fmt fmt-check clippy clippy-rocm \
         test-rocm test-rocm-core test-rocm-nn test-rocm-suite \
-        rocm-info rocm-cache-clean
+        rocm-info rocm-cache-clean rocm-shim-test
 
 CARGO ?= cargo
 export CARGO_BUILD_JOBS ?= 4
@@ -61,6 +61,24 @@ test-rocm: test-rocm-core test-rocm-nn
 # Run one candle-core suite against the GPU, e.g. make test-rocm-suite SUITE=conv_tests
 test-rocm-suite:
 	$(CARGO) test -p candle-core --features rocm --test $(SUITE) -- $(ROCM_FILTER) --test-threads=$(ROCM_TEST_THREADS)
+
+# Compiles every shared candle-kernels source with hipcc and checks the two
+# pieces of hand-written device code in the shim (16-bit atomicAdd, the *_sync
+# shuffle macros) on the actual GPU.
+ROCM_ARCH ?= $(shell rocminfo 2>/dev/null | grep -om1 'gfx[0-9a-z]*')
+rocm-shim-test:
+	@shim=candle-rocm-kernels/src/hip_shim; \
+	tmp=$$(mktemp -d); trap 'rm -rf $$tmp' EXIT; \
+	for f in candle-kernels/src/*.cu; do \
+	  case $$f in *mmvq_gguf.cu) continue;; esac; \
+	  n=$$(basename $$f .cu); printf '%-12s' "$$n"; \
+	  hipcc --genco --offload-arch=$(ROCM_ARCH) -O3 -std=c++17 -D__CUDA_ARCH__=800 \
+	    -include $$shim/hip_compat.h -I $$shim -I candle-kernels/src \
+	    -o $$tmp/$$n.hsaco $$f 2>$$tmp/$$n.err \
+	    && echo "compiled" || { echo "FAILED"; sed -n '1,20p' $$tmp/$$n.err; exit 1; }; \
+	done; \
+	hipcc --offload-arch=$(ROCM_ARCH) -std=c++17 -I $$shim -o $$tmp/shim_test $$shim/shim_test.hip \
+	  && $$tmp/shim_test
 
 rocm-info:
 	rocminfo | grep -E '^\s*(Name|Marketing Name|Uuid):' || true
