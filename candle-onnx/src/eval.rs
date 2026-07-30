@@ -257,14 +257,7 @@ fn simple_eval_(
     }
     validate_inputs(graph, values)?;
     eval_nodes(graph, values)?;
-    graph
-        .output
-        .iter()
-        .map(|output| match values.remove(&output.name) {
-            None => bail!("cannot find output {}", output.name),
-            Some(value) => Ok((output.name.clone(), value)),
-        })
-        .collect()
+    collect_outputs(graph, values)
 }
 
 fn validate_inputs(graph: &onnx::GraphProto, values: &HashMap<String, Value>) -> Result<()> {
@@ -2558,6 +2551,18 @@ fn eval_nodes(graph: &onnx::GraphProto, values: &mut HashMap<String, Value>) -> 
     }
 
     Ok(())
+}
+
+
+fn collect_outputs(graph: &onnx::GraphProto, values: &mut HashMap<String, Value>) -> Result<HashMap<String, Value>> {
+    graph
+        .output
+        .iter()
+        .map(|output| match values.remove(&output.name) {
+            None => bail!("Cannot find output {}", output.name),
+            Some(value) => Ok((output.name.clone(), value)),
+        })
+        .collect()
 }
 
 fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Result<Vec<usize>> {
