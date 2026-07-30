@@ -2,7 +2,7 @@
 //!
 use crate::backend::BackendStorage;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, DType, Layout, Result, WithDType};
+use crate::{CpuStorage, DType, Layout, Result};
 pub use candle_rocm_kernels as kernels;
 use half::{bf16, f16};
 pub use rocm_rs;
@@ -12,12 +12,22 @@ use rocm_rs::rocblas::{self, level3::GemmStridedBatchedType, types::Operation};
 mod device;
 mod error;
 mod miopen;
+mod ops_elementwise;
+mod ops_reduce;
+mod ops_scalar;
+#[cfg(test)]
+mod tests;
 mod wrappers;
 pub use device::{DeviceId, RocmDevice};
 pub use error::{RocmError, WrapErr};
 pub use wrappers::SendSyncDeviceMemory;
 pub mod utils;
 pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, Map3, S};
+
+use ops_elementwise::{CloneBuffer, Cmp, WhereCond};
+use ops_reduce::{index_select_typed, FastReduce};
+pub(crate) use ops_scalar::Affine;
+use ops_scalar::{Elu, Powf};
 
 pub enum RocmStorageSlice {
     U8(SendSyncDeviceMemory<u8>),
@@ -31,6 +41,11 @@ pub enum RocmStorageSlice {
     F64(SendSyncDeviceMemory<f64>),
     F8E4M3(SendSyncDeviceMemory<u8>),
 }
+
+/// `RocmStorageSlice::F8E4M3` stores its payload as `u8`, so every byte-view
+/// shortcut in this backend (and in `device.rs`) is only correct while F8E4M3 is
+/// exactly one byte wide.
+const _: () = assert!(std::mem::size_of::<float8::F8E4M3>() == 1);
 
 impl std::fmt::Debug for RocmStorageSlice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -604,446 +619,6 @@ fn dims_and_strides_pair(
     Ok(Some(dev.clone_htod(&data)?))
 }
 
-/// Duplicates a whole device buffer.
-///
-/// The clone keeps the source allocation's length so that absolute element
-/// offsets stay valid: `try_clone` hands the copy back to a caller that keeps
-/// using the *original* layout, start offset and strides included.
-struct Clone;
-
-impl Map1 for Clone {
-    fn f<T: Copy + Send + Sync + 'static>(
-        &self,
-        src: &SendSyncDeviceMemory<T>,
-        dev: &RocmDevice,
-        _: &Layout,
-    ) -> Result<SendSyncDeviceMemory<T>> {
-        let mut dst = dev.alloc::<T>(src.count())?;
-        dst.copy_from_device(src)?;
-        Ok(dst)
-    }
-}
-
-impl<U: crate::op::UnaryOpT> Map1 for U {
-    fn f<T: Copy + Send + Sync + 'static>(
-        &self,
-        src: &SendSyncDeviceMemory<T>,
-        dev: &RocmDevice,
-        layout: &Layout,
-    ) -> Result<SendSyncDeviceMemory<T>> {
-        let shape = layout.shape();
-        let dims = shape.dims();
-        let elem_count = shape.elem_count();
-
-        let func_name = try_kernel_name::<T>(U::KERNEL)?;
-        let ds = dims_and_strides(dev, layout, 1)?;
-        let output = dev.alloc::<T>(elem_count)?;
-        let (grid, block) = launch_config(elem_count);
-
-        unsafe {
-            let src_ptr = src.ptr_at(layout.start_offset());
-            let out_ptr = output.as_ptr();
-            let ds_ptr: *const usize = ds
-                .as_ref()
-                .map(|d| d.as_ptr() as *const usize)
-                .unwrap_or(std::ptr::null());
-
-            launch_kernel(
-                dev,
-                &kernels::UNARY,
-                &func_name,
-                grid,
-                block,
-                &mut [
-                    &elem_count as *const usize as *mut std::ffi::c_void,
-                    &dims.len() as *const usize as *mut std::ffi::c_void,
-                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                    (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                ],
-            )?;
-        }
-
-        Ok(output)
-    }
-}
-
-impl<U: crate::op::BinaryOpT> Map2 for U {
-    fn f<T: Copy + Send + Sync + 'static>(
-        &self,
-        lhs: &SendSyncDeviceMemory<T>,
-        lhs_l: &Layout,
-        rhs: &SendSyncDeviceMemory<T>,
-        rhs_l: &Layout,
-        dev: &RocmDevice,
-    ) -> Result<SendSyncDeviceMemory<T>> {
-        let shape = lhs_l.shape();
-        let dims = shape.dims();
-        let elem_count = shape.elem_count();
-
-        let func_name = try_kernel_name::<T>(U::KERNEL)?;
-        let ds = dims_and_strides_pair(dev, lhs_l, rhs_l)?;
-        let output = dev.alloc::<T>(elem_count)?;
-        let (grid, block) = launch_config(elem_count);
-
-        unsafe {
-            let lhs_ptr = lhs.ptr_at(lhs_l.start_offset());
-            let rhs_ptr = rhs.ptr_at(rhs_l.start_offset());
-            let out_ptr = output.as_ptr();
-            let ds_ptr: *const usize = ds
-                .as_ref()
-                .map(|d| d.as_ptr() as *const usize)
-                .unwrap_or(std::ptr::null());
-
-            launch_kernel(
-                dev,
-                &kernels::BINARY,
-                &func_name,
-                grid,
-                block,
-                &mut [
-                    &elem_count as *const usize as *mut std::ffi::c_void,
-                    &dims.len() as *const usize as *mut std::ffi::c_void,
-                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                    (&lhs_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    (&rhs_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                ],
-            )?;
-        }
-
-        Ok(output)
-    }
-}
-
-pub(crate) struct Affine(pub f64, pub f64);
-
-impl Affine {
-    fn map(&self, s: &RocmStorageSlice, d: &RocmDevice, l: &Layout) -> Result<RocmStorageSlice> {
-        let out = match s {
-            RocmStorageSlice::U8(s) => RocmStorageSlice::U8(self.f(s, d, l)?),
-            RocmStorageSlice::U32(s) => RocmStorageSlice::U32(self.f(s, d, l)?),
-            RocmStorageSlice::I16(s) => RocmStorageSlice::I16(self.f(s, d, l)?),
-            RocmStorageSlice::I32(s) => RocmStorageSlice::I32(self.f(s, d, l)?),
-            RocmStorageSlice::I64(s) => RocmStorageSlice::I64(self.f(s, d, l)?),
-            RocmStorageSlice::BF16(s) => RocmStorageSlice::BF16(self.f(s, d, l)?),
-            RocmStorageSlice::F16(s) => RocmStorageSlice::F16(self.f(s, d, l)?),
-            RocmStorageSlice::F32(s) => RocmStorageSlice::F32(self.f(s, d, l)?),
-            RocmStorageSlice::F64(s) => RocmStorageSlice::F64(self.f(s, d, l)?),
-            RocmStorageSlice::F8E4M3(_) => {
-                crate::bail!("Affine does not support F8E4M3 for ROCm")
-            }
-        };
-        Ok(out)
-    }
-
-    fn f<T: Copy + Send + Sync + WithDType + 'static>(
-        &self,
-        src: &SendSyncDeviceMemory<T>,
-        dev: &RocmDevice,
-        layout: &Layout,
-    ) -> Result<SendSyncDeviceMemory<T>> {
-        let shape = layout.shape();
-        let dims = shape.dims();
-        let elem_count = shape.elem_count();
-
-        let func_name = try_kernel_name::<T>("affine")?;
-        let ds = dims_and_strides(dev, layout, 1)?;
-        let output = dev.alloc::<T>(elem_count)?;
-        let (grid, block) = launch_config(elem_count);
-
-        let mul_val = T::from_f64(self.0);
-        let add_val = T::from_f64(self.1);
-
-        unsafe {
-            let src_ptr = src.ptr_at(layout.start_offset());
-            let out_ptr = output.as_ptr();
-            let ds_ptr: *const usize = ds
-                .as_ref()
-                .map(|d| d.as_ptr() as *const usize)
-                .unwrap_or(std::ptr::null());
-
-            launch_kernel(
-                dev,
-                &kernels::AFFINE,
-                &func_name,
-                grid,
-                block,
-                &mut [
-                    &elem_count as *const usize as *mut std::ffi::c_void,
-                    &dims.len() as *const usize as *mut std::ffi::c_void,
-                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                    (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    &mul_val as *const T as *mut std::ffi::c_void,
-                    &add_val as *const T as *mut std::ffi::c_void,
-                ],
-            )?;
-        }
-
-        Ok(output)
-    }
-}
-
-struct Powf(f64);
-
-impl Powf {
-    fn map(&self, s: &RocmStorageSlice, d: &RocmDevice, l: &Layout) -> Result<RocmStorageSlice> {
-        let out = match s {
-            RocmStorageSlice::U8(s) => RocmStorageSlice::U8(self.f(s, d, l)?),
-            RocmStorageSlice::U32(s) => RocmStorageSlice::U32(self.f(s, d, l)?),
-            RocmStorageSlice::I16(s) => RocmStorageSlice::I16(self.f(s, d, l)?),
-            RocmStorageSlice::I32(s) => RocmStorageSlice::I32(self.f(s, d, l)?),
-            RocmStorageSlice::I64(s) => RocmStorageSlice::I64(self.f(s, d, l)?),
-            RocmStorageSlice::BF16(s) => RocmStorageSlice::BF16(self.f(s, d, l)?),
-            RocmStorageSlice::F16(s) => RocmStorageSlice::F16(self.f(s, d, l)?),
-            RocmStorageSlice::F32(s) => RocmStorageSlice::F32(self.f(s, d, l)?),
-            RocmStorageSlice::F64(s) => RocmStorageSlice::F64(self.f(s, d, l)?),
-            RocmStorageSlice::F8E4M3(_) => {
-                crate::bail!("Powf does not support F8E4M3 for ROCm")
-            }
-        };
-        Ok(out)
-    }
-
-    fn f<T: Copy + Send + Sync + WithDType + 'static>(
-        &self,
-        src: &SendSyncDeviceMemory<T>,
-        dev: &RocmDevice,
-        layout: &Layout,
-    ) -> Result<SendSyncDeviceMemory<T>> {
-        let shape = layout.shape();
-        let dims = shape.dims();
-        let elem_count = shape.elem_count();
-
-        let func_name = try_kernel_name::<T>("upowf")?;
-        let ds = dims_and_strides(dev, layout, 1)?;
-        let output = dev.alloc::<T>(elem_count)?;
-        let (grid, block) = launch_config(elem_count);
-
-        let scalar_val = T::from_f64(self.0);
-
-        unsafe {
-            let src_ptr = src.ptr_at(layout.start_offset());
-            let out_ptr = output.as_ptr();
-            let ds_ptr: *const usize = ds
-                .as_ref()
-                .map(|d| d.as_ptr() as *const usize)
-                .unwrap_or(std::ptr::null());
-
-            launch_kernel(
-                dev,
-                &kernels::UNARY,
-                &func_name,
-                grid,
-                block,
-                &mut [
-                    &elem_count as *const usize as *mut std::ffi::c_void,
-                    &dims.len() as *const usize as *mut std::ffi::c_void,
-                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                    // UNARY_OP1 takes its scalar before the buffers, unlike
-                    // AFFINE_OP which takes them after.
-                    &scalar_val as *const T as *mut std::ffi::c_void,
-                    (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                ],
-            )?;
-        }
-
-        Ok(output)
-    }
-}
-
-struct Elu(f64);
-
-impl Elu {
-    fn map(&self, s: &RocmStorageSlice, d: &RocmDevice, l: &Layout) -> Result<RocmStorageSlice> {
-        let out = match s {
-            RocmStorageSlice::U8(s) => RocmStorageSlice::U8(self.f(s, d, l)?),
-            RocmStorageSlice::U32(s) => RocmStorageSlice::U32(self.f(s, d, l)?),
-            RocmStorageSlice::I16(s) => RocmStorageSlice::I16(self.f(s, d, l)?),
-            RocmStorageSlice::I32(s) => RocmStorageSlice::I32(self.f(s, d, l)?),
-            RocmStorageSlice::I64(s) => RocmStorageSlice::I64(self.f(s, d, l)?),
-            RocmStorageSlice::BF16(s) => RocmStorageSlice::BF16(self.f(s, d, l)?),
-            RocmStorageSlice::F16(s) => RocmStorageSlice::F16(self.f(s, d, l)?),
-            RocmStorageSlice::F32(s) => RocmStorageSlice::F32(self.f(s, d, l)?),
-            RocmStorageSlice::F64(s) => RocmStorageSlice::F64(self.f(s, d, l)?),
-            RocmStorageSlice::F8E4M3(_) => {
-                crate::bail!("Elu does not support F8E4M3 for ROCm")
-            }
-        };
-        Ok(out)
-    }
-
-    fn f<T: Copy + Send + Sync + WithDType + 'static>(
-        &self,
-        src: &SendSyncDeviceMemory<T>,
-        dev: &RocmDevice,
-        layout: &Layout,
-    ) -> Result<SendSyncDeviceMemory<T>> {
-        let shape = layout.shape();
-        let dims = shape.dims();
-        let elem_count = shape.elem_count();
-
-        let func_name = try_kernel_name::<T>("uelu")?;
-        let ds = dims_and_strides(dev, layout, 1)?;
-        let output = dev.alloc::<T>(elem_count)?;
-        let (grid, block) = launch_config(elem_count);
-
-        let alpha_val = T::from_f64(self.0);
-
-        unsafe {
-            let src_ptr = src.ptr_at(layout.start_offset());
-            let out_ptr = output.as_ptr();
-            let ds_ptr: *const usize = ds
-                .as_ref()
-                .map(|d| d.as_ptr() as *const usize)
-                .unwrap_or(std::ptr::null());
-
-            launch_kernel(
-                dev,
-                &kernels::UNARY,
-                &func_name,
-                grid,
-                block,
-                &mut [
-                    &elem_count as *const usize as *mut std::ffi::c_void,
-                    &dims.len() as *const usize as *mut std::ffi::c_void,
-                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                    // UNARY_OP1 takes its scalar before the buffers, unlike
-                    // AFFINE_OP which takes them after.
-                    &alpha_val as *const T as *mut std::ffi::c_void,
-                    (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                ],
-            )?;
-        }
-
-        Ok(output)
-    }
-}
-
-struct FastReduce<'a>(&'a [usize], ReduceOp);
-
-impl FastReduce<'_> {
-    fn map(
-        &self,
-        s: &RocmStorageSlice,
-        dev: &RocmDevice,
-        layout: &Layout,
-    ) -> Result<RocmStorageSlice> {
-        match s {
-            RocmStorageSlice::U8(s) => {
-                let out = self.f(s, dev, layout)?;
-                Ok(RocmStorageSlice::U8(out))
-            }
-            RocmStorageSlice::U32(s) => {
-                let out = self.f(s, dev, layout)?;
-                Ok(RocmStorageSlice::U32(out))
-            }
-            RocmStorageSlice::I16(s) => {
-                let out = self.f(s, dev, layout)?;
-                Ok(RocmStorageSlice::I16(out))
-            }
-            RocmStorageSlice::I32(s) => {
-                let out = self.f(s, dev, layout)?;
-                Ok(RocmStorageSlice::I32(out))
-            }
-            RocmStorageSlice::I64(s) => {
-                let out = self.f(s, dev, layout)?;
-                Ok(RocmStorageSlice::I64(out))
-            }
-            RocmStorageSlice::BF16(s) => {
-                let out = self.f(s, dev, layout)?;
-                Ok(RocmStorageSlice::BF16(out))
-            }
-            RocmStorageSlice::F16(s) => {
-                let out = self.f(s, dev, layout)?;
-                Ok(RocmStorageSlice::F16(out))
-            }
-            RocmStorageSlice::F32(s) => {
-                let out = self.f(s, dev, layout)?;
-                Ok(RocmStorageSlice::F32(out))
-            }
-            RocmStorageSlice::F64(s) => {
-                let out = self.f(s, dev, layout)?;
-                Ok(RocmStorageSlice::F64(out))
-            }
-            RocmStorageSlice::F8E4M3(_) => {
-                crate::bail!("reduce_op does not support F8E4M3 for ROCm")
-            }
-        }
-    }
-
-    fn f<T: Copy + Send + Sync + 'static>(
-        &self,
-        src: &SendSyncDeviceMemory<T>,
-        dev: &RocmDevice,
-        layout: &Layout,
-    ) -> Result<SendSyncDeviceMemory<T>> {
-        let src_dims = layout.shape().dims();
-        let src_el: usize = src_dims.iter().product();
-
-        let mut dims = vec![];
-        let mut stride = vec![];
-        let mut dst_el: usize = 1;
-        for (dim_idx, &d) in src_dims.iter().enumerate() {
-            if !self.0.contains(&dim_idx) {
-                dst_el *= d;
-                dims.push(d);
-                stride.push(layout.stride()[dim_idx]);
-            }
-        }
-        for &dim_idx in self.0.iter() {
-            dims.push(src_dims[dim_idx]);
-            stride.push(layout.stride()[dim_idx]);
-        }
-        let el_to_sum_per_block = src_el / dst_el;
-        let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
-
-        let (name, _return_index) = match self.1 {
-            ReduceOp::Sum => ("fast_sum", false),
-            ReduceOp::Min => ("fast_min", false),
-            ReduceOp::Max => ("fast_max", false),
-            ReduceOp::ArgMin => ("fast_argmin", true),
-            ReduceOp::ArgMax => ("fast_argmax", true),
-        };
-
-        let func_name = try_kernel_name::<T>(name)?;
-
-        let ds_data: Vec<usize> = [dims.as_slice(), stride.as_slice()].concat();
-        let ds = dev.clone_htod(&ds_data)?;
-
-        let output = dev.alloc::<T>(dst_el)?;
-        let grid = rocm_rs::hip::Dim3::from(dst_el as u32);
-        let block = rocm_rs::hip::Dim3::from(block_dim as u32);
-
-        unsafe {
-            let src_ptr = src.ptr_at(layout.start_offset());
-            let out_ptr = output.as_ptr();
-            let ds_ptr = ds.as_ptr() as *const usize;
-
-            launch_kernel(
-                dev,
-                &kernels::REDUCE,
-                &func_name,
-                grid,
-                block,
-                &mut [
-                    &src_el as *const usize as *mut std::ffi::c_void,
-                    &el_to_sum_per_block as *const usize as *mut std::ffi::c_void,
-                    &src_dims.len() as *const usize as *mut std::ffi::c_void,
-                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                    (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                ],
-            )?;
-        }
-
-        Ok(output)
-    }
-}
-
 impl std::fmt::Debug for RocmStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -1054,51 +629,6 @@ impl std::fmt::Debug for RocmStorage {
     }
 }
 
-fn index_select_typed<T: Copy + Send + Sync + WithDType + 'static>(
-    ids_prefix: &str,
-    ids_ptr: *mut std::ffi::c_void,
-    ds: &SendSyncDeviceMemory<usize>,
-    src_ptr: *mut std::ffi::c_void,
-    left_size: usize,
-    src_dim_size: usize,
-    ids_dim_size: usize,
-    right_size: usize,
-    dst_el: usize,
-    device: &RocmDevice,
-) -> Result<SendSyncDeviceMemory<T>> {
-    let func_name = try_kernel_name::<T>(ids_prefix)?;
-    let output = device.alloc::<T>(dst_el)?;
-    let num_dims = ds.count() / 2;
-    let (grid, block) = launch_config(dst_el);
-
-    unsafe {
-        let out_ptr = output.as_ptr();
-        let ds_ptr = ds.as_ptr() as *const usize;
-
-        launch_kernel(
-            device,
-            &kernels::INDEXING,
-            &func_name,
-            grid,
-            block,
-            &mut [
-                &dst_el as *const usize as *mut std::ffi::c_void,
-                &num_dims as *const usize as *mut std::ffi::c_void,
-                (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                (&ids_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                &left_size as *const usize as *mut std::ffi::c_void,
-                &src_dim_size as *const usize as *mut std::ffi::c_void,
-                &ids_dim_size as *const usize as *mut std::ffi::c_void,
-                &right_size as *const usize as *mut std::ffi::c_void,
-            ],
-        )?;
-    }
-
-    Ok(output)
-}
-
 impl BackendStorage for RocmStorage {
     type Device = RocmDevice;
 
@@ -1107,8 +637,10 @@ impl BackendStorage for RocmStorage {
         let slice = match &self.slice {
             // `Map1` refuses F8E4M3 (it shares the u8 storage and would resolve
             // to the u8 kernels), but a raw buffer copy is dtype agnostic.
-            RocmStorageSlice::F8E4M3(s) => RocmStorageSlice::F8E4M3(Clone.f(s, &device, layout)?),
-            slice => Clone.map(slice, &device, layout)?,
+            RocmStorageSlice::F8E4M3(s) => {
+                RocmStorageSlice::F8E4M3(CloneBuffer.f(s, &device, layout)?)
+            }
+            slice => CloneBuffer.map(slice, &device, layout)?,
         };
         Ok(Self { slice, device })
     }
@@ -1165,10 +697,10 @@ impl BackendStorage for RocmStorage {
         Ok(Self { slice, device })
     }
 
-    fn cmp(&self, _op: CmpOp, _rhs: &Self, _l1: &Layout, _l2: &Layout) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "cmp not yet implemented for ROCm".to_string(),
-        ))
+    fn cmp(&self, op: CmpOp, rhs: &Self, l1: &Layout, l2: &Layout) -> Result<Self> {
+        let device = self.device.clone();
+        let slice = Cmp(op).map(&self.slice, l1, &rhs.slice, l2, &device)?;
+        Ok(Self { slice, device })
     }
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
@@ -1301,17 +833,10 @@ impl BackendStorage for RocmStorage {
         Ok(Self { slice, device })
     }
 
-    fn where_cond(
-        &self,
-        _l: &Layout,
-        _a: &Self,
-        _la: &Layout,
-        _b: &Self,
-        _lb: &Layout,
-    ) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "where_cond not yet implemented for ROCm".to_string(),
-        ))
+    fn where_cond(&self, l: &Layout, t: &Self, lt: &Layout, f: &Self, lf: &Layout) -> Result<Self> {
+        let device = self.device.clone();
+        let slice = WhereCond(self, l).map(&t.slice, lt, &f.slice, lf, &device)?;
+        Ok(Self { slice, device })
     }
 
     fn conv1d(
@@ -1914,8 +1439,11 @@ impl BackendStorage for RocmStorage {
             (RocmStorageSlice::I32(_), crate::scalar::Scalar::I32(v)) => {
                 const_set!(I32, "i32", i32, v)
             }
-            (RocmStorageSlice::F8E4M3(_), _) => {
-                crate::bail!("const_set not supported for F8E4M3 on ROCm")
+            // `RocmStorageSlice::F8E4M3` keeps its payload as bytes, and F8E4M3
+            // is exactly one byte, so `ptr_at` on the u8 buffer still lands on
+            // element `start_offset`.
+            (RocmStorageSlice::F8E4M3(_), crate::scalar::Scalar::F8E4M3(v)) => {
+                const_set!(F8E4M3, "f8_e4m3", float8::F8E4M3, v)
             }
             _ => crate::bail!("dtype mismatch in const_set"),
         }

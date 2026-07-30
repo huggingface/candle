@@ -263,10 +263,21 @@ macro_rules! dispatch_cpu_storage {
                 let $variant = RocmStorageSlice::F64(mem);
                 $body
             }
+            CpuStorage::F8E4M3($data) => {
+                // `RocmStorageSlice::F8E4M3` holds bytes, and `float8::F8E4M3` is
+                // a `repr(transparent)` wrapper over a single `u8` (asserted in
+                // `rocm_backend::mod`), so the slice can be viewed as bytes
+                // without a copy.
+                let bytes: &[u8] =
+                    unsafe { std::slice::from_raw_parts($data.as_ptr() as *const u8, $data.len()) };
+                let mem = $self.clone_htod(bytes)?;
+                let $variant = RocmStorageSlice::F8E4M3(mem);
+                $body
+            }
             _ => {
-                return Err(crate::Error::Msg(format!(
-                    "CpuStorage variant not yet supported for ROCm"
-                )));
+                return Err(crate::Error::Msg(
+                    "CpuStorage variant not yet supported for ROCm".to_string(),
+                ));
             }
         }
     };
