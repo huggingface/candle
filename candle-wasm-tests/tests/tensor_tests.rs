@@ -296,6 +296,25 @@ async fn binary_op(device: &Device) -> Result<()> {
         max.to_vec2_async::< f32 > (). await ?, [[3.0, 2.5, 4.0, 2.5, 5.0], [2.0, 1.0,
         7.0, 8.0, 2.0]]
     );
+    let (b, s, h, pad) = (3usize, 4usize, 5usize, 2usize);
+    let base = Tensor::arange(1f32, (b * (s + pad) * h + 1) as f32, device)?
+        .reshape((b, s + pad, h))?;
+    let ub = base.narrow(1, 0, s)?;
+    let cont = ub.contiguous()?;
+    let scale = Tensor::arange(1f32, (b * s * h + 1) as f32, device)?
+        .reshape((b, s, h))?;
+    assert_eq!(
+        (& ub + & scale) ?.to_vec3_async::< f32 > (). await ?, (& cont + & scale)
+        ?.to_vec3_async::< f32 > (). await ?,
+    );
+    assert_eq!(
+        (& ub * & scale) ?.to_vec3_async::< f32 > (). await ?, (& cont * & scale)
+        ?.to_vec3_async::< f32 > (). await ?,
+    );
+    assert_eq!(
+        (& scale + & ub) ?.to_vec3_async::< f32 > (). await ?, (& scale + & cont)
+        ?.to_vec3_async::< f32 > (). await ?,
+    );
     Ok(())
 }
 async fn ternary_op(device: &Device) -> Result<()> {
@@ -751,6 +770,18 @@ async fn cat(device: &Device) -> Result<()> {
         assert_eq!(t_cat.i((0, 12, 1)) ?.to_vec0_async::< i64 > (). await ?, 10013);
         assert_eq!(t_cat.i((1, 12, 3)) ?.to_vec0_async::< i64 > (). await ?, 10031);
     }
+    let (b, s, h, pad) = (3usize, 4, 5, 2);
+    let base = Tensor::arange(0f32, (b * (s + pad) * h) as f32, device)?
+        .reshape((b, s + pad, h))?;
+    let tp1 = base.narrow(1, 0, s)?;
+    let tp2 = base.narrow(1, pad, s)?;
+    let cat_padded = Tensor::cat(&[&tp1, &tp2], 1)?;
+    let cat_cont = Tensor::cat(&[&tp1.contiguous()?, &tp2.contiguous()?], 1)?;
+    assert_eq!(
+        cat_padded.to_vec3_async::< f32 > (). await ?, cat_cont.to_vec3_async::< f32 > ()
+        . await ?,
+        "cat along dim=1 with padded outer stride should match contiguous result"
+    );
     Ok(())
 }
 async fn embeddings(device: &Device) -> Result<()> {
@@ -777,7 +808,8 @@ async fn embeddings(device: &Device) -> Result<()> {
     );
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn index_select_fail() -> Result<()> {
     let ids = Tensor::new(&[4u32, 2u32, 1u32], &Device::Cpu)?;
     let t = Tensor::new(&[[0f32, 1f32], [2f32, 3f32], [4f32, 5f32]], &Device::Cpu)?;
@@ -1303,7 +1335,7 @@ async fn randn(device: &Device) -> Result<()> {
     
             let mut v = Vec::new();
             for _ in 0..100 {
-                let t = Tensor::randn(0f32, 1f32, N, device)?;
+                let t = Tensor::rand(0f32, 1f32, N, device)?;
                 let vec = t.to_vec1_async::<f32>().await?;
                 v.push(vec);
             }
@@ -1467,7 +1499,8 @@ candle_wasm_tests::test_device!(
     tensor_send_sync, tensor_send_sync_cpu, tensor_send_sync_gpu, tensor_send_sync_metal,
     tensor_send_sync_wgpu
 );
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn randn_hasneg() -> Result<()> {
     let t = Tensor::randn(0f32, 1f32, 200, &Device::Cpu)?.to_vec1_async::<f32>().await?;
     if t.iter().all(|&v| v >= 0.) {
@@ -1475,7 +1508,8 @@ async fn randn_hasneg() -> Result<()> {
     }
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn pad_with_same() -> Result<()> {
     let t = Tensor::arange(1f32, 5f32, &Device::Cpu)?.reshape((2, 2))?;
     let t0 = t.pad_with_same(0, 1, 2)?;
@@ -1490,14 +1524,16 @@ async fn pad_with_same() -> Result<()> {
     );
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn i64_abs() -> Result<()> {
     let t = Tensor::new(&[-42i64, 1337], &Device::Cpu)?;
     let t = t.abs()?;
     assert_eq!(t.to_vec1_async::< i64 > (). await ?, [42, 1337]);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn tril_triu_eye() -> Result<()> {
     let t = Tensor::tril2(4, DType::F32, &Device::Cpu)?;
     assert_eq!(
@@ -1516,7 +1552,8 @@ async fn tril_triu_eye() -> Result<()> {
     );
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn cumsum() -> Result<()> {
     let t = &[3f32, 1., 4., 1., 5.];
     let t = Tensor::new(t, &Device::Cpu)?;
@@ -1553,7 +1590,8 @@ async fn assert_close(a: &Tensor, b: &Tensor, epsilon: f64) -> Result<()> {
     }
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn log_sum_exp() -> Result<()> {
     let input = Tensor::new(
         &[
@@ -1579,7 +1617,8 @@ async fn log_sum_exp() -> Result<()> {
     );
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn pow() -> Result<()> {
     let lhs = Tensor::new(&[[1f32, 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
     let rhs = (&lhs - 2.)?;
@@ -1589,7 +1628,8 @@ async fn pow() -> Result<()> {
     );
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn test_flip_1d() -> Result<()> {
     let t = Tensor::arange(0.0, 5.0, &Device::Cpu)?.reshape((5,))?;
     let flipped = t.flip(&[0])?;
@@ -1597,7 +1637,8 @@ async fn test_flip_1d() -> Result<()> {
     candle::test_utils::assert_tensor_eq(&flipped, &expected)?;
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn test_flip_2d() -> Result<()> {
     let t = Tensor::arange(0.0, 6.0, &Device::Cpu)?.reshape((2, 3))?;
     let flipped = t.flip(&[0, 1])?;
@@ -1609,7 +1650,8 @@ async fn test_flip_2d() -> Result<()> {
     candle::test_utils::assert_tensor_eq(&flipped, &expected)?;
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn test_flip_3d_channels() -> Result<()> {
     let t = Tensor::arange(0.0, 12.0, &Device::Cpu)?.reshape((2, 2, 3))?;
     let flipped = t.flip(&[2])?;
@@ -1621,7 +1663,8 @@ async fn test_flip_3d_channels() -> Result<()> {
     candle::test_utils::assert_tensor_eq(&flipped, &expected)?;
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn tensor_new() -> Result<()> {
     let t1 = Tensor::new(vec![1f32, 2.0, 3.0], &Device::Cpu)?;
     assert_eq!(t1.to_vec1_async::< f32 > (). await ?, [1.0, 2.0, 3.0]);
@@ -1640,7 +1683,8 @@ async fn tensor_new() -> Result<()> {
     );
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn tensor_norm() -> Result<()> {
     let t = Tensor::new(&[[3., 4.], [0., 0.]], &Device::Cpu)?;
     let norm = t.norm()?;
@@ -1648,7 +1692,8 @@ async fn tensor_norm() -> Result<()> {
     Ok(())
 }
 #[cfg(feature = "cuda")]
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn transfers_cuda_to_device() -> Result<()> {
     use rand::seq::SliceRandom;
     let devices = cudarc::driver::safe::CudaContext::device_count()
@@ -1667,7 +1712,8 @@ async fn transfers_cuda_to_device() -> Result<()> {
     Ok(())
 }
 #[cfg(feature = "cuda")]
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
     use std::{ops::Deref, sync::RwLockReadGuard};
     use candle::Storage;

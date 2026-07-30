@@ -40,7 +40,8 @@ impl CustomOp1 for Elu {
         Ok((storage, l.shape().clone()))
     }
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn custom_op1_no_backward() -> Result<()> {
     let cpu = &Device::Cpu;
     let t = Tensor::arange(0u32, 12u32, cpu)?.to_dtype(DType::F32)?;
@@ -99,7 +100,8 @@ impl CustomOp1 for EluWithBackward {
         Ok(Some(grad_res.mul(&bwd)?))
     }
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn custom_op1_with_backward() -> Result<()> {
     let cpu = &Device::Cpu;
     let t = candle::Var::new(&[-2f32, 0f32, 2f32], cpu)?;
@@ -127,7 +129,8 @@ impl candle::InplaceOp1 for Elu {
         Ok(())
     }
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn inplace_op1() -> Result<()> {
     let cpu = &Device::Cpu;
     let t = Tensor::arange(0u32, 12u32, cpu)?.to_dtype(DType::F32)?;
@@ -141,7 +144,8 @@ async fn inplace_op1() -> Result<()> {
 }
 #[cfg(all(feature = "ug", any(feature = "cuda", feature = "metal")))]
 #[allow(clippy::approx_constant)]
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn ug_op() -> Result<()> {
     let kernel = {
         use candle_ug::lang::op;

@@ -20,7 +20,8 @@ use candle_wasm_tests::{
 use anyhow::Result;
 use candle::{test_utils, Device, Tensor};
 use candle_nn::{LayerNorm, Module};
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn layer_norm() -> Result<()> {
     let device = &Device::Cpu;
     let w = Tensor::new(&[3f32], device)?;
@@ -36,6 +37,8 @@ async fn layer_norm() -> Result<()> {
         1e-8,
     );
     let ln = LayerNorm::new(w, b, 1e-8);
+    assert_eq!(ln.eps(), 1e-8);
+    assert!(ln.remove_mean());
     let two = Tensor::new(&[[[2f32]]], device)?;
     let res = ln.forward(&two)?.flatten_all()?;
     assert_eq!(res.to_vec1_async::< f32 > (). await ?, [0.5f32]);
@@ -52,5 +55,8 @@ async fn layer_norm() -> Result<()> {
     assert_eq!(to_vec3_round_async(& mean, 4). await ?, [[[0.5], [0.5], [0.5]]]);
     let std = (res.broadcast_sub(&mean)?.sqr()?.sum_keepdim(2)?.sqrt()? / 3.0)?;
     assert_eq!(to_vec3_round_async(& std, 4). await ?, [[[1.7321], [1.7321], [1.7321]]]);
+    let rms = LayerNorm::rms_norm(Tensor::new(&[1f32], device)?, 1e-5);
+    assert_eq!(rms.eps(), 1e-5);
+    assert!(! rms.remove_mean());
     Ok(())
 }

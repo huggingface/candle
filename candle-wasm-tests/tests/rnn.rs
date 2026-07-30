@@ -19,7 +19,8 @@ use candle_wasm_tests::{
 };
 use candle::{test_utils::to_vec2_round, DType, Device, Result, Tensor};
 use candle_nn::RNN;
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn lstm() -> Result<()> {
     let cpu = &Device::Cpu;
     let w_ih = Tensor::arange(0f32, 24f32, cpu)?.reshape((12, 2))?;
@@ -52,7 +53,8 @@ async fn lstm() -> Result<()> {
     assert_eq!(to_vec2_round_async(c, 4). await ?, & [[5.725, 0.4458, - 0.2908]]);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn gru() -> Result<()> {
     let cpu = &Device::Cpu;
     let w_ih = Tensor::arange(0f32, 18f32, cpu)?.reshape((9, 2))?;

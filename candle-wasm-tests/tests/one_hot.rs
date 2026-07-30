@@ -15,7 +15,8 @@ use candle_wasm_tests::{
 };
 use candle::{Result, Shape, Tensor};
 use candle_nn::encoding::one_hot_async;
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn test_i64_one_hot() -> Result<()> {
     let device = candle::Device::Cpu;
     let indices = Tensor::new(vec![vec![0i64, 2], vec![1, - 1]], &device)?;
@@ -32,7 +33,8 @@ async fn test_i64_one_hot() -> Result<()> {
     assert_eq!(matrix, expected_matrix);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn test_rank_3_one_hot() -> Result<()> {
     let device = candle::Device::Cpu;
     let indices = Tensor::new(
@@ -58,7 +60,8 @@ async fn test_rank_3_one_hot() -> Result<()> {
     assert_eq!(matrix, expected_matrix);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn test_u8_one_cold() -> Result<()> {
     let device = candle::Device::Cpu;
     let depth = 4;
@@ -72,7 +75,8 @@ async fn test_u8_one_cold() -> Result<()> {
     assert_eq!(matrix, expected_matrix);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn test_iter() -> Result<()> {
     let device = candle::Device::Cpu;
     let depth = 4;

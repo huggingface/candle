@@ -15,7 +15,8 @@ use candle_wasm_tests::{
 };
 use anyhow::Result;
 use candle::{Device, IndexOp, Tensor};
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn integer_index() -> Result<()> {
     let dev = Device::Cpu;
     let tensor = Tensor::arange(0u32, 2 * 3, &dev)?.reshape((2, 3))?;
@@ -27,7 +28,8 @@ async fn integer_index() -> Result<()> {
     assert_eq!(result.to_vec1_async::< u32 > (). await ?, & [2, 5]);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn range_index() -> Result<()> {
     let dev = Device::Cpu;
     let tensor = Tensor::arange(0u32, 2 * 3, &dev)?.reshape((2, 3))?;
@@ -64,7 +66,8 @@ async fn range_index() -> Result<()> {
     assert_eq!(result.to_vec2_async::< u32 > (). await ?, & empty);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn index_3d() -> Result<()> {
     let tensor = Tensor::from_iter(0..24u32, &Device::Cpu)?.reshape((2, 3, 4))?;
     assert_eq!(tensor.i((0, 0, 0)) ?.to_scalar_async::< u32 > (). await ?, 0);
@@ -85,7 +88,8 @@ async fn index_3d() -> Result<()> {
     );
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn slice_assign() -> Result<()> {
     let dev = Device::Cpu;
     let tensor = Tensor::arange(0u32, 4 * 5, &dev)?.reshape((4, 5))?;

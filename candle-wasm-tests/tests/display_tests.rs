@@ -15,7 +15,8 @@ use candle_wasm_tests::{
 };
 use anyhow::Result;
 use candle::{DType, Device::Cpu, Tensor};
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn display_scalar() -> Result<()> {
     let t = Tensor::new(1234u32, &Cpu)?;
     let s = format!("{t}");
@@ -31,7 +32,8 @@ async fn display_scalar() -> Result<()> {
     assert_eq!(& s, "[0.]\nTensor[[], f32]");
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn display_vector() -> Result<()> {
     let t = Tensor::new::<&[u32; 0]>(&[], &Cpu)?;
     let s = format!("{t}");
@@ -53,7 +55,8 @@ Tensor[[50], f32]"#;
     assert_eq!(& s, "[42., 42., 42., ..., 42., 42., 42.]\nTensor[[11000], f32]");
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn display_multi_dim() -> Result<()> {
     let t = (Tensor::ones((200, 100), DType::F32, &Cpu)? * 42.)?;
     let s = format!("\n{t}");

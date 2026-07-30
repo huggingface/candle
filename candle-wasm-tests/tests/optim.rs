@@ -21,7 +21,8 @@ use candle::test_utils::{to_vec0_round, to_vec2_round};
 use anyhow::Result;
 use candle::{DType, Device, Tensor, Var};
 use candle_nn::{AdamW, Linear, Module, Optimizer, ParamsAdamW, SGD};
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn sgd_optim() -> Result<()> {
     let x = Var::new(0f32, &Device::Cpu)?;
     let mut sgd = SGD::new(vec![x.clone()], 0.1)?;
@@ -33,7 +34,8 @@ async fn sgd_optim() -> Result<()> {
     assert_eq!(x.to_scalar_async::< f32 > (). await ?, 4.199999);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn sgd_linear_regression() -> Result<()> {
     let w_gen = Tensor::new(&[[3f32, 1.]], &Device::Cpu)?;
     let b_gen = Tensor::new(-2f32, &Device::Cpu)?;
@@ -56,7 +58,8 @@ async fn sgd_linear_regression() -> Result<()> {
     assert_eq!(b.to_scalar_async::< f32 > (). await ?, - 1.9796902);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn adamw_linear_regression() -> Result<()> {
     let w_gen = Tensor::new(&[[3f32, 1.]], &Device::Cpu)?;
     let b_gen = Tensor::new(-2f32, &Device::Cpu)?;
@@ -83,7 +86,8 @@ async fn adamw_linear_regression() -> Result<()> {
     assert_eq!(to_vec0_round_async(b.as_tensor(), 4). await ?, 0.7873);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn adamw_linear_regression_varmap() -> Result<()> {
     use candle_nn::Init::Const;
     let w_gen = Tensor::new(&[[3f32, 1.]], &Device::Cpu)?;

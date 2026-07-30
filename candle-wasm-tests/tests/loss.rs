@@ -19,7 +19,8 @@ use candle_wasm_tests::{
 };
 use candle::test_utils::to_vec0_round;
 use candle::{Device, Result, Tensor};
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn nll_and_cross_entropy() -> Result<()> {
     let cpu = Device::Cpu;
     let input = Tensor::new(
@@ -38,7 +39,8 @@ async fn nll_and_cross_entropy() -> Result<()> {
     assert_eq!(to_vec0_round_async(& loss, 4). await ?, 1.1312);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn binary_cross_entropy_with_logit() -> Result<()> {
     let cpu = Device::Cpu;
     let inp = [
@@ -61,7 +63,8 @@ async fn binary_cross_entropy_with_logit() -> Result<()> {
     assert_eq!(to_vec0_round_async(& loss, 4). await ?, 0.8224);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn huber_loss() -> Result<()> {
     let cpu = Device::Cpu;
     let inp = [

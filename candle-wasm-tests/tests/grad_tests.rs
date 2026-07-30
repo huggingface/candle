@@ -476,7 +476,8 @@ async fn binary_grad(device: &Device) -> Result<()> {
     assert_eq!(grad_y.to_vec1_async::< f32 > (). await ?, [4.0, 14.0, 2.0]);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn test_flip_backprop() -> Result<()> {
     let device = &Device::Cpu;
     let x = Var::ones((2, 2), DType::F64, device)?;

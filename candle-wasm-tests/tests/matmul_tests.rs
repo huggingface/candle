@@ -82,7 +82,8 @@ async fn broadcast_matmul(device: &Device) -> Result<()> {
     }
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn tensor_dot() -> Result<()> {
     let lhs = Tensor::new(&[1., 2., 3.], &Device::Cpu)?;
     let rhs = Tensor::new(&[4., 5., 6.], &Device::Cpu)?;
@@ -91,7 +92,8 @@ async fn tensor_dot() -> Result<()> {
     candle::test_utils::assert_tensor_eq(&dot_ret, &expected)?;
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn tensor_mv() -> Result<()> {
     let mat = Tensor::new(&[[1., 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
     let vec = Tensor::new(&[1., 1., 1.], &Device::Cpu)?;
@@ -136,7 +138,8 @@ candle_wasm_tests::test_device!(
     mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal, mm_layout_wgpu
 );
 #[cfg(feature = "wgpu")]
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn test_matmul_kernels_wgpu() -> Result<()> {
     use candle::wgpu::MatmulAlgorithm;
     let algs = vec![
@@ -159,13 +162,14 @@ async fn test_matmul_kernels_wgpu() -> Result<()> {
                         for tpb_batch in [true, false] {
                             for tpa_batch in [true, false] {
                                 big_matmul_wgpu(
-                                    &device,
-                                    tpa,
-                                    tpb,
-                                    use_start_offset,
-                                    tpb_batch,
-                                    tpa_batch,
-                                ).await?;
+                                        &device,
+                                        tpa,
+                                        tpb,
+                                        use_start_offset,
+                                        tpb_batch,
+                                        tpa_batch,
+                                    )
+                                    .await?;
                             }
                         }
                     }

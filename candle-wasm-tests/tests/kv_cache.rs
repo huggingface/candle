@@ -18,7 +18,8 @@ use candle_wasm_tests::{
     to_vec0_round_async, to_vec1_round_async, to_vec2_round_async, to_vec3_round_async,
 };
 use candle::{Device, Result, Tensor};
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn kv_cache() -> Result<()> {
     let mut cache = candle_nn::kv_cache::Cache::new(0, 16);
     for _ in [0, 1] {
@@ -44,7 +45,8 @@ async fn kv_cache() -> Result<()> {
     }
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn rotating_kv_cache() -> Result<()> {
     let mut cache = candle_nn::kv_cache::RotatingCache::new(0, 6);
     for _ in [0, 1] {

@@ -358,6 +358,29 @@ fn quantized_embedding_metal() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "wgpu")]
+#[test]
+fn quantized_embedding_wgpu() -> Result<()> {
+    let device = Device::new_wgpu(0)?;
+    for dtype in [
+        GgmlDType::Q4_0,
+        GgmlDType::Q4_1,
+        GgmlDType::Q5_0,
+        GgmlDType::Q5_1,
+        GgmlDType::Q8_0,
+        GgmlDType::Q8_1,
+        GgmlDType::Q2K,
+        GgmlDType::Q3K,
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+        GgmlDType::Q8K,
+    ] {
+        run_quantized_embedding(&device, dtype, 1e-3)?;
+    }
+    Ok(())
+}
+
 fn quantize_q4_0(device: &Device) -> Result<()> {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
 

@@ -29,12 +29,13 @@ mod metal_sdpa_tests {
         let elem_count = shape.elem_count();
         let normal = rand_distr::Normal::new(0.0, 1.0).unwrap();
         let vs: Vec<f32> = (0..elem_count)
-            .map(|_| normal.sample_async(rng).await)
+            .map(async |_| normal.sample_async(rng).await)
             .collect();
         Tensor::from_vec(vs, &shape, dev)
     }
-    #[test]
-    fn sdpa_full() -> Result<()> {
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+    async fn sdpa_full() -> Result<()> {
         const BS: usize = 4;
         const R: usize = 16;
         const L: usize = 16;
@@ -69,8 +70,9 @@ mod metal_sdpa_tests {
         assert!(error <= 0.02, "{}", error);
         Ok(())
     }
-    #[test]
-    fn sdpa_vector() -> Result<()> {
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+    async fn sdpa_vector() -> Result<()> {
         const BS: usize = 4;
         const R: usize = 1;
         const L: usize = 1;
@@ -105,8 +107,9 @@ mod metal_sdpa_tests {
         assert!(error <= 0.000, "{}", error);
         Ok(())
     }
-    #[test]
-    fn sdpa_full_softcapping() -> Result<()> {
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+    async fn sdpa_full_softcapping() -> Result<()> {
         const BS: usize = 4;
         const R: usize = 1;
         const L: usize = 4;
@@ -144,8 +147,9 @@ mod metal_sdpa_tests {
         assert!(error <= 0.002, "{}", error);
         Ok(())
     }
-    #[test]
-    fn sdpa_vector_softcapping() -> Result<()> {
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+    async fn sdpa_vector_softcapping() -> Result<()> {
         const BS: usize = 4;
         const R: usize = 1;
         const L: usize = 1;
@@ -183,8 +187,9 @@ mod metal_sdpa_tests {
         assert!(error <= 0.0001, "{}", error);
         Ok(())
     }
-    #[test]
-    fn sdpa_vector_cross() -> Result<()> {
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+    async fn sdpa_vector_cross() -> Result<()> {
         const BS: usize = 4;
         const R: usize = 1;
         const L: usize = 24;

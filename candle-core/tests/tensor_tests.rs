@@ -54,6 +54,8 @@ fn ones(device: &Device) -> Result<()> {
                 ]
             ],
         );
+    }
+    if device.is_dtype_available(DType::BF16) {
         assert_eq!(
             Tensor::ones((2, 3), DType::BF16, device)?.to_vec2::<half::bf16>()?,
             [
@@ -69,24 +71,26 @@ fn ones(device: &Device) -> Result<()> {
                 ]
             ],
         );
+    }
 
     if !device.is_metal() {
-        assert_eq!(
-            Tensor::ones((2, 3), DType::F8E4M3, device)?.to_vec2::<F8E4M3>()?,
-            [
+        if device.is_dtype_available(DType::F8E4M3){
+            assert_eq!(
+                Tensor::ones((2, 3), DType::F8E4M3, device)?.to_vec2::<F8E4M3>()?,
                 [
-                    F8E4M3::from_f32(1.),
-                    F8E4M3::from_f32(1.),
-                    F8E4M3::from_f32(1.)
+                    [
+                        F8E4M3::from_f32(1.),
+                        F8E4M3::from_f32(1.),
+                        F8E4M3::from_f32(1.)
+                    ],
+                    [
+                        F8E4M3::from_f32(1.),
+                        F8E4M3::from_f32(1.),
+                        F8E4M3::from_f32(1.)
+                    ]
                 ],
-                [
-                    F8E4M3::from_f32(1.),
-                    F8E4M3::from_f32(1.),
-                    F8E4M3::from_f32(1.)
-                ]
-            ],
-        );
-    }
+            );
+        }
     }
     Ok(())
 }
@@ -931,20 +935,20 @@ fn cat(device: &Device) -> Result<()> {
         let t2 = t2.t()?.contiguous()?.t()?;
         let t3 = t3.t()?.contiguous()?.t()?;
         let t_cat2 = Tensor::cat(&[&t1, &t2, &t3], 1)?;
-
-    let diff = t_cat.eq(&t_cat2)?.to_dtype(DType::F32)?.sum_all()?;
-    assert_eq!(diff.to_vec0::<f32>()?, 104.0);
-    assert_eq!(t_cat.i((0, 0, 0))?.to_vec0::<i64>()?, 0);
-    assert_eq!(t_cat.i((0, 4, 0))?.to_vec0::<i64>()?, 16);
-    assert_eq!(t_cat.i((0, 5, 0))?.to_vec0::<i64>()?, 20);
-    assert_eq!(t_cat.i((1, 5, 0))?.to_vec0::<i64>()?, 44);
-    assert_eq!(t_cat.i((0, 6, 0))?.to_vec0::<i64>()?, 100);
-    assert_eq!(t_cat.i((1, 6, 0))?.to_vec0::<i64>()?, 112);
-    assert_eq!(t_cat.i((0, 6, 1))?.to_vec0::<i64>()?, 101);
-    assert_eq!(t_cat.i((0, 7, 1))?.to_vec0::<i64>()?, 105);
-    assert_eq!(t_cat.i((0, 12, 1))?.to_vec0::<i64>()?, 10013);
-    assert_eq!(t_cat.i((1, 12, 3))?.to_vec0::<i64>()?, 10031);
-
+    
+        let diff = t_cat.eq(&t_cat2)?.to_dtype(DType::F32)?.sum_all()?;
+        assert_eq!(diff.to_vec0::<f32>()?, 104.0);
+        assert_eq!(t_cat.i((0, 0, 0))?.to_vec0::<i64>()?, 0);
+        assert_eq!(t_cat.i((0, 4, 0))?.to_vec0::<i64>()?, 16);
+        assert_eq!(t_cat.i((0, 5, 0))?.to_vec0::<i64>()?, 20);
+        assert_eq!(t_cat.i((1, 5, 0))?.to_vec0::<i64>()?, 44);
+        assert_eq!(t_cat.i((0, 6, 0))?.to_vec0::<i64>()?, 100);
+        assert_eq!(t_cat.i((1, 6, 0))?.to_vec0::<i64>()?, 112);
+        assert_eq!(t_cat.i((0, 6, 1))?.to_vec0::<i64>()?, 101);
+        assert_eq!(t_cat.i((0, 7, 1))?.to_vec0::<i64>()?, 105);
+        assert_eq!(t_cat.i((0, 12, 1))?.to_vec0::<i64>()?, 10013);
+        assert_eq!(t_cat.i((1, 12, 3))?.to_vec0::<i64>()?, 10031);
+    }
     // compare contiguous to uniform blocks
     let (b, s, h, pad) = (3usize, 4, 5, 2);
     let base =

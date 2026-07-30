@@ -17,7 +17,8 @@ use candle::Result;
 use candle_transformers::object_detection::{
     non_maximum_suppression, soft_non_maximum_suppression, Bbox,
 };
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn nms_basic() -> Result<()> {
     let mut bboxes = vec![
         vec![Bbox { xmin : 245.0, ymin : 305.0, xmax : 575.0, ymax : 490.0, confidence :
@@ -31,7 +32,8 @@ async fn nms_basic() -> Result<()> {
     assert_eq!(bboxes[0].confidence, 0.9);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn softnms_basic_functionality() -> Result<()> {
     let mut bboxes = vec![
         vec![Bbox { xmin : 0.0, ymin : 0.0, xmax : 1.0, ymax : 1.0, confidence : 0.5,
@@ -45,7 +47,8 @@ async fn softnms_basic_functionality() -> Result<()> {
     assert!(bboxes[0] [2].confidence < 0.6);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn softnms_confidence_decay() -> Result<()> {
     let mut bboxes = vec![
         vec![Bbox { xmin : 0.0, ymin : 0.0, xmax : 1.0, ymax : 1.0, confidence : 0.9,
@@ -57,7 +60,8 @@ async fn softnms_confidence_decay() -> Result<()> {
     assert!(bboxes[0] [1].confidence < 0.8);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn softnms_confidence_threshold() -> Result<()> {
     let mut bboxes = vec![
         vec![Bbox { xmin : 0.0, ymin : 0.0, xmax : 1.0, ymax : 1.0, confidence : 0.9,
@@ -70,7 +74,8 @@ async fn softnms_confidence_threshold() -> Result<()> {
     assert_eq!(bboxes[0] [1].confidence, 0.00);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn softnms_no_overlap() -> Result<()> {
     let mut bboxes = vec![
         vec![Bbox { xmin : 0.0, ymin : 0.0, xmax : 1.0, ymax : 1.0, confidence : 0.9,
@@ -83,14 +88,16 @@ async fn softnms_no_overlap() -> Result<()> {
     assert_eq!(bboxes[0] [1].confidence, 0.8);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn softnms_no_bbox() -> Result<()> {
     let mut bboxes: Vec<Vec<Bbox<()>>> = vec![];
     soft_non_maximum_suppression(&mut bboxes, Some(0.5), Some(0.1), Some(0.5));
     assert!(bboxes.is_empty());
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn softnms_single_bbox() -> Result<()> {
     let mut bboxes = vec![
         vec![Bbox { xmin : 0.0, ymin : 0.0, xmax : 1.0, ymax : 1.0, confidence : 0.9,
@@ -100,7 +107,8 @@ async fn softnms_single_bbox() -> Result<()> {
     assert_eq!(bboxes[0].len(), 1);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn softnms_equal_confidence_overlap() -> Result<()> {
     let mut bboxes = vec![
         vec![Bbox { xmin : 0.0, ymin : 0.0, xmax : 1.0, ymax : 1.0, confidence : 0.5,

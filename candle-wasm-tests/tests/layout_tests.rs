@@ -50,7 +50,8 @@ async fn contiguous(device: &Device) -> Result<()> {
 candle_wasm_tests::test_device!(
     contiguous, contiguous_cpu, contiguous_gpu, contiguous_metal, contiguous_wgpu
 );
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn strided_blocks() -> Result<()> {
     use candle::Device::Cpu;
     let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
@@ -59,9 +60,7 @@ async fn strided_blocks() -> Result<()> {
             assert_eq!(start_offset, 0);
             assert_eq!(len, 24);
         }
-        candle::StridedBlocks::MultipleBlocks { .. } => {
-            panic!("unexpected block structure")
-        }
+        other => panic!("unexpected block structure {other:?}"),
     };
     let tensor = Tensor::arange(0u32, 26u32, &Cpu)?.i(2..)?.reshape((2, 3, 4))?;
     match tensor.strided_blocks() {
@@ -69,9 +68,7 @@ async fn strided_blocks() -> Result<()> {
             assert_eq!(start_offset, 2);
             assert_eq!(len, 24);
         }
-        candle::StridedBlocks::MultipleBlocks { .. } => {
-            panic!("unexpected block structure")
-        }
+        other => panic!("unexpected block structure {other:?}"),
     };
     let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
     let tensor = tensor.i(1)?;
@@ -80,9 +77,7 @@ async fn strided_blocks() -> Result<()> {
             assert_eq!(start_offset, 12);
             assert_eq!(len, 12);
         }
-        candle::StridedBlocks::MultipleBlocks { .. } => {
-            panic!("unexpected block structure")
-        }
+        other => panic!("unexpected block structure {other:?}"),
     };
     let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
     let tensor = tensor.i((.., 1))?.contiguous()?;
@@ -95,22 +90,26 @@ async fn strided_blocks() -> Result<()> {
                 19]]
             );
         }
-        candle::StridedBlocks::MultipleBlocks { .. } => {
-            panic!("unexpected block structure")
-        }
+        other => panic!("unexpected block structure {other:?}"),
     };
     let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
     let tensor = tensor.i((.., 1))?;
     match tensor.strided_blocks() {
-        candle::StridedBlocks::SingleBlock { .. } => panic!("unexpected block structure"),
-        candle::StridedBlocks::MultipleBlocks { block_len, block_start_index } => {
+        candle::StridedBlocks::UniformBlocks {
+            start_offset,
+            block_len,
+            count,
+            src_stride,
+        } => {
+            assert_eq!(start_offset, 4);
             assert_eq!(block_len, 4);
-            assert_eq!(block_start_index.collect::< Vec < _ >> (), & [4, 16])
+            assert_eq!(count, 2);
+            assert_eq!(src_stride, 12);
         }
+        other => panic!("unexpected block structure {other:?}"),
     };
     let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
     match tensor.t()?.strided_blocks() {
-        candle::StridedBlocks::SingleBlock { .. } => panic!("unexpected block structure"),
         candle::StridedBlocks::MultipleBlocks { block_start_index, block_len } => {
             assert_eq!(block_len, 1);
             assert_eq!(
@@ -118,16 +117,17 @@ async fn strided_blocks() -> Result<()> {
                 10, 3, 7, 11, 12, 16, 20, 13, 17, 21, 14, 18, 22, 15, 19, 23]
             )
         }
+        other => panic!("unexpected block structure {other:?}"),
     };
     let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
     match tensor.transpose(0, 1)?.strided_blocks() {
-        candle::StridedBlocks::SingleBlock { .. } => panic!("unexpected block structure"),
         candle::StridedBlocks::MultipleBlocks { block_start_index, block_len } => {
             assert_eq!(block_len, 4);
             assert_eq!(
                 block_start_index.collect::< Vec < _ >> (), & [0, 12, 4, 16, 8, 20]
             )
         }
+        other => panic!("unexpected block structure {other:?}"),
     };
     Ok(())
 }

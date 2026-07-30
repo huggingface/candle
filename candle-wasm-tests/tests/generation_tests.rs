@@ -15,7 +15,8 @@ use candle_wasm_tests::{
 };
 use candle::{Device, Result, Tensor};
 use candle_transformers::generation::LogitsProcessor;
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn sample_with_zero_temperature() -> Result<()> {
     let mut logits_process = LogitsProcessor::new(1337, None, None);
     let logits = Tensor::new(&[0.1, 0.2, 0.3, 0.4], &Device::Cpu)?;
@@ -23,7 +24,8 @@ async fn sample_with_zero_temperature() -> Result<()> {
     assert_eq!(token, 3);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn sample_with_temperature() -> Result<()> {
     let mut logits_process = LogitsProcessor::new(42, Some(0.9), None);
     let logits = Tensor::new(&[0.1, 0.2, 0.3, 0.4], &Device::Cpu)?;
@@ -31,7 +33,8 @@ async fn sample_with_temperature() -> Result<()> {
     assert_eq!(token, 0);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn sample_with_top_p() -> Result<()> {
     let mut logits_process = LogitsProcessor::new(42, Some(1.0), Some(0.5));
     let logits = Tensor::new(&[0.1, 0.2, 0.3, 0.4], &Device::Cpu)?;
@@ -39,7 +42,8 @@ async fn sample_with_top_p() -> Result<()> {
     assert_eq!(token, 2);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn sample_with_top_k() -> Result<()> {
     let mut logits_process = LogitsProcessor::from_sampling(
         42,
@@ -65,7 +69,8 @@ async fn sample_with_top_k() -> Result<()> {
     assert_eq!(token, 2);
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn sample_gumbel() -> Result<()> {
     let mut logits_process = LogitsProcessor::from_sampling(
         42,

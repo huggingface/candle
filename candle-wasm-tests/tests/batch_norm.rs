@@ -20,7 +20,8 @@ use candle_wasm_tests::{
 use anyhow::Result;
 use candle::{test_utils, DType, Device, Tensor};
 use candle_nn::{batch_norm, BatchNorm, BatchNormConfig, VarBuilder, VarMap};
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn batch_norm_test() -> Result<()> {
     let running_mean = Tensor::zeros(5, DType::F32, &Device::Cpu)?;
     let running_var = Tensor::ones(5, DType::F32, &Device::Cpu)?;
@@ -191,7 +192,8 @@ async fn batch_norm_test() -> Result<()> {
     );
     Ok(())
 }
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn train_batch_norm() -> Result<()> {
     let vm = VarMap::new();
     let vb = VarBuilder::from_varmap(&vm, DType::F32, &Device::Cpu);

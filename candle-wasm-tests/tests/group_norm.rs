@@ -21,7 +21,8 @@ use anyhow::Result;
 use candle::test_utils::to_vec3_round;
 use candle::{Device, Tensor};
 use candle_nn::{GroupNorm, Module};
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn group_norm() -> Result<()> {
     let device = &Device::Cpu;
     let w = Tensor::from_vec(vec![1f32; 6], 6, device)?;
