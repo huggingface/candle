@@ -462,24 +462,31 @@ matching `clang-offload-bundler` is taken from `$ROCM_PATH` (default
 `/opt/rocm`), so point `ROCM_PATH` at your install if it lives elsewhere.
 
 ```
-Kernel compilation failed: could not run rocm_agent_enumerator: ... Install ROCm or set CANDLE_ROCM_ARCH
+ROCm error: hipGetDeviceProperties failed for device 0 ... set CANDLE_ROCM_ARCH to build kernels anyway
 ```
 or a launch failing with an "invalid device function"
 
-The target architecture is auto-detected with `rocm_agent_enumerator`. If that
-is unavailable, or the detected architecture does not match the GPU you are
-running on, set it explicitly:
+The target architecture is read from the device the `Device::new_rocm(ordinal)`
+call opened, via `hipGetDeviceProperties`. Override it if that is unavailable or
+reports the wrong target:
 
 ```bash
 CANDLE_ROCM_ARCH=gfx1101 cargo run --release --example bert --features rocm
 ```
 
-If you edited a kernel source, or upgraded ROCm, and get load or launch errors
-from cached code objects, clear the on-disk cache:
+The cache key covers the kernel sources, the HIP shim headers, the compile flags
+and the toolchain version, so editing a kernel or upgrading ROCm invalidates the
+affected entries on its own. To force a recompile anyway — say a crash left a
+truncated code object behind:
 
 ```bash
+CANDLE_ROCM_FORCE_RECOMPILE=1 cargo run --release --example bert --features rocm
 make rocm-cache-clean   # or: rm -rf ~/.cache/candle-rocm
 ```
+
+Set `CANDLE_ROCM_CACHE_DIR` to move the cache elsewhere. Without a writable
+`$HOME` — containers, CI, service accounts — it falls back to a per-uid
+directory under the system temp dir.
 
 #### Extremely slow model load time with WSL
 

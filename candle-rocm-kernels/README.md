@@ -25,7 +25,7 @@ comparison operators need.
 
 | Shim header | Purpose |
 |---|---|
-| `hip_compat.h` | Force-included. 16-bit `atomicAdd`, `__dp4a`, `__vsubss4`, `*_sync` shuffle wrappers |
+| `hip_compat.h` | Force-included. 16-bit `atomicAdd`, `__dp4a`, `__vsubss4`, `*_sync` shuffle wrappers, `__syncwarp` |
 | `cuda_fp16.h` | `#include <hip/hip_fp16.h>` |
 | `cuda_bf16.h` | HIP bf16, plus the `__nv_bfloat16` alias and `__hmax_nan`/`__hmin_nan` |
 | `cuda_fp8.h` | Maps `__nv_fp8_e4m3` onto HIP's OCP `__hip_fp8_e4m3` |
@@ -34,8 +34,18 @@ comparison operators need.
 
 Sources are compiled with `-D__CUDA_ARCH__=800`, which enables the f16
 (`>= 530`) and bf16 (`>= 800`) kernels. fp8 shares the `>= 800` guard, so those
-kernels are built too, but the backend never launches them — every F8E4M3 path
-in `candle-core/src/rocm_backend` returns an error.
+kernels are built too. Of them only `const_set_f8_e4m3` is ever launched, and
+it is a pure bit-move; every *arithmetic* F8E4M3 path in
+`candle-core/src/rocm_backend` returns an error, so none of `binary.cu`'s fp8
+ops — the only fp8 code that actually converts — is reachable. The header
+comment in `cuda_fp8.h` spells this out.
+
+The `*_sync` wrappers exist because HIP's own `__shfl_*_sync` and `__syncwarp`
+take a **64-bit** lane mask and `static_assert` on CUDA's 32-bit `0xffffffff`.
+The macros drop the mask and forward to the whole-wavefront form. `__syncwarp`
+forwards to HIP's function rather than to `__builtin_amdgcn_wave_barrier()`:
+HIP brackets the barrier with release/acquire wavefront fences, and the bare
+builtin is a scheduling barrier with no memory ordering.
 
 ## Compilation and caching
 
@@ -44,14 +54,29 @@ any GPU architecture without a rebuild. Results are cached on disk:
 
 ```
 ~/.cache/candle-rocm/{arch}-{rocm_version}/
-    {module}_{source_hash}.hsaco
-    src/                     # staged sources and shim headers
+    {module}_{key}.hsaco
+    {module}_{key}.lock      # advisory lock over one cache entry
+    src-{headers_key}/       # staged sources and shim headers
 ```
 
-`{source_hash}` is the first 16 hex characters of the source's SHA-256, so
-editing one kernel invalidates only its module. Cache writes go through a
-uniquely named temporary followed by a rename, so concurrent processes cannot
-observe a half-written file.
+`{key}` is the first 16 hex characters of a SHA-256 over **everything that can
+change the emitted code object**: the source, every staged header (name and
+contents), the hipcc flags, the target architecture, the full `hipcc --version`
+string and this crate's version. Editing one kernel still invalidates only its
+own module, but editing a shim header or bumping the toolchain now invalidates
+what it should. Keying on the source alone — as an earlier version did — meant a
+shim fix was silently ignored: the staged headers were rewritten, the cache
+filename was not, and the stale code object was loaded instead.
+
+The staging directory is named after the digest of the header set, so two builds
+with different headers never overwrite each other's staged copies.
+
+Writes go through a uniquely named temporary followed by a rename, and the two
+compile intermediates (the hipcc bundle and the unbundler's output) are named
+per process. On a cache miss the whole miss → compile → write sequence runs
+under an advisory `fslock` file lock, with the cache re-checked after the lock
+is acquired: concurrent compilers of the same module cannot persist a corrupt
+object, and only one of them pays the compile.
 
 The pipeline is `hipcc --genco` followed by `clang-offload-bundler --unbundle`,
 which yields the single-architecture code object that `hipModuleLoadData`
@@ -66,13 +91,26 @@ about 70 s, being 4,845 lines.
 
 | Variable | Effect |
 |---|---|
-| `CANDLE_ROCM_ARCH` | Target architecture, e.g. `gfx1101`. Otherwise detected with `rocm_agent_enumerator` |
+| `CANDLE_ROCM_ARCH` | Target architecture, e.g. `gfx1101`. Otherwise read from the device |
 | `CANDLE_ROCM_VERSION` | Overrides the version parsed from `hipcc --version` |
+| `CANDLE_ROCM_CACHE_DIR` | Cache root, overriding `~/.cache/candle-rocm` |
+| `CANDLE_ROCM_FORCE_RECOMPILE` | `1` skips the cache read (the write still happens) |
 | `ROCM_PATH` | ROCm install root, default `/opt/rocm` |
 
 Architecture detection fails loudly rather than guessing. A code object built
 for the wrong architecture would otherwise surface much later as an opaque
-"invalid device function".
+"invalid device function". It comes from `hipGetDeviceProperties(ordinal)
+.gcnArchName` for the ordinal the `RocmDevice` was opened with, so a
+heterogeneous box — an iGPU beside a dGPU, or two different dGPUs — builds each
+device's objects for its own target. `gcnArchName` also carries the target
+features (`gfx942:sramecc+:xnack-`) that `--offload-arch` expects; the cache
+directory uses a path-safe spelling of it, the compiler and the cache key get
+the raw string.
+
+When `CANDLE_ROCM_CACHE_DIR` is unset and `~/.cache` is missing or read-only —
+containers, CI runners, service accounts — the cache falls back to a per-uid
+directory under the system temp dir with a warning on stderr, rather than
+failing to run at all.
 
 ## Requirements
 
@@ -131,9 +169,12 @@ the same `candle-kernels` code the CUDA backend launches.
 `i16`/`i32` are a shared-source limitation, not a ROCm one: `cast.cu`,
 `reduce.cu` and `indexing.cu` never instantiate their templates for those
 types, so there is no kernel to launch. `f8e4m3` kernels *do* compile (they sit
-behind the same `__CUDA_ARCH__ >= 800` guard as bf16) but the backend never
-launches them — every `F8E4M3` arm returns an error, and the `cast_*_f8_e4m3`
-entry points are named differently from what the cast macro derives.
+behind the same `__CUDA_ARCH__ >= 800` guard as bf16); the arithmetic ones are
+never launched — every elementwise `F8E4M3` arm returns an error, and the
+`cast_*_f8_e4m3` entry points are named differently from what the cast macro
+derives. What *does* work is moving fp8 bytes around: `const_set` launches
+`const_set_f8_e4m3`, `copy2d` uses `hipMemcpy2D` and `copy_strided_src` reuses
+`ucopy_u8`, none of which converts.
 
 ### Deliberately not implemented
 
@@ -147,7 +188,9 @@ entry points are named differently from what the cast macro derives.
 - **`quantize_imatrix` / `quantize_imatrix_onto`.** Error out; plain `quantize`
   round-trips through the CPU quantizer.
 - **`device_ptr`** on quantized storage. Errors; only the CUDA path exposes it.
-- **fp8 ops** as described above.
+- **fp8 arithmetic** as described above. Enabling it means validating the
+  OCP-vs-NVIDIA E4M3 conversion on hardware first; only the bit-moves are safe
+  on the strength of the encodings matching.
 
 ## Divergences from `cuda_backend`
 
@@ -186,14 +229,24 @@ make rocm-shim-test
 Compiles every shared module for the local GPU and runs
 `src/hip_shim/shim_test.hip`, which exercises the only hand-written device code
 in the project — the 16-bit `atomicAdd` CAS loops (aligned, unaligned, and
-neighbour preservation) and the `*_sync` shuffle wrappers — on real hardware.
+neighbour preservation), the `*_sync` shuffle wrappers, and both `__syncwarp`
+spellings — on real hardware.
+
+The cache keying itself is covered by unit tests:
+
+```
+cargo test --manifest-path candle-rocm-kernels/Cargo.toml
+```
 
 ## Layout
 
 ```
 src/
   lib.rs           Id / Module / the eleven module constants
-  compile.rs       runtime hipcc invocation, disk and in-memory caches
+  compile/
+    mod.rs         KernelCache: hipcc invocation, disk and in-memory caches
+    cache.rs       cache keys, cache locations, locking, atomic writes
+    detect.rs      GPU architecture and ROCm toolchain detection
   error.rs         KernelError
   wrappers.rs      Send + Sync wrapper around rocm-rs' Module
   hip_shim/        the CUDA-to-HIP bridge; the only HIP-specific code here

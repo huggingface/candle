@@ -63,8 +63,10 @@ impl RocmDevice {
         let miopen =
             SendSyncMIOpenHandle::new(&stream).map_err(|e| RocmError::MIOpen(e.to_string()))?;
 
+        // Keyed on this device's own architecture: a second GPU of a different
+        // generation must not reuse device 0's code objects.
         let kernel_manager =
-            Arc::new(Mutex::new(KernelCache::new(None).map_err(|e| {
+            Arc::new(Mutex::new(KernelCache::new(device_id).map_err(|e| {
                 crate::Error::Msg(format!("Failed to create kernel cache: {}", e))
             })?));
 

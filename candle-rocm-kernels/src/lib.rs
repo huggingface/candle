@@ -7,8 +7,9 @@
 //! supplies the few intrinsics HIP lacks.
 //!
 //! Compilation happens at runtime on first use and is cached on disk under
-//! `~/.cache/candle-rocm/<arch>-<rocm-version>/`, so one binary runs on any
-//! GPU architecture without a rebuild.
+//! `~/.cache/candle-rocm/<arch>-<rocm-version>/` (override with
+//! `CANDLE_ROCM_CACHE_DIR`), so one binary runs on any GPU architecture without
+//! a rebuild.
 
 mod compile;
 mod error;
@@ -72,7 +73,11 @@ pub struct Module {
 }
 
 impl Module {
-    /// Position in [`ALL_IDS`]; used to index a per-device module store.
+    /// Position in [`ALL_IDS`], i.e. the module's own [`Id`] as a `usize`.
+    ///
+    /// A dense index rather than the name, so a per-device store can be an
+    /// array instead of a map. [`KernelCache`] itself keys on the name; this is
+    /// for callers that want the cheaper lookup.
     pub const fn index(&self) -> usize {
         self.index
     }
