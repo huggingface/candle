@@ -8,7 +8,7 @@ use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::lora::LoraLinear;
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use std::{collections::HashMap, f32::consts::PI};
+use std::{collections::HashMap, f32::consts::PI, sync::Arc};
 
 /// Rank, scaling and target projections for a LoRA adapter to inject into a
 /// [`Llama`] model at load time. `target_modules` is matched against the
@@ -358,6 +358,28 @@ pub struct PagedKvCache {
 }
 
 impl PagedKvCache {
+    fn validate_uniform_sequence_lengths(&self, batch_size: usize) -> Result<()> {
+        if batch_size <= 1 {
+            return Ok(());
+        }
+        let seqlens = self.seqlens_k.to_dtype(DType::U32)?.to_vec1::<u32>()?;
+        if seqlens.len() != batch_size + 1 {
+            candle::bail!(
+                "PagedKvCache.seqlens_k must have {} entries for a batch of {batch_size}, got {}",
+                batch_size + 1,
+                seqlens.len()
+            )
+        }
+        let expected_len = seqlens[1].saturating_sub(seqlens[0]);
+        if seqlens
+            .windows(2)
+            .any(|pair| pair[1].saturating_sub(pair[0]) != expected_len)
+        {
+            candle::bail!("paged attention currently requires uniform sequence lengths")
+        }
+        Ok(())
+    }
+
     /// Scatters the newly computed K/V (shape `(b_sz, num_kv_heads, seq_len,
     /// head_dim)`) into `key_cache`/`value_cache` at the physical slots that
     /// `block_table` designates for absolute positions
@@ -417,6 +439,9 @@ impl PagedKvCache {
                 .broadcast_as((b_sz, num_kv_heads, head_dim))?
                 .contiguous()?
         } else {
+            // The host-derived path remains valid for ordinary CUDA decode.
+            // During CUDA graph capture its device-to-host readback returns a
+            // normal capture error; graph callers should attach a decode slot.
             let block_table = self.block_table.to_dtype(DType::U32)?.to_vec2::<u32>()?;
             if block_table.len() != b_sz {
                 candle::bail!(
@@ -495,6 +520,10 @@ pub struct Cache {
     // host-side block-table readback byte-for-byte. See
     // `Cache::set_paged_kv_decode_slot`.
     paged_kv_decode_slots: Vec<Option<Tensor>>,
+    // Clearing a paged cache discards history that is unavailable to the
+    // contiguous cache. The next use of that layer must therefore start a new
+    // sequence at position zero.
+    paged_kv_reset_required: Vec<bool>,
     cos: Tensor,
     sin: Tensor,
     device: Device,
@@ -560,6 +589,7 @@ impl Cache {
             paged_kvs: vec![None; config.num_hidden_layers],
             decode_positions: vec![None; config.num_hidden_layers],
             paged_kv_decode_slots: vec![None; config.num_hidden_layers],
+            paged_kv_reset_required: vec![false; config.num_hidden_layers],
             device: device.clone(),
             cos,
             sin,
@@ -572,7 +602,10 @@ impl Cache {
     /// `candle_flash_attn::flash_attn_varlen_paged_windowed` against the
     /// caller-owned `key_cache`/`value_cache`/`block_table` instead of the
     /// contiguous concat-and-narrow path. Existing callers that never call this
-    /// see no behavior change.
+    /// see no behavior change. This validates the current `seqlens_k` metadata
+    /// once, before the forward path (and CUDA graph capture) begins. If callers
+    /// update that metadata in place, call [`Cache::validate_paged_kv_metadata`]
+    /// at the same sequence boundary.
     pub fn set_paged_kv(&mut self, block_idx: usize, paged: PagedKvCache) -> Result<()> {
         let Some(slot) = self.paged_kvs.get_mut(block_idx) else {
             candle::bail!(
@@ -580,19 +613,57 @@ impl Cache {
                 self.paged_kvs.len()
             )
         };
+        paged.validate_uniform_sequence_lengths(paged.block_table.dim(0)?)?;
         *slot = Some(paged);
         Ok(())
     }
 
-    /// Reverts a layer to the contiguous KV cache path.
+    /// Validates changed paged-cache metadata outside the model forward path.
+    pub fn validate_paged_kv_metadata(&self, block_idx: usize) -> Result<()> {
+        let Some(paged) = self.paged_kv(block_idx) else {
+            candle::bail!("no paged KV cache is attached for layer {block_idx}")
+        };
+        paged.validate_uniform_sequence_lengths(paged.block_table.dim(0)?)
+    }
+
+    /// Removes caller-owned paged storage at a sequence boundary.
+    ///
+    /// Paged K/V history cannot be migrated to the contiguous cache. Clearing
+    /// it therefore also clears the contiguous history and requires the next
+    /// forward pass for this layer to begin a new sequence (`index_pos == 0`).
     pub fn clear_paged_kv(&mut self, block_idx: usize) {
         if let Some(slot) = self.paged_kvs.get_mut(block_idx) {
             *slot = None;
+        }
+        if let Some(slot) = self.kvs.get_mut(block_idx) {
+            *slot = None;
+        }
+        if let Some(reset_required) = self.paged_kv_reset_required.get_mut(block_idx) {
+            *reset_required = true;
         }
     }
 
     pub fn paged_kv(&self, block_idx: usize) -> Option<&PagedKvCache> {
         self.paged_kvs.get(block_idx).and_then(|p| p.as_ref())
+    }
+
+    fn ensure_paged_kv_sequence_boundary(
+        &mut self,
+        block_idx: usize,
+        index_pos: usize,
+    ) -> Result<()> {
+        let Some(reset_required) = self.paged_kv_reset_required.get_mut(block_idx) else {
+            candle::bail!("block_idx {block_idx} out of range for paged KV cache")
+        };
+        if *reset_required && index_pos != 0 {
+            candle::bail!(
+                "paged KV cache for layer {block_idx} was cleared; restart the sequence at index_pos == 0"
+            )
+        }
+        if index_pos == 0 {
+            *reset_required = false;
+        }
+        Ok(())
     }
 
     /// Attaches a persistent, caller-owned decode-position tensor (shape `(1,)`,
@@ -801,7 +872,17 @@ fn flash_attn_varlen_paged(
     _: f32,
     _: usize,
 ) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
+    candle::bail!("paged attention requires the `flash-attn` feature")
+}
+
+#[cfg(feature = "flash-attn")]
+fn ensure_paged_attention_available() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(feature = "flash-attn"))]
+fn ensure_paged_attention_available() -> Result<()> {
+    candle::bail!("paged attention requires the `flash-attn` feature")
 }
 
 impl CausalSelfAttention {
@@ -859,6 +940,8 @@ impl CausalSelfAttention {
         let mut v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
+
+        cache.ensure_paged_kv_sequence_boundary(block_idx, index_pos)?;
 
         let q = self.apply_rotary_emb(&q, index_pos, block_idx, cache)?;
         let mut k = self.apply_rotary_emb(&k, index_pos, block_idx, cache)?;
@@ -975,6 +1058,7 @@ impl CausalSelfAttention {
         decode_slot: Option<&Tensor>,
         adapters: Option<&[Option<&str>]>,
     ) -> Result<Tensor> {
+        ensure_paged_attention_available()?;
         paged.write_new_kv(k, v, index_pos, decode_slot)?;
 
         let q = q.transpose(1, 2)?.contiguous()?.reshape((
@@ -1164,12 +1248,84 @@ impl Mlp {
     }
 }
 
+/// A transformer's feed-forward computation within a Llama block.
+///
+/// Implement this trait to replace a block's dense MLP while retaining Candle's
+/// attention, RoPE, causal masking, KV cache, norms, and residual wiring. The
+/// factory passed to [`Llama::load_with_mlp_factory`] receives the layer index
+/// and a [`VarBuilder`] rooted at that layer's `mlp` prefix.
+pub trait BlockMlp: Send + Sync {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor>;
+}
+
+impl BlockMlp for Mlp {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        Self::forward(self, xs, None)
+    }
+}
+
+#[derive(Clone)]
+enum BlockMlpImpl {
+    Dense(Box<Mlp>),
+    Custom(Arc<dyn BlockMlp>),
+}
+
+impl std::fmt::Debug for BlockMlpImpl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dense(mlp) => mlp.fmt(f),
+            Self::Custom(_) => f.write_str("dyn BlockMlp"),
+        }
+    }
+}
+
+impl BlockMlpImpl {
+    fn forward(&self, xs: &Tensor, adapters: Option<&[Option<&str>]>) -> Result<Tensor> {
+        match self {
+            Self::Dense(mlp) => mlp.forward(xs, adapters),
+            Self::Custom(mlp) => mlp.forward(xs),
+        }
+    }
+
+    fn has_adapter(&self, name: &str) -> bool {
+        matches!(self, Self::Dense(mlp) if mlp.has_adapter(name))
+    }
+
+    fn set_active_adapter(&mut self, name: Option<&str>) -> Result<()> {
+        if let Self::Dense(mlp) = self {
+            mlp.set_active_adapter(name)?;
+        }
+        Ok(())
+    }
+
+    fn load_lora_adapter(&mut self, name: &str, vb: VarBuilder, config: &LoraConfig) -> Result<()> {
+        match self {
+            Self::Dense(mlp) => mlp.load_lora_adapter(name, vb, config),
+            Self::Custom(_)
+                if config.target_modules.iter().any(|module| {
+                    matches!(module.as_str(), "gate_proj" | "up_proj" | "down_proj")
+                }) =>
+            {
+                candle::bail!("cannot attach an MLP LoRA adapter to a custom BlockMlp")
+            }
+            Self::Custom(_) => Ok(()),
+        }
+    }
+
+    fn remove_adapter(&mut self, name: &str) -> Result<()> {
+        if let Self::Dense(mlp) = self {
+            mlp.remove_adapter(name)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
-    mlp: Mlp,
+    mlp: BlockMlpImpl,
     span: tracing::Span,
 }
 
@@ -1219,6 +1375,27 @@ impl Block {
         layer_idx: usize,
         lora_adapters: &[LoraSpec],
     ) -> Result<Self> {
+        let block_lora: Vec<_> = lora_adapters
+            .iter()
+            .map(|(name, vb, cfg)| {
+                (
+                    name.clone(),
+                    vb.pp(format!("model.layers.{layer_idx}")),
+                    cfg.clone(),
+                )
+            })
+            .collect();
+        let mlp = BlockMlpImpl::Dense(Box::new(Mlp::load(vb.pp("mlp"), cfg, &block_lora)?));
+        Self::load_with_mlp(vb, cfg, layer_idx, lora_adapters, mlp)
+    }
+
+    fn load_with_mlp(
+        vb: VarBuilder,
+        cfg: &Config,
+        layer_idx: usize,
+        lora_adapters: &[LoraSpec],
+        mlp: BlockMlpImpl,
+    ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "block");
         let block_lora: Vec<_> = lora_adapters
             .iter()
@@ -1231,7 +1408,6 @@ impl Block {
             })
             .collect();
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, &block_lora)?;
-        let mlp = Mlp::load(vb.pp("mlp"), cfg, &block_lora)?;
         let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
@@ -1409,6 +1585,42 @@ impl Llama {
         Self::load_with_config(vb, cfg, LlamaLoadConfig::default())
     }
 
+    /// Loads Llama while supplying the feed-forward computation for each block.
+    ///
+    /// `mlp_factory` is called once per transformer layer with its zero-based
+    /// index and a [`VarBuilder`] rooted at `model.layers.{index}.mlp`. The
+    /// supplied MLP may own weights on devices other than the rest of the model.
+    /// All non-MLP computation remains Candle's normal Llama implementation.
+    ///
+    /// This constructor does not load LoRA adapters into the custom MLP. Use
+    /// [`Llama::load_with_config`] for the built-in dense MLP with LoRA support.
+    pub fn load_with_mlp_factory<F>(vb: VarBuilder, cfg: &Config, mlp_factory: F) -> Result<Self>
+    where
+        F: for<'a> Fn(usize, VarBuilder<'a>) -> Result<Box<dyn BlockMlp>>,
+    {
+        let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
+        let lm_head = if cfg.tie_word_embeddings {
+            Linear::from_weights(wte.embeddings().clone(), None)
+        } else {
+            linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
+        };
+        let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
+        let blocks: Vec<_> = (0..cfg.num_hidden_layers)
+            .map(|i| {
+                let block_vb = vb.pp(format!("model.layers.{i}"));
+                let mlp = BlockMlpImpl::Custom(Arc::from(mlp_factory(i, block_vb.pp("mlp"))?));
+                Block::load_with_mlp(block_vb, cfg, i, &[], mlp)
+            })
+            .collect::<Result<_>>()?;
+
+        Ok(Self {
+            wte,
+            blocks,
+            ln_f,
+            lm_head,
+        })
+    }
+
     /// Like [`Llama::load`], but additionally injects the LoRA adapters
     /// listed in `load_config` into the matching attention/MLP projections.
     /// With no adapters registered this behaves exactly like `Llama::load`.
@@ -1479,6 +1691,17 @@ impl Llama {
         config: LoraConfig,
         prefix: &str,
     ) -> Result<()> {
+        let targets_mlp = ["gate_proj", "up_proj", "down_proj"]
+            .iter()
+            .any(|module| config.wants(module));
+        if targets_mlp
+            && self
+                .blocks
+                .iter()
+                .any(|block| matches!(&block.mlp, BlockMlpImpl::Custom(_)))
+        {
+            candle::bail!("cannot attach an MLP LoRA adapter to a custom BlockMlp")
+        }
         let vb = if prefix.is_empty() { vb } else { vb.pp(prefix) };
         for (i, block) in self.blocks.iter_mut().enumerate() {
             block.load_lora_adapter(name, vb.pp(format!("model.layers.{i}")), &config)?;
@@ -1513,6 +1736,7 @@ impl Llama {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     fn tiny_config() -> Config {
         Config {
@@ -1635,6 +1859,65 @@ mod tests {
         assert_eq!(logits.dims(), &[1, cfg.vocab_size]);
         // No adapters were registered, so activating one must fail.
         assert!(model.set_active_adapter(Some("missing")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dense_mlp_matches_standard_llama_bit_for_bit() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        // Both models read the same initialized weights, while the custom path
+        // exercises the public factory once for every transformer layer.
+        let varmap = candle_nn::VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let dense = Llama::load(vb.clone(), &cfg)?;
+        let layers = Arc::new(Mutex::new(Vec::new()));
+        let factory_layers = Arc::clone(&layers);
+        let factory_cfg = cfg.clone();
+        let custom = Llama::load_with_mlp_factory(vb, &cfg, move |layer, vb| {
+            factory_layers.lock().unwrap().push(layer);
+            Ok(Box::new(Mlp::load(vb, &factory_cfg, &[])?))
+        })?;
+        assert_eq!(*layers.lock().unwrap(), vec![0]);
+
+        let tokens = Tensor::from_vec(vec![1u32, 2, 3], (1, 3), &device)?;
+        let mut dense_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        let mut custom_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        let dense_logits = dense.forward(&tokens, 0, &mut dense_cache)?;
+        let custom_logits = custom.forward(&tokens, 0, &mut custom_cache)?;
+        assert_eq!(
+            dense_logits.to_vec2::<f32>()?,
+            custom_logits.to_vec2::<f32>()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn custom_mlp_rejects_lora_before_attention_is_mutated() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let base_vb = VarBuilder::from_tensors(base_weights(&cfg, &device), DType::F32, &device);
+        let mut model = Llama::load_with_mlp_factory(base_vb, &cfg, |_, vb| {
+            Ok(Box::new(Mlp::load(vb, &cfg, &[])?))
+        })?;
+        let adapter_vb = VarBuilder::from_tensors(
+            lora_adapter_weights(&cfg, 2, &device, PEFT_ADAPTER_PREFIX),
+            DType::F32,
+            &device,
+        );
+
+        assert!(model
+            .load_lora_adapter(
+                "partial",
+                adapter_vb,
+                LoraConfig {
+                    rank: 2,
+                    alpha: 4.0,
+                    target_modules: vec!["o_proj".into(), "gate_proj".into()],
+                },
+            )
+            .is_err());
+        assert!(model.set_active_adapter(Some("partial")).is_err());
         Ok(())
     }
 
@@ -2025,6 +2308,44 @@ mod tests {
     }
 
     #[test]
+    fn clearing_paged_kv_requires_a_sequence_reset() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let mut cache = Cache::new(true, DType::F32, &cfg, &device)?;
+
+        cache.clear_paged_kv(0);
+        assert!(cache.ensure_paged_kv_sequence_boundary(0, 1).is_err());
+        cache.ensure_paged_kv_sequence_boundary(0, 0)?;
+        Ok(())
+    }
+
+    #[test]
+    fn paged_kv_rejects_non_uniform_sequence_lengths() -> Result<()> {
+        let device = Device::Cpu;
+        let paged = |seqlens: Vec<u32>| {
+            Ok::<_, candle::Error>(PagedKvCache {
+                key_cache: Tensor::zeros((1, 1, 1, 1), DType::F32, &device)?,
+                value_cache: Tensor::zeros((1, 1, 1, 1), DType::F32, &device)?,
+                block_table: Tensor::zeros((2, 1), DType::U32, &device)?,
+                seqlens_k: Tensor::new(seqlens, &device)?,
+                page_block_size: 1,
+            })
+        };
+
+        paged(vec![0, 3, 6])?.validate_uniform_sequence_lengths(2)?;
+        assert!(paged(vec![0, 3, 7])?
+            .validate_uniform_sequence_lengths(2)
+            .is_err());
+        Ok(())
+    }
+
+    #[cfg(not(feature = "flash-attn"))]
+    #[test]
+    fn paged_attention_without_flash_attn_returns_an_error() {
+        assert!(ensure_paged_attention_available().is_err());
+    }
+
+    #[test]
     fn paged_kv_cache_writes_land_in_the_slots_the_block_table_designates() -> Result<()> {
         let device = Device::Cpu;
         // 2 physical blocks of 4 slots each, 1 kv head, head_dim 2.
@@ -2264,6 +2585,7 @@ mod tests {
         cfg.num_attention_heads = num_attention_heads;
         cfg.num_key_value_heads = num_key_value_heads;
         cfg.num_hidden_layers = 1;
+        cfg.max_position_embeddings = seq_len;
         // `paged_test_config()`'s base `max_position_embeddings` (16) is too small
         // for this test's `seq_len` (17); the dense reference path narrows the
         // RoPE cos/sin cache to `max_position_embeddings` rows.
@@ -3435,8 +3757,8 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "flashinfer-kernels"))]
-mod flashinfer_attention_tests {
+#[cfg(test)]
+mod acceleration_attention_tests {
     use super::*;
 
     fn tiny_config(use_flashinfer_attention: bool) -> Config {
@@ -3459,6 +3781,7 @@ mod flashinfer_attention_tests {
         }
     }
 
+    #[cfg(feature = "flashinfer-kernels")]
     fn weights(cfg: &Config, dev: &Device) -> HashMap<String, Tensor> {
         let h = cfg.hidden_size;
         let i = cfg.intermediate_size;
@@ -3525,6 +3848,7 @@ mod flashinfer_attention_tests {
     // and with it set the numerically-equivalent flashinfer kernel must reproduce
     // the same logits (up to floating-point tolerance) for a single-token decode
     // step following a multi-token prefill.
+    #[cfg(feature = "flashinfer-kernels")]
     #[test]
     fn flashinfer_decode_matches_dense_path() -> Result<()> {
         let dev = Device::Cpu;
@@ -3555,6 +3879,115 @@ mod flashinfer_attention_tests {
         for (a, b) in dense_logits[0].iter().zip(flashinfer_logits[0].iter()) {
             assert!((a - b).abs() < 1e-4, "dense={a} flashinfer={b}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dense_mlp_matches_standard_llama_bit_for_bit() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config(false);
+        // Both models read the same initialized weights, mirroring a checkpoint
+        // load while exercising the public factory path for every MLP.
+        let varmap = candle_nn::VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let dense = Llama::load(vb.clone(), &cfg)?;
+        let custom = Llama::load_with_mlp_factory(vb, &cfg, |_, vb| {
+            Ok(Box::new(Mlp::load(vb, &cfg, &[])?))
+        })?;
+        let tokens = Tensor::from_vec(vec![1u32, 2, 3], (1, 3), &device)?;
+        let mut dense_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        let mut custom_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+
+        let dense_logits = dense.forward(&tokens, 0, &mut dense_cache)?;
+        let custom_logits = custom.forward(&tokens, 0, &mut custom_cache)?;
+        assert_eq!(
+            dense_logits.to_vec2::<f32>()?,
+            custom_logits.to_vec2::<f32>()?
+        );
+        Ok(())
+    }
+
+    // Requires a CUDA device and the `flash-attn` feature (which compiles the real
+    // `flash_attn_varlen_paged_windowed` kernel); not runnable on the CPU-only sandbox
+    // this crate is normally developed in. Exercises the actual GPU code path end to
+    // end: writes new K/V into a caller-owned paged cache and checks the attention
+    // output against the long-established dense (non-flash) causal path.
+    #[cfg(feature = "flash-attn")]
+    #[test]
+    fn paged_attention_matches_dense_causal_attention_on_gpu() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let dtype = DType::BF16;
+
+        let num_attention_heads = 2;
+        let num_key_value_heads = 2;
+        let head_dim = 64;
+        let hidden_size = num_attention_heads * head_dim;
+        let kv_size = num_key_value_heads * head_dim;
+        let seq_len = 17;
+        let page_block_size = 32;
+
+        let new_linear = |out_dim: usize, in_dim: usize| -> Result<Linear> {
+            let w = Tensor::randn(0f32, 0.02, (out_dim, in_dim), &device)?.to_dtype(dtype)?;
+            Ok(Linear::from_weights(w, None))
+        };
+        let attn = CausalSelfAttention {
+            q_proj: new_linear(hidden_size, hidden_size)?,
+            k_proj: new_linear(kv_size, hidden_size)?,
+            v_proj: new_linear(kv_size, hidden_size)?,
+            o_proj: new_linear(hidden_size, hidden_size)?,
+            num_attention_heads,
+            num_key_value_heads,
+            head_dim,
+            use_flash_attn: false,
+            span: tracing::span!(tracing::Level::TRACE, "attn"),
+            span_rot: tracing::span!(tracing::Level::TRACE, "attn-rot"),
+            max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
+        };
+
+        let mut cfg = tiny_config();
+        cfg.hidden_size = hidden_size;
+        cfg.num_attention_heads = num_attention_heads;
+        cfg.num_key_value_heads = num_key_value_heads;
+        cfg.num_hidden_layers = 1;
+        cfg.max_position_embeddings = seq_len;
+
+        let x = Tensor::randn(0f32, 1., (1, seq_len, hidden_size), &device)?.to_dtype(dtype)?;
+
+        // Ground truth: the long-established dense (non-flash) causal softmax path.
+        let mut dense_cache = Cache::new(true, dtype, &cfg, &device)?;
+        let y_dense = attn.forward(&x, 0, 0, &mut dense_cache)?;
+
+        // Candidate: paged cache sized to hold the whole sequence in a single block,
+        // routed through `flash_attn_varlen_paged_windowed`.
+        let key_cache = Tensor::zeros(
+            (1, page_block_size, num_key_value_heads, head_dim),
+            dtype,
+            &device,
+        )?;
+        let value_cache = Tensor::zeros(
+            (1, page_block_size, num_key_value_heads, head_dim),
+            dtype,
+            &device,
+        )?;
+        let paged = PagedKvCache {
+            key_cache,
+            value_cache,
+            block_table: Tensor::from_vec(vec![0u32], (1, 1), &device)?,
+            seqlens_k: Tensor::new(&[0u32, seq_len as u32], &device)?,
+            page_block_size,
+        };
+        let mut paged_cache = Cache::new(true, dtype, &cfg, &device)?;
+        paged_cache.set_paged_kv(0, paged)?;
+        let y_paged = attn.forward(&x, 0, 0, &mut paged_cache)?;
+
+        let diff = y_dense
+            .to_dtype(DType::F32)?
+            .sub(&y_paged.to_dtype(DType::F32)?)?
+            .abs()?
+            .flatten_all()?
+            .max(0)?
+            .to_vec0::<f32>()?;
+        assert!(diff < 0.1, "paged vs dense max abs diff {diff}");
         Ok(())
     }
 }
