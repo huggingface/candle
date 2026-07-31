@@ -2003,6 +2003,28 @@ fn test_flip_3d_channels() -> Result<()> {
 }
 
 #[test]
+fn tensor_from_data_validates_concrete_shape() -> Result<()> {
+    let values = [1f32, 2., 3., 4.];
+
+    assert!(Tensor::from_slice(&values, (2, 2, 2), &Device::Cpu).is_err());
+    assert!(Tensor::from_slice(&values, (2, 1), &Device::Cpu).is_err());
+    assert!(Tensor::from_vec(values.to_vec(), (2, 2, 2), &Device::Cpu).is_err());
+    assert!(Tensor::from_vec(values.to_vec(), (2, 1), &Device::Cpu).is_err());
+
+    let tensor = Tensor::from_slice(&values, (2, 2), &Device::Cpu)?;
+    assert_eq!(tensor.dims(), &[2, 2]);
+
+    let tensor = Tensor::from_vec(values.to_vec(), ((), 2), &Device::Cpu)?;
+    assert_eq!(tensor.dims(), &[2, 2]);
+
+    let empty: &[f32] = &[];
+    let tensor = Tensor::from_slice(empty, (0, 3), &Device::Cpu)?;
+    assert_eq!(tensor.dims(), &[0, 3]);
+
+    Ok(())
+}
+
+#[test]
 fn tensor_new() -> Result<()> {
     let t1 = Tensor::new(vec![1f32, 2.0, 3.0], &Device::Cpu)?;
     assert_eq!(t1.to_vec1::<f32>()?, [1.0, 2.0, 3.0]);
