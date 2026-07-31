@@ -173,7 +173,42 @@ impl PagedKvCache {
     /// head_dim)`) into `key_cache`/`value_cache` at the physical slots that
     /// `block_table` designates for absolute positions
     /// `index_pos..index_pos+seq_len`.
-    fn write_new_kv(&self, k: &Tensor, v: &Tensor, index_pos: usize) -> Result<()> {
+    fn validate_uniform_sequence_lengths(
+        &self,
+        b_sz: usize,
+        index_pos: usize,
+        seq_len: usize,
+    ) -> Result<()> {
+        if b_sz <= 1 {
+            return Ok(());
+        }
+        let seqlens = self.seqlens_k.to_dtype(DType::U32)?.to_vec1::<u32>()?;
+        if seqlens.len() != b_sz + 1 {
+            candle::bail!(
+                "seqlens_k has {} entries, expected {} for batch size {b_sz}",
+                seqlens.len(),
+                b_sz + 1
+            )
+        }
+        let expected = (index_pos + seq_len) as u32;
+        if seqlens
+            .windows(2)
+            .any(|pair| pair[1].checked_sub(pair[0]) != Some(expected))
+        {
+            candle::bail!(
+                "paged KV cache requires equal history lengths across a batch; per-sequence positions are unsupported"
+            )
+        }
+        Ok(())
+    }
+
+    fn write_new_kv(
+        &self,
+        k: &Tensor,
+        v: &Tensor,
+        index_pos: usize,
+        decode_slot: Option<&Tensor>,
+    ) -> Result<()> {
         if !self.key_cache.is_contiguous() || !self.value_cache.is_contiguous() {
             candle::bail!("PagedKvCache key_cache/value_cache must be contiguous")
         }
@@ -192,42 +227,65 @@ impl PagedKvCache {
                 self.key_cache.dims()
             )
         }
-        let block_table = self.block_table.to_dtype(DType::U32)?.to_vec2::<u32>()?;
-        if block_table.len() != b_sz {
-            candle::bail!(
-                "block_table batch dim ({}) does not match kv batch dim ({b_sz})",
-                block_table.len()
-            )
-        }
-        let last_pos = index_pos + seq_len - 1;
-        let mut slots = Vec::with_capacity(b_sz * seq_len);
-        for row in &block_table {
-            let max_logical_block = last_pos / self.page_block_size;
-            if max_logical_block >= row.len() {
+        let device = k.device();
+        let indices = if let Some(decode_slot) = decode_slot {
+            if seq_len != 1 {
+                candle::bail!("paged KV decode slots are only valid for single-token decode")
+            }
+            if !decode_slot.device().same_device(device) {
+                candle::bail!("paged KV decode slots must reside on the K/V device")
+            }
+            if decode_slot.dims1()? != b_sz {
                 candle::bail!(
-                    "block_table has {} blocks, but position {last_pos} needs logical block {max_logical_block}",
-                    row.len()
+                    "paged KV decode slot count ({}) does not match kv batch size ({b_sz})",
+                    decode_slot.dims1()?
                 )
             }
-            for t in 0..seq_len {
-                let pos = index_pos + t;
-                let logical_block = pos / self.page_block_size;
-                let offset = pos % self.page_block_size;
-                let physical_block = row[logical_block] as usize;
-                if physical_block >= num_blocks {
+            decode_slot
+                .to_dtype(DType::U32)?
+                .reshape((b_sz, 1, 1))?
+                .broadcast_as((b_sz, num_kv_heads, head_dim))?
+                .contiguous()?
+        } else {
+            if device.is_cuda() && seq_len == 1 {
+                candle::bail!(
+                    "paged KV CUDA decode requires caller-provided device slots; call Cache::set_paged_kv_decode_slot"
+                )
+            }
+            let block_table = self.block_table.to_dtype(DType::U32)?.to_vec2::<u32>()?;
+            if block_table.len() != b_sz {
+                candle::bail!(
+                    "block_table batch dim ({}) does not match kv batch dim ({b_sz})",
+                    block_table.len()
+                )
+            }
+            let last_pos = index_pos + seq_len - 1;
+            let mut slots = Vec::with_capacity(b_sz * seq_len);
+            for row in &block_table {
+                let max_logical_block = last_pos / self.page_block_size;
+                if max_logical_block >= row.len() {
                     candle::bail!(
-                        "block_table references physical block {physical_block}, but key_cache only has {num_blocks} blocks"
+                        "block_table has {} blocks, but position {last_pos} needs logical block {max_logical_block}",
+                        row.len()
                     )
                 }
-                slots.push((physical_block * self.page_block_size + offset) as u32);
+                for t in 0..seq_len {
+                    let pos = index_pos + t;
+                    let logical_block = pos / self.page_block_size;
+                    let offset = pos % self.page_block_size;
+                    let physical_block = row[logical_block] as usize;
+                    if physical_block >= num_blocks {
+                        candle::bail!(
+                            "block_table references physical block {physical_block}, but key_cache only has {num_blocks} blocks"
+                        )
+                    }
+                    slots.push((physical_block * self.page_block_size + offset) as u32);
+                }
             }
-        }
-
-        let device = k.device();
-        let indices = Tensor::from_vec(slots, (b_sz * seq_len, 1, 1), device)?
-            .broadcast_as((b_sz * seq_len, num_kv_heads, head_dim))?
-            .contiguous()?;
-
+            Tensor::from_vec(slots, (b_sz * seq_len, 1, 1), device)?
+                .broadcast_as((b_sz * seq_len, num_kv_heads, head_dim))?
+                .contiguous()?
+        };
         let k_flat =
             k.transpose(1, 2)?
                 .contiguous()?
@@ -259,6 +317,8 @@ pub struct Cache {
     // contiguous concat-and-narrow path byte-for-byte; existing callers that
     // never touch this are entirely unaffected. See `PagedKvCache`.
     paged_kvs: Vec<Option<PagedKvCache>>,
+    paged_kv_decode_slots: Vec<Option<Tensor>>,
+    paged_kv_reset_required: Vec<bool>,
     cos: Tensor,
     sin: Tensor,
     device: Device,
@@ -322,6 +382,8 @@ impl Cache {
             use_kv_cache,
             kvs: vec![None; config.num_hidden_layers],
             paged_kvs: vec![None; config.num_hidden_layers],
+            paged_kv_decode_slots: vec![None; config.num_hidden_layers],
+            paged_kv_reset_required: vec![false; config.num_hidden_layers],
             device: device.clone(),
             cos,
             sin,
@@ -350,7 +412,55 @@ impl Cache {
     pub fn clear_paged_kv(&mut self, block_idx: usize) {
         if let Some(slot) = self.paged_kvs.get_mut(block_idx) {
             *slot = None;
+            self.kvs[block_idx] = None;
+            self.paged_kv_decode_slots[block_idx] = None;
+            self.paged_kv_reset_required[block_idx] = true;
         }
+    }
+
+    /// Supplies physical cache slots on the target device for CUDA single-token decode.
+    pub fn set_paged_kv_decode_slot(&mut self, block_idx: usize, slots: Tensor) -> Result<()> {
+        let Some(slot) = self.paged_kv_decode_slots.get_mut(block_idx) else {
+            candle::bail!(
+                "block_idx {block_idx} out of range for {} layers",
+                self.paged_kvs.len()
+            )
+        };
+        *slot = Some(slots);
+        Ok(())
+    }
+
+    pub fn clear_paged_kv_decode_slot(&mut self, block_idx: usize) {
+        if let Some(slot) = self.paged_kv_decode_slots.get_mut(block_idx) {
+            *slot = None;
+        }
+    }
+
+    fn paged_kv_decode_slot(&self, block_idx: usize) -> Option<&Tensor> {
+        self.paged_kv_decode_slots
+            .get(block_idx)
+            .and_then(Option::as_ref)
+    }
+
+    fn ensure_paged_kv_sequence_boundary(
+        &mut self,
+        block_idx: usize,
+        index_pos: usize,
+    ) -> Result<()> {
+        if self
+            .paged_kv_reset_required
+            .get(block_idx)
+            .copied()
+            .unwrap_or(false)
+        {
+            if index_pos != 0 {
+                candle::bail!(
+                    "paged KV cache was cleared; the next forward pass must start at index_pos 0"
+                )
+            }
+            self.paged_kv_reset_required[block_idx] = false;
+        }
+        Ok(())
     }
 
     pub fn paged_kv(&self, block_idx: usize) -> Option<&PagedKvCache> {
@@ -446,7 +556,17 @@ fn flash_attn_varlen_paged(
     _: f32,
     _: usize,
 ) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
+    candle::bail!("paged attention requires the `flash-attn` feature")
+}
+
+#[cfg(feature = "flash-attn")]
+fn ensure_paged_attention_available() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(feature = "flash-attn"))]
+fn ensure_paged_attention_available() -> Result<()> {
+    candle::bail!("paged attention requires the `flash-attn` feature")
 }
 
 impl CausalSelfAttention {
@@ -483,12 +603,28 @@ impl CausalSelfAttention {
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
+        if let Some(paged) = cache.paged_kv(block_idx) {
+            paged.validate_uniform_sequence_lengths(b_sz, index_pos, seq_len)?;
+        }
+        cache.ensure_paged_kv_sequence_boundary(block_idx, index_pos)?;
+
         let q = self.apply_rotary_emb(&q, index_pos, cache)?;
         let mut k = self.apply_rotary_emb(&k, index_pos, cache)?;
 
         if let Some(paged) = cache.paged_kv(block_idx) {
             let v = v.contiguous()?;
-            return self.forward_paged(&q, &k, &v, index_pos, b_sz, seq_len, hidden_size, paged);
+            let decode_slot = cache.paged_kv_decode_slot(block_idx);
+            return self.forward_paged(
+                &q,
+                &k,
+                &v,
+                index_pos,
+                b_sz,
+                seq_len,
+                hidden_size,
+                paged,
+                decode_slot,
+            );
         }
 
         if cache.use_kv_cache {
@@ -570,8 +706,10 @@ impl CausalSelfAttention {
         seq_len: usize,
         hidden_size: usize,
         paged: &PagedKvCache,
+        decode_slot: Option<&Tensor>,
     ) -> Result<Tensor> {
-        paged.write_new_kv(k, v, index_pos)?;
+        ensure_paged_attention_available()?;
+        paged.write_new_kv(k, v, index_pos, decode_slot)?;
 
         let q = q.transpose(1, 2)?.contiguous()?.reshape((
             b_sz * seq_len,
@@ -958,7 +1096,7 @@ mod tests {
             &device,
         )?;
 
-        paged.write_new_kv(&k, &v, index_pos)?;
+        paged.write_new_kv(&k, &v, index_pos, None)?;
 
         let key_flat = paged
             .key_cache
@@ -1012,8 +1150,47 @@ mod tests {
         // Position 2 needs logical block 1, which doesn't exist in the table.
         let k = Tensor::zeros((1, num_kv_heads, 1, head_dim), DType::F32, &device)?;
         let v = Tensor::zeros((1, num_kv_heads, 1, head_dim), DType::F32, &device)?;
-        assert!(paged.write_new_kv(&k, &v, 2).is_err());
+        assert!(paged.write_new_kv(&k, &v, 2, None).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn paged_kv_rejects_nonuniform_batch_history() -> Result<()> {
+        let device = Device::Cpu;
+        let paged = PagedKvCache {
+            key_cache: Tensor::zeros((1, 4, 1, 2), DType::F32, &device)?,
+            value_cache: Tensor::zeros((1, 4, 1, 2), DType::F32, &device)?,
+            block_table: Tensor::zeros((2, 1), DType::U32, &device)?,
+            seqlens_k: Tensor::new(&[0u32, 3, 6], &device)?,
+            page_block_size: 4,
+        };
+        paged.validate_uniform_sequence_lengths(2, 2, 1)?;
+
+        let nonuniform = PagedKvCache {
+            seqlens_k: Tensor::new(&[0u32, 3, 7], &device)?,
+            ..paged
+        };
+        assert!(nonuniform
+            .validate_uniform_sequence_lengths(2, 2, 1)
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn clearing_paged_kv_requires_a_sequence_boundary() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let mut cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        cache.clear_paged_kv(0);
+        assert!(cache.ensure_paged_kv_sequence_boundary(0, 1).is_err());
+        cache.ensure_paged_kv_sequence_boundary(0, 0)?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "flash-attn"))]
+    #[test]
+    fn paged_attention_without_flash_attn_returns_an_error() {
+        assert!(ensure_paged_attention_available().is_err());
     }
 
     #[derive(Debug)]
