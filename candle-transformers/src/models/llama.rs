@@ -2585,6 +2585,7 @@ mod tests {
         cfg.num_attention_heads = num_attention_heads;
         cfg.num_key_value_heads = num_key_value_heads;
         cfg.num_hidden_layers = 1;
+        cfg.max_position_embeddings = seq_len;
         // `paged_test_config()`'s base `max_position_embeddings` (16) is too small
         // for this test's `seq_len` (17); the dense reference path narrows the
         // RoPE cos/sin cache to `max_position_embeddings` rows.
@@ -3948,6 +3949,7 @@ mod acceleration_attention_tests {
         cfg.num_attention_heads = num_attention_heads;
         cfg.num_key_value_heads = num_key_value_heads;
         cfg.num_hidden_layers = 1;
+        cfg.max_position_embeddings = seq_len;
 
         let x = Tensor::randn(0f32, 1., (1, seq_len, hidden_size), &device)?.to_dtype(dtype)?;
 
