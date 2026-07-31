@@ -4,16 +4,23 @@
 //! `candle-kernels/src/quantized.cu` sources, so the on-device layout — padded
 //! rows above all — has to match byte for byte.
 //!
-//! Matrix multiplication takes one of two paths. A single-token decode
-//! (`b * m == 1`) with an f32 activation and a dtype that has a fused
-//! dequantize-and-GEMV kernel goes through DMMV, straight against the packed
-//! weights. Everything else — prefill, batched decode, non-f32 activations,
-//! Q8_1 — dequantizes into a dense buffer and defers to the rocBLAS GEMM, which
-//! is correct for every dtype but materialises the whole weight matrix.
+//! Matrix multiplication takes one of three paths, tried in this order:
 //!
-//! The MMVQ and MMQ kernels the CUDA backend also picks between are compiled
-//! into the module but not yet wired up; they would cover f16/bf16 activations
-//! and small batches, and would remove the dense dequantize from prefill.
+//! * [`mmvq`] — a batch of one to eight rows against the packed weights, with
+//!   the activations requantized to `q8_1`. Covers f32, f16 and bf16
+//!   activations and every dtype with an `mul_mat_vec_*_q8_1_cuda<N>` kernel.
+//!   It declines a batch of one where DMMV is cheaper, which is most of a
+//!   decode step; see `mmvq::dmmv_is_faster`.
+//! * [`dmmv`] — the fused dequantize-and-GEMV, for a single f32 activation row.
+//!   No requantization, so it is also the more accurate of the two.
+//! * dequantize-then-GEMM — prefill and everything else. Correct for every
+//!   dtype, but materialises the whole weight matrix in the activation's dtype.
+//!
+//! `CANDLE_ROCM_FORCE_DMMV=1` disables the MMVQ path entirely.
+//!
+//! The MMQ kernels the CUDA backend uses for larger batches are compiled into
+//! the module but not wired up; they are what would remove the dense
+//! dequantize from prefill.
 
 use super::{GgmlDType, QStorage};
 use crate::backend::{BackendDevice, BackendStorage};
@@ -21,12 +28,18 @@ use crate::quantized::k_quants::GgmlType;
 use crate::rocm_backend::{RocmDevice, RocmStorage, RocmStorageSlice, SendSyncDeviceMemory};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 
+mod dmmv;
 mod kernels;
+mod mmvq;
 
 use kernels::MATRIX_ROW_PADDING;
 
 #[cfg(test)]
+mod bench;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_mmvq;
 
 pub struct QRocmStorage {
     /// Quantized payload followed by `MATRIX_ROW_PADDING` elements worth of
@@ -244,12 +257,10 @@ impl QRocmStorage {
 
     /// `self` is the transposed weight matrix of shape `(n, k)`.
     ///
-    /// For a single-token decode (`b*m == 1`) the fused DMMV kernel multiplies
-    /// straight against the packed weights, skipping the dequantize→GEMM
-    /// round-trip. Every other shape — and any dtype without a DMMV kernel or a
-    /// non-f32 activation — falls back to dequantize-then-GEMM: the dequantized
-    /// weights are laid out as `n` rows of `k`, so the `(k, n)` operand the GEMM
-    /// wants is that same buffer viewed with swapped strides.
+    /// See the module docs for the three paths and the order they are tried in.
+    /// The dense fallback lays the dequantized weights out as `n` rows of `k`,
+    /// so the `(k, n)` operand the GEMM wants is that same buffer viewed with
+    /// swapped strides.
     pub fn fwd(
         &self,
         self_shape: &Shape,
@@ -268,18 +279,36 @@ impl QRocmStorage {
                 layout.shape()
             )
         }
+        let mut out_shape = layout.shape().dims().to_vec();
+        out_shape.pop();
+        out_shape.push(n);
+        let wrap = |dst| {
+            (
+                RocmStorage {
+                    slice: RocmStorageSlice::F32(dst),
+                    device: self.device.clone(),
+                },
+                Shape::from(out_shape.clone()),
+            )
+        };
 
-        // Decode fast-path: a single f32 activation vector against the packed
-        // weights via the fused DMMV kernel. The kernels reduce with
-        // `__shfl_xor(width = 32)` and index only lanes below 32, so they are
-        // correct on a 32-lane RDNA wavefront; `dmmv_decode_matches_a_dequantized_matmul`
-        // pins that on hardware for all ten dtypes. Falls through to the GEMM
-        // path for every unsupported case.
-        if b * m == 1 && kernels::has_dmmv_kernel(self.dtype) {
+        let b_size = b * m;
+        if b_size <= mmvq::MAX_BATCH {
+            if let Some(dst) = mmvq::try_fwd(self, n, k, b_size, storage, layout)? {
+                return Ok(wrap(dst));
+            }
+        }
+
+        // DMMV: a single f32 activation vector against the packed weights. The
+        // kernels reduce with `__shfl_xor(width = 32)` and index only lanes
+        // below 32, so they are correct on a 32-lane RDNA wavefront;
+        // `dmmv_decode_matches_a_dequantized_matmul` pins that on hardware for
+        // all ten dtypes.
+        if b_size == 1 && dmmv::has_kernel(self.dtype) {
             if let RocmStorageSlice::F32(y) = &storage.slice {
                 if let Some((o1, o2)) = layout.contiguous_offsets() {
                     if o2 - o1 == k {
-                        let dst = kernels::mul_mat_vec(
+                        let dst = dmmv::mul_mat_vec(
                             &self.data,
                             self.len,
                             y,
@@ -289,37 +318,26 @@ impl QRocmStorage {
                             n,
                             &self.device,
                         )?;
-                        let mut out_shape = layout.shape().dims().to_vec();
-                        out_shape.pop();
-                        out_shape.push(n);
-                        return Ok((
-                            RocmStorage {
-                                slice: RocmStorageSlice::F32(dst),
-                                device: self.device.clone(),
-                            },
-                            out_shape.into(),
-                        ));
+                        return Ok(wrap(dst));
                     }
                 }
             }
-            // TODO(mmvq q8_1 fast-path): the faster q8_1 MMVQ variant
-            // (`mmvq_gguf.cu`) would also cover f16/bf16 activations and small
-            // batches; not wired yet, so those still take the GEMM fallback.
         }
 
-        let weights = self.dequantize(n * k)?;
+        // An f16 activation gets the dedicated f16 dequantize kernel rather
+        // than a full f32 buffer plus a cast: half the peak memory, and one
+        // fewer pass over `n * k` elements. bf16 has no such kernel, and going
+        // via f16 would clip anything past 65504, so it keeps the f32 route.
         let weights = match storage.dtype() {
-            DType::F32 => weights,
-            dtype @ (DType::F16 | DType::BF16 | DType::F64) => {
-                weights.to_dtype(&Layout::contiguous((n, k)), dtype)?
-            }
+            DType::F32 => self.dequantize(n * k)?,
+            DType::F16 => self.dequantize_f16(n * k)?,
+            dtype @ (DType::BF16 | DType::F64) => self
+                .dequantize(n * k)?
+                .to_dtype(&Layout::contiguous((n, k)), dtype)?,
             dtype => crate::bail!("quantized matmul expects a float input, got {dtype:?}"),
         };
         let rhs_l = Layout::new((k, n).into(), vec![1, k], 0).broadcast_as((b, k, n))?;
         let out = storage.matmul(&weights, (b, m, n, k), layout, &rhs_l)?;
-        let mut out_shape = layout.shape().dims().to_vec();
-        out_shape.pop();
-        out_shape.push(n);
         Ok((out, out_shape.into()))
     }
 

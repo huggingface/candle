@@ -185,13 +185,17 @@ fn embedding_honours_the_ids_offset() -> Result<()> {
     Ok(())
 }
 
-/// `fwd` dequantizes and defers to the rocBLAS GEMM; the result has to track
-/// the same computation run on the CPU with the *same* dequantized weights.
+/// `fwd`'s dense fallback dequantizes and defers to the rocBLAS GEMM; the
+/// result has to track the same computation run with the *same* dequantized
+/// weights.
+///
+/// `m` is past [`mmvq::MAX_BATCH`] deliberately: anything at or below it is
+/// claimed by MMVQ, which is a different numerical path with its own test.
 #[test]
 fn fwd_matches_a_dequantized_matmul() -> Result<()> {
     let dev = rocm_device!();
     let device = Device::Rocm(dev.clone());
-    let (m, k, n) = (3usize, 256usize, 4usize);
+    let (m, k, n) = (16usize, 256usize, 4usize);
     let lhs: Vec<f32> = (0..m * k).map(|i| (i as f32 / 53.).sin()).collect();
     let rhs: Vec<f32> = (0..n * k).map(|i| (i as f32 / 71.).cos()).collect();
     let lhs = Tensor::from_slice(&lhs, (m, k), &device)?;
@@ -242,10 +246,10 @@ fn deq_reads_unaligned_buffers() -> Result<()> {
     Ok(())
 }
 
-/// The `b * m == 1` decode fast-path in [`QRocmStorage::fwd`] dispatches to the
-/// fused DMMV kernel instead of dequantize-then-GEMM, so it is a *separate*
-/// numerical path from the one `fwd_matches_a_dequantized_matmul` covers — and
-/// it is the only path a token-by-token generation loop ever takes.
+/// The fused DMMV kernel against the same dequantize-then-matmul reference.
+///
+/// `QMatMul::forward` no longer reaches DMMV for these shapes — [`mmvq`] claims
+/// every batch of eight or fewer — so the launcher is called directly.
 ///
 /// The kernels reduce with `__shfl_xor(width = 32)` and index lanes below 32,
 /// which is what makes them correct on a 32-lane RDNA wavefront; this pins that
@@ -268,25 +272,39 @@ fn dmmv_decode_matches_a_dequantized_matmul() -> Result<()> {
         GgmlDType::Q6K,
     ] {
         // A k of 4096 exercises more than one iteration of the kernel's column
-        // loop; n of 128 spans several workgroups.
-        for (k, n) in [(256usize, 4usize), (4096usize, 128usize)] {
+        // loop; n of 128 spans several workgroups, and the odd counts put the
+        // last workgroup half past the end of the output.
+        for (k, n) in [
+            (256usize, 4usize),
+            (256, 5),
+            (4096, 128),
+            (4096, 127),
+            (1024, 1),
+        ] {
             let lhs: Vec<f32> = (0..k).map(|i| (i as f32 / 53.).sin()).collect();
             let rhs: Vec<f32> = (0..n * k).map(|i| (i as f32 / 71.).cos()).collect();
-            // Shape (1, k) is the decode shape: b * m == 1.
-            let lhs = Tensor::from_slice(&lhs, (1, k), &device)?;
-            let rhs = Tensor::from_slice(&rhs, (n, k), &device)?;
+            let lhs_t = Tensor::from_slice(&lhs, (1, k), &device)?;
+            let rhs_t = Tensor::from_slice(&rhs, (n, k), &device)?;
 
-            let qt = crate::quantized::QTensor::quantize(&rhs, dtype)?;
-            let want = lhs
+            let qt = crate::quantized::QTensor::quantize(&rhs_t, dtype)?;
+            let want = lhs_t
                 .matmul(&qt.dequantize(&device)?.t()?)?
                 .to_vec2::<f32>()?;
-            let got = crate::quantized::QMatMul::from_qtensor(qt)?
-                .forward(&lhs)?
-                .to_vec2::<f32>()?;
 
-            assert_eq!(got.len(), 1, "{dtype:?} k={k} n={n}");
-            assert_eq!(got[0].len(), n, "{dtype:?} k={k} n={n}");
-            for (i, (a, b)) in got[0].iter().zip(want[0].iter()).enumerate() {
+            let q = match &qt.storage {
+                QStorage::Rocm(q) => q,
+                _ => crate::bail!("quantize did not stay on the rocm device"),
+            };
+            let y = dev.clone_htod(&lhs)?;
+            // The odd `n` cases guard `dmmv::MMV_Y`: raising it makes the
+            // grid overshoot, which the K-quant kernels' `row > nrows` check
+            // lets through and which q5_k cannot express at all. Either way
+            // the output stops matching here.
+            let dst = dmmv::mul_mat_vec(&q.data, q.len, &y, 0, dtype, k, n, &dev)?;
+            let got = dev.clone_dtoh(&dst)?;
+
+            assert_eq!(got.len(), n, "{dtype:?} k={k} n={n}");
+            for (i, (a, b)) in got.iter().zip(want[0].iter()).enumerate() {
                 let tol = 2e-3 * b.abs().max(1.0);
                 assert!(
                     (a - b).abs() <= tol,

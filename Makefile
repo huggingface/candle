@@ -64,9 +64,9 @@ test-rocm: test-rocm-core test-rocm-nn
 test-rocm-suite:
 	$(CARGO) test -p candle-core --features rocm --test $(SUITE) -- $(ROCM_FILTER) --test-threads=$(ROCM_TEST_THREADS)
 
-# Compiles every shared candle-kernels source with hipcc and checks the two
-# pieces of hand-written device code in the shim (16-bit atomicAdd, the *_sync
-# shuffle macros) on the actual GPU.
+# Compiles every shared candle-kernels source with hipcc and checks the
+# hand-written device code in the shim (16-bit atomicAdd, the *_sync shuffle
+# macros, __dp4a) on the actual GPU.
 ROCM_ARCH ?= $(shell rocminfo 2>/dev/null | grep -om1 'gfx[0-9a-z]*')
 rocm-shim-test:
 	@shim=candle-rocm-kernels/src/hip_shim; \

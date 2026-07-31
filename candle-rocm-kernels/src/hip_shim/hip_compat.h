@@ -51,9 +51,27 @@ CANDLE_HIP_ATOMIC_ADD_16(__hip_bfloat16, __bfloat16_as_ushort, __ushort_as_bfloa
 // ---------------------------------------------------------------------------
 // Integer SIMD intrinsics (quantized.cu)
 // ---------------------------------------------------------------------------
-// Portable expansions. gfx11+ can do the dot product in one instruction via
-// __builtin_amdgcn_sudot4, but correctness comes first; revisit once the
-// quantized kernels are validated.
+// gfx11/gfx12 (RDNA3/RDNA4) have v_dot4_i32_iu8, which __builtin_amdgcn_sudot4
+// lowers to in a single instruction; the leading/third `true` select the signed
+// interpretation of each operand and the trailing `false` disables clamping, so
+// it computes exactly what the portable expansion below does. The MMVQ kernels
+// are dp4a-bound, so this is the difference between four multiply-adds and one
+// instruction per inner step.
+//
+// The gate is the architecture macro rather than __has_builtin: clang declares
+// the builtin for every AMDGPU target and rejects it only during semantic
+// analysis ("needs target feature dot8-insts"), so __has_builtin(...) is 1 on
+// gfx1030 and gfx90a as well and would break their builds. CDNA and gfx10 carry
+// the related __builtin_amdgcn_sdot4 (dot1-insts); it is deliberately left
+// unwired because no such part was available to validate it on, and a wrong
+// dot product here is a silent wrong answer in every quantized matmul.
+//
+// `make rocm-shim-test` compares this against the reference loop on the GPU.
+#if defined(__GFX11__) || defined(__GFX12__)
+__device__ __forceinline__ int __dp4a(int a, int b, int c) {
+    return __builtin_amdgcn_sudot4(true, a, true, b, c, false);
+}
+#else
 __device__ __forceinline__ int __dp4a(int a, int b, int c) {
     int res = c;
     for (int i = 0; i < 4; ++i) {
@@ -63,6 +81,7 @@ __device__ __forceinline__ int __dp4a(int a, int b, int c) {
     }
     return res;
 }
+#endif
 
 // Per-byte saturating signed subtract.
 __device__ __forceinline__ unsigned int __vsubss4(unsigned int a, unsigned int b) {
