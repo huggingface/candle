@@ -242,11 +242,9 @@ impl PagedKvCache {
                 .broadcast_as((b_sz, num_kv_heads, head_dim))?
                 .contiguous()?
         } else {
-            if device.is_cuda() && seq_len == 1 {
-                candle::bail!(
-                    "paged KV CUDA decode requires caller-provided device slots; call Cache::set_paged_kv_decode_slot"
-                )
-            }
+            // The host-derived path remains valid for ordinary CUDA decode.
+            // During CUDA graph capture its device-to-host readback returns a
+            // normal capture error; graph callers should attach a decode slot.
             let block_table = self.block_table.to_dtype(DType::U32)?.to_vec2::<u32>()?;
             if block_table.len() != b_sz {
                 candle::bail!(
