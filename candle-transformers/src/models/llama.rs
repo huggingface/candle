@@ -8,7 +8,7 @@ use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::lora::LoraLinear;
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use std::{collections::HashMap, f32::consts::PI};
+use std::{collections::HashMap, f32::consts::PI, sync::Arc};
 
 /// Rank, scaling and target projections for a LoRA adapter to inject into a
 /// [`Llama`] model at load time. `target_modules` is matched against the
@@ -1164,12 +1164,84 @@ impl Mlp {
     }
 }
 
+/// A transformer's feed-forward computation within a Llama block.
+///
+/// Implement this trait to replace a block's dense MLP while retaining Candle's
+/// attention, RoPE, causal masking, KV cache, norms, and residual wiring. The
+/// factory passed to [`Llama::load_with_mlp_factory`] receives the layer index
+/// and a [`VarBuilder`] rooted at that layer's `mlp` prefix.
+pub trait BlockMlp: Send + Sync {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor>;
+}
+
+impl BlockMlp for Mlp {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        Self::forward(self, xs, None)
+    }
+}
+
+#[derive(Clone)]
+enum BlockMlpImpl {
+    Dense(Box<Mlp>),
+    Custom(Arc<dyn BlockMlp>),
+}
+
+impl std::fmt::Debug for BlockMlpImpl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dense(mlp) => mlp.fmt(f),
+            Self::Custom(_) => f.write_str("dyn BlockMlp"),
+        }
+    }
+}
+
+impl BlockMlpImpl {
+    fn forward(&self, xs: &Tensor, adapters: Option<&[Option<&str>]>) -> Result<Tensor> {
+        match self {
+            Self::Dense(mlp) => mlp.forward(xs, adapters),
+            Self::Custom(mlp) => mlp.forward(xs),
+        }
+    }
+
+    fn has_adapter(&self, name: &str) -> bool {
+        matches!(self, Self::Dense(mlp) if mlp.has_adapter(name))
+    }
+
+    fn set_active_adapter(&mut self, name: Option<&str>) -> Result<()> {
+        if let Self::Dense(mlp) = self {
+            mlp.set_active_adapter(name)?;
+        }
+        Ok(())
+    }
+
+    fn load_lora_adapter(&mut self, name: &str, vb: VarBuilder, config: &LoraConfig) -> Result<()> {
+        match self {
+            Self::Dense(mlp) => mlp.load_lora_adapter(name, vb, config),
+            Self::Custom(_)
+                if config.target_modules.iter().any(|module| {
+                    matches!(module.as_str(), "gate_proj" | "up_proj" | "down_proj")
+                }) =>
+            {
+                candle::bail!("cannot attach an MLP LoRA adapter to a custom BlockMlp")
+            }
+            Self::Custom(_) => Ok(()),
+        }
+    }
+
+    fn remove_adapter(&mut self, name: &str) -> Result<()> {
+        if let Self::Dense(mlp) = self {
+            mlp.remove_adapter(name)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
-    mlp: Mlp,
+    mlp: BlockMlpImpl,
     span: tracing::Span,
 }
 
@@ -1219,6 +1291,27 @@ impl Block {
         layer_idx: usize,
         lora_adapters: &[LoraSpec],
     ) -> Result<Self> {
+        let block_lora: Vec<_> = lora_adapters
+            .iter()
+            .map(|(name, vb, cfg)| {
+                (
+                    name.clone(),
+                    vb.pp(format!("model.layers.{layer_idx}")),
+                    cfg.clone(),
+                )
+            })
+            .collect();
+        let mlp = BlockMlpImpl::Dense(Box::new(Mlp::load(vb.pp("mlp"), cfg, &block_lora)?));
+        Self::load_with_mlp(vb, cfg, layer_idx, lora_adapters, mlp)
+    }
+
+    fn load_with_mlp(
+        vb: VarBuilder,
+        cfg: &Config,
+        layer_idx: usize,
+        lora_adapters: &[LoraSpec],
+        mlp: BlockMlpImpl,
+    ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "block");
         let block_lora: Vec<_> = lora_adapters
             .iter()
@@ -1231,7 +1324,6 @@ impl Block {
             })
             .collect();
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, &block_lora)?;
-        let mlp = Mlp::load(vb.pp("mlp"), cfg, &block_lora)?;
         let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
@@ -1409,6 +1501,42 @@ impl Llama {
         Self::load_with_config(vb, cfg, LlamaLoadConfig::default())
     }
 
+    /// Loads Llama while supplying the feed-forward computation for each block.
+    ///
+    /// `mlp_factory` is called once per transformer layer with its zero-based
+    /// index and a [`VarBuilder`] rooted at `model.layers.{index}.mlp`. The
+    /// supplied MLP may own weights on devices other than the rest of the model.
+    /// All non-MLP computation remains Candle's normal Llama implementation.
+    ///
+    /// This constructor does not load LoRA adapters into the custom MLP. Use
+    /// [`Llama::load_with_config`] for the built-in dense MLP with LoRA support.
+    pub fn load_with_mlp_factory<F>(vb: VarBuilder, cfg: &Config, mlp_factory: F) -> Result<Self>
+    where
+        F: for<'a> Fn(usize, VarBuilder<'a>) -> Result<Box<dyn BlockMlp>>,
+    {
+        let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
+        let lm_head = if cfg.tie_word_embeddings {
+            Linear::from_weights(wte.embeddings().clone(), None)
+        } else {
+            linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
+        };
+        let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
+        let blocks: Vec<_> = (0..cfg.num_hidden_layers)
+            .map(|i| {
+                let block_vb = vb.pp(format!("model.layers.{i}"));
+                let mlp = BlockMlpImpl::Custom(Arc::from(mlp_factory(i, block_vb.pp("mlp"))?));
+                Block::load_with_mlp(block_vb, cfg, i, &[], mlp)
+            })
+            .collect::<Result<_>>()?;
+
+        Ok(Self {
+            wte,
+            blocks,
+            ln_f,
+            lm_head,
+        })
+    }
+
     /// Like [`Llama::load`], but additionally injects the LoRA adapters
     /// listed in `load_config` into the matching attention/MLP projections.
     /// With no adapters registered this behaves exactly like `Llama::load`.
@@ -1513,6 +1641,7 @@ impl Llama {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     fn tiny_config() -> Config {
         Config {
@@ -1635,6 +1764,36 @@ mod tests {
         assert_eq!(logits.dims(), &[1, cfg.vocab_size]);
         // No adapters were registered, so activating one must fail.
         assert!(model.set_active_adapter(Some("missing")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dense_mlp_matches_standard_llama_bit_for_bit() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        // Both models read the same initialized weights, while the custom path
+        // exercises the public factory once for every transformer layer.
+        let varmap = candle_nn::VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let dense = Llama::load(vb.clone(), &cfg)?;
+        let layers = Arc::new(Mutex::new(Vec::new()));
+        let factory_layers = Arc::clone(&layers);
+        let factory_cfg = cfg.clone();
+        let custom = Llama::load_with_mlp_factory(vb, &cfg, move |layer, vb| {
+            factory_layers.lock().unwrap().push(layer);
+            Ok(Box::new(Mlp::load(vb, &factory_cfg, &[])?))
+        })?;
+        assert_eq!(*layers.lock().unwrap(), vec![0]);
+
+        let tokens = Tensor::from_vec(vec![1u32, 2, 3], (1, 3), &device)?;
+        let mut dense_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        let mut custom_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        let dense_logits = dense.forward(&tokens, 0, &mut dense_cache)?;
+        let custom_logits = custom.forward(&tokens, 0, &mut custom_cache)?;
+        assert_eq!(
+            dense_logits.to_vec2::<f32>()?,
+            custom_logits.to_vec2::<f32>()?
+        );
         Ok(())
     }
 
