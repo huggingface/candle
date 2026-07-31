@@ -202,7 +202,7 @@ fn main() -> anyhow::Result<()> {
     let mut model = {
         let model = gguf_file::Content::read(&mut file).map_err(|e| e.with_path(model_path))?;
         let mut total_size_in_bytes = 0;
-        for (_, tensor) in model.tensor_infos.iter() {
+        for tensor in model.tensor_infos.values() {
             let elem_count = tensor.shape.elem_count();
             total_size_in_bytes +=
                 elem_count * tensor.ggml_dtype.type_size() / tensor.ggml_dtype.block_size();
@@ -210,7 +210,7 @@ fn main() -> anyhow::Result<()> {
         println!(
             "loaded {:?} tensors ({}) in {:.2}s",
             model.tensor_infos.len(),
-            &format_size(total_size_in_bytes),
+            format_size(total_size_in_bytes),
             start.elapsed().as_secs_f32(),
         );
         Qwen2::from_gguf(model, &mut file, &device)?
@@ -228,7 +228,7 @@ fn main() -> anyhow::Result<()> {
         Which::DeepseekR1Qwen7B => format!("<｜User｜>{prompt_str}<｜Assistant｜>"),
         _ => format!("<|im_start|>user\n{prompt_str}<|im_end|>\n<|im_start|>assistant\n"),
     };
-    print!("formatted instruct prompt: {}", &prompt_str);
+    print!("formatted instruct prompt: {}", prompt_str);
     let tokens = tos
         .tokenizer()
         .encode(prompt_str, true)
