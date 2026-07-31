@@ -358,12 +358,7 @@ pub struct PagedKvCache {
 }
 
 impl PagedKvCache {
-    fn validate_uniform_sequence_lengths(
-        &self,
-        batch_size: usize,
-        index_pos: usize,
-        seq_len: usize,
-    ) -> Result<()> {
+    fn validate_uniform_sequence_lengths(&self, batch_size: usize) -> Result<()> {
         if batch_size <= 1 {
             return Ok(());
         }
@@ -375,14 +370,12 @@ impl PagedKvCache {
                 seqlens.len()
             )
         }
-        let expected_len = index_pos + seq_len;
+        let expected_len = seqlens[1].saturating_sub(seqlens[0]);
         if seqlens
             .windows(2)
-            .any(|pair| pair[1].saturating_sub(pair[0]) as usize != expected_len)
+            .any(|pair| pair[1].saturating_sub(pair[0]) != expected_len)
         {
-            candle::bail!(
-                "paged attention currently requires uniform sequence lengths; all rows must have length {expected_len}"
-            )
+            candle::bail!("paged attention currently requires uniform sequence lengths")
         }
         Ok(())
     }
@@ -611,7 +604,10 @@ impl Cache {
     /// `candle_flash_attn::flash_attn_varlen_paged_windowed` against the
     /// caller-owned `key_cache`/`value_cache`/`block_table` instead of the
     /// contiguous concat-and-narrow path. Existing callers that never call this
-    /// see no behavior change.
+    /// see no behavior change. This validates the current `seqlens_k` metadata
+    /// once, before the forward path (and CUDA graph capture) begins. If callers
+    /// update that metadata in place, call [`Cache::validate_paged_kv_metadata`]
+    /// at the same sequence boundary.
     pub fn set_paged_kv(&mut self, block_idx: usize, paged: PagedKvCache) -> Result<()> {
         let Some(slot) = self.paged_kvs.get_mut(block_idx) else {
             candle::bail!(
@@ -619,8 +615,17 @@ impl Cache {
                 self.paged_kvs.len()
             )
         };
+        paged.validate_uniform_sequence_lengths(paged.block_table.dim(0)?)?;
         *slot = Some(paged);
         Ok(())
+    }
+
+    /// Validates changed paged-cache metadata outside the model forward path.
+    pub fn validate_paged_kv_metadata(&self, block_idx: usize) -> Result<()> {
+        let Some(paged) = self.paged_kv(block_idx) else {
+            candle::bail!("no paged KV cache is attached for layer {block_idx}")
+        };
+        paged.validate_uniform_sequence_lengths(paged.block_table.dim(0)?)
     }
 
     /// Removes caller-owned paged storage at a sequence boundary.
@@ -938,13 +943,7 @@ impl CausalSelfAttention {
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        if cache.paged_kv(block_idx).is_some() {
-            cache.ensure_paged_kv_sequence_boundary(block_idx, index_pos)?;
-            cache
-                .paged_kv(block_idx)
-                .expect("paged cache was checked above")
-                .validate_uniform_sequence_lengths(b_sz, index_pos, seq_len)?;
-        }
+        cache.ensure_paged_kv_sequence_boundary(block_idx, index_pos)?;
 
         let q = self.apply_rotary_emb(&q, index_pos, block_idx, cache)?;
         let mut k = self.apply_rotary_emb(&k, index_pos, block_idx, cache)?;
@@ -2295,9 +2294,9 @@ mod tests {
             })
         };
 
-        paged(vec![0, 3, 6])?.validate_uniform_sequence_lengths(2, 2, 1)?;
+        paged(vec![0, 3, 6])?.validate_uniform_sequence_lengths(2)?;
         assert!(paged(vec![0, 3, 7])?
-            .validate_uniform_sequence_lengths(2, 2, 1)
+            .validate_uniform_sequence_lengths(2)
             .is_err());
         Ok(())
     }
@@ -3719,8 +3718,8 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "flashinfer-kernels"))]
-mod flashinfer_attention_tests {
+#[cfg(test)]
+mod acceleration_attention_tests {
     use super::*;
 
     fn tiny_config(use_flashinfer_attention: bool) -> Config {
@@ -3743,6 +3742,7 @@ mod flashinfer_attention_tests {
         }
     }
 
+    #[cfg(feature = "flashinfer-kernels")]
     fn weights(cfg: &Config, dev: &Device) -> HashMap<String, Tensor> {
         let h = cfg.hidden_size;
         let i = cfg.intermediate_size;
@@ -3809,6 +3809,7 @@ mod flashinfer_attention_tests {
     // and with it set the numerically-equivalent flashinfer kernel must reproduce
     // the same logits (up to floating-point tolerance) for a single-token decode
     // step following a multi-token prefill.
+    #[cfg(feature = "flashinfer-kernels")]
     #[test]
     fn flashinfer_decode_matches_dense_path() -> Result<()> {
         let dev = Device::Cpu;
@@ -3845,14 +3846,15 @@ mod flashinfer_attention_tests {
     #[test]
     fn custom_dense_mlp_matches_standard_llama_bit_for_bit() -> Result<()> {
         let device = Device::Cpu;
-        let cfg = tiny_config();
+        let cfg = tiny_config(false);
         // Both models read the same initialized weights, mirroring a checkpoint
         // load while exercising the public factory path for every MLP.
         let varmap = candle_nn::VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
         let dense = Llama::load(vb.clone(), &cfg)?;
-        let custom =
-            Llama::load_with_mlp_factory(vb, &cfg, |_, vb| Ok(Box::new(Mlp::load(vb, &cfg)?)))?;
+        let custom = Llama::load_with_mlp_factory(vb, &cfg, |_, vb| {
+            Ok(Box::new(Mlp::load(vb, &cfg, &[])?))
+        })?;
         let tokens = Tensor::from_vec(vec![1u32, 2, 3], (1, 3), &device)?;
         let mut dense_cache = Cache::new(true, DType::F32, &cfg, &device)?;
         let mut custom_cache = Cache::new(true, DType::F32, &cfg, &device)?;
