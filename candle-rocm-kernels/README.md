@@ -152,7 +152,7 @@ the same `candle-kernels` code the CUDA backend launches.
 | `copy_strided_src`, `copy2d`, `const_set` | shared kernel + `hipMemcpy` | contiguous copies go through `hipMemcpy`/`hipMemcpy2D` |
 | `rand_uniform`, `rand_normal` | rocRAND | generated in `f32`/`f64`, then cast |
 | Quantized load / `dequantize` / `dequantize_f16` / `embedding` (`get_rows`) | shared kernel | all GGML block types |
-| Quantized `fwd` (matmul) | **dequantize + GEMM** | correct but slow; see below |
+| Quantized `fwd` (matmul) | MMVQ / DMMV / dequantize + GEMM | batch 1-8 fused, larger batches dequantize; see below |
 | `candle-nn`: `softmax_last_dim`, `rms_norm`, `layer_norm`, `sigmoid` | shared kernel | `rocm_fwd` on the custom op |
 | `candle-nn`: `rope`, `rope_i`, `rope_thd` | shared kernel | |
 
@@ -176,12 +176,34 @@ derives. What *does* work is moving fp8 bytes around: `const_set` launches
 `const_set_f8_e4m3`, `copy2d` uses `hipMemcpy2D` and `copy_strided_src` reuses
 `ucopy_u8`, none of which converts.
 
+### Quantized matmul paths
+
+`QRocmStorage::fwd` picks between three, all against kernels compiled from the
+shared `quantized.cu`:
+
+| batch (`b * m`) | activation | path |
+|---|---|---|
+| 1 | `f32`, K-quant, or under 8 Mi weight elements | DMMV (`dequantize_mul_mat_vec_*`) |
+| 1 | `f32` legacy quant at 8 Mi elements or more | MMVQ (`mul_mat_vec_*_q8_1_cuda1`) |
+| 1 | `f16` / `bf16` | MMVQ, activation cast to `f32` first |
+| 2-8 | any float | MMVQ (`…_cuda<N>`) |
+| > 8 | any float | dequantize the weights, then rocBLAS GEMM |
+
+MMVQ requantizes the activation row to `q8_1` in a separate launch, which costs
+roughly 14 µs; the size and dtype conditions on the batch-of-one rows are where
+that stops paying for itself. `quantized/rocm/mmvq.rs::dmmv_is_faster` carries
+the measurements. `CANDLE_ROCM_FORCE_DMMV=1` pins everything to the two
+non-MMVQ paths, which is both an escape hatch and how the two are benchmarked
+against each other (`quantized::rocm::bench`, `--ignored`).
+
 ### Deliberately not implemented
 
-- **Quantized fast paths.** `QRocmStorage::fwd` dequantizes to `f32` and runs a
-  rocBLAS GEMM. The DMMV, MMVQ and MMQ kernels in `quantized.cu` are compiled
-  but never launched, and the `fast_mmq` / `fast_mmvq` modules are CUDA-only.
-  This is the single largest performance gap.
+- **MMQ (`mul_mat_q*`), the large-batch quantized matmul.** Compiled into the
+  module but not launched, so anything past a batch of eight still dequantizes
+  the whole weight matrix and runs a rocBLAS GEMM — prefill above eight tokens
+  is now the largest remaining performance gap. The `fast_mmq` / `fast_mmvq`
+  modules stay CUDA-only: they bind to `mmvq_gguf.cu` / `mmq_gguf/`, which use
+  inline PTX, `nvcuda::wmma` and `__reduce_add_sync`.
 - **MoE.** `indexed_moe_forward` errors; there are no fused MoE kernels.
 - **Flash attention.** `candle-flash-attn` is CUDA-only. `candle-nn`'s `sdpa`
   fast path is Metal-only on every backend.
@@ -194,7 +216,7 @@ derives. What *does* work is moving fp8 bytes around: `const_set` launches
 
 ## Divergences from `cuda_backend`
 
-Three places where this backend deliberately does *not* mirror the CUDA one,
+Four places where this backend deliberately does *not* mirror the CUDA one,
 because the CUDA behaviour looks like an upstream bug. Recorded here so they can
 be reported rather than re-derived.
 
@@ -211,7 +233,16 @@ be reported rather than re-derived.
    stricter alignment requirement. The ROCm fallback (`quantized/rocm.rs::deq`)
    copies each block out with `read_unaligned`, and
    `deq_reads_unaligned_buffers` in `quantized/rocm/tests.rs` covers it.
-3. **CPU `conv_transpose1d` is wrong for batch > 1.** `cpu_backend/mod.rs:1415`,
+3. **MMVQ writes one row past the output for an odd row count.**
+   `quantized.cu:3002` guards the store with `if (threadIdx.x <
+   rows_per_cuda_block)` only; upstream llama.cpp also requires `row0 +
+   threadIdx.x < nrows_dst`. At a batch of two or more the grid is
+   `nrows.div_ceil(2)` blocks of two rows, so an odd `nrows` has the last block
+   write `dst[j*nrows + nrows]` — the *first output of the next batch row*, not
+   past the end of the buffer, so it corrupts silently. `quantized/rocm/mmvq.rs`
+   declines those shapes rather than editing the shared `.cu`;
+   `odd_output_rows_stay_correct` covers them.
+4. **CPU `conv_transpose1d` is wrong for batch > 1.** `cpu_backend/mod.rs:1415`,
    `MatMul::f`, collapses the batch loop when `b_skip == 0 && a_skip == m * k`
    without checking that the lhs rows are contiguous. The col2im path of
    `conv_transpose1d` produces exactly that shape with a strided lhs, so every
@@ -229,8 +260,10 @@ make rocm-shim-test
 Compiles every shared module for the local GPU and runs
 `src/hip_shim/shim_test.hip`, which exercises the only hand-written device code
 in the project — the 16-bit `atomicAdd` CAS loops (aligned, unaligned, and
-neighbour preservation), the `*_sync` shuffle wrappers, and both `__syncwarp`
-spellings — on real hardware.
+neighbour preservation), the `*_sync` shuffle wrappers, both `__syncwarp`
+spellings, and `__dp4a` (which on gfx11/gfx12 lowers to `v_dot4_i32_iu8` via
+`__builtin_amdgcn_sudot4` rather than to the portable loop) — on real
+hardware.
 
 The cache keying itself is covered by unit tests:
 

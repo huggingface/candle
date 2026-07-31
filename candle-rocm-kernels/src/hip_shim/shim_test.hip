@@ -1,6 +1,7 @@
-// Validates the two pieces of hand-written logic in hip_compat.h against real
-// gfx1101 hardware: the 16-bit atomicAdd CAS loops and the *_sync shuffle
-// macros. Everything else in the shim is a typedef or a header alias.
+// Validates the hand-written logic in hip_compat.h against real GPU hardware:
+// the 16-bit atomicAdd CAS loops, the *_sync shuffle macros and __dp4a (which
+// on gfx11/gfx12 is an intrinsic, not the portable loop). Everything else in
+// the shim is a typedef or a header alias.
 #include <cstdio>
 #include <cmath>
 #include "hip_compat.h"
@@ -26,6 +27,26 @@ __global__ void syncwarp_both_spellings(int *out) {
     int v = scratch[threadIdx.x ^ 1];
     __syncwarp(0xffffffff);
     out[threadIdx.x] = v;
+}
+
+// --- __dp4a: the intrinsic against a literal reading of its contract -------
+// On gfx11/gfx12 the shim lowers __dp4a to v_dot4_i32_iu8; everywhere else it
+// expands to this same loop, so the check degenerates to a tautology there and
+// still costs nothing.
+__device__ __forceinline__ int dp4a_reference(int a, int b, int c) {
+    int res = c;
+    for (int i = 0; i < 4; ++i) {
+        const int shift = i * 8;
+        res += (int)(signed char)((a >> shift) & 0xff) *
+               (int)(signed char)((b >> shift) & 0xff);
+    }
+    return res;
+}
+
+__global__ void dp4a_vs_reference(const int *a, const int *b, int *mismatches, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    mismatches[i] = __dp4a(a[i], b[i], i) == dp4a_reference(a[i], b[i], i) ? 0 : 1;
 }
 
 // --- 16-bit atomicAdd: every thread adds 1.0 to one accumulator ------------
@@ -90,6 +111,33 @@ int main() {
     int sw_ok = 1;
     for (int i = 0; i < 32; ++i) sw_ok &= (h_sw[i] == (i ^ 1));
     CHECK(sw_ok, "__syncwarp both spellings");
+
+    // __dp4a over pseudo-random byte quads plus the two saturation corners
+    // (-128 * -128 overflows a signed byte, so a clamping variant of the
+    // instruction would disagree here and nowhere else).
+    const int DP = 1 << 16;
+    int *h_dpa = new int[DP], *h_dpb = new int[DP];
+    unsigned seed = 12345u;
+    for (int i = 0; i < DP; ++i) {
+        seed = seed * 1103515245u + 12345u; h_dpa[i] = (int)seed;
+        seed = seed * 1103515245u + 12345u; h_dpb[i] = (int)seed;
+    }
+    h_dpa[0] = (int)0x80808080u; h_dpb[0] = (int)0x80808080u;
+    h_dpa[1] = 0x7f7f7f7f;       h_dpb[1] = (int)0x80808080u;
+    int *d_dpa, *d_dpb, *d_dpbad;
+    HIP_CHECK(hipMalloc(&d_dpa, DP * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_dpb, DP * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_dpbad, DP * sizeof(int)));
+    HIP_CHECK(hipMemcpy(d_dpa, h_dpa, DP * sizeof(int), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_dpb, h_dpb, DP * sizeof(int), hipMemcpyHostToDevice));
+    hipLaunchKernelGGL(dp4a_vs_reference, dim3(DP / 256), dim3(256), 0, 0,
+                       d_dpa, d_dpb, d_dpbad, DP);
+    int *h_dpbad = new int[DP];
+    HIP_CHECK(hipMemcpy(h_dpbad, d_dpbad, DP * sizeof(int), hipMemcpyDeviceToHost));
+    int dp_bad = 0;
+    for (int i = 0; i < DP; ++i) dp_bad += h_dpbad[i];
+    CHECK(dp_bad == 0, "__dp4a matches reference");
+    delete[] h_dpa; delete[] h_dpb; delete[] h_dpbad;
 
     // 1024 threads each adding 1.0 -> 1024.0, exactly representable in both.
     __half *d_h;
