@@ -173,12 +173,7 @@ impl PagedKvCache {
     /// head_dim)`) into `key_cache`/`value_cache` at the physical slots that
     /// `block_table` designates for absolute positions
     /// `index_pos..index_pos+seq_len`.
-    fn validate_uniform_sequence_lengths(
-        &self,
-        b_sz: usize,
-        index_pos: usize,
-        seq_len: usize,
-    ) -> Result<()> {
+    fn validate_uniform_sequence_lengths(&self, b_sz: usize) -> Result<()> {
         if b_sz <= 1 {
             return Ok(());
         }
@@ -190,7 +185,7 @@ impl PagedKvCache {
                 b_sz + 1
             )
         }
-        let expected = (index_pos + seq_len) as u32;
+        let expected = seqlens[1].saturating_sub(seqlens[0]);
         if seqlens
             .windows(2)
             .any(|pair| pair[1].checked_sub(pair[0]) != Some(expected))
@@ -396,7 +391,10 @@ impl Cache {
     /// `candle_flash_attn::flash_attn_varlen_paged_windowed` against the
     /// caller-owned `key_cache`/`value_cache`/`block_table` instead of the
     /// contiguous concat-and-narrow path. Existing callers that never call this
-    /// see no behavior change.
+    /// see no behavior change. This validates the current `seqlens_k` metadata
+    /// before entering the forward path (and CUDA graph capture). If callers
+    /// update that metadata in place, call [`Cache::validate_paged_kv_metadata`]
+    /// at the same sequence boundary.
     pub fn set_paged_kv(&mut self, block_idx: usize, paged: PagedKvCache) -> Result<()> {
         let Some(slot) = self.paged_kvs.get_mut(block_idx) else {
             candle::bail!(
@@ -404,8 +402,17 @@ impl Cache {
                 self.paged_kvs.len()
             )
         };
+        paged.validate_uniform_sequence_lengths(paged.block_table.dim(0)?)?;
         *slot = Some(paged);
         Ok(())
+    }
+
+    /// Validates changed paged-cache metadata outside the model forward path.
+    pub fn validate_paged_kv_metadata(&self, block_idx: usize) -> Result<()> {
+        let Some(paged) = self.paged_kv(block_idx) else {
+            candle::bail!("no paged KV cache is attached for layer {block_idx}")
+        };
+        paged.validate_uniform_sequence_lengths(paged.block_table.dim(0)?)
     }
 
     /// Reverts a layer to the contiguous KV cache path.
@@ -603,9 +610,6 @@ impl CausalSelfAttention {
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        if let Some(paged) = cache.paged_kv(block_idx) {
-            paged.validate_uniform_sequence_lengths(b_sz, index_pos, seq_len)?;
-        }
         cache.ensure_paged_kv_sequence_boundary(block_idx, index_pos)?;
 
         let q = self.apply_rotary_emb(&q, index_pos, cache)?;
@@ -1164,15 +1168,13 @@ mod tests {
             seqlens_k: Tensor::new(&[0u32, 3, 6], &device)?,
             page_block_size: 4,
         };
-        paged.validate_uniform_sequence_lengths(2, 2, 1)?;
+        paged.validate_uniform_sequence_lengths(2)?;
 
         let nonuniform = PagedKvCache {
             seqlens_k: Tensor::new(&[0u32, 3, 7], &device)?,
             ..paged
         };
-        assert!(nonuniform
-            .validate_uniform_sequence_lengths(2, 2, 1)
-            .is_err());
+        assert!(nonuniform.validate_uniform_sequence_lengths(2).is_err());
         Ok(())
     }
 
