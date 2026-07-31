@@ -396,26 +396,24 @@ impl DecoderLayer {
     }
 }
 
-// Build the additive causal mask for `tgt` query positions over `tgt + offset`
-// keys. The mask is identical for every batch row, so it is built with a batch
-// dim of `1` and broadcast across the batch at use. A batch dim > 1 would claim
-// `b` copies of the data while the slice holds only one, silently under-sizing
-// the tensor's storage: `Tensor::from_slice` does not check the element count of
-// a fully-concrete shape.
-fn causal_mask(
-    device: &Device,
-    dtype: DType,
+/// Builds the additive causal attention mask of shape `(1, 1, tgt, tgt + offset)`.
+fn build_causal_mask(
     tgt: usize,
     offset: usize,
     sw: Option<usize>,
+    device: &Device,
+    dtype: DType,
 ) -> Result<Tensor> {
     let minf = f32::NEG_INFINITY;
     let mask: Vec<_> = (0..tgt)
         .flat_map(|i| {
             (0..(tgt + offset)).map(move |j| {
                 let past_ok = j <= i + offset;
+                // Within the window iff `(i + offset) - j <= w`, rearranged to
+                // `j + w >= i + offset` to stay in `usize` (no signed casts, no
+                // subtraction underflow when `j > i + offset`).
                 let sw_ok = match sw {
-                    Some(w) => (i + offset) as i64 - j as i64 <= w as i64,
+                    Some(w) => j + w >= i + offset,
                     None => true,
                 };
                 if past_ok && sw_ok {
@@ -472,7 +470,7 @@ impl Model {
     }
 
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
-        let (_, l) = input.dims2()?;
+        let (_b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
 
         // Build causal mask only for the standard attention fallback path.
@@ -482,7 +480,13 @@ impl Model {
         #[cfg(feature = "flash-attn")]
         let needs_mask = self.device.is_cpu() && l > 1;
         let causal = if needs_mask {
-            Some(causal_mask(&self.device, self.dtype, l, offset, None)?)
+            Some(build_causal_mask(
+                l,
+                offset,
+                None,
+                &self.device,
+                self.dtype,
+            )?)
         } else {
             None
         };
@@ -528,30 +532,58 @@ impl ModelForCausalLM {
 mod tests {
     use super::*;
 
-    // The causal mask must be batch-independent so a single copy broadcasts
-    // across every row. Building it with the full batch dim used to under-size
-    // the storage, giving garbage/NaN for batch > 1 on the GPU attention path.
+    // Regression test for https://github.com/huggingface/candle/issues/3582
     #[test]
-    fn causal_mask_is_batch_independent() -> Result<()> {
+    fn causal_mask_is_batch_independent_and_broadcasts() {
         let device = Device::Cpu;
-        let (tgt, offset) = (3, 0);
-        let mask = causal_mask(&device, DType::F32, tgt, offset, None)?;
-        assert_eq!(mask.dims(), &[1, 1, tgt, tgt + offset]);
+        let neg = f32::NEG_INFINITY;
 
-        // Lower triangle is attended (0), the strict upper triangle is masked.
-        let neg_inf = f32::NEG_INFINITY;
+        let mask = build_causal_mask(3, 0, None, &device, DType::F32).unwrap();
         assert_eq!(
-            mask.squeeze(0)?.squeeze(0)?.to_vec2::<f32>()?,
-            [[0., neg_inf, neg_inf], [0., 0., neg_inf], [0., 0., 0.]],
+            mask.dims(),
+            &[1, 1, 3, 3],
+            "mask must carry a leading batch dim of 1 so broadcast_add applies it to every row",
         );
 
-        // Broadcasting onto batched scores gives every row the same mask.
-        let b = 4;
-        let scores = Tensor::zeros((b, 1, tgt, tgt + offset), DType::F32, &device)?;
-        let rows = scores.broadcast_add(&mask)?.squeeze(1)?.to_vec3::<f32>()?;
-        for row in &rows[1..] {
-            assert_eq!(row, &rows[0]);
-        }
-        Ok(())
+        // Broadcasting onto a 2-sequence batch must mask both rows identically and causally.
+        let scores = Tensor::zeros((2, 1, 3, 3), DType::F32, &device).unwrap();
+        let masked = scores
+            .broadcast_add(&mask)
+            .unwrap()
+            .squeeze(1)
+            .unwrap()
+            .to_vec3::<f32>()
+            .unwrap();
+
+        assert_eq!(
+            masked[0], masked[1],
+            "both batch rows must receive the same causal mask",
+        );
+        assert_eq!(masked[0][0], vec![0.0, neg, neg]);
+        assert_eq!(masked[0][1], vec![0.0, 0.0, neg]);
+        assert_eq!(masked[0][2], vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn causal_mask_respects_sliding_window() {
+        // With a sliding window of `w`, query i may attend to key j only when it is
+        // both causal (j <= i + offset) and within the window (i + offset - j <= w).
+        let device = Device::Cpu;
+        let neg = f32::NEG_INFINITY;
+
+        let mask = build_causal_mask(4, 0, Some(1), &device, DType::F32)
+            .unwrap()
+            .squeeze(0)
+            .unwrap()
+            .squeeze(0)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+
+        // window = 1: each query sees itself and the single preceding position.
+        assert_eq!(mask[0], vec![0.0, neg, neg, neg]);
+        assert_eq!(mask[1], vec![0.0, 0.0, neg, neg]);
+        assert_eq!(mask[2], vec![neg, 0.0, 0.0, neg]);
+        assert_eq!(mask[3], vec![neg, neg, 0.0, 0.0]);
     }
 }
