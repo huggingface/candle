@@ -113,7 +113,7 @@ impl WgpuDevice {
             (crate::DType::F16, true) => Ok(DType::F16),
             (crate::DType::U8, _) => Err(crate::Error::from(format!(
                 "Dtype {:?} not supported on wgpu",
-                &dtype
+                dtype
             ))),
             (_, false) => Err(crate::Error::from(format!(
                 "Dtype {:?} not supported on this wgpu device",

@@ -265,7 +265,7 @@ impl QueueBufferInner {
 
         self.shared
             .defines_array
-            .sort_unstable_by(|a, b| a.0.cmp(&b.0));
+            .sort_unstable_by_key(|a| a.0);
         let index_defines = self
             .shared
             .define_cache

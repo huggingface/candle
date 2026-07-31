@@ -192,7 +192,7 @@ impl<'de> Deserialize<'de> for Metadata {
         // Previous versions might have a different ordering
         // Than we expect (Not aligned ordered, but purely name ordered,
         // or actually any order).
-        tensors.sort_by(|(_, left), (_, right)| left.data_offsets.cmp(&right.data_offsets));
+        tensors.sort_by_key(|(_, left)| left.data_offsets);
         Metadata::new(metadata, tensors).map_err(serde::de::Error::custom)
     }
 }
@@ -264,8 +264,10 @@ impl Metadata {
                 .try_fold(1usize, usize::checked_mul)
                 .ok_or(SafeTensorError::ValidationOverflow)?;
             let nbytes = nelements
-                .checked_mul(info.dtype.size())
-                .ok_or(SafeTensorError::ValidationOverflow)?;
+                .checked_mul(info.dtype.bitsize())
+                .ok_or(SafeTensorError::ValidationOverflow)?
+                .div_ceil(8);
+            
             if (e - s) != nbytes {
                 return Err(SafeTensorError::TensorInvalidInfo);
             }

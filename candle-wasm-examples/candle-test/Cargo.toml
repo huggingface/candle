@@ -84,3 +84,7 @@ wgpu = [
   "candle/wgpu_debug_serialize",
   "candle-wgpu-kernels",
 ]
+
+[[bin]]
+name = "candle-test"
+required-features = ["wgpu"]
