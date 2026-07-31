@@ -439,11 +439,9 @@ impl PagedKvCache {
                 .broadcast_as((b_sz, num_kv_heads, head_dim))?
                 .contiguous()?
         } else {
-            if device.is_cuda() && seq_len == 1 {
-                candle::bail!(
-                    "paged CUDA decode requires Cache::set_paged_kv_decode_slot to keep slot calculation on the device"
-                )
-            }
+            // The host-derived path remains valid for ordinary CUDA decode.
+            // During CUDA graph capture its device-to-host readback returns a
+            // normal capture error; graph callers should attach a decode slot.
             let block_table = self.block_table.to_dtype(DType::U32)?.to_vec2::<u32>()?;
             if block_table.len() != b_sz {
                 candle::bail!(
@@ -1693,6 +1691,17 @@ impl Llama {
         config: LoraConfig,
         prefix: &str,
     ) -> Result<()> {
+        let targets_mlp = ["gate_proj", "up_proj", "down_proj"]
+            .iter()
+            .any(|module| config.wants(module));
+        if targets_mlp
+            && self
+                .blocks
+                .iter()
+                .any(|block| matches!(&block.mlp, BlockMlpImpl::Custom(_)))
+        {
+            candle::bail!("cannot attach an MLP LoRA adapter to a custom BlockMlp")
+        }
         let vb = if prefix.is_empty() { vb } else { vb.pp(prefix) };
         for (i, block) in self.blocks.iter_mut().enumerate() {
             block.load_lora_adapter(name, vb.pp(format!("model.layers.{i}")), &config)?;
@@ -1880,6 +1889,35 @@ mod tests {
             dense_logits.to_vec2::<f32>()?,
             custom_logits.to_vec2::<f32>()?
         );
+        Ok(())
+    }
+
+    #[test]
+    fn custom_mlp_rejects_lora_before_attention_is_mutated() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let base_vb = VarBuilder::from_tensors(base_weights(&cfg, &device), DType::F32, &device);
+        let mut model = Llama::load_with_mlp_factory(base_vb, &cfg, |_, vb| {
+            Ok(Box::new(Mlp::load(vb, &cfg, &[])?))
+        })?;
+        let adapter_vb = VarBuilder::from_tensors(
+            lora_adapter_weights(&cfg, 2, &device, PEFT_ADAPTER_PREFIX),
+            DType::F32,
+            &device,
+        );
+
+        assert!(model
+            .load_lora_adapter(
+                "partial",
+                adapter_vb,
+                LoraConfig {
+                    rank: 2,
+                    alpha: 4.0,
+                    target_modules: vec!["o_proj".into(), "gate_proj".into()],
+                },
+            )
+            .is_err());
+        assert!(model.set_active_adapter(Some("partial")).is_err());
         Ok(())
     }
 
