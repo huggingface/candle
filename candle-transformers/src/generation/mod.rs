@@ -10,7 +10,9 @@ use candle::{DType, Error, Result, Tensor};
 use rand::{distr::Distribution, SeedableRng};
 
 mod incremental_decoder;
+mod stop_criteria;
 pub use incremental_decoder::IncrementalDecoder;
+pub use stop_criteria::{FinishReason, StopCriteria};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Sampling {
