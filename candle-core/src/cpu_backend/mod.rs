@@ -1412,12 +1412,12 @@ impl Map2 for MatMul {
         } else {
             Parallelism::None
         };
-        let (b, m, n, k) = if b_skip == 0 && a_skip == m * k {
+        let (b, m, n, k) = if b_skip == 0 && a_skip == m * lhs_rs {
+            // The lhs batch and row dimensions are adjacent, so they can be
+            // flattened while reusing the broadcast rhs matrix.
             // a_skip and c_skip should be updated but step is always 0 so
             // it wouldn't matter.
             (1, b * m, n, k)
-        } else if a_skip == 0 && b_skip == n * k {
-            (1, m, b * n, k)
         } else {
             (b, m, n, k)
         };

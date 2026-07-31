@@ -82,6 +82,67 @@ fn broadcast_matmul(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn assert_matmul_matches_contiguous(lhs: &Tensor, rhs: &Tensor) -> Result<()> {
+    let actual = lhs.matmul(rhs)?;
+    let expected = lhs.contiguous()?.matmul(&rhs.contiguous()?)?;
+    assert_eq!(actual.shape(), expected.shape());
+    let max_diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+    assert!(
+        max_diff < 1e-5,
+        "matmul mismatch for lhs stride {:?} and rhs stride {:?}: {max_diff}",
+        lhs.stride(),
+        rhs.stride()
+    );
+    Ok(())
+}
+
+fn matmul_lhs_batch_broadcast(device: &Device) -> Result<()> {
+    let (b, m, k, n) = (4, 3, 5, 2);
+    let lhs = Tensor::arange(0f32, (m * k) as f32, device)?
+        .reshape((1, m, k))?
+        .broadcast_as((b, m, k))?;
+    let rhs = Tensor::arange(0f32, (b * k * n) as f32, device)?.reshape((b, k, n))?;
+    assert_matmul_matches_contiguous(&lhs, &rhs)?;
+
+    let rhs = Tensor::arange(0f32, (b * n * k) as f32, device)?
+        .reshape((b, n, k))?
+        .transpose(1, 2)?;
+    assert_matmul_matches_contiguous(&lhs, &rhs)?;
+
+    let lhs = Tensor::ones((1, 32, 32), DType::F32, device)?.broadcast_as((32, 32, 32))?;
+    let rhs = Tensor::ones((32, 32, 32), DType::F32, device)?;
+    assert_matmul_matches_contiguous(&lhs, &rhs)
+}
+
+fn matmul_rhs_batch_broadcast(device: &Device) -> Result<()> {
+    let (b, m, k, n) = (4, 3, 5, 2);
+    let lhs = Tensor::arange(0f32, (b * m * k) as f32, device)?.reshape((b, m, k))?;
+    let rhs = Tensor::arange(0f32, (k * n) as f32, device)?
+        .reshape((1, k, n))?
+        .broadcast_as((b, k, n))?;
+    assert_matmul_matches_contiguous(&lhs, &rhs)?;
+
+    let lhs = Tensor::arange(0f32, (b * k * m) as f32, device)?
+        .reshape((b, k, m))?
+        .transpose(1, 2)?;
+    assert_matmul_matches_contiguous(&lhs, &rhs)
+}
+
+fn matmul_multi_axis_batch_broadcast(device: &Device) -> Result<()> {
+    let (b1, b2, m, k, n) = (2, 3, 2, 4, 3);
+    let lhs = Tensor::arange(0f32, (m * k) as f32, device)?
+        .reshape((1, 1, m, k))?
+        .broadcast_as((b1, b2, m, k))?;
+    let rhs = Tensor::arange(0f32, (k * n) as f32, device)?
+        .reshape((1, 1, k, n))?
+        .broadcast_as((b1, b2, k, n))?;
+    assert_matmul_matches_contiguous(&lhs, &rhs)?;
+
+    let lhs = Tensor::arange(0f32, (m * k) as f32, device)?.reshape((1, m, k))?;
+    let rhs = Tensor::arange(0f32, (k * n) as f32, device)?.reshape((1, k, n))?;
+    assert_matmul_matches_contiguous(&lhs, &rhs)
+}
+
 #[test]
 fn tensor_dot() -> Result<()> {
     let lhs = Tensor::new(&[1., 2., 3.], &Device::Cpu)?;
@@ -141,6 +202,24 @@ test_device!(
     broadcast_matmul_cpu,
     broadcast_matmul_gpu,
     broadcast_matmul_metal
+);
+test_device!(
+    matmul_lhs_batch_broadcast,
+    matmul_lhs_batch_broadcast_cpu,
+    matmul_lhs_batch_broadcast_gpu,
+    matmul_lhs_batch_broadcast_metal
+);
+test_device!(
+    matmul_rhs_batch_broadcast,
+    matmul_rhs_batch_broadcast_cpu,
+    matmul_rhs_batch_broadcast_gpu,
+    matmul_rhs_batch_broadcast_metal
+);
+test_device!(
+    matmul_multi_axis_batch_broadcast,
+    matmul_multi_axis_batch_broadcast_cpu,
+    matmul_multi_axis_batch_broadcast_gpu,
+    matmul_multi_axis_batch_broadcast_metal
 );
 test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal);
 test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal);
