@@ -207,7 +207,7 @@ fn main() -> Result<()> {
 
     let gguf = gguf_file::Content::read(&mut file).map_err(|e| e.with_path(model_path.clone()))?;
     let mut total_size_in_bytes = 0;
-    for (_, tensor) in gguf.tensor_infos.iter() {
+    for tensor in gguf.tensor_infos.values() {
         let elem_count = tensor.shape.elem_count();
         total_size_in_bytes +=
             elem_count * tensor.ggml_dtype.type_size() / tensor.ggml_dtype.block_size();
