@@ -358,6 +358,35 @@ pub struct PagedKvCache {
 }
 
 impl PagedKvCache {
+    fn validate_uniform_sequence_lengths(
+        &self,
+        batch_size: usize,
+        index_pos: usize,
+        seq_len: usize,
+    ) -> Result<()> {
+        if batch_size <= 1 {
+            return Ok(());
+        }
+        let seqlens = self.seqlens_k.to_dtype(DType::U32)?.to_vec1::<u32>()?;
+        if seqlens.len() != batch_size + 1 {
+            candle::bail!(
+                "PagedKvCache.seqlens_k must have {} entries for a batch of {batch_size}, got {}",
+                batch_size + 1,
+                seqlens.len()
+            )
+        }
+        let expected_len = index_pos + seq_len;
+        if seqlens
+            .windows(2)
+            .any(|pair| pair[1].saturating_sub(pair[0]) as usize != expected_len)
+        {
+            candle::bail!(
+                "paged attention currently requires uniform sequence lengths; all rows must have length {expected_len}"
+            )
+        }
+        Ok(())
+    }
+
     /// Scatters the newly computed K/V (shape `(b_sz, num_kv_heads, seq_len,
     /// head_dim)`) into `key_cache`/`value_cache` at the physical slots that
     /// `block_table` designates for absolute positions
@@ -417,6 +446,11 @@ impl PagedKvCache {
                 .broadcast_as((b_sz, num_kv_heads, head_dim))?
                 .contiguous()?
         } else {
+            if device.is_cuda() && seq_len == 1 {
+                candle::bail!(
+                    "paged CUDA decode requires Cache::set_paged_kv_decode_slot to keep slot calculation on the device"
+                )
+            }
             let block_table = self.block_table.to_dtype(DType::U32)?.to_vec2::<u32>()?;
             if block_table.len() != b_sz {
                 candle::bail!(
@@ -495,6 +529,10 @@ pub struct Cache {
     // host-side block-table readback byte-for-byte. See
     // `Cache::set_paged_kv_decode_slot`.
     paged_kv_decode_slots: Vec<Option<Tensor>>,
+    // Clearing a paged cache discards history that is unavailable to the
+    // contiguous cache. The next use of that layer must therefore start a new
+    // sequence at position zero.
+    paged_kv_reset_required: Vec<bool>,
     cos: Tensor,
     sin: Tensor,
     device: Device,
@@ -560,6 +598,7 @@ impl Cache {
             paged_kvs: vec![None; config.num_hidden_layers],
             decode_positions: vec![None; config.num_hidden_layers],
             paged_kv_decode_slots: vec![None; config.num_hidden_layers],
+            paged_kv_reset_required: vec![false; config.num_hidden_layers],
             device: device.clone(),
             cos,
             sin,
@@ -584,15 +623,44 @@ impl Cache {
         Ok(())
     }
 
-    /// Reverts a layer to the contiguous KV cache path.
+    /// Removes caller-owned paged storage at a sequence boundary.
+    ///
+    /// Paged K/V history cannot be migrated to the contiguous cache. Clearing
+    /// it therefore also clears the contiguous history and requires the next
+    /// forward pass for this layer to begin a new sequence (`index_pos == 0`).
     pub fn clear_paged_kv(&mut self, block_idx: usize) {
         if let Some(slot) = self.paged_kvs.get_mut(block_idx) {
             *slot = None;
+        }
+        if let Some(slot) = self.kvs.get_mut(block_idx) {
+            *slot = None;
+        }
+        if let Some(reset_required) = self.paged_kv_reset_required.get_mut(block_idx) {
+            *reset_required = true;
         }
     }
 
     pub fn paged_kv(&self, block_idx: usize) -> Option<&PagedKvCache> {
         self.paged_kvs.get(block_idx).and_then(|p| p.as_ref())
+    }
+
+    fn ensure_paged_kv_sequence_boundary(
+        &mut self,
+        block_idx: usize,
+        index_pos: usize,
+    ) -> Result<()> {
+        let Some(reset_required) = self.paged_kv_reset_required.get_mut(block_idx) else {
+            candle::bail!("block_idx {block_idx} out of range for paged KV cache")
+        };
+        if *reset_required && index_pos != 0 {
+            candle::bail!(
+                "paged KV cache for layer {block_idx} was cleared; restart the sequence at index_pos == 0"
+            )
+        }
+        if index_pos == 0 {
+            *reset_required = false;
+        }
+        Ok(())
     }
 
     /// Attaches a persistent, caller-owned decode-position tensor (shape `(1,)`,
@@ -801,7 +869,17 @@ fn flash_attn_varlen_paged(
     _: f32,
     _: usize,
 ) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
+    candle::bail!("paged attention requires the `flash-attn` feature")
+}
+
+#[cfg(feature = "flash-attn")]
+fn ensure_paged_attention_available() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(feature = "flash-attn"))]
+fn ensure_paged_attention_available() -> Result<()> {
+    candle::bail!("paged attention requires the `flash-attn` feature")
 }
 
 impl CausalSelfAttention {
@@ -859,6 +937,14 @@ impl CausalSelfAttention {
         let mut v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
+
+        if cache.paged_kv(block_idx).is_some() {
+            cache.ensure_paged_kv_sequence_boundary(block_idx, index_pos)?;
+            cache
+                .paged_kv(block_idx)
+                .expect("paged cache was checked above")
+                .validate_uniform_sequence_lengths(b_sz, index_pos, seq_len)?;
+        }
 
         let q = self.apply_rotary_emb(&q, index_pos, block_idx, cache)?;
         let mut k = self.apply_rotary_emb(&k, index_pos, block_idx, cache)?;
@@ -975,6 +1061,7 @@ impl CausalSelfAttention {
         decode_slot: Option<&Tensor>,
         adapters: Option<&[Option<&str>]>,
     ) -> Result<Tensor> {
+        ensure_paged_attention_available()?;
         paged.write_new_kv(k, v, index_pos, decode_slot)?;
 
         let q = q.transpose(1, 2)?.contiguous()?.reshape((
@@ -2181,6 +2268,44 @@ mod tests {
         };
         assert!(cache.set_paged_kv(cfg.num_hidden_layers, paged).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn clearing_paged_kv_requires_a_sequence_reset() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let mut cache = Cache::new(true, DType::F32, &cfg, &device)?;
+
+        cache.clear_paged_kv(0);
+        assert!(cache.ensure_paged_kv_sequence_boundary(0, 1).is_err());
+        cache.ensure_paged_kv_sequence_boundary(0, 0)?;
+        Ok(())
+    }
+
+    #[test]
+    fn paged_kv_rejects_non_uniform_sequence_lengths() -> Result<()> {
+        let device = Device::Cpu;
+        let paged = |seqlens: Vec<u32>| {
+            Ok::<_, candle::Error>(PagedKvCache {
+                key_cache: Tensor::zeros((1, 1, 1, 1), DType::F32, &device)?,
+                value_cache: Tensor::zeros((1, 1, 1, 1), DType::F32, &device)?,
+                block_table: Tensor::zeros((2, 1), DType::U32, &device)?,
+                seqlens_k: Tensor::new(seqlens, &device)?,
+                page_block_size: 1,
+            })
+        };
+
+        paged(vec![0, 3, 6])?.validate_uniform_sequence_lengths(2, 2, 1)?;
+        assert!(paged(vec![0, 3, 7])?
+            .validate_uniform_sequence_lengths(2, 2, 1)
+            .is_err());
+        Ok(())
+    }
+
+    #[cfg(not(feature = "flash-attn"))]
+    #[test]
+    fn paged_attention_without_flash_attn_returns_an_error() {
+        assert!(ensure_paged_attention_available().is_err());
     }
 
     #[test]
