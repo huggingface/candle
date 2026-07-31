@@ -166,7 +166,7 @@ impl<M: Module> Module for Option<&M> {
     }
 }
 
-/// A single forward method using a single single tensor argument and a flag to
+/// A single forward method using a single tensor argument and a flag to
 /// separate the training and evaluation behaviors.
 pub trait ModuleT {
     fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor>;
