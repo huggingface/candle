@@ -13,6 +13,7 @@
 
 use rocm_rs::rocblas::{self, level3::GemmStridedBatchedType, types::Operation};
 
+use super::gemm_precision::gemm_reduced_precision_f16;
 use super::{RocmError, RocmStorage, RocmStorageSlice};
 use crate::{Layout, Result};
 use half::{bf16, f16};
@@ -216,6 +217,27 @@ unsafe fn gemm_strided_batched_ex(
     use rocm_rs::rocblas::ffi;
     use rocm_rs::rocblas::utils::GemmAlgo;
 
+    // `rocblas_gemm_strided_batched_ex` types alpha and beta as the *compute*
+    // type, not as the operand type, so the two travel together.
+    let alpha_f16 = f16::from_f32(cfg.gemm.alpha);
+    let beta_f16 = f16::from_f32(cfg.gemm.beta);
+    let (compute_type, alpha, beta) = if datatype == ffi::rocblas_datatype__rocblas_datatype_f16_r
+        && gemm_reduced_precision_f16()
+    {
+        (
+            ffi::rocblas_datatype__rocblas_datatype_f16_r,
+            &alpha_f16 as *const f16 as *const std::ffi::c_void,
+            &beta_f16 as *const f16 as *const std::ffi::c_void,
+        )
+    } else {
+        // bf16 lands here unconditionally: rocBLAS has no bf16 compute type.
+        (
+            ffi::rocblas_datatype__rocblas_datatype_f32_r,
+            &cfg.gemm.alpha as *const f32 as *const std::ffi::c_void,
+            &cfg.gemm.beta as *const f32 as *const std::ffi::c_void,
+        )
+    };
+
     let status = unsafe {
         rocblas_gemm_strided_batched_ex(
             blas.as_raw(),
@@ -224,7 +246,7 @@ unsafe fn gemm_strided_batched_ex(
             cfg.gemm.m,
             cfg.gemm.n,
             cfg.gemm.k,
-            &cfg.gemm.alpha as *const f32 as *const std::ffi::c_void,
+            alpha,
             a,
             datatype,
             cfg.gemm.lda,
@@ -233,7 +255,7 @@ unsafe fn gemm_strided_batched_ex(
             datatype,
             cfg.gemm.ldb,
             cfg.stride_b,
-            &cfg.gemm.beta as *const f32 as *const std::ffi::c_void,
+            beta,
             c,
             datatype,
             cfg.gemm.ldc,
@@ -243,7 +265,7 @@ unsafe fn gemm_strided_batched_ex(
             cfg.gemm.ldc,
             cfg.stride_c,
             cfg.batch_size,
-            ffi::rocblas_datatype__rocblas_datatype_f32_r,
+            compute_type,
             GemmAlgo::Standard.into(),
             0,
             0,

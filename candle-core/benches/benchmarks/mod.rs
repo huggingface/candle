@@ -40,6 +40,10 @@ impl BenchDevice for Device {
                 #[cfg(not(feature = "metal"))]
                 panic!("Metal device without metal feature enabled: {device:?}")
             }
+            #[cfg(feature = "rocm")]
+            // `RocmDevice::synchronize` is inherent, so unlike the CUDA arm
+            // this needs no `BackendDevice` import.
+            Device::Rocm(device) => Ok(device.synchronize()?),
         }
     }
 
@@ -57,6 +61,8 @@ impl BenchDevice for Device {
             }
             Device::Cuda(_) => format!("cuda_{}", name.into()),
             Device::Metal(_) => format!("metal_{}", name.into()),
+            #[cfg(feature = "rocm")]
+            Device::Rocm(_) => format!("rocm_{}", name.into()),
         }
     }
 }
@@ -67,14 +73,21 @@ struct BenchDeviceHandler {
 
 impl BenchDeviceHandler {
     pub fn new() -> Result<Self> {
-        let mut devices = Vec::new();
-        if cfg!(feature = "metal") {
-            devices.push(Device::new_metal(0)?);
+        // `Device::new_metal`/`new_cuda` exist unconditionally and error at
+        // runtime, so those two can stay behind `cfg!`; `new_rocm` is compiled
+        // only under the feature, so it needs an attribute cfg.
+        #[cfg(not(feature = "rocm"))]
+        let device = if cfg!(feature = "metal") {
+            Device::new_metal(0)?
         } else if cfg!(feature = "cuda") {
-            devices.push(Device::new_cuda(0)?);
+            Device::new_cuda(0)?
         } else {
-            devices.push(Device::Cpu);
-        }
-        Ok(Self { devices })
+            Device::Cpu
+        };
+        #[cfg(feature = "rocm")]
+        let device = Device::new_rocm(0)?;
+        Ok(Self {
+            devices: vec![device],
+        })
     }
 }

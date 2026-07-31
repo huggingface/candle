@@ -4,10 +4,9 @@
 //! `AFFINE_OP` takes both of its scalars *after* them. Read the macro in
 //! `candle-kernels/src` before touching either argument list.
 
-use super::{
-    dims_and_strides, kernels, launch_config_layout, launch_kernel, try_kernel_name, RocmDevice,
-    RocmStorageSlice, SendSyncDeviceMemory,
-};
+use super::launch::{launch_config_layout, launch_kernel};
+use super::params::dims_and_strides;
+use super::{kernels, try_kernel_name, RocmDevice, RocmStorageSlice, SendSyncDeviceMemory};
 use crate::{Layout, Result, WithDType};
 
 pub(crate) struct Affine(pub f64, pub f64);
@@ -47,7 +46,7 @@ impl Affine {
         let elem_count = shape.elem_count();
 
         let func_name = try_kernel_name::<T>("affine")?;
-        let ds = dims_and_strides(dev, layout, 1)?;
+        let ds = dims_and_strides(dev, layout)?;
         let output = dev.alloc::<T>(elem_count)?;
         let (grid, block) = launch_config_layout(dev, elem_count, ds.is_null());
 
@@ -118,7 +117,7 @@ impl Powf {
         let elem_count = shape.elem_count();
 
         let func_name = try_kernel_name::<T>("upowf")?;
-        let ds = dims_and_strides(dev, layout, 1)?;
+        let ds = dims_and_strides(dev, layout)?;
         let output = dev.alloc::<T>(elem_count)?;
         let (grid, block) = launch_config_layout(dev, elem_count, ds.is_null());
 
@@ -189,7 +188,7 @@ impl Elu {
         let elem_count = shape.elem_count();
 
         let func_name = try_kernel_name::<T>("uelu")?;
-        let ds = dims_and_strides(dev, layout, 1)?;
+        let ds = dims_and_strides(dev, layout)?;
         let output = dev.alloc::<T>(elem_count)?;
         let (grid, block) = launch_config_layout(dev, elem_count, ds.is_null());
 

@@ -6,7 +6,7 @@ use super::alloc::{RocmAllocator, SendSyncDeviceMemory};
 #[cfg(feature = "miopen")]
 use super::wrappers::SendSyncMIOpenHandle;
 use super::wrappers::{SendSyncPseudoRng, SendSyncRocblasHandle, SendSyncStream};
-use super::RocmError;
+use super::{rocm_error, RocmError, WrapErr};
 use rocm_rs::hip::Device as HipDevice;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -63,7 +63,7 @@ impl RocmDevice {
         let allocator = Arc::new(RocmAllocator::new(stream.clone()));
 
         let mut rocrand = SendSyncPseudoRng::new(rocm_rs::rocrand::rng_type::PSEUDO_DEFAULT)
-            .map_err(|e| crate::Error::Msg(format!("Failed to create rocrand generator: {}", e)))?;
+            .map_err(|e| rocm_error(format!("Failed to create rocrand generator: {}", e)))?;
         // Put the generator on *this* device's stream rather than leaving it
         // on the null stream: it writes into allocator memory, and the
         // allocator recycles a block on the assumption that all work touching
@@ -73,12 +73,12 @@ impl RocmDevice {
             // SAFETY: `stream` outlives the generator — both are owned by this
             // device, and `rocrand` is dropped first.
             unsafe { rocrand.set_stream(rocm_rs::hip::stream_to_rocrand(&stream)) }
-                .map_err(|e| crate::Error::Msg(format!("Failed to set rocrand stream: {}", e)))?;
+                .map_err(|e| rocm_error(format!("Failed to set rocrand stream: {}", e)))?;
         }
         let seed = 299792458u64;
         rocrand
             .set_seed(seed)
-            .map_err(|e| crate::Error::Msg(format!("Failed to set rocrand seed: {}", e)))?;
+            .map_err(|e| rocm_error(format!("Failed to set rocrand seed: {}", e)))?;
 
         let blas = SendSyncRocblasHandle::new().map_err(|e| RocmError::Rocblas(e.to_string()))?;
         blas.set_stream(&stream)
@@ -92,7 +92,7 @@ impl RocmDevice {
         // generation must not reuse device 0's code objects.
         let kernel_manager = Arc::new(
             KernelCache::new(device_id)
-                .map_err(|e| crate::Error::Msg(format!("Failed to create kernel cache: {}", e)))?,
+                .map_err(|e| rocm_error(format!("Failed to create kernel cache: {}", e)))?,
         );
 
         Ok(Self {
@@ -144,15 +144,15 @@ impl RocmDevice {
     pub fn alloc<T>(&self, len: usize) -> Result<SendSyncDeviceMemory<T>> {
         self.bind()?;
         SendSyncDeviceMemory::new(&self.allocator, len)
-            .map_err(|e| crate::Error::Msg(format!("Failed to allocate ROCm memory: {}", e)))
+            .map_err(|e| rocm_error(format!("Failed to allocate ROCm memory: {}", e)))
     }
 
     pub fn alloc_zeros<T: Default + Clone>(&self, len: usize) -> Result<SendSyncDeviceMemory<T>> {
         self.bind()?;
         let mut mem = SendSyncDeviceMemory::new(&self.allocator, len)
-            .map_err(|e| crate::Error::Msg(format!("Failed to allocate ROCm memory: {}", e)))?;
+            .map_err(|e| rocm_error(format!("Failed to allocate ROCm memory: {}", e)))?;
         mem.memset(0)
-            .map_err(|e| crate::Error::Msg(format!("Failed to memset: {}", e)))?;
+            .map_err(|e| rocm_error(format!("Failed to memset: {}", e)))?;
         Ok(mem)
     }
 
@@ -160,9 +160,9 @@ impl RocmDevice {
         self.bind()?;
         let count = src.len();
         let mut dst = SendSyncDeviceMemory::new(&self.allocator, count)
-            .map_err(|e| crate::Error::Msg(format!("Failed to allocate ROCm memory: {}", e)))?;
+            .map_err(|e| rocm_error(format!("Failed to allocate ROCm memory: {}", e)))?;
         dst.copy_from_host(src)
-            .map_err(|e| crate::Error::Msg(format!("Failed to copy host to device: {}", e)))?;
+            .map_err(|e| rocm_error(format!("Failed to copy host to device: {}", e)))?;
         Ok(dst)
     }
 
@@ -177,18 +177,14 @@ impl RocmDevice {
         // faulted in by the copy either way. Not worth the `unsafe`.
         let mut dst: Vec<T> = vec![T::default(); count];
         src.copy_to_host(&mut dst)
-            .map_err(|e| crate::Error::Msg(format!("Failed to copy device to host: {}", e)))?;
+            .map_err(|e| rocm_error(format!("Failed to copy device to host: {}", e)))?;
         Ok(dst)
     }
 
     pub fn synchronize(&self) -> Result<()> {
         self.stream
             .synchronize()
-            .map_err(|e| crate::Error::Msg(format!("Synchronize failed: {}", e)))
-    }
-
-    pub(crate) fn kernel_manager(&self) -> &KernelCache {
-        &self.kernel_manager
+            .map_err(|e| rocm_error(format!("Synchronize failed: {}", e)))
     }
 
     #[cfg(feature = "miopen")]
@@ -209,7 +205,7 @@ impl RocmDevice {
     pub(super) fn rocrand(&self) -> Result<std::sync::MutexGuard<'_, SendSyncPseudoRng>> {
         self.rocrand
             .lock()
-            .map_err(|_| crate::Error::Msg("Failed to lock rocrand generator".to_string()))
+            .map_err(|_| rocm_error("Failed to lock rocrand generator".to_string()))
     }
 
     /// Get or load a kernel function from the cache.
@@ -224,9 +220,7 @@ impl RocmDevice {
         module: &candle_rocm_kernels::Module,
     ) -> crate::Result<rocm_rs::hip::Function> {
         self.bind()?;
-        self.kernel_manager
-            .function(module, kernel_name)
-            .map_err(|e| crate::Error::Msg(e.to_string()))
+        self.kernel_manager.function(module, kernel_name).w()
     }
 }
 
@@ -246,7 +240,7 @@ fn multiprocessor_count(ordinal: i32) -> Result<u32> {
         )
     };
     if status != bindings::hipError_t_hipSuccess {
-        return Err(crate::Error::Msg(format!(
+        return Err(rocm_error(format!(
             "hipDeviceGetAttribute(MultiprocessorCount) failed for device {ordinal} \
              with error {status}"
         )));

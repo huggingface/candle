@@ -3,9 +3,10 @@
 //! Argument order always comes from the kernel macro in `candle-kernels/src`,
 //! never from what a neighbouring launcher happens to do.
 
+use super::launch::{launch_config_layout, launch_kernel};
+use super::params::{dims_and_strides, dims_and_strides_pair};
 use super::{
-    dims_and_strides, dims_and_strides_pair, kernels, launch_config_layout, launch_kernel,
-    params_from_vec, try_kernel_name, Map1, Map2, Map2Any, RocmDevice, RocmStorage,
+    kernels, params_from_vec, try_kernel_name, Map1, Map2, Map2Any, RocmDevice, RocmStorage,
     RocmStorageSlice, SendSyncDeviceMemory, S,
 };
 use crate::op::CmpOp;
@@ -43,7 +44,7 @@ impl<U: crate::op::UnaryOpT> Map1 for U {
         let elem_count = shape.elem_count();
 
         let func_name = try_kernel_name::<T>(U::KERNEL)?;
-        let ds = dims_and_strides(dev, layout, 1)?;
+        let ds = dims_and_strides(dev, layout)?;
         let output = dev.alloc::<T>(elem_count)?;
         let (grid, block) = launch_config_layout(dev, elem_count, ds.is_null());
 

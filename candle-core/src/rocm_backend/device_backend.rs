@@ -8,7 +8,7 @@ use crate::backend::BackendDevice;
 use crate::{CpuStorage, CpuStorageRef, DType, Result, Shape};
 use half::{bf16, f16};
 
-use super::{RocmDevice, RocmStorage, RocmStorageSlice};
+use super::{rocm_error, RocmDevice, RocmStorage, RocmStorageSlice};
 
 macro_rules! dispatch_dtypes {
     ($method:ident, ($self:expr, $elem_count:expr, $dtype:expr) -> |$slice:ident| $body:expr) => {
@@ -54,7 +54,7 @@ macro_rules! dispatch_dtypes {
                 $body
             }
             DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
-                return Err(crate::Error::Msg(format!(
+                return Err(rocm_error(format!(
                     "DType {:?} not yet supported for ROCm",
                     $dtype
                 )));
@@ -90,7 +90,7 @@ impl RocmDevice {
             | CpuStorageRef::F6E3M2(_)
             | CpuStorageRef::F4(_)
             | CpuStorageRef::F8E8M0(_) => {
-                return Err(crate::Error::Msg(
+                return Err(rocm_error(
                     "F6E2M3/F6E3M2/F4/F8E8M0 storage is not yet supported for ROCm".to_string(),
                 ))
             }
@@ -188,11 +188,11 @@ impl BackendDevice for RocmDevice {
         let mut rocrand = self.rocrand()?;
         rocrand
             .set_seed(seed)
-            .map_err(|e| crate::Error::Msg(format!("Failed to set rocrand seed: {}", e)))?;
+            .map_err(|e| rocm_error(format!("Failed to set rocrand seed: {}", e)))?;
         *self
             .seed_value
             .write()
-            .map_err(|_| crate::Error::Msg("Failed to lock ROCm seed value".to_string()))? = seed;
+            .map_err(|_| rocm_error("Failed to lock ROCm seed value".to_string()))? = seed;
         Ok(())
     }
 
@@ -200,7 +200,7 @@ impl BackendDevice for RocmDevice {
         let seed = self
             .seed_value
             .read()
-            .map_err(|_| crate::Error::Msg("Failed to lock ROCm seed value".to_string()))?;
+            .map_err(|_| rocm_error("Failed to lock ROCm seed value".to_string()))?;
         Ok(*seed)
     }
 

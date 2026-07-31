@@ -53,7 +53,7 @@ pub fn miopen_dtype<T: Copy>() -> Result<DataType> {
     } else if type_name.contains("f16") {
         Ok(DataType::MiopenHalf)
     } else {
-        Err(crate::Error::Msg(format!(
+        Err(super::rocm_error(format!(
             "unsupported dtype for MIOpen: {}",
             type_name
         )))
@@ -117,11 +117,11 @@ fn algo_cache() -> &'static Mutex<HashMap<AlgoKey, CachedAlgo>> {
 fn lock_algo_cache() -> Result<std::sync::MutexGuard<'static, HashMap<AlgoKey, CachedAlgo>>> {
     algo_cache()
         .lock()
-        .map_err(|_| crate::Error::Msg("MIOpen algorithm cache is poisoned".to_string()))
+        .map_err(|_| super::rocm_error("MIOpen algorithm cache is poisoned".to_string()))
 }
 
 fn miopen_err(what: &str, e: impl std::fmt::Display) -> crate::Error {
-    crate::Error::Msg(format!("MIOpen {what} failed: {e}"))
+    super::rocm_error(format!("MIOpen {what} failed: {e}"))
 }
 
 /// Rejects a convolution whose declared output disagrees with MIOpen's, which

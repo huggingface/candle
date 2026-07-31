@@ -1,8 +1,7 @@
 //! Launchers for the reduction kernels in `candle-kernels/src/reduce.cu`.
 
-use super::{
-    kernels, launch_kernel, try_kernel_name, Map1Any, RocmDevice, SendSyncDeviceMemory, S,
-};
+use super::launch::launch_kernel;
+use super::{kernels, try_kernel_name, Map1Any, RocmDevice, SendSyncDeviceMemory, S};
 use crate::op::ReduceOp;
 use crate::{Layout, Result};
 

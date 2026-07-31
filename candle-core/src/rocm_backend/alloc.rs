@@ -198,9 +198,14 @@ pub struct SendSyncDeviceMemory<T> {
 // SAFETY: the state is a device pointer plus a refcount on the allocator. The
 // pointer addresses GPU memory, not host memory, so no host thread can race on
 // it; ownership is unique and mutation goes through `&mut self`.
-unsafe impl<T: Send> Send for SendSyncDeviceMemory<T> {}
+//
+// `T` is unbounded on purpose. No value of `T` is ever stored here — it is a
+// size and type tag for `PhantomData` and for the `&[T]` the host transfers
+// borrow — so `T`'s own thread-safety is irrelevant. A `T: Send` bound would
+// read as if it were load-bearing, which is exactly the confusion to avoid.
+unsafe impl<T> Send for SendSyncDeviceMemory<T> {}
 // SAFETY: see the `Send` impl above.
-unsafe impl<T: Sync> Sync for SendSyncDeviceMemory<T> {}
+unsafe impl<T> Sync for SendSyncDeviceMemory<T> {}
 
 impl<T> SendSyncDeviceMemory<T> {
     pub(crate) fn new(alloc: &Arc<RocmAllocator>, count: usize) -> Result<Self, HipError> {

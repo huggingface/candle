@@ -30,10 +30,9 @@ impl BenchDevice for Device {
                 panic!("Metal device without metal feature enabled: {device:?}")
             }
             #[cfg(feature = "rocm")]
-            Device::Rocm(device) => {
-                use candle::backend::BackendDevice;
-                Ok(device.synchronize()?)
-            }
+            // `RocmDevice::synchronize` is inherent, so unlike the CUDA arm
+            // this needs no `BackendDevice` import.
+            Device::Rocm(device) => Ok(device.synchronize()?),
         }
     }
 
@@ -63,15 +62,20 @@ struct BenchDeviceHandler {
 
 impl BenchDeviceHandler {
     pub fn new() -> Result<Self> {
-        let mut devices = Vec::new();
+        // Exactly one accelerator is benchmarked per build and the features are
+        // mutually exclusive by priority, so the choice is a cfg'd binding
+        // rather than a sequence of cfg'd pushes — which clippy reads as
+        // `vec_init_then_push`.
         #[cfg(feature = "metal")]
-        devices.push(Device::new_metal(0)?);
+        let device = Device::new_metal(0)?;
         #[cfg(all(feature = "cuda", not(feature = "metal")))]
-        devices.push(Device::new_cuda(0)?);
+        let device = Device::new_cuda(0)?;
         #[cfg(all(feature = "rocm", not(feature = "metal"), not(feature = "cuda")))]
-        devices.push(Device::new_rocm(0)?);
+        let device = Device::new_rocm(0)?;
         #[cfg(not(any(feature = "metal", feature = "cuda", feature = "rocm")))]
-        devices.push(Device::Cpu);
-        Ok(Self { devices })
+        let device = Device::Cpu;
+        Ok(Self {
+            devices: vec![device],
+        })
     }
 }
