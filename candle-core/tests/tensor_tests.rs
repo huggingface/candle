@@ -9,6 +9,13 @@ fn zeros(device: &Device) -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn from_vec_and_from_slice_reject_mismatched_concrete_shapes() {
+    let data = [1f32, 2., 3., 4.];
+    assert!(Tensor::from_slice(&data, (2, 2, 2), &Device::Cpu).is_err());
+    assert!(Tensor::from_vec(data.to_vec(), (2, 2, 2), &Device::Cpu).is_err());
+}
+
 fn ones(device: &Device) -> Result<()> {
     assert_eq!(
         Tensor::ones((2, 3), DType::U8, device)?.to_vec2::<u8>()?,

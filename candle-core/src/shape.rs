@@ -472,8 +472,12 @@ pub trait ShapeWithOneHole {
 }
 
 impl<S: Into<Shape>> ShapeWithOneHole for S {
-    fn into_shape(self, _el_count: usize) -> Result<Shape> {
-        Ok(self.into())
+    fn into_shape(self, el_count: usize) -> Result<Shape> {
+        let shape = self.into();
+        if shape.elem_count() != el_count {
+            crate::bail!("cannot reshape tensor with {el_count} elements to {shape:?}")
+        }
+        Ok(shape)
     }
 }
 
@@ -630,5 +634,11 @@ mod tests {
         assert_eq!(shape.dims(), &[2, 3, 4, 5, 6]);
         let shape = Shape::from((2, 3, 4, 5, 6, 7));
         assert_eq!(shape.dims(), &[2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn concrete_shape_requires_matching_element_count() {
+        assert!((2, 3).into_shape(6).is_ok());
+        assert!((2, 3).into_shape(5).is_err());
     }
 }
