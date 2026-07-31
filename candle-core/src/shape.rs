@@ -9,7 +9,7 @@ pub const SCALAR: Shape = Shape(vec![]);
 
 impl std::fmt::Debug for Shape {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", &self.dims())
+        write!(f, "{:?}", self.dims())
     }
 }
 
