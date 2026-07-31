@@ -2,6 +2,27 @@
 
 ROCm/HIP kernel support for the Candle deep learning framework.
 
+## Origin
+
+This backend began as [@airpods69](https://github.com/airpods69)'s
+[#3424, "Initial implementation for ROCm support"](https://github.com/huggingface/candle/pull/3424),
+which established everything the work below rests on: the decision to bind
+ROCm through [`rocm-rs`](https://crates.io/crates/rocm-rs), the `rocm` feature
+and its wiring through `Device`, `Storage` and the backend traits, the shape of
+`rocm_backend` as a mirror of `cuda_backend`, and a working device, allocator,
+RNG and matmul. That PR also picked up the thread from
+[#3186](https://github.com/huggingface/candle/pull/3186) and the ROCm request
+issue it referenced.
+
+Its open checklist — convolutions, training a model, and "update the API to
+make more sense" — is what this work continued. The one place it diverges is
+the kernels: #3424 hand-wrote `.hip` sources, and this crate compiles the
+shared `.cu` ones instead, for the reasons in the Overview.
+
+Development and testing happened on a Radeon RX 7800 XT (gfx1101, RDNA3) under
+ROCm 7.2.4 — the same architecture as #3424's RX 7700 XT, one ROCm major
+version newer.
+
 ## Overview
 
 This crate does not ship kernels of its own. It embeds the **shared**
