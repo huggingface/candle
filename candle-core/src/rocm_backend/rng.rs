@@ -7,7 +7,7 @@ use crate::backend::BackendStorage;
 use crate::{DType, Layout, Result, Shape};
 
 use super::alloc::SendSyncDeviceMemory;
-use super::{Affine, RocmDevice, RocmStorage, RocmStorageSlice};
+use super::{rocm_error, Affine, RocmDevice, RocmStorage, RocmStorageSlice};
 use rocm_rs::rocrand::bindings;
 use rocm_rs::rocrand::Generator;
 
@@ -19,11 +19,10 @@ use rocm_rs::rocrand::Generator;
 /// straight to the C entry point costs nothing and keeps the buffers
 /// stream-ordered.
 ///
-/// rocrand is left on the null stream, as before. `RocmDevice`'s own stream is
-/// blocking (`hipStreamCreate` with flags 0), so the null stream legacy-
-/// synchronises with it in both directions: the generator kernel runs after the
-/// buffer's stream-ordered allocation and before anything the device stream
-/// queues afterwards.
+/// The generator runs on the owning `RocmDevice`'s stream — `RocmDevice::new`
+/// binds it there with `rocrand_set_stream` — so its writes are ordered against
+/// the buffer's allocation and against whatever consumes the buffer next, which
+/// is what the caching allocator's block reuse relies on (see `super::alloc`).
 ///
 /// # Safety
 /// `call` must be handed the pointer and element count of `data` and must write
@@ -39,7 +38,7 @@ where
 {
     let status = call(rng.as_ptr(), data.as_ptr() as *mut T, data.count());
     if status != bindings::rocrand_status_ROCRAND_STATUS_SUCCESS {
-        return Err(crate::Error::Msg(format!(
+        return Err(rocm_error(format!(
             "rocrand {what} failed with status {status}"
         )));
     }
@@ -81,7 +80,7 @@ impl RocmDevice {
         // `copy_from_device` clamps to the shorter of the two allocations, so
         // this keeps the first `elem_count` elements and drops the rest.
         dst.copy_from_device(&data)
-            .map_err(|e| crate::Error::Msg(format!("Failed to copy device to device: {}", e)))?;
+            .map_err(|e| rocm_error(format!("Failed to copy device to device: {}", e)))?;
         Ok(dst)
     }
 
@@ -138,7 +137,7 @@ impl RocmDevice {
                 RocmStorageSlice::F64(data)
             }
             dtype => {
-                return Err(crate::Error::Msg(format!(
+                return Err(rocm_error(format!(
                     "dtype {:?} not supported for rocm rand_uniform",
                     dtype
                 )))
@@ -190,7 +189,7 @@ impl RocmDevice {
                 RocmStorageSlice::F64(self.shrink_to(data, elem_count)?)
             }
             dtype => {
-                return Err(crate::Error::Msg(format!(
+                return Err(rocm_error(format!(
                     "dtype {:?} not supported for rocm rand_normal",
                     dtype
                 )))

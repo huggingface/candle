@@ -25,7 +25,9 @@
 use super::{GgmlDType, QStorage};
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::quantized::k_quants::GgmlType;
-use crate::rocm_backend::{RocmDevice, RocmStorage, RocmStorageSlice, SendSyncDeviceMemory};
+use crate::rocm_backend::{
+    rocm_error, RocmDevice, RocmStorage, RocmStorageSlice, SendSyncDeviceMemory,
+};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 
 mod dmmv;
@@ -66,7 +68,7 @@ fn upload(device: &RocmDevice, data: &[u8], dtype: GgmlDType) -> Result<SendSync
     // zeroed.
     inner
         .copy_from_host(data)
-        .map_err(|e| crate::Error::Msg(format!("failed to upload quantized data: {e}")))?;
+        .map_err(|e| rocm_error(format!("failed to upload quantized data: {e}")))?;
     Ok(inner)
 }
 
@@ -125,7 +127,7 @@ impl QRocmStorage {
         // `copy_to_host` clamps to the shorter of the two buffers.
         self.data
             .copy_to_host(&mut out)
-            .map_err(|e| crate::Error::Msg(format!("failed to read quantized data: {e}")))?;
+            .map_err(|e| rocm_error(format!("failed to read quantized data: {e}")))?;
         Ok(out)
     }
 
@@ -350,10 +352,6 @@ impl QRocmStorage {
         _ids_l: &Layout,
     ) -> Result<(RocmStorage, Shape)> {
         crate::bail!("indexed_moe_forward is not implemented for the ROCm backend")
-    }
-
-    pub fn device_ptr(&self) -> Result<*const u8> {
-        crate::bail!("device_ptr is not implemented for the ROCm backend")
     }
 }
 

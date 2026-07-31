@@ -12,7 +12,7 @@
 
 use crate::quantized::GgmlDType;
 use crate::rocm_backend::rocm_rs::hip::Dim3;
-use crate::rocm_backend::{kernels, RocmDevice, SendSyncDeviceMemory};
+use crate::rocm_backend::{kernels, rocm_error, RocmDevice, SendSyncDeviceMemory};
 use crate::Result;
 use half::f16;
 use std::ffi::c_void;
@@ -37,7 +37,7 @@ pub(super) fn arg<T>(v: &T) -> *mut c_void {
 }
 
 pub(super) fn launch_err(name: &str, e: impl std::fmt::Display) -> crate::Error {
-    crate::Error::Msg(format!("quantized kernel {name} launch failed: {e}"))
+    rocm_error(format!("quantized kernel {name} launch failed: {e}"))
 }
 
 /// Kernel name, whether it is a K-quant, block size and grid size for one

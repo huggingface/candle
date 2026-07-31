@@ -308,8 +308,13 @@ impl QStorage {
     pub fn device_ptr(&self) -> Result<*const u8> {
         match self {
             QStorage::Cuda(storage) => storage.device_ptr(),
+            // The ROCm quantized kernels take the buffer straight off
+            // `QRocmStorage`, so nothing here ever needs a raw pointer; the arm
+            // exists only because the match has to be exhaustive.
             #[cfg(feature = "rocm")]
-            QStorage::Rocm(storage) => storage.device_ptr(),
+            QStorage::Rocm(_) => {
+                crate::bail!("device_ptr is not implemented for the ROCm backend")
+            }
             QStorage::Metal(_) | QStorage::Cpu(_) => {
                 crate::bail!("not implemented");
             }

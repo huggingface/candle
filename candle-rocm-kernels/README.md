@@ -142,7 +142,7 @@ the same `candle-kernels` code the CUDA backend launches.
 | `reduce_op` (sum/min/max/argmin/argmax) | shared kernel | `fast_*`; argmin/argmax return `u32` |
 | `gather`, `scatter`, `scatter_add`, `index_select`, `index_add` | shared kernel | ids must be `u8`/`u32`/`i64` |
 | `arg_sort` | shared kernel | `asort_asc_*` / `asort_desc_*` |
-| `matmul` | rocBLAS | `f32`/`f64`/`f16`/`bf16`, strided-batched |
+| `matmul` | rocBLAS | `f32`/`f64`/`f16`/`bf16`, strided-batched; see the precision knobs below |
 | `conv1d`, `conv2d` | im2col + rocBLAS GEMM | MIOpen instead under `--features miopen` |
 | `conv_transpose1d` | col2im + GEMM | falls back to the shared kernel when dilation/padding/output-padding is non-trivial |
 | `conv_transpose2d` | shared kernel | always direct, as on CUDA |
@@ -175,6 +175,22 @@ never launched — every elementwise `F8E4M3` arm returns an error, and the
 derives. What *does* work is moving fp8 bytes around: `const_set` launches
 `const_set_f8_e4m3`, `copy2d` uses `hipMemcpy2D` and `copy_strided_src` reuses
 `ucopy_u8`, none of which converts.
+
+### GEMM precision knobs
+
+`candle::rocm` mirrors `candle::cuda`'s three getter/setter pairs, so portable
+code can express the intent on either backend:
+
+| knob | effect on ROCm |
+|---|---|
+| `set_gemm_reduced_precision_f16` | **live** — selects the `rocblas_datatype_f16_r` compute type (the analogue of `CUBLAS_COMPUTE_16F`) and passes alpha/beta as `f16` |
+| `set_gemm_reduced_precision_bf16` | stored, no effect — rocBLAS has no bf16 compute type, so bf16 always accumulates in `f32` |
+| `set_gemm_reduced_precision_f32` | stored, no effect — the xf32 analogue is a handle-wide *math mode* available only on CDNA (gfx94x), not a per-call compute type |
+
+All three default to `false`, matching CUDA: f16 and bf16 go through
+`rocblas_gemm_strided_batched_ex` with an `f32` compute type, so there is no
+silent precision loss out of the box. `tests_gemm.rs` pins that the f16 knob
+really changes the result rather than being accepted and ignored.
 
 ### Quantized matmul paths
 
@@ -209,10 +225,21 @@ against each other (`quantized::rocm::bench`, `--ignored`).
   fast path is Metal-only on every backend.
 - **`quantize_imatrix` / `quantize_imatrix_onto`.** Error out; plain `quantize`
   round-trips through the CPU quantizer.
-- **`device_ptr`** on quantized storage. Errors; only the CUDA path exposes it.
+- **`device_ptr`** on quantized storage. `QStorage::device_ptr` errors for the
+  ROCm arm; only the CUDA path exposes it. Nothing on this backend needs it —
+  the quantized launchers take the buffer straight off `QRocmStorage`.
 - **fp8 arithmetic** as described above. Enabling it means validating the
   OCP-vs-NVIDIA E4M3 conversion on hardware first; only the bit-moves are safe
   on the strength of the encodings matching.
+
+### Errors
+
+Everything the backend raises arrives as `candle::Error::Rocm`, wrapping a
+`candle::rocm_backend::RocmError` — the same shape as `Error::Cuda`/`CudaError`,
+so a ROCm failure carries a backtrace and can be matched on rather than
+string-scraped. Both wrappers are `#[error(transparent)]`, so the rendered
+message is the one written at the failing call site. `RocmError::Kernel` wraps
+this crate's `KernelError`.
 
 ## Divergences from `cuda_backend`
 

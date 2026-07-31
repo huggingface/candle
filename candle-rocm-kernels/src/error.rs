@@ -10,8 +10,6 @@ pub enum KernelError {
     Compilation(String),
     #[error("Internal error: {0}")]
     Internal(String),
-    #[error("Unsupported dtype: {0}")]
-    UnsupportedDType(String),
 }
 
 impl From<rocm_rs::hip::Error> for KernelError {

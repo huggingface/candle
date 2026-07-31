@@ -43,11 +43,14 @@ fmt:
 fmt-check:
 	$(CARGO) fmt --all -- --check
 
+# Mirrors `.github/workflows/rust-ci.yml`'s clippy job exactly, `--benches`
+# included. Dropping any of those flags means passing here and failing CI.
 clippy:
-	$(CARGO) clippy --workspace --tests --examples -- -D warnings
+	$(CARGO) clippy --workspace --tests --examples --benches -- -D warnings
 
+# Same flags as `clippy` above, minus the members that have no ROCm code.
 clippy-rocm:
-	$(CARGO) clippy -p candle-core -p candle-nn --features rocm --tests -- -D warnings
+	$(CARGO) clippy -p candle-core -p candle-nn --features rocm --tests --benches -- -D warnings
 
 test:
 	$(CARGO) test --workspace

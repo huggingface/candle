@@ -1,7 +1,16 @@
-//! Kernel naming and launch geometry.
+//! Kernel naming, launch geometry, and the launch itself.
 //!
-//! The two questions every launcher asks before it can call the driver: what is
-//! this kernel called for dtype `T`, and how many blocks should it get.
+//! Everything a launcher needs between having a slice and having queued work:
+//! what the kernel is called for dtype `T`, how many blocks it should get, and
+//! the call into the driver. There is one loading path ([`RocmDevice::get_or_load_func`])
+//! and one launch-failure message, so a kernel that cannot be found or cannot be
+//! launched reports the same way whichever entry point was used.
+//!
+//! Two entry points remain because the grids genuinely differ:
+//! [`launch_kernel`] takes a grid the caller sized (usually from
+//! [`launch_config`], which may cap it — sound only for the grid-stride
+//! elementwise kernels), while [`launch_dense`] sizes its own from the output
+//! element count and never caps.
 
 use super::{kernels, RocmDevice, RocmError};
 use crate::Result;
@@ -144,6 +153,27 @@ pub fn launch_config_layout(
     launch_config_for(num_elems, dev.multiprocessor_count(), contiguous)
 }
 
+/// Grid and block for a kernel that maps one thread to one output element.
+///
+/// [`launch_config`] may cap the grid, which is only sound for the grid-stride
+/// elementwise kernels. Everything in `conv.cu` instead returns early past the
+/// end of its output, so a capped grid would silently leave the tail untouched;
+/// this sizes the grid in full and errors rather than clamping.
+pub(crate) fn dense_grid(dst_el: usize) -> Result<(rocm_rs::hip::Dim3, rocm_rs::hip::Dim3)> {
+    const BLOCK: usize = 256;
+    let blocks = u32::try_from(dst_el.div_ceil(BLOCK).max(1))
+        .map_err(|_| RocmError::Internal(format!("output of {dst_el} elements is too large")))?;
+    Ok((
+        rocm_rs::hip::Dim3::from(blocks),
+        rocm_rs::hip::Dim3::from(BLOCK as u32),
+    ))
+}
+
+/// Launches `func_name` from `module` on `dev`'s stream.
+///
+/// # Safety
+/// `args` must match the kernel's parameter list exactly, and `grid` must cover
+/// every element the kernel writes unless the kernel is a grid-stride loop.
 pub(super) unsafe fn launch_kernel(
     dev: &RocmDevice,
     module: &kernels::Module,
@@ -152,16 +182,27 @@ pub(super) unsafe fn launch_kernel(
     block: rocm_rs::hip::Dim3,
     args: &mut [*mut std::ffi::c_void],
 ) -> Result<()> {
-    dev.bind()?;
-    // No lock is held across the launch: `KernelCache` guards its own maps and
-    // hands back a plain `hipFunction_t`.
-    let kernel = dev
-        .kernel_manager()
-        .function(module, func_name)
-        .map_err(|e| crate::Error::Msg(e.to_string()))?;
-    kernel
-        .launch(grid, block, 0, Some(&dev.stream), args)
-        .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))
+    // No lock is held across the launch: `get_or_load_func` releases the kernel
+    // cache's own locks and hands back a plain `hipFunction_t`.
+    let func = dev.get_or_load_func(func_name, module)?;
+    func.launch(grid, block, 0, Some(dev.stream()), args)
+        .map_err(|e| RocmError::Internal(format!("{func_name} launch failed: {e}")).into())
+}
+
+/// [`launch_kernel`] with the grid sized by [`dense_grid`] instead of by the
+/// caller.
+///
+/// # Safety
+/// As [`launch_kernel`].
+pub(crate) unsafe fn launch_dense(
+    dev: &RocmDevice,
+    module: &kernels::Module,
+    func_name: &str,
+    dst_el: usize,
+    args: &mut [*mut std::ffi::c_void],
+) -> Result<()> {
+    let (grid, block) = dense_grid(dst_el)?;
+    launch_kernel(dev, module, func_name, grid, block, args)
 }
 
 #[cfg(test)]

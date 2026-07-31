@@ -11,7 +11,8 @@
 
 use std::ffi::c_void;
 
-use super::utils::{info_buffer, launch_dense};
+use super::launch::launch_dense;
+use super::params::info_buffer;
 use super::{kernels, try_kernel_name, Map2, RocmDevice, SendSyncDeviceMemory};
 use crate::{Layout, Result};
 

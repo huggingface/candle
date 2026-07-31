@@ -12,9 +12,10 @@
 
 use std::ffi::c_void;
 
+use super::launch::{launch_config, launch_kernel};
 use super::{
-    kernels, launch_config, launch_kernel, try_kernel_name, Map1, Map2InPlace, RocmDevice,
-    RocmStorage, RocmStorageSlice, SendSyncDeviceMemory,
+    kernels, try_kernel_name, Map1, Map2InPlace, RocmDevice, RocmStorage, RocmStorageSlice,
+    SendSyncDeviceMemory,
 };
 use crate::{Layout, Result};
 

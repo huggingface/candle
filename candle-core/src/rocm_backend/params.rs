@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use super::{RocmDevice, SendSyncDeviceMemory};
+use super::{rocm_error, RocmDevice, SendSyncDeviceMemory};
 use crate::{Layout, Result};
 
 /// Cached device copy of a `[dims, strides…]` parameter vector.
@@ -64,7 +64,7 @@ pub fn params_from_vec(dev: &RocmDevice, params: Vec<usize>) -> Result<ParamBuff
     {
         let cache = cache
             .lock()
-            .map_err(|_| crate::Error::Msg("ROCm parameter cache is poisoned".to_string()))?;
+            .map_err(|_| rocm_error("ROCm parameter cache is poisoned".to_string()))?;
         if let Some(buffer) = cache.get(&params) {
             return Ok(ParamBuffer::Cached(buffer.clone()));
         }
@@ -73,7 +73,7 @@ pub fn params_from_vec(dev: &RocmDevice, params: Vec<usize>) -> Result<ParamBuff
     let buffer = Arc::new(dev.clone_htod(&params)?);
     let mut cache = cache
         .lock()
-        .map_err(|_| crate::Error::Msg("ROCm parameter cache is poisoned".to_string()))?;
+        .map_err(|_| rocm_error("ROCm parameter cache is poisoned".to_string()))?;
     // Another thread may have inserted the same key while this one uploaded;
     // keep whichever landed first so the two threads share one buffer.
     Ok(ParamBuffer::Cached(
@@ -81,21 +81,18 @@ pub fn params_from_vec(dev: &RocmDevice, params: Vec<usize>) -> Result<ParamBuff
     ))
 }
 
-pub(super) fn dims_and_strides(
-    dev: &RocmDevice,
-    layout: &Layout,
-    n_strides: usize,
-) -> Result<ParamBuffer> {
+/// The `[dims, strides]` prefix a one-operand strided kernel takes.
+///
+/// A contiguous layout gets no buffer at all: the kernels test `info` for null
+/// and index linearly when it is.
+pub(super) fn dims_and_strides(dev: &RocmDevice, layout: &Layout) -> Result<ParamBuffer> {
     if layout.is_contiguous() {
         return Ok(ParamBuffer::Null);
     }
     let dims = layout.shape().dims();
-    let strides = layout.stride();
-    let mut data = Vec::with_capacity(dims.len() + n_strides * dims.len());
+    let mut data = Vec::with_capacity(dims.len() * 2);
     data.extend_from_slice(dims);
-    for _ in 0..n_strides {
-        data.extend_from_slice(strides);
-    }
+    data.extend_from_slice(layout.stride());
     params_from_vec(dev, data)
 }
 
@@ -112,6 +109,21 @@ pub(super) fn dims_and_strides_pair(
     data.extend_from_slice(dims);
     data.extend_from_slice(l1.stride());
     data.extend_from_slice(l2.stride());
+    params_from_vec(dev, data)
+}
+
+/// Concatenates `parts` and uploads them as a kernel `info` buffer.
+///
+/// The conv, pool and upsample kernels dereference `info` unconditionally, so
+/// unlike the elementwise ops there is no null shortcut for a contiguous
+/// layout — which is exactly why routing this through the parameter cache
+/// matters more here than anywhere else. Conv and pool shapes are fixed for the
+/// life of a model, so after the first forward pass every call is a hit.
+pub(crate) fn info_buffer(dev: &RocmDevice, parts: &[&[usize]]) -> Result<ParamBuffer> {
+    let mut data = Vec::with_capacity(parts.iter().map(|p| p.len()).sum());
+    for part in parts {
+        data.extend_from_slice(part);
+    }
     params_from_vec(dev, data)
 }
 
