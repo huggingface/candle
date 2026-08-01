@@ -125,17 +125,36 @@ fn mmvq_handles_half_precision_activations() -> Result<()> {
     Ok(())
 }
 
-/// An odd `n` with a batch is the case MMVQ declines (the kernel would write
-/// one row past the output); the result still has to be right, via whichever
-/// path picks it up. `n = 1` additionally exercises a grid of a single block.
+/// Regression: an odd `n` at a batch of two or more is the shape where the
+/// kernel's output tile hangs off the end of the matrix.
+///
+/// `rows_per_cuda_block` is 2 there and the grid is `n.div_ceil(2)`, so the
+/// last block owns one real row and one that does not exist. Guarding the
+/// store on the thread index alone — as this vendored kernel did — writes that
+/// phantom row to `dst[j*n + n]`, i.e. batch row `j + 1`'s first output.
+///
+/// The large `n` is what makes the damage visible, and it is not optional.
+/// That same address is also written, correctly, by block 0 — one unrolled
+/// column iteration *after* the last block writes it — so while the whole grid
+/// is resident the two blocks run in step and the correct store always lands
+/// last. Only once the grid is well past what fits on the GPU at once does the
+/// last block run late enough for the phantom to survive. On gfx1101 the
+/// masking holds to `n = 65` and is gone by `n = 1025`; 4097 rows (2049
+/// blocks) sits far enough past the edge to be stable, and misses there by
+/// ~400 against a 2% tolerance. The small odd `n` stay for the single-block
+/// grid and, at `m = 1`, for the `rows_per_cuda_block == 1` path.
 #[test]
-fn odd_output_rows_stay_correct() -> Result<()> {
+fn odd_output_rows_survive_a_batched_mmvq() -> Result<()> {
     let device = rocm_device!();
     for dtype in [GgmlDType::Q4_0, GgmlDType::Q4K] {
         for n in [1usize, 3, 65] {
-            for m in [1usize, 2, 8] {
+            // 4 is the last batch with nwarps = 4, 5 the first with nwarps = 2.
+            for m in [1usize, 2, 4, 5, 8] {
                 check(&device, dtype, m, 512, n, DType::F32)?;
             }
+        }
+        for m in [2usize, 8] {
+            check(&device, dtype, m, 512, 4097, DType::F32)?;
         }
     }
     Ok(())

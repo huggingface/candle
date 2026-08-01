@@ -68,36 +68,17 @@ fn launch_shape(nrows: usize, b_size: usize) -> Option<(usize, usize)> {
 
 /// Whether `(dtype, nrows, b_size)` can go through MMVQ at all.
 ///
-/// The parity condition is a bound check this vendored copy of the kernel is
-/// missing. Upstream llama.cpp writes the result as
-///
-/// ```text
-/// if (threadIdx.x < rows_per_cuda_block &&
-///     (rows_per_cuda_block == 1 || row0 + int(threadIdx.x) < nrows_dst)) {
-/// ```
-///
-/// while `quantized.cu:3002` has only the first half:
-///
-/// ```text
-/// if (threadIdx.x < rows_per_cuda_block) {
-///     dst[j*nrows_dst + row0 + threadIdx.x] = tmp[j][threadIdx.x];
-/// }
-/// ```
-///
-/// For `b_size == 1`, `rows_per_cuda_block` is 1 and the grid is exactly `nrows`
-/// blocks, so nothing overshoots. For `b_size >= 2` it is 2 and the grid is
-/// `nrows.div_ceil(2)`; an odd `nrows` then makes the last block write
-/// `dst[j*nrows + nrows]`, which for every `j` but the last is the *first output
-/// of the next batch row* — silent corruption, not an out-of-bounds fault. Odd
-/// `nrows` with a batch therefore falls back rather than being fixed here, since
-/// the fix belongs in a `.cu` file shared with the CUDA backend.
+/// An odd `nrows` at `b_size >= 2` used to fall back here: `rows_per_cuda_block`
+/// is 2, the grid is `nrows.div_ceil(2)`, and the vendored kernel guarded its
+/// store on the thread index alone, so the last block wrote `dst[j*nrows +
+/// nrows]` — the next batch row's first output. `quantized.cu` now carries
+/// upstream llama.cpp's full guard and the shape is served directly.
 fn supports(dtype: GgmlDType, nrows: usize, ncols: usize, b_size: usize) -> bool {
     kernel_stem(dtype).is_some()
         && launch_shape(nrows, b_size).is_some()
         && ncols.is_multiple_of(dtype.block_size())
         && ncols > 0
         && nrows > 0
-        && (b_size == 1 || nrows.is_multiple_of(2))
 }
 
 /// Weight elements below which MMVQ's fixed cost outweighs what it saves, for

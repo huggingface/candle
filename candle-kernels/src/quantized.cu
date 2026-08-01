@@ -2966,8 +2966,14 @@ static __device__ void mul_mat_vec_q(
         for (int j = 0; j < ncols_y; ++j) {
 #pragma unroll
             for (int i = 0; i < rows_per_cuda_block; ++i) {
+                // The tile is a fixed `rows_per_cuda_block` tall, so the last block
+                // of an odd `nrows_x` dots a row that does not exist. Its result is
+                // dropped by the store guard below, but the load still has to stay
+                // inside the weights; the index is loop-invariant, so the clamp is
+                // hoisted out of the `kbx` loop.
+                const int row = row0 + i < nrows_x ? row0 + i : 0;
                 tmp[j][i] += vec_dot_q_cuda(
-                    &x[kbx + (row0 + i)*blocks_per_row_x], &y[j*blocks_per_col_y + kby], kqs);
+                    &x[kbx + row*blocks_per_row_x], &y[j*blocks_per_col_y + kby], kqs);
             }
         }
     }
@@ -2999,7 +3005,11 @@ static __device__ void mul_mat_vec_q(
             tmp[j][i] = warp_reduce_sum(tmp[j][i]);
         }
 
-        if (threadIdx.x < rows_per_cuda_block) {
+        // The second half of the guard is what keeps an `nrows_dst` that is not a
+        // multiple of `rows_per_cuda_block` from having its last block write one
+        // row past the end of its column — which lands on the *next* column's
+        // first output, i.e. silent corruption rather than a fault.
+        if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || row0 + int(threadIdx.x) < nrows_dst)) {
             dst[j*nrows_dst + row0 + threadIdx.x] = tmp[j][threadIdx.x];
         }
     }

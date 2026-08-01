@@ -59,12 +59,14 @@ fn dmmv_wins_the_small_single_row_shapes() {
     assert!(dmmv_is_faster(GgmlDType::Q2K, 960 * 960));
 }
 
-/// An odd `nrows` with a batch would have the last block write into the
-/// next batch row's output; see [`supports`].
+/// An odd `nrows` with a batch is the shape whose last block only half
+/// exists; it is served now that the kernel guards the store. See
+/// [`supports`].
 #[test]
-fn odd_row_counts_are_rejected_only_for_batches() {
+fn odd_row_counts_are_supported_at_every_batch() {
     assert!(supports(GgmlDType::Q4K, 4097, 4096, 1));
-    assert!(!supports(GgmlDType::Q4K, 4097, 4096, 2));
+    assert!(supports(GgmlDType::Q4K, 4097, 4096, 2));
+    assert!(supports(GgmlDType::Q4K, 4097, 4096, 8));
     assert!(supports(GgmlDType::Q4K, 4096, 4096, 8));
     assert!(!supports(GgmlDType::Q4K, 4096, 4096, 9));
     // `ncols` must be whole blocks: the kernel divides by `qk`.
