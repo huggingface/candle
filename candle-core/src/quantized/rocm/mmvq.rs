@@ -1,17 +1,18 @@
-//! MMVQ: quantize the activations to `q8_1`, then dot them against the packed
-//! weights with integer SIMD (`__dp4a`, one `v_dot4_i32_iu8` per step on
-//! gfx11+).
+//! MMVQ: the decode fast-path, dotting `q8_1` activations against the packed
+//! weights with integer SIMD.
 //!
-//! This is the decode fast-path. Against [`super::dmmv`] it covers batches of
-//! up to eight rather than one, and against the dense fallback it never
-//! materialises the weight matrix in f32 — an `lm_head` of 32000x4096 is
-//! 500 MB of transient at f32, moved twice, per matmul.
+//! Against [`super::dmmv`] it covers batches of up to eight rather than one,
+//! and against the dense fallback it never materialises the weight matrix in
+//! f32 — an `lm_head` of 32000x4096 is 500 MB of transient at f32, moved twice,
+//! per matmul. [`super::mmq`] is the same idea for a batch too large for these
+//! kernels; the requantization they share is in [`super::q8_1`].
 //!
 //! Every kernel signature below is copied out of `candle-kernels/src/quantized.cu`
 //! rather than inferred; the families in that file disagree about arity and
 //! argument order, and a wrong guess is a silent wrong answer.
 
-use super::kernels::{arg, launch_err, MATRIX_ROW_PADDING, WARP_SIZE};
+use super::kernels::{arg, launch_err, WARP_SIZE};
+use super::q8_1::{buffer_bytes, force_dmmv, pad, quantize_q8_1};
 use super::QRocmStorage;
 use crate::backend::BackendStorage;
 use crate::quantized::GgmlDType;
@@ -21,33 +22,10 @@ use crate::rocm_backend::{
 };
 use crate::{DType, Layout, Result};
 
-/// `quantize_q8_1`'s thread block (`CUDA_QUANTIZE_BLOCK_SIZE`). A block covers
-/// 256 columns, i.e. eight `QK8_1` blocks, one per wave32.
-const QUANTIZE_BLOCK_SIZE: usize = 256;
-
-/// `gridDim.y` is capped at 65535, so a tall activation matrix is quantized in
-/// chunks of rows. Only `mul_mat_via_q8_1`-shaped calls ever come close, but the
-/// loop is cheap and matches `quantized/cuda.rs`.
-const MAX_GRID_Y: usize = 65535;
+use super::kernels::MATRIX_ROW_PADDING;
 
 /// Largest batch an `mul_mat_vec_*_q8_1_cuda<N>` instantiation exists for.
 pub(super) const MAX_BATCH: usize = 8;
-
-fn pad(p: usize, q: usize) -> usize {
-    p.div_ceil(q) * q
-}
-
-/// Set `CANDLE_ROCM_FORCE_DMMV=1` to route every decode-shaped matmul through
-/// [`super::dmmv`] instead. DMMV does not requantize the activations, so it is
-/// the reference when an accuracy question comes up, and it is how the two
-/// paths are benchmarked against each other.
-pub(super) fn force_dmmv() -> bool {
-    static FORCE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FORCE.get_or_init(|| match std::env::var("CANDLE_ROCM_FORCE_DMMV") {
-        Ok(v) => v != "0" && !v.is_empty(),
-        Err(_) => false,
-    })
-}
 
 /// Kernel-name stem for `dtype`, without the batch-size suffix.
 ///
@@ -157,52 +135,6 @@ fn dmmv_is_faster(dtype: GgmlDType, work: usize) -> bool {
     }
 }
 
-/// Quantize `ky` rows of `k` f32 columns into `dst` as `q8_1`.
-///
-/// ```text
-/// quantize_q8_1(const float *x, void *vy, const int kx, const int kx_padded)
-/// ```
-///
-/// Rows are padded out to `MATRIX_ROW_PADDING` columns and the tail is zero
-/// filled by the kernel itself (`const float xi = ix < kx ? x[iy*kx + ix] : 0`),
-/// so `dst` must be sized for the *padded* width. `x` is indexed as `iy*kx`,
-/// i.e. the source rows are packed at their unpadded width.
-fn quantize_q8_1(
-    src: &SendSyncDeviceMemory<f32>,
-    src_offset: usize,
-    dst: &SendSyncDeviceMemory<u8>,
-    k: usize,
-    ky: usize,
-    dev: &RocmDevice,
-) -> Result<()> {
-    let kx_padded = pad(k, MATRIX_ROW_PADDING);
-    let num_blocks = kx_padded.div_ceil(QUANTIZE_BLOCK_SIZE);
-    let dst_row_bytes = kx_padded / GgmlDType::Q8_1.block_size() * GgmlDType::Q8_1.type_size();
-    let func = dev.get_or_load_func("quantize_q8_1", &kernels::QUANTIZED)?;
-    let kx_i = k as i32;
-    let kx_padded_i = kx_padded as i32;
-
-    let mut rows_done = 0;
-    while rows_done < ky {
-        let rows = (ky - rows_done).min(MAX_GRID_Y);
-        // `ptr_at` scales by the element size, so the f32 source advances by
-        // elements and the u8 destination by bytes.
-        let src_ptr = unsafe { src.ptr_at(src_offset + rows_done * k) };
-        let dst_ptr = unsafe { dst.ptr_at(rows_done * dst_row_bytes) };
-        let mut args = vec![arg(&src_ptr), arg(&dst_ptr), arg(&kx_i), arg(&kx_padded_i)];
-        func.launch(
-            Dim3::new_2d(num_blocks as u32, rows as u32),
-            Dim3::new_1d(QUANTIZE_BLOCK_SIZE as u32),
-            0,
-            Some(dev.stream()),
-            &mut args,
-        )
-        .map_err(|e| launch_err("quantize_q8_1", e))?;
-        rows_done += rows;
-    }
-    Ok(())
-}
-
 /// `data` (the `(nrows, ncols)` packed weights) times `b_size` activation rows.
 ///
 /// ```text
@@ -236,12 +168,10 @@ pub(super) fn mul_mat_vec_via_q8_1(
     };
 
     let ncols_padded = pad(ncols, MATRIX_ROW_PADDING);
-    let y_bytes =
-        b_size * ncols_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
     // Zeroed rather than uninitialised: `quantize_q8_1` writes every byte of the
     // padded row, but a zeroed buffer keeps a future geometry change from
     // feeding the dot product garbage instead of an obvious zero.
-    let y_q8_1 = dev.alloc_zeros::<u8>(y_bytes)?;
+    let y_q8_1 = dev.alloc_zeros::<u8>(buffer_bytes(ncols, b_size))?;
     quantize_q8_1(y, y_offset, &y_q8_1, ncols, b_size, dev)?;
 
     let name = format!("{stem}{b_size}");

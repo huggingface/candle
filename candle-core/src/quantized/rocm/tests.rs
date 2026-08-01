@@ -187,10 +187,13 @@ fn embedding_honours_the_ids_offset() -> Result<()> {
 
 /// `fwd`'s dense fallback dequantizes and defers to the rocBLAS GEMM; the
 /// result has to track the same computation run with the *same* dequantized
-/// weights.
+/// weights, which is why the bound here is tight where the `q8_1` paths' own
+/// tests use a relative 2%.
 ///
-/// `m` is past [`mmvq::MAX_BATCH`] deliberately: anything at or below it is
-/// claimed by MMVQ, which is a different numerical path with its own test.
+/// Reaching that fallback at all takes a shape all three fused paths decline.
+/// `m` is past [`mmvq::MAX_BATCH`], which rules out MMVQ and DMMV; `Q2K` with
+/// `k = 256` then rules out MMQ, whose column loop steps 512 elements at a time
+/// for that dtype. Q4K here would be claimed by MMQ.
 #[test]
 fn fwd_matches_a_dequantized_matmul() -> Result<()> {
     let dev = rocm_device!();
@@ -202,7 +205,7 @@ fn fwd_matches_a_dequantized_matmul() -> Result<()> {
     // `QTensor` stores the weights transposed, i.e. `(n, k)`.
     let rhs = Tensor::from_slice(&rhs, (n, k), &device)?;
 
-    let qt = crate::quantized::QTensor::quantize(&rhs, GgmlDType::Q4K)?;
+    let qt = crate::quantized::QTensor::quantize(&rhs, GgmlDType::Q2K)?;
     let want = lhs
         .matmul(&qt.dequantize(&device)?.t()?)?
         .to_vec2::<f32>()?;

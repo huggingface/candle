@@ -4,7 +4,7 @@
 //! `candle-kernels/src/quantized.cu` sources, so the on-device layout — padded
 //! rows above all — has to match byte for byte.
 //!
-//! Matrix multiplication takes one of three paths, tried in this order:
+//! Matrix multiplication takes one of four paths, tried in this order:
 //!
 //! * [`mmvq`] — a batch of one to eight rows against the packed weights, with
 //!   the activations requantized to `q8_1`. Covers f32, f16 and bf16
@@ -13,14 +13,15 @@
 //!   decode step; see `mmvq::dmmv_is_faster`.
 //! * [`dmmv`] — the fused dequantize-and-GEMV, for a single f32 activation row.
 //!   No requantization, so it is also the more accurate of the two.
-//! * dequantize-then-GEMM — prefill and everything else. Correct for every
-//!   dtype, but materialises the whole weight matrix in the activation's dtype.
+//! * [`mmq`] — the tiled `q8_1` matmul, for the batches the vector kernels do
+//!   not cover. This is prefill. It declines the weight matrices too small to
+//!   beat a rocBLAS GEMM, and the three dtypes whose kernel never does; see
+//!   `mmq::min_work`.
+//! * dequantize-then-GEMM — everything left. Correct for every dtype, but
+//!   materialises the whole weight matrix in the activation's dtype.
 //!
-//! `CANDLE_ROCM_FORCE_DMMV=1` disables the MMVQ path entirely.
-//!
-//! The MMQ kernels the CUDA backend uses for larger batches are compiled into
-//! the module but not wired up; they are what would remove the dense
-//! dequantize from prefill.
+//! `CANDLE_ROCM_FORCE_DMMV=1` disables both `q8_1` paths, leaving DMMV and the
+//! dense dequantize.
 
 use super::{GgmlDType, QStorage};
 use crate::backend::{BackendDevice, BackendStorage};
@@ -32,7 +33,9 @@ use crate::{CpuStorage, DType, Layout, Result, Shape};
 
 mod dmmv;
 mod kernels;
+mod mmq;
 mod mmvq;
+mod q8_1;
 
 use kernels::MATRIX_ROW_PADDING;
 
@@ -40,6 +43,8 @@ use kernels::MATRIX_ROW_PADDING;
 mod bench;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_mmq;
 #[cfg(test)]
 mod tests_mmvq;
 
@@ -324,6 +329,13 @@ impl QRocmStorage {
                     }
                 }
             }
+        }
+
+        // MMQ: everything the vector paths declined, prefill above all. It
+        // reads the packed weights directly, so the dense fallback below it is
+        // only for the dtypes and shapes it has no kernel for.
+        if let Some(dst) = mmq::try_fwd(self, n, k, b_size, storage, layout)? {
+            return Ok(wrap(dst));
         }
 
         // An f16 activation gets the dedicated f16 dequantize kernel rather
