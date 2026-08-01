@@ -1320,8 +1320,13 @@ impl BlockMlpImpl {
     }
 }
 
+/// A single Llama transformer layer.
+///
+/// `Block` can be loaded and run independently, which allows callers to build
+/// a contiguous range of layers without materialising Llama's embeddings, final
+/// norm, or language-model head.
 #[derive(Debug, Clone)]
-struct Block {
+pub struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
@@ -1330,7 +1335,8 @@ struct Block {
 }
 
 impl Block {
-    fn forward(
+    /// Runs this block using `block_idx`'s entry in `cache`.
+    pub fn forward(
         &self,
         x: &Tensor,
         index_pos: usize,
@@ -1369,7 +1375,34 @@ impl Block {
         self.mlp.remove_adapter(name)
     }
 
-    fn load(
+    /// Loads layer `layer_idx` with the standard dense MLP.
+    ///
+    /// `vb` must be rooted at `model.layers.{layer_idx}`.
+    pub fn load(vb: VarBuilder, cfg: &Config, layer_idx: usize) -> Result<Self> {
+        Self::load_with_lora(vb, cfg, layer_idx, &[])
+    }
+
+    /// Loads layer `layer_idx`, replacing its feed-forward computation with
+    /// `mlp`. `vb` must be rooted at `model.layers.{layer_idx}`.
+    ///
+    /// Custom MLPs do not receive LoRA adapters; use [`Block::load`] for the
+    /// built-in dense MLP when LoRA support is required.
+    pub fn load_with_block_mlp(
+        vb: VarBuilder,
+        cfg: &Config,
+        layer_idx: usize,
+        mlp: Box<dyn BlockMlp>,
+    ) -> Result<Self> {
+        Self::load_with_mlp(
+            vb,
+            cfg,
+            layer_idx,
+            &[],
+            BlockMlpImpl::Custom(Arc::from(mlp)),
+        )
+    }
+
+    fn load_with_lora(
         vb: VarBuilder,
         cfg: &Config,
         layer_idx: usize,
@@ -1640,7 +1673,9 @@ impl Llama {
         };
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
-            .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), cfg, i, &lora_adapters))
+            .map(|i| {
+                Block::load_with_lora(vb.pp(format!("model.layers.{i}")), cfg, i, &lora_adapters)
+            })
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
@@ -1888,6 +1923,34 @@ mod tests {
         assert_eq!(
             dense_logits.to_vec2::<f32>()?,
             custom_logits.to_vec2::<f32>()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn independently_loaded_block_matches_dense_block() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let vb = VarBuilder::from_tensors(base_weights(&cfg, &device), DType::F32, &device);
+        let block_vb = vb.pp("model.layers.0");
+        let dense = Block::load(block_vb.clone(), &cfg, 0)?;
+        let composed = Block::load_with_block_mlp(
+            block_vb.clone(),
+            &cfg,
+            0,
+            Box::new(Mlp::load(block_vb.pp("mlp"), &cfg, &[])?),
+        )?;
+        let input = Tensor::randn(0f32, 1., (1, 3, cfg.hidden_size), &device)?;
+        let mut dense_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        let mut composed_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+
+        assert_eq!(
+            dense
+                .forward(&input, 0, 0, &mut dense_cache, None)?
+                .to_vec3::<f32>()?,
+            composed
+                .forward(&input, 0, 0, &mut composed_cache, None)?
+                .to_vec3::<f32>()?
         );
         Ok(())
     }
