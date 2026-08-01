@@ -11,7 +11,11 @@ export CARGO_BUILD_JOBS ?= 4
 # disk. That cache is now locked per entry, so concurrent compilers are safe;
 # the suites still default to one thread so that GPU memory use and the
 # attribution of a failure stay predictable. Override with ROCM_TEST_THREADS.
-ROCM_FILTER ?= _rocm
+# Plain `rocm`, not `_rocm`: the integration suites suffix their GPU tests
+# `..._rocm`, but the backend's own module tests are named for what they check
+# and only carry `rocm` in their module path (`quantized::rocm::tests_mmvq::…`).
+# The narrower filter silently skipped every one of them.
+ROCM_FILTER ?= rocm
 ROCM_TEST_THREADS ?= 1
 ROCM_CRATES := -p candle-core -p candle-nn -p candle-transformers -p candle-examples
 
