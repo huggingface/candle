@@ -45,6 +45,18 @@ pub(crate) fn module_key(
     truncated_hex(hasher)
 }
 
+/// Identity of a source text, for the in-memory module map.
+///
+/// Not [`module_key`]: that one also digests the whole staged header set, which
+/// is fixed for a given cache and far larger than most sources, and it is only
+/// ever computed on a miss. This runs on every custom lookup, so it hashes the
+/// source and nothing else — and keeps the full digest rather than truncating
+/// it, because a collision here is a wrong-kernel launch rather than a stale
+/// file.
+pub(crate) fn source_digest(source: &str) -> [u8; 32] {
+    Sha256::digest(source.as_bytes()).into()
+}
+
 /// Names the directory the headers are staged into, so two builds whose header
 /// sets differ never write over each other's staging area.
 pub(crate) fn headers_key(headers: &[(&str, &str)]) -> String {
@@ -184,10 +196,10 @@ fn user_tag() -> String {
 /// half-written intermediates and can persist a corrupt `.hsaco` that only an
 /// `rm -rf` clears. It also stops N processes each spending ~70 s on the same
 /// translation unit.
-pub(crate) fn lock_entry(cache_dir: &Path, name: &str, key: &str) -> Result<LockFile, KernelError> {
+pub(crate) fn lock_entry(cache_dir: &Path, entry: &str) -> Result<LockFile, KernelError> {
     fs::create_dir_all(cache_dir)
         .map_err(|e| KernelError::Io(format!("could not create {}: {e}", cache_dir.display())))?;
-    let path = cache_dir.join(format!("{name}_{key}.lock"));
+    let path = cache_dir.join(format!("{entry}.lock"));
     let mut lock = LockFile::open(&path)
         .map_err(|e| KernelError::Io(format!("could not open {}: {e}", path.display())))?;
     lock.lock()
@@ -291,6 +303,12 @@ mod tests {
         let a = [("ab", "c"), ("d", "e")];
         let b = [("a", "bc"), ("d", "e")];
         assert_ne!(key(&a), key(&b));
+    }
+
+    #[test]
+    fn a_source_digest_tracks_the_source() {
+        assert_eq!(source_digest("a"), source_digest("a"));
+        assert_ne!(source_digest("a"), source_digest("b"));
     }
 
     #[test]

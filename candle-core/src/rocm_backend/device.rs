@@ -238,8 +238,16 @@ impl RocmDevice {
     /// `binary_op_macros.cuh` are on the include path — so a downstream kernel
     /// can be written in the same dialect as `candle-kernels/src/*.cu`.
     ///
-    /// `module_name` names the on-disk cache entry and must be unique across
-    /// the custom modules of a process; it cannot collide with a built-in.
+    /// `module_name` names the on-disk cache entry and should be unique across
+    /// the custom modules of a process; it cannot collide with a built-in. It
+    /// is not the whole key though — the source is part of it in memory as well
+    /// as on disk, so reusing a name for a revised source compiles and loads the
+    /// revision rather than handing back the module it replaces.
+    ///
+    /// That costs a SHA-256 pass over `source` per call, so a launch loop should
+    /// keep the returned function rather than ask for it again: the handle
+    /// borrows nothing and modules are never unloaded, which is also why every
+    /// distinct source stays resident for the life of the process.
     pub fn get_or_load_custom_func(
         &self,
         kernel_name: &str,

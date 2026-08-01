@@ -139,6 +139,16 @@ written in the same CUDA-syntax dialect as `candle-kernels/src/*.cu`. What it
 does *not* get is a say in the compile flags or its own staged headers; a module
 has to be one translation unit.
 
+The module name is not the whole key: the source is part of it in memory as well
+as on disk, so reusing a name for a revised source loads the revision instead of
+the module it replaces. The price is a SHA-256 pass over the source on every
+call, which is worth avoiding in a launch loop — hold the returned function
+rather than resolving it again. It stays valid because modules are never
+unloaded (the handle borrows nothing, so unloading one would dangle it), which
+is also the reason every distinct source stays resident for the life of the
+process. A caller that generates a kernel per shape should bound the set of
+sources it asks for.
+
 Custom modules are namespaced apart from the built-ins, so naming one `unary`
 resolves to yours rather than to candle's. `KernelCache::custom_function` and
 `get_or_load_custom` are the same thing one layer down, for a caller holding the

@@ -6,15 +6,17 @@
 
 mod cache;
 mod detect;
+mod hipcc;
+#[cfg(test)]
+mod tests;
 
 use crate::error::KernelError;
 use crate::wrappers::SendSyncModule;
 use crate::Module;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, RwLock};
 
 /// Identifies one translation unit in the cache.
 ///
@@ -24,14 +26,22 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 enum ModuleName {
     BuiltIn(&'static str),
-    Custom(String),
+    /// Name *and* source digest. A caller may revise its source and keep the
+    /// name — an edit between runs, a kernel specialised per shape — and the
+    /// revision must not resolve against the module it replaces. The disk cache
+    /// has always keyed on the source; without the digest here the in-memory
+    /// map shadowed it and silently served the older code object.
+    Custom {
+        name: String,
+        source: [u8; 32],
+    },
 }
 
 impl ModuleName {
     fn as_str(&self) -> &str {
         match self {
             ModuleName::BuiltIn(name) => name,
-            ModuleName::Custom(name) => name.as_str(),
+            ModuleName::Custom { name, .. } => name.as_str(),
         }
     }
 
@@ -42,7 +52,7 @@ impl ModuleName {
     fn file_stem(&self) -> String {
         match self {
             ModuleName::BuiltIn(name) => cache::path_component(name),
-            ModuleName::Custom(name) => format!("custom-{}", cache::path_component(name)),
+            ModuleName::Custom { name, .. } => format!("custom-{}", cache::path_component(name)),
         }
     }
 }
@@ -54,14 +64,22 @@ pub struct KernelCache {
     arch: String,
     /// Full `hipcc --version` output; part of the cache key.
     toolchain: String,
-    /// Keyed by module name, i.e. one entry per translation unit. Keying this
-    /// by *kernel* name would recompile the whole unit once per kernel.
+    /// Keyed by module identity, i.e. one entry per translation unit. Keying
+    /// this by *kernel* name would recompile the whole unit once per kernel.
     ///
     /// An `RwLock` rather than a `Mutex`: after the first launch every lookup
     /// is a hit, so the hot path only needs a shared read.
+    ///
+    /// Nothing is ever evicted, and that is load-bearing rather than an
+    /// oversight: [`Self::function`] hands out a bare `hipFunction_t` that
+    /// borrows nothing, so unloading a module would dangle every handle already
+    /// resolved from it and fault the GPU at the next launch. Built-ins are
+    /// finite; a caller that generates a module per shape holds the memory it
+    /// asks for, which is the only safe reading of the API it used.
     modules: RwLock<HashMap<ModuleName, Arc<SendSyncModule>>>,
-    /// One lock per translation unit, created on first compile of that unit and
-    /// taken only on the compile-and-load path.
+    /// One lock per translation unit, created on first compile of that unit,
+    /// taken only on the compile-and-load path and dropped once the module is
+    /// resident.
     ///
     /// The disk lock in [`cache::lock_entry`] is a *file* lock, which excludes
     /// other processes but not other threads of this one — and the compiler's
@@ -89,7 +107,7 @@ impl KernelCache {
         // headers differ never overwrite each other's staged copies.
         let src_dir = cache_dir.join(format!("src-{}", cache::headers_key(crate::HEADERS)));
 
-        stage_headers(&src_dir)?;
+        hipcc::stage_headers(&src_dir)?;
 
         Ok(Self {
             cache_dir,
@@ -112,15 +130,33 @@ impl KernelCache {
     /// are: the shim is force-included and candle's own headers
     /// (`cuda_utils.cuh`, `compatibility.cuh`, `binary_op_macros.cuh`) are on
     /// the include path, so a downstream kernel can be written against the same
-    /// dialect. `module_name` names the cache entry and must be unique within
-    /// the process; it lives in its own namespace, so it may repeat a built-in
-    /// name without colliding.
+    /// dialect. `module_name` names the cache entry; it lives in its own
+    /// namespace, so it may repeat a built-in name without colliding.
+    ///
+    /// The entry is keyed on the source as well as the name, so revising a
+    /// source compiles the revision rather than returning the module it
+    /// replaces. That costs one SHA-256 pass over `source` per call — a few
+    /// tens of microseconds for a large kernel, which is real next to a launch.
+    /// A caller launching in a loop should hold the [`rocm_rs::hip::Function`]
+    /// (it borrows nothing and stays valid, since modules are never unloaded)
+    /// instead of resolving it per launch. Built-in lookups pay none of this.
+    ///
+    /// Every distinct source stays resident for the life of the process:
+    /// handing out unborrowed function handles rules out ever unloading one.
+    /// Generating a module per shape therefore grows memory without bound; if
+    /// that is the intent, bound the set of sources you ask for.
     pub fn get_or_load_custom(
         &self,
         module_name: &str,
         source: &str,
     ) -> Result<Arc<SendSyncModule>, KernelError> {
-        self.load(ModuleName::Custom(module_name.to_string()), source)
+        self.load(
+            ModuleName::Custom {
+                name: module_name.to_string(),
+                source: cache::source_digest(source),
+            },
+            source,
+        )
     }
 
     fn load(&self, name: ModuleName, source: &str) -> Result<Arc<SendSyncModule>, KernelError> {
@@ -159,8 +195,12 @@ impl KernelCache {
         // moment the caller drops it — leaving the resolved `hipFunction_t`
         // dangling and faulting the GPU at the next launch. The loser's own
         // module unloads harmlessly instead.
-        let mut modules = self.write_modules()?;
-        Ok(modules.entry(name).or_insert(loaded).clone())
+        let landed = {
+            let mut modules = self.write_modules()?;
+            modules.entry(name.clone()).or_insert(loaded).clone()
+        };
+        self.release_compile_gate(&name)?;
+        Ok(landed)
     }
 
     /// The per-module compile lock, created on first use.
@@ -169,6 +209,21 @@ impl KernelCache {
             KernelError::Internal("kernel compile gate map is poisoned".to_string())
         })?;
         Ok(gates.entry(name.clone()).or_default().clone())
+    }
+
+    /// Forget a unit's gate now that its module is resident, so the map does not
+    /// retain one lock per key for the life of the process.
+    ///
+    /// Safe because the module is written first: a thread still queued on this
+    /// gate holds it through its own `Arc` and finds the module on its re-check,
+    /// and a thread that arrives afterwards and creates a fresh gate never gets
+    /// as far as compiling — the lookup that precedes the gate is already a hit.
+    fn release_compile_gate(&self, name: &ModuleName) -> Result<(), KernelError> {
+        let mut gates = self.compiling.lock().map_err(|_| {
+            KernelError::Internal("kernel compile gate map is poisoned".to_string())
+        })?;
+        gates.remove(name);
+        Ok(())
     }
 
     /// Resolve `name` inside `module`.
@@ -209,9 +264,9 @@ impl KernelCache {
     /// Read the module's code object from the disk cache, compiling it first if
     /// it is not there.
     fn code_object(&self, name: &ModuleName, source: &str) -> Result<Vec<u8>, KernelError> {
-        let stem = name.file_stem();
         let key = cache::module_key(source, crate::HEADERS, &self.arch, &self.toolchain);
-        let cache_file = self.cache_dir.join(format!("{stem}_{key}.hsaco"));
+        let entry = format!("{}_{key}", name.file_stem());
+        let cache_file = self.cache_dir.join(format!("{entry}.hsaco"));
         let forced = cache::force_recompile();
 
         if !forced {
@@ -223,14 +278,21 @@ impl KernelCache {
         // Hold the lock across the re-check, the compile and the write: the
         // intermediates below are written non-atomically, so two compilers of
         // the same entry could otherwise persist a corrupt code object.
-        let _lock = cache::lock_entry(&self.cache_dir, &stem, &key)?;
+        let _lock = cache::lock_entry(&self.cache_dir, &entry)?;
         if !forced {
             if let Ok(binary) = fs::read(&cache_file) {
                 return Ok(binary);
             }
         }
 
-        let binary = self.compile(name.as_str(), &stem, source, &key)?;
+        let binary = hipcc::compile(
+            &self.src_dir,
+            &self.cache_dir,
+            &self.arch,
+            name.as_str(),
+            &entry,
+            source,
+        )?;
         cache::write_atomic(&cache_file, &binary)?;
         Ok(binary)
     }
@@ -254,59 +316,6 @@ impl KernelCache {
             .write()
             .map_err(|_| KernelError::Internal("kernel module cache lock is poisoned".to_string()))
     }
-
-    /// hipcc the source into a bundled code object, then unbundle it into the
-    /// single-architecture ELF that `hipModuleLoadData` expects.
-    ///
-    /// Both intermediates are named per key *and* per process. The lock in
-    /// [`Self::code_object`] is advisory, so nothing outside this crate is
-    /// obliged to respect it.
-    fn compile(
-        &self,
-        name: &str,
-        stem: &str,
-        source: &str,
-        key: &str,
-    ) -> Result<Vec<u8>, KernelError> {
-        let src_file = self.src_dir.join(format!("{stem}_{key}.cu"));
-        cache::write_atomic(&src_file, source.as_bytes())?;
-
-        let shim_dir = self.src_dir.join("hip_shim");
-        let bundle = self
-            .cache_dir
-            .join(format!("{stem}_{key}.{}.bundle", std::process::id()));
-
-        let output = Command::new("hipcc")
-            .args(cache::COMPILE_FLAGS)
-            .arg(format!("--offload-arch={}", self.arch))
-            .arg("-include")
-            .arg(shim_dir.join("hip_compat.h"))
-            // Shim first: its cuda_*.h shadow the CUDA toolkit headers.
-            .arg("-I")
-            .arg(&shim_dir)
-            .arg("-I")
-            .arg(&self.src_dir)
-            .arg("-o")
-            .arg(&bundle)
-            .arg(&src_file)
-            .output()
-            .map_err(|e| {
-                KernelError::Compilation(format!("could not run hipcc: {e}. Is ROCm installed?"))
-            })?;
-
-        if !output.status.success() {
-            return Err(KernelError::Compilation(format!(
-                "hipcc failed for `{}` ({}):\n{}",
-                name,
-                self.arch,
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-
-        let binary = unbundle(&bundle, &self.arch);
-        let _ = fs::remove_file(&bundle);
-        binary
-    }
 }
 
 /// Look `name` up in an already-loaded module.
@@ -320,181 +329,4 @@ fn resolve(
             "kernel `{name}` not found in module `{module_name}`: {e}"
         ))
     })
-}
-
-/// Extract the single-arch code object from a clang offload bundle.
-fn unbundle(bundle: &std::path::Path, arch: &str) -> Result<Vec<u8>, KernelError> {
-    // `bundle` is already process-unique, so this derived name is too.
-    let unbundled = bundle.with_extension("hsaco.tmp");
-    let output = Command::new(offload_bundler())
-        .arg("--unbundle")
-        .arg("--type=o")
-        .arg(format!("--targets=hipv4-amdgcn-amd-amdhsa--{arch}"))
-        .arg(format!("--input={}", bundle.display()))
-        .arg(format!("--output={}", unbundled.display()))
-        .output()
-        .map_err(|e| {
-            KernelError::Compilation(format!("could not run clang-offload-bundler: {e}"))
-        })?;
-
-    if !output.status.success() {
-        return Err(KernelError::Compilation(format!(
-            "clang-offload-bundler failed for {arch}:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-
-    let binary = fs::read(&unbundled)
-        .map_err(|e| KernelError::Io(format!("could not read unbundled code object: {e}")));
-    let _ = fs::remove_file(&unbundled);
-    binary
-}
-
-/// Prefer ROCm's own bundler: a system clang's copy can be a different LLVM
-/// version than the hipcc that produced the bundle.
-fn offload_bundler() -> PathBuf {
-    let rocm = std::env::var("ROCM_PATH").unwrap_or_else(|_| "/opt/rocm".to_string());
-    for candidate in [
-        PathBuf::from(&rocm).join("llvm/bin/clang-offload-bundler"),
-        PathBuf::from(&rocm).join("bin/clang-offload-bundler"),
-    ] {
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-    PathBuf::from("clang-offload-bundler")
-}
-
-/// Directories this process has already staged, so a second `RocmDevice::new`
-/// does not re-walk the header set.
-fn staged_dirs() -> &'static Mutex<HashSet<PathBuf>> {
-    static STAGED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
-    STAGED.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
-/// Write the staged sources the compiler needs to `#include`.
-///
-/// `src_dir` is named after the digest of this exact header set, so a directory
-/// carrying the completion marker already holds the right contents. The marker
-/// is written last and atomically: a run that crashed mid-staging leaves no
-/// marker, and the next one rewrites everything rather than trusting a file it
-/// may have truncated.
-fn stage_headers(src_dir: &Path) -> Result<(), KernelError> {
-    let staged = staged_dirs();
-    if let Ok(seen) = staged.lock() {
-        if seen.contains(src_dir) {
-            return Ok(());
-        }
-    }
-
-    let marker = src_dir.join(".staged");
-    if !marker.is_file() {
-        for (rel_path, contents) in crate::HEADERS {
-            let path = src_dir.join(rel_path);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).map_err(|e| {
-                    KernelError::Io(format!("could not create {}: {e}", parent.display()))
-                })?;
-            }
-            cache::write_atomic(&path, contents.as_bytes())?;
-        }
-        cache::write_atomic(&marker, b"")?;
-    }
-
-    if let Ok(mut seen) = staged.lock() {
-        seen.insert(src_dir.to_path_buf());
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::KernelCache;
-    use std::sync::Arc;
-
-    /// A source this crate does not own, written in the same dialect as
-    /// `candle-kernels/src/*.cu`. The `#include` is the point of the test as
-    /// much as the kernel is: a downstream module has to reach candle's staged
-    /// headers, not just the shim.
-    const CUSTOM: &str = r#"
-#include "cuda_utils.cuh"
-
-extern "C" __global__ void custom_scale_f32(const float *x, float *y, const size_t n) {
-    for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) {
-        y[i] = x[i] * 3.0f;
-    }
-}
-"#;
-
-    /// A caller-supplied source has to compile and resolve through the same
-    /// cache the built-ins use — the whole point of the custom entry point.
-    #[test]
-    fn a_custom_source_compiles_and_resolves() {
-        let cache = match KernelCache::new(0) {
-            Ok(cache) => cache,
-            // No ROCm device on this machine.
-            Err(_) => return,
-        };
-        cache
-            .custom_function("candle_rocm_kernels_test", CUSTOM, "custom_scale_f32")
-            .expect("custom module failed to compile");
-        // Second call is the in-memory hit.
-        cache
-            .custom_function("candle_rocm_kernels_test", CUSTOM, "custom_scale_f32")
-            .expect("custom module failed to resolve from cache");
-    }
-
-    /// Custom modules live in their own namespace. Keying both kinds by a bare
-    /// string would hand a downstream crate that named its module `unary`
-    /// candle's `unary` instead — a wrong-kernel launch, not an error.
-    #[test]
-    fn a_custom_module_does_not_shadow_a_built_in_of_the_same_name() {
-        let cache = match KernelCache::new(0) {
-            Ok(cache) => cache,
-            Err(_) => return,
-        };
-        // Load the custom one first, so a shared namespace would poison the
-        // built-in lookup rather than the other way round.
-        cache
-            .custom_function("unary", CUSTOM, "custom_scale_f32")
-            .expect("custom module failed to compile");
-        cache
-            .function(&crate::UNARY, "ucopy_f32")
-            .expect("built-in `unary` was shadowed by the custom module");
-        // And the reverse: the built-in must not satisfy the custom lookup.
-        assert!(cache.custom_function("unary", CUSTOM, "ucopy_f32").is_err());
-    }
-
-    /// Dropping the outer `Mutex<KernelCache>` the ROCm backend used to hold
-    /// exposed two races on the compile-and-load path, both of which faulted the
-    /// GPU rather than failing cleanly: two threads writing the same
-    /// process-named hipcc intermediates, and the loser of an insert race
-    /// `hipModuleUnload`ing a module whose functions the caller had already
-    /// resolved. Ten threads racing on one module is what reproduced them.
-    #[test]
-    fn concurrent_first_use_of_a_module_is_safe() {
-        let cache = match KernelCache::new(0) {
-            Ok(cache) => Arc::new(cache),
-            // No ROCm device on this machine.
-            Err(_) => return,
-        };
-        let handles: Vec<_> = (0..10)
-            .map(|_| {
-                let cache = cache.clone();
-                std::thread::spawn(move || {
-                    cache
-                        .function(&crate::UNARY, "ucopy_f32")
-                        .map(|f| f.as_raw() as usize)
-                })
-            })
-            .collect();
-
-        let resolved: Vec<usize> = handles
-            .into_iter()
-            .map(|h| h.join().expect("thread panicked").expect("resolve failed"))
-            .collect();
-        // One module, one symbol: every thread must have landed on the same
-        // handle, which is only true if exactly one load won.
-        assert!(resolved.windows(2).all(|w| w[0] == w[1]), "{resolved:?}");
-    }
 }
