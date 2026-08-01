@@ -50,7 +50,8 @@ macro_rules! dispatch_dtypes {
                 $body
             }
             DType::F8E4M3 => {
-                let $slice = RocmStorageSlice::F8E4M3($self.$method::<u8>($elem_count)?);
+                let $slice =
+                    RocmStorageSlice::F8E4M3($self.$method::<float8::F8E4M3>($elem_count)?);
                 $body
             }
             DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
@@ -77,15 +78,7 @@ impl RocmDevice {
             CpuStorageRef::F16(data) => RocmStorageSlice::F16(self.clone_htod(data)?),
             CpuStorageRef::F32(data) => RocmStorageSlice::F32(self.clone_htod(data)?),
             CpuStorageRef::F64(data) => RocmStorageSlice::F64(self.clone_htod(data)?),
-            CpuStorageRef::F8E4M3(data) => {
-                // `RocmStorageSlice::F8E4M3` holds bytes, and `float8::F8E4M3`
-                // is a `repr(transparent)` wrapper over a single `u8` (asserted
-                // in `rocm_backend::mod`), so the slice can be viewed as bytes
-                // without a copy.
-                let bytes: &[u8] =
-                    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len()) };
-                RocmStorageSlice::F8E4M3(self.clone_htod(bytes)?)
-            }
+            CpuStorageRef::F8E4M3(data) => RocmStorageSlice::F8E4M3(self.clone_htod(data)?),
             CpuStorageRef::F6E2M3(_)
             | CpuStorageRef::F6E3M2(_)
             | CpuStorageRef::F4(_)

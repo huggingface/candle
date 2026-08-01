@@ -15,13 +15,63 @@
 use super::{kernels, RocmDevice, RocmError};
 use crate::Result;
 
-/// Kernel-name suffix candle-kernels uses for the Rust type `T`.
+/// Roots whose F8E4M3 instantiation is spelled `fp8_e4m3` rather than
+/// `f8_e4m3`.
+///
+/// candle-kernels is not self-consistent here: `unary.cu` and `ternary.cu` use
+/// `fp8_e4m3` for everything except `ucopy_f8_e4m3`, while `binary.cu`,
+/// `affine.cu`, `fill.cu`, `indexing.cu` and `cast.cu` use `f8_e4m3`. Nothing
+/// in a root name says which, so the exceptions are listed. They are not
+/// renamed in place: those strings are the CUDA backend's symbol table too, and
+/// there is no NVIDIA toolchain here to verify a rename against.
+///
+/// `f8e4m3_spelling_matches_the_kernel_sources` below checks every entry (and
+/// the absence of any other) against the shipped `.cu` text.
+const FP8_SPELLED_ROOTS: &[&str] = &[
+    "uabs",
+    "uceil",
+    "ucos",
+    "uelu",
+    "uerf",
+    "uexp",
+    "ufloor",
+    "ugelu",
+    "ugelu_erf",
+    "ulog",
+    "uneg",
+    "unormcdf",
+    "upowf",
+    "urecip",
+    "urelu",
+    "uround",
+    "usigmoid",
+    "usign",
+    "usilu",
+    "usin",
+    "usqr",
+    "usqrt",
+    "utanh",
+    "where_i16",
+    "where_i32",
+    "where_i64",
+    "where_u32",
+    "where_u8",
+];
+
+/// Kernel-name suffix candle-kernels uses for the Rust type `T` in `kernel`.
 ///
 /// `bf16` has to be probed before `f16` — `half::bf16`'s type name contains
-/// both.
-fn dtype_suffix<T: Copy + Send + Sync + 'static>() -> Option<&'static str> {
+/// both. F8E4M3 is the only dtype whose suffix depends on the kernel; see
+/// [`FP8_SPELLED_ROOTS`].
+fn dtype_suffix<T: Copy + Send + Sync + 'static>(kernel: &str) -> Option<&'static str> {
     let type_name = std::any::type_name::<T>();
-    let suffix = if type_name.contains("f32") {
+    let suffix = if type_name.contains("F8E4M3") {
+        if FP8_SPELLED_ROOTS.contains(&kernel) {
+            "fp8_e4m3"
+        } else {
+            "f8_e4m3"
+        }
+    } else if type_name.contains("f32") {
         "f32"
     } else if type_name.contains("f64") {
         "f64"
@@ -48,7 +98,7 @@ fn dtype_suffix<T: Copy + Send + Sync + 'static>() -> Option<&'static str> {
 /// Name of the `kernel` variant compiled for `T`, or an error when candle
 /// ships no kernels for that dtype.
 pub fn try_kernel_name<T: Copy + Send + Sync + 'static>(kernel: &str) -> Result<String> {
-    match dtype_suffix::<T>() {
+    match dtype_suffix::<T>(kernel) {
         Some(suffix) => Ok(format!("{}_{}", kernel, suffix)),
         None => Err(RocmError::Internal(format!(
             "unsupported dtype {} for kernel {}",
@@ -64,7 +114,7 @@ pub fn try_kernel_name<T: Copy + Send + Sync + 'static>(kernel: &str) -> Result<
 /// An unsupported dtype yields a name no module defines, so the caller gets a
 /// "kernel not found" error at launch instead of aborting the process.
 pub fn kernel_name<T: Copy + Send + Sync + 'static>(kernel: &str) -> String {
-    let suffix = dtype_suffix::<T>().unwrap_or("unsupported_dtype");
+    let suffix = dtype_suffix::<T>(kernel).unwrap_or("unsupported_dtype");
     format!("{}_{}", kernel, suffix)
 }
 
@@ -207,10 +257,83 @@ pub(crate) unsafe fn launch_dense(
 
 #[cfg(test)]
 mod tests {
-    use super::launch_config_for;
+    use super::{launch_config_for, FP8_SPELLED_ROOTS};
 
     const CUS: u32 = 60;
     const BLOCK: u32 = 256;
+
+    /// Roots that `sources` instantiates as `{root}{suffix}`, ignoring
+    /// commented-out lines and the `__nv_fp8_e4m3` type name itself.
+    fn roots_ending_in(suffix: &str) -> Vec<String> {
+        use super::kernels as k;
+        // Every shared translation unit; `Id` has no `Module` lookup.
+        let modules = [
+            &k::AFFINE,
+            &k::BINARY,
+            &k::CAST,
+            &k::CONV,
+            &k::FILL,
+            &k::INDEXING,
+            &k::QUANTIZED,
+            &k::REDUCE,
+            &k::SORT,
+            &k::TERNARY,
+            &k::UNARY,
+        ];
+        let mut found = vec![];
+        for module in modules {
+            for line in module.source().lines() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                for (at, _) in line.match_indices(suffix) {
+                    let head = &line[..at];
+                    let start = head
+                        .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+                        .map_or(0, |i| i + 1);
+                    let root = &head[start..];
+                    // `__nv_fp8_e4m3` / `__hip_fp8_e4m3` are the type, not a kernel.
+                    if root.is_empty() || root.starts_with("__") {
+                        continue;
+                    }
+                    // Require a kernel name, not a longer identifier that merely
+                    // contains the suffix (`cast_f8_e4m3_f32`).
+                    if line[at + suffix.len()..]
+                        .starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                    {
+                        continue;
+                    }
+                    found.push(root.to_string());
+                }
+            }
+        }
+        found.sort();
+        found.dedup();
+        found
+    }
+
+    /// The `fp8_e4m3`/`f8_e4m3` split is an upstream inconsistency matched by
+    /// hand, so it has to be checked against the sources rather than trusted.
+    #[test]
+    fn f8e4m3_spelling_matches_the_kernel_sources() {
+        let irregular = roots_ending_in("_fp8_e4m3");
+        assert_eq!(
+            irregular,
+            FP8_SPELLED_ROOTS
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+            "FP8_SPELLED_ROOTS has drifted from candle-kernels"
+        );
+        // Nothing may be spelled both ways: the suffix has to be a function of
+        // the root alone.
+        for root in roots_ending_in("_f8_e4m3") {
+            assert!(
+                !FP8_SPELLED_ROOTS.contains(&root.as_str()),
+                "{root} exists with both spellings"
+            );
+        }
+    }
 
     /// `hipModuleLaunchKernel` rejects `gridDim.x == 0`, so an elementwise op on
     /// an empty tensor would error instead of being a no-op.

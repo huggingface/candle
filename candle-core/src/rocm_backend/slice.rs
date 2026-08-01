@@ -4,6 +4,7 @@
 
 use std::ffi::c_void;
 
+use float8::F8E4M3;
 use half::{bf16, f16};
 
 use super::alloc::SendSyncDeviceMemory;
@@ -19,13 +20,14 @@ pub enum RocmStorageSlice {
     F16(SendSyncDeviceMemory<f16>),
     F32(SendSyncDeviceMemory<f32>),
     F64(SendSyncDeviceMemory<f64>),
-    F8E4M3(SendSyncDeviceMemory<u8>),
+    F8E4M3(SendSyncDeviceMemory<F8E4M3>),
 }
 
-/// `RocmStorageSlice::F8E4M3` stores its payload as `u8`, so every byte-view
-/// shortcut in this backend (and in `device.rs`) is only correct while F8E4M3 is
-/// exactly one byte wide.
-const _: () = assert!(std::mem::size_of::<float8::F8E4M3>() == 1);
+/// F8E4M3 carries its own type rather than sharing `u8`'s, so that the generic
+/// `f` in the `Map*` traits resolves to the `*_f8_e4m3` kernels instead of
+/// silently to the `*_u8` ones. The byte-view shortcuts here and in `device.rs`
+/// still assume it is exactly one byte wide.
+const _: () = assert!(std::mem::size_of::<F8E4M3>() == 1);
 
 impl std::fmt::Debug for RocmStorageSlice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

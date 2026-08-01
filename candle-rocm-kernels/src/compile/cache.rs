@@ -12,7 +12,16 @@ use std::path::{Path, PathBuf};
 /// `--offload-arch` and the include paths are not here: the architecture is
 /// hashed separately and the include paths are derived from the cache
 /// directory itself.
-pub(crate) const COMPILE_FLAGS: &[&str] = &["--genco", "-O3", "-std=c++17", "-D__CUDA_ARCH__=800"];
+///
+/// `__CUDA_ARCH__` is the *shared sources'* feature gate, not a claim about the
+/// AMD part. 890 is the lowest value at which every dtype candle supports is
+/// instantiated: bf16 needs 800, and the F8E4M3 kernels in `unary.cu`,
+/// `affine.cu`, `ternary.cu` and `indexing.cu` sit behind 890 (Ada, where
+/// NVIDIA first shipped fp8 hardware). Nothing else in the shared sources is
+/// gated between 801 and 890, so this adds fp8 entry points and changes no
+/// other kernel. Those entry points convert through f32 in software — RDNA3 has
+/// no fp8 hardware — which is exactly what the CUDA sources ask for anyway.
+pub(crate) const COMPILE_FLAGS: &[&str] = &["--genco", "-O3", "-std=c++17", "-D__CUDA_ARCH__=890"];
 
 /// The one flag that does depend on the target: the `RDNA*` define selecting the
 /// MMQ tile geometry in `quantized.cu`. Same rule as [`COMPILE_FLAGS`] — a

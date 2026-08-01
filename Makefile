@@ -75,13 +75,18 @@ test-rocm-suite:
 # hand-written device code in the shim (16-bit atomicAdd, the *_sync shuffle
 # macros, __dp4a) on the actual GPU.
 ROCM_ARCH ?= $(shell rocminfo 2>/dev/null | grep -om1 'gfx[0-9a-z]*')
+# Read from COMPILE_FLAGS rather than repeated here: compiling the shim test at
+# a different __CUDA_ARCH__ than the runtime compiler uses would test a
+# different set of kernels than the one that actually ships.
+ROCM_ARCH_DEFINE = $(shell grep -om1 '\-D__CUDA_ARCH__=[0-9]*' candle-rocm-kernels/src/compile/cache.rs)
 rocm-shim-test:
 	@shim=candle-rocm-kernels/src/hip_shim; \
+	test -n "$(ROCM_ARCH_DEFINE)" || { echo "could not read __CUDA_ARCH__ from cache.rs"; exit 1; }; \
 	tmp=$$(mktemp -d); trap 'rm -rf $$tmp' EXIT; \
 	for f in candle-kernels/src/*.cu; do \
 	  case $$f in *mmvq_gguf.cu) continue;; esac; \
 	  n=$$(basename $$f .cu); printf '%-12s' "$$n"; \
-	  hipcc --genco --offload-arch=$(ROCM_ARCH) -O3 -std=c++17 -D__CUDA_ARCH__=800 \
+	  hipcc --genco --offload-arch=$(ROCM_ARCH) -O3 -std=c++17 $(ROCM_ARCH_DEFINE) \
 	    -include $$shim/hip_compat.h -I $$shim -I candle-kernels/src \
 	    -o $$tmp/$$n.hsaco $$f 2>$$tmp/$$n.err \
 	    && echo "compiled" || { echo "FAILED"; sed -n '1,20p' $$tmp/$$n.err; exit 1; }; \

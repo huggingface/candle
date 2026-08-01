@@ -3,7 +3,7 @@
 //! `mod.rs` is far over the workspace 400-line cap, so these live here.
 
 use super::tests::rocm_device;
-use super::{Map2, Map3, RocmDevice, RocmStorage, SendSyncDeviceMemory};
+use super::{RocmDevice, RocmStorage};
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::{CpuStorage, DType, Device, Layout, Result, Tensor};
 
@@ -150,69 +150,5 @@ fn f8e4m3_supports_strided_and_contiguous_copies() -> Result<()> {
         fp8_bits(&Tensor::cat(&[&g, &g], 0)?)?,
         fp8_bits(&Tensor::cat(&[&c, &c], 0)?)?
     );
-    Ok(())
-}
-
-struct Unreached;
-
-impl Map2 for Unreached {
-    fn f<T: Copy + Send + Sync + 'static>(
-        &self,
-        _: &SendSyncDeviceMemory<T>,
-        _: &Layout,
-        _: &SendSyncDeviceMemory<T>,
-        _: &Layout,
-        _: &RocmDevice,
-    ) -> Result<SendSyncDeviceMemory<T>> {
-        crate::bail!("Map2::f must not run for F8E4M3")
-    }
-}
-
-impl Map3 for Unreached {
-    fn f<T: Copy + Send + Sync + 'static>(
-        &self,
-        _: &SendSyncDeviceMemory<T>,
-        _: &Layout,
-        _: &SendSyncDeviceMemory<T>,
-        _: &Layout,
-        _: &SendSyncDeviceMemory<T>,
-        _: &Layout,
-        _: &RocmDevice,
-    ) -> Result<SendSyncDeviceMemory<T>> {
-        crate::bail!("Map3::f must not run for F8E4M3")
-    }
-}
-
-/// F8E4M3 shares the `u8` storage, so a generic `f` would silently resolve to
-/// the u8 kernels. `Map1`/`Map1Any`/`Map2Any`/`Map2InPlace` all say so; `Map2`
-/// and `Map3` used to fall through to "dtype mismatch", which describes a
-/// caller bug that did not happen.
-#[test]
-fn map2_and_map3_reject_f8e4m3_explicitly() -> Result<()> {
-    let dev = rocm_backend_device!();
-    let a = dev.storage_from_slice(&fp8(&[1., 2., 3., 4.]))?.slice;
-    let b = dev.storage_from_slice(&fp8(&[5., 6., 7., 8.]))?.slice;
-    let c = dev.storage_from_slice(&fp8(&[9., 10., 11., 12.]))?.slice;
-    let l = Layout::contiguous(4);
-
-    let err = Map2::map(&Unreached, &a, &l, &b, &l, &dev)
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("Map2 does not support F8E4M3"), "{err}");
-
-    let err = Map3::map(&Unreached, &a, &l, &b, &l, &c, &l, &dev)
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("Map3 does not support F8E4M3"), "{err}");
-    Ok(())
-}
-
-/// The message a user actually hits when adding two fp8 tensors.
-#[test]
-fn f8e4m3_binary_op_names_the_dtype() -> Result<()> {
-    let dev = rocm_device!();
-    let a = Tensor::from_slice(&fp8(&[1., 2., 3., 4.]), 4, &dev)?;
-    let err = (&a + &a).unwrap_err().to_string();
-    assert!(err.contains("F8E4M3"), "unexpected error: {err}");
     Ok(())
 }

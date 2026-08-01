@@ -210,6 +210,16 @@ impl Map2InPlace for Scatter<'_> {
         dev: &RocmDevice,
     ) -> Result<()> {
         let (base, op) = self.kind.names();
+        // `indexing.cu` instantiates `SA_OP_F8` for fp8 but no `S_OP`, so
+        // scatter-add has a kernel and scatter-set does not. Say so rather than
+        // let the driver report a missing symbol.
+        if matches!(self.kind, ScatterKind::Set) && std::any::type_name::<T>().contains("F8E4M3") {
+            crate::bail!(
+                "scatter is not available for F8E4M3 on ROCm: \
+                 candle-kernels/src/indexing.cu instantiates SA_OP_F8 but no S_OP \
+                 for fp8, so only scatter-add has a kernel"
+            )
+        }
         let dim = self.dim;
         let ids_o1 = contiguous_offset(self.ids_l, op)?;
         let (name, ids_ptr) = ids_prefix_and_ptr(base, &self.ids.slice, ids_o1, op)?;
