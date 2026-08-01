@@ -1,7 +1,7 @@
 .PHONY: clean-ptx clean test all \
         check check-cuda check-rocm check-all \
         fmt fmt-check clippy clippy-rocm \
-        test-rocm test-rocm-core test-rocm-nn test-rocm-suite \
+        test-rocm test-rocm-core test-rocm-nn test-rocm-suite test-rocm-ug \
         rocm-info rocm-cache-clean rocm-shim-test
 
 CARGO ?= cargo
@@ -66,6 +66,12 @@ test-rocm-nn:
 	$(CARGO) test -p candle-nn --features rocm -- $(ROCM_FILTER) --test-threads=$(ROCM_TEST_THREADS)
 
 test-rocm: test-rocm-core test-rocm-nn
+
+# The `ug` micro-kernel path. Separate from test-rocm-core because `ug` is not
+# part of the `rocm` feature set, so the ROCm suites above never build UgIOp1.
+# The filter is `ug` rather than $(ROCM_FILTER): the test is named for the op.
+test-rocm-ug:
+	$(CARGO) test -p candle-core --features "rocm ug" -- ug --test-threads=$(ROCM_TEST_THREADS)
 
 # Run one candle-core suite against the GPU, e.g. make test-rocm-suite SUITE=conv_tests
 test-rocm-suite:

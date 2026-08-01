@@ -60,6 +60,8 @@ mod tests_indexing;
 mod tests_rng;
 #[cfg(test)]
 mod tests_sort;
+#[cfg(all(test, feature = "ug"))]
+mod tests_ug;
 mod wrappers;
 pub use alloc::SendSyncDeviceMemory;
 pub use device::{DeviceId, RocmDevice};

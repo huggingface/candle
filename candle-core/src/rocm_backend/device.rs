@@ -265,6 +265,29 @@ impl RocmDevice {
             .custom_function(module_name, source, kernel_name)
             .w()
     }
+
+    /// Compile a `ug` micro-kernel for this device, the counterpart of
+    /// `CudaDevice::compile`.
+    ///
+    /// CUDA hands the generated source to nvrtc; here it goes through the same
+    /// `hipcc` path as every other kernel candle compiles, so the result is
+    /// disk-cached and a repeated call with an unchanged kernel is free from the
+    /// second process onwards. The generated HIP carries no `#include` of its
+    /// own — it relies on the shim [`Self::get_or_load_custom_func`] force
+    /// includes, exactly as the sources shared with the CUDA backend do.
+    #[cfg(all(feature = "ug", not(target_arch = "wasm32")))]
+    pub fn compile(
+        &self,
+        func_name: &'static str,
+        kernel: candle_ug::lang::ssa::Kernel,
+    ) -> Result<rocm_rs::hip::Function> {
+        let mut buf = vec![];
+        candle_ug::rocm::code_gen::gen(&mut buf, func_name, &kernel)?;
+        let source = String::from_utf8(buf)?;
+        // The source is part of the cache key, so a distinct kernel compiled
+        // under a name already seen still recompiles rather than aliasing.
+        self.get_or_load_custom_func(func_name, &format!("candle_ug_{func_name}"), &source)
+    }
 }
 
 /// Compute units on device `ordinal`.
