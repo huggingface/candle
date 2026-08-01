@@ -423,17 +423,48 @@ impl Mlp {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Block {
+/// A transformer's feed-forward computation within a Llama block.
+///
+/// Implement this trait to replace a block's dense MLP while retaining Candle's
+/// attention, RoPE, causal masking, KV cache, norms, and residual wiring.
+pub trait BlockMlp: Send + Sync {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor>;
+}
+
+impl BlockMlp for Mlp {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        Self::forward(self, xs)
+    }
+}
+
+/// A single Llama transformer layer.
+///
+/// `Block` can be loaded and run independently, which allows callers to build
+/// a contiguous range of layers without materialising Llama's embeddings, final
+/// norm, or language-model head.
+#[derive(Clone)]
+pub struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
-    mlp: Mlp,
+    mlp: std::sync::Arc<dyn BlockMlp>,
     span: tracing::Span,
 }
 
+impl std::fmt::Debug for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Block")
+            .field("rms_1", &self.rms_1)
+            .field("attn", &self.attn)
+            .field("rms_2", &self.rms_2)
+            .field("mlp", &"dyn BlockMlp")
+            .finish()
+    }
+}
+
 impl Block {
-    fn forward(
+    /// Runs this block using `block_idx`'s entry in `cache`.
+    pub fn forward(
         &self,
         x: &Tensor,
         index_pos: usize,
@@ -449,10 +480,24 @@ impl Block {
         Ok(x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    /// Loads layer `layer_idx` with the standard dense MLP.
+    ///
+    /// `vb` must be rooted at `model.layers.{layer_idx}`.
+    pub fn load(vb: VarBuilder, cfg: &Config, layer_idx: usize) -> Result<Self> {
+        let mlp = Box::new(Mlp::load(vb.pp("mlp"), cfg)?);
+        Self::load_with_block_mlp(vb, cfg, layer_idx, mlp)
+    }
+
+    /// Loads layer `layer_idx`, replacing its feed-forward computation with
+    /// `mlp`. `vb` must be rooted at `model.layers.{layer_idx}`.
+    pub fn load_with_block_mlp(
+        vb: VarBuilder,
+        cfg: &Config,
+        _layer_idx: usize,
+        mlp: Box<dyn BlockMlp>,
+    ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "block");
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg)?;
-        let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
         let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
@@ -463,7 +508,7 @@ impl Block {
             rms_1,
             attn,
             rms_2,
-            mlp,
+            mlp: std::sync::Arc::from(mlp),
             span,
         })
     }
@@ -521,8 +566,8 @@ impl Llama {
         };
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
-            .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), cfg).unwrap())
-            .collect();
+            .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), cfg, i))
+            .collect::<Result<_>>()?;
 
         Ok(Self {
             wte,
@@ -530,5 +575,116 @@ impl Llama {
             ln_f,
             lm_head,
         })
+    }
+
+    /// Loads Llama while supplying the feed-forward computation for each block.
+    ///
+    /// `mlp_factory` is called once per transformer layer with its zero-based
+    /// index and a [`VarBuilder`] rooted at `model.layers.{index}.mlp`.
+    pub fn load_with_mlp_factory<F>(vb: VarBuilder, cfg: &Config, mlp_factory: F) -> Result<Self>
+    where
+        F: for<'a> Fn(usize, VarBuilder<'a>) -> Result<Box<dyn BlockMlp>>,
+    {
+        let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
+        let lm_head = if cfg.tie_word_embeddings {
+            Linear::from_weights(wte.embeddings().clone(), None)
+        } else {
+            linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
+        };
+        let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
+        let blocks = (0..cfg.num_hidden_layers)
+            .map(|i| {
+                let block_vb = vb.pp(format!("model.layers.{i}"));
+                Block::load_with_block_mlp(
+                    block_vb.clone(),
+                    cfg,
+                    i,
+                    mlp_factory(i, block_vb.pp("mlp"))?,
+                )
+            })
+            .collect::<Result<_>>()?;
+
+        Ok(Self {
+            wte,
+            blocks,
+            ln_f,
+            lm_head,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tiny_config() -> Config {
+        Config {
+            hidden_size: 4,
+            intermediate_size: 8,
+            vocab_size: 16,
+            num_hidden_layers: 1,
+            num_attention_heads: 2,
+            num_key_value_heads: 2,
+            use_flash_attn: false,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.0,
+            bos_token_id: None,
+            eos_token_id: None,
+            rope_scaling: None,
+            max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
+            tie_word_embeddings: false,
+        }
+    }
+
+    #[test]
+    fn independently_loaded_block_matches_dense_block() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let vb = VarBuilder::zeros(DType::F32, &device);
+        let block_vb = vb.pp("model.layers.0");
+        let dense = Block::load(block_vb.clone(), &cfg, 0)?;
+        let composed = Block::load_with_block_mlp(
+            block_vb.clone(),
+            &cfg,
+            0,
+            Box::new(Mlp::load(block_vb.pp("mlp"), &cfg)?),
+        )?;
+        let input = Tensor::randn(0f32, 1., (1, 3, cfg.hidden_size), &device)?;
+        let mut dense_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        let mut composed_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+
+        assert_eq!(
+            dense
+                .forward(&input, 0, 0, &mut dense_cache)?
+                .to_vec3::<f32>()?,
+            composed
+                .forward(&input, 0, 0, &mut composed_cache)?
+                .to_vec3::<f32>()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dense_mlp_matches_standard_llama() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let vb = VarBuilder::zeros(DType::F32, &device);
+        let dense = Llama::load(vb.clone(), &cfg)?;
+        let custom = Llama::load_with_mlp_factory(vb, &cfg, |_, mlp_vb| {
+            Ok(Box::new(Mlp::load(mlp_vb, &cfg)?))
+        })?;
+        let tokens = Tensor::from_vec(vec![1u32, 2, 3], (1, 3), &device)?;
+        let mut dense_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        let mut custom_cache = Cache::new(true, DType::F32, &cfg, &device)?;
+
+        assert_eq!(
+            dense
+                .forward(&tokens, 0, &mut dense_cache)?
+                .to_vec2::<f32>()?,
+            custom
+                .forward(&tokens, 0, &mut custom_cache)?
+                .to_vec2::<f32>()?
+        );
+        Ok(())
     }
 }
