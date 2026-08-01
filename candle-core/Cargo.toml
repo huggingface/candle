@@ -55,7 +55,7 @@ criterion = { workspace = true }
 [features]
 default = []
 cuda = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda"]
-rocm = ["dep:rocm-rs", "dep:candle-rocm-kernels"]
+rocm = ["dep:rocm-rs", "dep:candle-rocm-kernels", "candle-ug?/rocm"]
 # Opt-in MIOpen conv forward, mirroring how `cudnn` layers over `cuda`. The
 # default ROCm build uses the im2col + GEMM path and never links libMIOpen.
 miopen = ["rocm", "rocm-rs/miopen"]

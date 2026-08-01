@@ -17,3 +17,5 @@ ug-metal = { workspace = true, optional = true }
 default = []
 cuda = ["dep:ug-cuda"]
 metal = ["dep:ug-metal"]
+# No `dep:` here: the HIP code generator is part of this crate, `ug` is all it needs.
+rocm = []

@@ -58,6 +58,8 @@ pub mod cpu_backend;
 #[cfg(feature = "cuda")]
 pub mod cuda_backend;
 mod custom_op;
+#[cfg(feature = "ug")]
+mod custom_op_ug;
 mod device;
 pub mod display;
 mod dtype;
@@ -95,9 +97,9 @@ mod variable;
 pub use cuda_backend::cudnn;
 
 pub use cpu_backend::{CpuStorage, CpuStorageRef};
-#[cfg(feature = "ug")]
-pub use custom_op::UgIOp1;
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
+#[cfg(feature = "ug")]
+pub use custom_op_ug::UgIOp1;
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
 pub use dummy_dtype::{F4, F6E2M3, F6E3M2, F8E8M0};

@@ -165,7 +165,12 @@ runtime on first use and cached under `~/.cache/candle-rocm`, so the first run
 of a given architecture pays a one-off compile (a few seconds per module, about
 70 s for the quantized module) and later runs load from the cache. If MIOpen is
 installed, `--features miopen` swaps convolutions onto it, the way `cudnn`
-layers over `cuda`. The ROCm backend started from
+layers over `cuda`. `--features "rocm ug"` also enables the `ug` micro-kernel
+path (`UgIOp1`, `RocmDevice::compile`); since there is no `ug-rocm` crate
+upstream, the HIP code generator lives in
+[candle-ug](./candle-ug/src/rocm/code_gen.rs) and its output goes through the
+same `hipcc` cache as everything else. Run `make test-rocm-ug` to exercise it.
+The ROCm backend started from
 [@airpods69](https://github.com/airpods69)'s
 [#3424](https://github.com/huggingface/candle/pull/3424); see
 [candle-rocm-kernels](./candle-rocm-kernels/README.md#origin).
