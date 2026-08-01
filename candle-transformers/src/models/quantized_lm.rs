@@ -38,7 +38,7 @@ use std::io::{Read, Seek};
 
 use super::{
     quantized_gemma3, quantized_glm4, quantized_lfm2, quantized_llama, quantized_phi,
-    quantized_phi3, quantized_qwen2, quantized_qwen3, quantized_qwen3_moe,
+    quantized_phi3, quantized_qwen2, quantized_qwen3, quantized_qwen3_5, quantized_qwen3_moe,
 };
 
 /// The decoder interface shared by the quantized model families.
@@ -75,6 +75,8 @@ pub enum Architecture {
     Qwen2,
     /// [`quantized_qwen3`], `general.architecture = "qwen3"`.
     Qwen3,
+    /// [`quantized_qwen3_5`], `general.architecture = "qwen3_5"`.
+    Qwen3_5,
     /// [`quantized_qwen3_moe`], `general.architecture = "qwen3moe"`. CUDA only.
     Qwen3Moe,
 }
@@ -92,6 +94,7 @@ pub const SUPPORTED_ARCHITECTURES: &[&str] = &[
     "phi3",
     "qwen2",
     "qwen3",
+    "qwen3_5",
     "qwen3moe",
 ];
 
@@ -110,6 +113,7 @@ impl Architecture {
             "phi3" => Self::Phi3,
             "qwen2" => Self::Qwen2,
             "qwen3" => Self::Qwen3,
+            "qwen3_5" => Self::Qwen3_5,
             "qwen3moe" => Self::Qwen3Moe,
             _ => return None,
         };
@@ -141,6 +145,7 @@ impl Architecture {
             Self::Phi3 => "phi3",
             Self::Qwen2 => "qwen2",
             Self::Qwen3 => "qwen3",
+            Self::Qwen3_5 => "qwen3_5",
             Self::Qwen3Moe => "qwen3moe",
         }
     }
@@ -325,6 +330,9 @@ pub fn from_gguf_with<R: Read + Seek>(
         Architecture::Qwen3 => Box::new(quantized_qwen3::ModelWeights::from_gguf(
             ct, reader, device,
         )?),
+        Architecture::Qwen3_5 => Box::new(quantized_qwen3_5::ModelWeights::from_gguf(
+            ct, reader, device,
+        )?),
         Architecture::Qwen3Moe => Box::new(quantized_qwen3_moe::GGUFQWenMoE::from_gguf(
             ct, reader, device, dtype,
         )?),
@@ -350,6 +358,7 @@ impl_quantized_lm!(quantized_phi::ModelWeights);
 impl_quantized_lm!(quantized_phi3::ModelWeights);
 impl_quantized_lm!(quantized_qwen2::ModelWeights);
 impl_quantized_lm!(quantized_qwen3::ModelWeights);
+impl_quantized_lm!(quantized_qwen3_5::ModelWeights);
 impl_quantized_lm!(quantized_qwen3_moe::GGUFQWenMoE);
 
 #[cfg(test)]
@@ -393,6 +402,10 @@ mod tests {
         }
         assert_eq!(Architecture::from_name("qwen3"), Some(Architecture::Qwen3));
         assert_eq!(
+            Architecture::from_name("qwen3_5"),
+            Some(Architecture::Qwen3_5)
+        );
+        assert_eq!(
             Architecture::from_name("qwen3moe"),
             Some(Architecture::Qwen3Moe)
         );
@@ -416,6 +429,7 @@ mod tests {
             Architecture::Phi3,
             Architecture::Qwen2,
             Architecture::Qwen3,
+            Architecture::Qwen3_5,
             Architecture::Qwen3Moe,
         ] {
             assert_eq!(Architecture::from_name(arch.name()), Some(arch));
@@ -437,6 +451,7 @@ mod tests {
         let err = Architecture::from_content(&ct).unwrap_err().to_string();
         assert!(err.contains("mamba"), "{err}");
         assert!(err.contains("qwen3moe"), "{err}");
+        assert!(err.contains("qwen3_5"), "{err}");
     }
 
     #[test]
@@ -516,7 +531,12 @@ mod tests {
             .to_string();
         assert!(err.contains("cuda"), "{err}");
         // Every other family is device and dtype agnostic here.
-        for arch in [Architecture::Llama, Architecture::Glm4, Architecture::Qwen3] {
+        for arch in [
+            Architecture::Llama,
+            Architecture::Glm4,
+            Architecture::Qwen3,
+            Architecture::Qwen3_5,
+        ] {
             arch.check_device_support(&Device::Cpu, DType::F32).unwrap();
         }
     }
@@ -550,6 +570,7 @@ mod tests {
             Architecture::Phi2,
             Architecture::Qwen2,
             Architecture::Qwen3,
+            Architecture::Qwen3_5,
             Architecture::Qwen3Moe,
         ] {
             assert!(!arch.supports_flash_attn(), "{}", arch.name());
@@ -581,7 +602,12 @@ mod tests {
         };
         assert!(err.contains("f16"), "{err}");
         // Every family stays loadable on cuda under the resolved default.
-        for arch in [Architecture::Llama, Architecture::Glm4, Architecture::Qwen3] {
+        for arch in [
+            Architecture::Llama,
+            Architecture::Glm4,
+            Architecture::Qwen3,
+            Architecture::Qwen3_5,
+        ] {
             arch.check_device_support(&device, DType::BF16).unwrap();
         }
     }
