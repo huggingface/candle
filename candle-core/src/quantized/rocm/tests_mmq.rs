@@ -6,9 +6,9 @@
 //!
 //! [`check`] launches the kernel directly rather than going through
 //! `QRocmStorage::fwd`, so the shapes it covers are free of the dispatch
-//! policy: `mmq::is_faster` sends only large weight matrices this way, and
-//! quantizing one of those per test case would cost seconds for no extra
-//! coverage of the kernel. The dispatch itself is pinned separately, by
+//! policy: `mmq::is_faster` declines the smallest weight matrices, and
+//! quantizing one past its threshold per test case would cost seconds for no
+//! extra coverage of the kernel. The dispatch itself is pinned separately, by
 //! [`the_dispatch_reaches_mmq`] and the `is_faster` cases.
 
 use super::mmq;
@@ -215,29 +215,95 @@ fn unsupported_shapes_are_declined() {
     }
 }
 
+/// Smallest and largest weight counts `bench_prefill_paths` sweeps a crossover
+/// across: 512x512, and the 2048x2048 where the last dtype (Q2K) catches up.
+/// Everything `mmq::min_work` claims has to sit between them — below the floor
+/// there is no measurement to justify enabling MMQ, and above the ceiling the
+/// sweep says MMQ wins for every dtype, so declining it wastes the measurement.
+const SWEEP_FLOOR: usize = 256 << 10;
+const LAST_MEASURED_CROSSOVER: usize = 4 << 20;
+
+/// The weight count at which `mmq::is_faster` switches on, or `None` if it never
+/// does. Found by bisection, which is also what pins the policy's *shape*: a
+/// single boundary with nothing enabled below it and everything above.
+fn threshold(dtype: GgmlDType) -> Option<usize> {
+    let ceiling = 1 << 30;
+    if !mmq::is_faster(dtype, ceiling) {
+        return None;
+    }
+    let (mut lo, mut hi) = (0usize, ceiling);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if mmq::is_faster(dtype, mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    Some(lo)
+}
+
 /// The policy half of the dispatch: MMQ is taken on the strength of the weight
-/// matrix, and three dtypes never take it because it measured slower than the
-/// dense dequantize at every size. See `mmq::min_work`.
+/// matrix alone. This checks the properties the measurement establishes rather
+/// than the constants it produced, so retuning `mmq::min_work` against a fresh
+/// sweep does not mean rewriting the test to agree with it. See `min_work` for
+/// the table.
 #[test]
 fn the_size_policy_matches_what_was_measured() {
-    assert!(!mmq::is_faster(GgmlDType::Q4_0, (4 << 20) - 1));
-    assert!(mmq::is_faster(GgmlDType::Q4_0, 4 << 20));
-    assert!(!mmq::is_faster(GgmlDType::Q4K, 4 << 20));
-    assert!(mmq::is_faster(GgmlDType::Q4K, 16 << 20));
+    for dtype in MMQ_DTYPES {
+        // Under the RDNA geometry every dtype with a kernel wins somewhere, so
+        // an MMQ dtype that never dispatches is a policy that threw away a
+        // measured win.
+        let Some(min) = threshold(dtype) else {
+            panic!("{dtype:?} has a mul_mat_q kernel but takes MMQ at no size")
+        };
+        assert!(
+            min >= SWEEP_FLOOR,
+            "{dtype:?} enabled at {min} weights, below the {SWEEP_FLOOR} the sweep bottoms out at"
+        );
+        assert!(
+            min <= LAST_MEASURED_CROSSOVER,
+            "{dtype:?} declines MMQ up to {min} weights, past where the sweep has it winning"
+        );
+        assert!(!mmq::is_faster(dtype, min - 1), "{dtype:?} below {min}");
+        assert!(mmq::is_faster(dtype, min), "{dtype:?} at {min}");
+    }
+
+    // No `mul_mat_q*` entry point, so no threshold could make this dispatch.
+    for dtype in [GgmlDType::Q8_1, GgmlDType::F16, GgmlDType::F32] {
+        assert_eq!(threshold(dtype), None, "{dtype:?}");
+    }
+
+    // The measured ordering. Seven dtypes beat dense at every size swept and so
+    // share the floor; Q6K, Q3K and Q2K each crossed over inside the sweep, in
+    // that order, and each therefore has to wait strictly longer than the last.
     for dtype in [
-        GgmlDType::Q3K,
-        GgmlDType::Q5K,
+        GgmlDType::Q4_0,
+        GgmlDType::Q4_1,
         GgmlDType::Q5_0,
         GgmlDType::Q5_1,
+        GgmlDType::Q8_0,
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
     ] {
-        assert!(!mmq::is_faster(dtype, 1 << 30), "{dtype:?}");
+        assert_eq!(threshold(dtype), Some(SWEEP_FLOOR), "{dtype:?}");
     }
+    let mut prev = SWEEP_FLOOR;
+    for dtype in [GgmlDType::Q6K, GgmlDType::Q3K, GgmlDType::Q2K] {
+        let min = threshold(dtype).unwrap_or_default();
+        assert!(
+            min > prev,
+            "{dtype:?} crosses over at {min}, not after {prev}"
+        );
+        prev = min;
+    }
+    assert_eq!(prev, LAST_MEASURED_CROSSOVER);
 }
 
 /// End to end through `QRocmStorage::fwd`, at a shape the policy actually sends
-/// to MMQ: 2048x2048 Q4_0 is 4 Mi weights, exactly its threshold. f16 and bf16
-/// activations reach the kernel through a cast to f32, which is the other half
-/// of `try_fwd`.
+/// to MMQ: 2048x2048 Q4_0 is 4 Mi weights, well past its threshold. f16 and
+/// bf16 activations reach the kernel through a cast to f32, which is the other
+/// half of `try_fwd`.
 #[test]
 fn the_dispatch_reaches_mmq() -> Result<()> {
     let device = rocm_device!();

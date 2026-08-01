@@ -15,8 +15,8 @@
 //!   No requantization, so it is also the more accurate of the two.
 //! * [`mmq`] — the tiled `q8_1` matmul, for the batches the vector kernels do
 //!   not cover. This is prefill. It declines the weight matrices too small to
-//!   beat a rocBLAS GEMM, and the three dtypes whose kernel never does; see
-//!   `mmq::min_work`.
+//!   beat a rocBLAS GEMM, which for most dtypes means only the ones below the
+//!   smallest size ever measured; see `mmq::min_work`.
 //! * dequantize-then-GEMM — everything left. Correct for every dtype, but
 //!   materialises the whole weight matrix in the activation's dtype.
 //!

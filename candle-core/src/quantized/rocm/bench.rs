@@ -142,15 +142,21 @@ fn bench_prefill_paths() -> Result<()> {
         _ => return Ok(()),
     };
     println!(
-        "{:>6} {:>7} {:>6} {:>5} {:>10} {:>10} {:>8}",
-        "dtype", "k", "n", "m", "mmq_ms", "dense_ms", "speedup"
+        "{:>6} {:>7} {:>6} {:>5} {:>10} {:>10} {:>8} {:>8}",
+        "dtype", "k", "n", "m", "mmq_ms", "dense_ms", "speedup", "spread"
     );
-    // Weight elements per shape: 0.25 Mi, 1 Mi, 4 Mi, 16 Mi, 131 Mi. The
-    // crossover is a function of that product, so the sweep brackets it.
+    // Weight elements per shape: 0.25, 0.5, 1, 1, 2, 4, 8, 16 and 125 Mi. The
+    // crossover is taken to be a function of that product alone, so the sweep
+    // steps it in halvings around where it lands and carries two different
+    // (k, n) at 1 Mi to check that the product really is what decides.
     let shapes = [
         (512usize, 512usize),
+        (512, 1024),
         (1024, 1024),
+        (512, 2048),
+        (1024, 2048),
         (2048, 2048),
+        (2048, 4096),
         (4096, 4096),
         (4096, 32000),
     ];
@@ -168,31 +174,53 @@ fn bench_prefill_paths() -> Result<()> {
                 let y = dev.clone_htod(&lhs)?;
                 let lhs = Tensor::from_slice(&lhs, (m, k), &device)?;
                 let iters = if m > 64 { 20 } else { 50 };
-                let mmq_ms = time(&device, iters, || {
-                    super::mmq::mul_mat_via_q8_1(&q.data, q.len, &y, 0, dtype, k, n, m, &dev)
-                        .map(|_| ())
-                })?;
-                // The fallback's own computation: dequantize the weights, then
-                // GEMM against the transposed view.
-                let dense_ms = time(&device, iters, || {
-                    let deq = qt.dequantize(&device)?.t()?;
-                    lhs.matmul(&deq).map(|_| ())
-                })?;
+                let (mut mmq, mut dense, mut ratio) = (vec![], vec![], vec![]);
+                for _ in 0..REPS {
+                    let mmq_ms = time(&device, iters, || {
+                        super::mmq::mul_mat_via_q8_1(&q.data, q.len, &y, 0, dtype, k, n, m, &dev)
+                            .map(|_| ())
+                    })?;
+                    // The fallback's own computation: dequantize the weights,
+                    // then GEMM against the transposed view.
+                    let dense_ms = time(&device, iters, || {
+                        let deq = qt.dequantize(&device)?.t()?;
+                        lhs.matmul(&deq).map(|_| ())
+                    })?;
+                    mmq.push(mmq_ms);
+                    dense.push(dense_ms);
+                    ratio.push(dense_ms / mmq_ms);
+                }
+                let speedup = median(&mut ratio);
+                // `median` sorted `ratio`, so its ends are the extremes.
+                let spread = 100. * (ratio[REPS - 1] - ratio[0]) / speedup;
                 println!(
-                    "{:>6} {:>7} {:>6} {:>5} {:>10.4} {:>10.4} {:>8.2}",
+                    "{:>6} {:>7} {:>6} {:>5} {:>10.4} {:>10.4} {:>8.2} {:>7.1}%",
                     format!("{dtype:?}"),
                     k,
                     n,
                     m,
-                    mmq_ms,
-                    dense_ms,
-                    dense_ms / mmq_ms
+                    median(&mut mmq),
+                    median(&mut dense),
+                    speedup,
+                    spread
                 );
             }
             drop(deq);
         }
     }
     Ok(())
+}
+
+/// Timing pairs per configuration in [`bench_prefill_paths`]. The two paths are
+/// timed back to back inside a repeat, so a clock or occupancy drift moves both
+/// and largely cancels in the ratio; the spread of the ratio across repeats is
+/// what says whether a speedup near 1.0 is a real one.
+const REPS: usize = 5;
+
+/// Median of `xs`, which it sorts in place.
+fn median(xs: &mut [f64]) -> f64 {
+    xs.sort_by(f64::total_cmp);
+    xs[xs.len() / 2]
 }
 
 /// Mean wall time of `run` over `iters` iterations, in milliseconds.
