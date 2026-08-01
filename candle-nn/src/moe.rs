@@ -151,6 +151,12 @@ pub fn moe_gemm(
     }
 }
 
+/// The dense (f16/bf16) fused expert GEMM has no ROCm implementation.
+///
+/// It is `moe_gemm_wmma` in `candle-kernels/src/moe/moe_wmma.cu`, written
+/// against `nvcuda::wmma` and `<mma.h>`, and compiled into the `libmoe.a`
+/// static library — neither the intrinsics nor that build step exists on the
+/// ROCm side. The quantized [`moe_gemm_gguf`] does run there.
 #[cfg(not(feature = "cuda"))]
 pub fn moe_gemm(
     _: &Tensor,
@@ -161,7 +167,11 @@ pub fn moe_gemm(
     _: usize,
     _: bool,
 ) -> Result<Tensor> {
-    candle::bail!("moe_gemm is only implemented for the cuda backend")
+    candle::bail!(
+        "moe_gemm is only implemented for the cuda backend: its kernel is \
+         `nvcuda::wmma` and has no ROCm equivalent. Quantized MoE weights go \
+         through moe_gemm_gguf, which does support ROCm."
+    )
 }
 
 #[cfg(feature = "cuda")]
@@ -336,7 +346,34 @@ pub fn moe_gemm_gguf(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(all(not(feature = "cuda"), feature = "rocm"))]
+mod rocm;
+
+/// ROCm reaches the same routed mat-vecs through `indexed_moe_forward`; see
+/// [`rocm`] for why, and for what `is_prefill` and `dtype` mean there (nothing).
+#[cfg(all(not(feature = "cuda"), feature = "rocm"))]
+#[allow(clippy::too_many_arguments)]
+pub fn moe_gemm_gguf(
+    input: &Tensor,
+    weights: &QTensor,
+    topk_weights: &Option<Tensor>,
+    sorted_token_ids: &Tensor,
+    experts_ids: &Tensor,
+    topk: usize,
+    _is_prefill: bool,
+    _dtype: candle::DType,
+) -> Result<Tensor> {
+    rocm::moe_gemm_gguf(
+        input,
+        weights,
+        topk_weights,
+        sorted_token_ids,
+        experts_ids,
+        topk,
+    )
+}
+
+#[cfg(all(not(feature = "cuda"), not(feature = "rocm")))]
 #[allow(clippy::too_many_arguments)]
 pub fn moe_gemm_gguf(
     _: &Tensor,
@@ -348,5 +385,5 @@ pub fn moe_gemm_gguf(
     _: bool,
     _: candle::DType,
 ) -> Result<Tensor> {
-    candle::bail!("moe_gemm_gguf is only implemented for the cuda backend")
+    candle::bail!("moe_gemm_gguf is only implemented for the cuda and rocm backends")
 }
