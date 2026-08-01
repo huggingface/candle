@@ -127,6 +127,74 @@ fn bench_decode_paths() -> Result<()> {
     Ok(())
 }
 
+/// MMQ against the dense fallback it replaced, on the same weights.
+///
+/// This is what decides whether the MMQ dispatch in
+/// [`super::QRocmStorage::fwd`] wants a size threshold under it: the dense path
+/// materialises `n * k` weights in f32 whatever the batch, so the two only come
+/// close when that matrix is small and the batch is large.
+#[test]
+#[ignore = "benchmark: needs a GPU and takes seconds"]
+fn bench_prefill_paths() -> Result<()> {
+    let device = rocm_device!();
+    let dev = match &device {
+        Device::Rocm(dev) => dev.clone(),
+        _ => return Ok(()),
+    };
+    println!(
+        "{:>6} {:>7} {:>6} {:>5} {:>10} {:>10} {:>8}",
+        "dtype", "k", "n", "m", "mmq_ms", "dense_ms", "speedup"
+    );
+    // Weight elements per shape: 0.25 Mi, 1 Mi, 4 Mi, 16 Mi, 131 Mi. The
+    // crossover is a function of that product, so the sweep brackets it.
+    let shapes = [
+        (512usize, 512usize),
+        (1024, 1024),
+        (2048, 2048),
+        (4096, 4096),
+        (4096, 32000),
+    ];
+    for dtype in super::tests_mmq::MMQ_DTYPES {
+        for (k, n) in shapes {
+            let rhs = Tensor::rand(-1f32, 1f32, (n, k), &device)?;
+            let qt = QTensor::quantize(&rhs, dtype)?;
+            let deq = qt.dequantize(&device)?.t()?;
+            let q = match &qt.storage {
+                crate::quantized::QStorage::Rocm(q) => q,
+                _ => return Ok(()),
+            };
+            for m in [9usize, 32, 128, 512] {
+                let lhs: Vec<f32> = (0..m * k).map(|i| (i as f32 / 53.).sin()).collect();
+                let y = dev.clone_htod(&lhs)?;
+                let lhs = Tensor::from_slice(&lhs, (m, k), &device)?;
+                let iters = if m > 64 { 20 } else { 50 };
+                let mmq_ms = time(&device, iters, || {
+                    super::mmq::mul_mat_via_q8_1(&q.data, q.len, &y, 0, dtype, k, n, m, &dev)
+                        .map(|_| ())
+                })?;
+                // The fallback's own computation: dequantize the weights, then
+                // GEMM against the transposed view.
+                let dense_ms = time(&device, iters, || {
+                    let deq = qt.dequantize(&device)?.t()?;
+                    lhs.matmul(&deq).map(|_| ())
+                })?;
+                println!(
+                    "{:>6} {:>7} {:>6} {:>5} {:>10.4} {:>10.4} {:>8.2}",
+                    format!("{dtype:?}"),
+                    k,
+                    n,
+                    m,
+                    mmq_ms,
+                    dense_ms,
+                    dense_ms / mmq_ms
+                );
+            }
+            drop(deq);
+        }
+    }
+    Ok(())
+}
+
 /// Mean wall time of `run` over `iters` iterations, in milliseconds.
 fn time(device: &Device, iters: usize, mut run: impl FnMut() -> Result<()>) -> Result<f64> {
     for _ in 0..3 {

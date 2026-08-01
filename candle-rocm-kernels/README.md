@@ -212,7 +212,7 @@ the same `candle-kernels` code the CUDA backend launches.
 | `copy_strided_src`, `copy2d`, `const_set` | shared kernel + `hipMemcpy` | contiguous copies go through `hipMemcpy`/`hipMemcpy2D` |
 | `rand_uniform`, `rand_normal` | rocRAND | generated in `f32`/`f64`, then cast |
 | Quantized load / `dequantize` / `dequantize_f16` / `embedding` (`get_rows`) | shared kernel | all GGML block types |
-| Quantized `fwd` (matmul) | MMVQ / DMMV / dequantize + GEMM | batch 1-8 fused, larger batches dequantize; see below |
+| Quantized `fwd` (matmul) | MMVQ / DMMV / MMQ / dequantize + GEMM | batch 1-8 fused, larger batches tiled where MMQ pays; see below |
 | `candle-nn`: `softmax_last_dim`, `rms_norm`, `layer_norm`, `sigmoid` | shared kernel | `rocm_fwd` on the custom op |
 | `candle-nn`: `rope`, `rope_i`, `rope_thd` | shared kernel | |
 
@@ -254,7 +254,7 @@ really changes the result rather than being accepted and ignored.
 
 ### Quantized matmul paths
 
-`QRocmStorage::fwd` picks between three, all against kernels compiled from the
+`QRocmStorage::fwd` picks between four, all against kernels compiled from the
 shared `quantized.cu`:
 
 | batch (`b * m`) | activation | path |
@@ -263,23 +263,41 @@ shared `quantized.cu`:
 | 1 | `f32` legacy quant at 8 Mi elements or more | MMVQ (`mul_mat_vec_*_q8_1_cuda1`) |
 | 1 | `f16` / `bf16` | MMVQ, activation cast to `f32` first |
 | 2-8 | any float | MMVQ (`…_cuda<N>`) |
-| > 8 | any float | dequantize the weights, then rocBLAS GEMM |
+| any | any float, weights above the size threshold below | MMQ (`mul_mat_q*`) |
+| any | anything left | dequantize the weights, then rocBLAS GEMM |
 
-MMVQ requantizes the activation row to `q8_1` in a separate launch, which costs
-roughly 14 µs; the size and dtype conditions on the batch-of-one rows are where
-that stops paying for itself. `quantized/rocm/mmvq.rs::dmmv_is_faster` carries
-the measurements. `CANDLE_ROCM_FORCE_DMMV=1` pins everything to the two
-non-MMVQ paths, which is both an escape hatch and how the two are benchmarked
-against each other (`quantized::rocm::bench`, `--ignored`).
+Both `q8_1` paths requantize the activations in a separate launch, which costs
+roughly 14 µs; the size and dtype conditions are where that stops paying for
+itself. `CANDLE_ROCM_FORCE_DMMV=1` disables both of them, which is an escape
+hatch and how they are benchmarked against the alternatives
+(`quantized::rocm::bench`, `--ignored`).
+
+The batch-of-one conditions are in `quantized/rocm/mmvq.rs::dmmv_is_faster`.
+MMQ's are in `mmq.rs::min_work`, and are a size threshold per dtype rather than
+a batch one — what MMQ saves is the dequantized weight matrix, so the weights
+are what decide it:
+
+| dtype | MMQ from | measured against the dense path |
+|---|---|---|
+| Q4_0, Q4_1, Q6K | 4 Mi weight elements | 1.1-3.3x faster above it |
+| Q8_0, Q2K, Q4K | 16 Mi weight elements | 1.0-2.3x faster above it |
+| Q5_0, Q5_1 | never | flattens out at a wash (0.89-1.06x) |
+| Q3K, Q5K | never | slower at every size; Q3K by more than 2x throughout |
+
+`bench_prefill_paths` prints the full sweep those come from. The thresholds sit
+where the ratio stops favouring dense rather than where MMQ becomes decisive,
+because a wall-clock ratio does not show what the dense path *allocates* —
+524 MB of transient for a 4096x32000 `lm_head` at f32.
 
 ### Deliberately not implemented
 
-- **MMQ (`mul_mat_q*`), the large-batch quantized matmul.** Compiled into the
-  module but not launched, so anything past a batch of eight still dequantizes
-  the whole weight matrix and runs a rocBLAS GEMM — prefill above eight tokens
-  is now the largest remaining performance gap. The `fast_mmq` / `fast_mmvq`
-  modules stay CUDA-only: they bind to `mmvq_gguf.cu` / `mmq_gguf/`, which use
-  inline PTX, `nvcuda::wmma` and `__reduce_add_sync`.
+- **The `fast_mmq` / `fast_mmvq` modules.** CUDA-only: they bind to
+  `mmvq_gguf.cu` / `mmq_gguf/`, which use inline PTX, `nvcuda::wmma` and
+  `__reduce_add_sync`. The plain `mul_mat_q*` kernels this backend does launch
+  are the older, portable ones.
+- **MMQ for Q3K, Q5K, Q5_0 and Q5_1.** The kernels exist and are correct — the
+  tests launch them directly — but they measured no faster than dequantizing
+  and calling rocBLAS at any size, so `fwd` does not dispatch to them.
 - **MoE.** `indexed_moe_forward` errors; there are no fused MoE kernels.
 - **Flash attention.** `candle-flash-attn` is CUDA-only. `candle-nn`'s `sdpa`
   fast path is Metal-only on every backend.
