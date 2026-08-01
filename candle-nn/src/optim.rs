@@ -198,4 +198,31 @@ impl AdamW {
     pub fn set_params(&mut self, params: ParamsAdamW) {
         self.params = params;
     }
+
+    /// The number of steps taken so far, i.e. the `t` in Adam's bias-correction
+    /// factor `1 - beta^t`.
+    pub fn step_t(&self) -> usize {
+        self.step_t
+    }
+
+    /// Overwrite the step counter, e.g. when resuming a run from a checkpoint.
+    pub fn set_step_t(&mut self, step_t: usize) {
+        self.step_t = step_t
+    }
+
+    /// Iterate over `(parameter, first_moment, second_moment)` for each tracked
+    /// variable, in the order the optimizer holds them.
+    ///
+    /// Note that `new` skips non-float variables, so this can yield fewer items
+    /// than were passed to it. Callers saving state by position should iterate
+    /// this on both the save and the restore side rather than zipping it against
+    /// their own variable list.
+    ///
+    /// `Var` has interior mutability, so this is enough to restore state as well
+    /// as save it: `var.set(..)` on a returned moment takes `&self`.
+    pub fn moments(&self) -> impl Iterator<Item = (&Var, &Var, &Var)> + '_ {
+        self.vars
+            .iter()
+            .map(|v| (&v.var, &v.first_moment, &v.second_moment))
+    }
 }
