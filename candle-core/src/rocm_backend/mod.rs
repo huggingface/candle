@@ -49,6 +49,8 @@ mod tests_conv;
 #[cfg(test)]
 mod tests_copy;
 #[cfg(test)]
+mod tests_custom_kernel;
+#[cfg(test)]
 mod tests_gemm;
 #[cfg(test)]
 mod tests_indexing;
