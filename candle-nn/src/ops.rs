@@ -289,6 +289,10 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         "softmax-last-dim"
     }
 
+    fn bwd(&self, _arg: &Tensor, res: &Tensor, grad_res: &Tensor) -> Result<Option<Tensor>> {
+        Ok(Some(Self::bwd_impl(res, grad_res)?))
+    }
+
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
         fn softmax<T: candle::WithDType + num_traits::Float>(
             src: &[T],
@@ -435,7 +439,26 @@ impl candle::CustomOp1 for SoftmaxLastDim {
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
-    xs.apply_op1_no_bwd(&SoftmaxLastDim)
+    xs.apply_op1(SoftmaxLastDim)
+}
+
+impl SoftmaxLastDim {
+    /// The softmax jacobian-vector product, `dx = y * (dy - sum_h(dy * y))` — the formula of
+    /// PyTorch's `_softmax_backward_data` reference decomposition. Only the saved output `y` is
+    /// needed; nothing is recomputed. Half-precision inputs run the two reductions in `f32`,
+    /// mirroring the composed path.
+    fn bwd_impl(res: &Tensor, grad_res: &Tensor) -> Result<Tensor> {
+        let x_dtype = res.dtype();
+        let internal = match x_dtype {
+            candle::DType::F16 | candle::DType::BF16 => candle::DType::F32,
+            d => d,
+        };
+        let y = res.to_dtype(internal)?;
+        let dy = grad_res.to_dtype(internal)?;
+        let t = (&dy * &y)?;
+        let s = t.sum_keepdim(D::Minus1)?;
+        (t - y.broadcast_mul(&s)?)?.to_dtype(x_dtype)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -694,6 +717,55 @@ impl candle::CustomOp3 for LayerNorm {
         "layer-norm"
     }
 
+    /// The layer-norm backward, following PyTorch's `native_layer_norm_backward` reference
+    /// decomposition: with `g = dy * gamma` and row statistics over the hidden axis,
+    /// `dx = rstd/N * (N*g - sum_h(g) - x_hat * sum_h(g * x_hat))`,
+    /// `dgamma = sum_outer(dy * x_hat)`, `dbeta = sum_outer(dy)`.
+    ///
+    /// ATen's CUDA kernels consume the mean and rstd SAVED by the forward; a `CustomOp` has a
+    /// single output, so they are recomputed here from `arg1` (five extra kernels of the ~11
+    /// total). Making the forward save them needs a multi-output native op — the next rung,
+    /// not this change. Half-precision inputs compute in `f32` end to end, mirroring both the
+    /// fused forward kernel and the composed path.
+    fn bwd(
+        &self,
+        arg1: &Tensor,
+        arg2: &Tensor,
+        _arg3: &Tensor,
+        _res: &Tensor,
+        grad_res: &Tensor,
+    ) -> Result<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
+        let x_dtype = arg1.dtype();
+        let internal = match x_dtype {
+            candle::DType::F16 | candle::DType::BF16 => candle::DType::F32,
+            d => d,
+        };
+        let hidden = arg1.dim(D::Minus1)?;
+        let n = hidden as f64;
+        let x = arg1.to_dtype(internal)?;
+        let dy = grad_res.to_dtype(internal)?;
+        let gamma = arg2.to_dtype(internal)?;
+
+        let mu = (x.sum_keepdim(D::Minus1)? / n)?;
+        let xc = x.broadcast_sub(&mu)?;
+        let var = (xc.sqr()?.sum_keepdim(D::Minus1)? / n)?;
+        let rstd = (var + self.eps as f64)?.sqrt()?.recip()?;
+        let x_hat = xc.broadcast_mul(&rstd)?;
+
+        let g = dy.broadcast_mul(&gamma)?;
+        let sum_g = g.sum_keepdim(D::Minus1)?;
+        let sum_gx = (&g * &x_hat)?.sum_keepdim(D::Minus1)?;
+        let inner = ((&g * n)?.broadcast_sub(&sum_g)? - x_hat.broadcast_mul(&sum_gx)?)?;
+        let dx = inner.broadcast_mul(&(rstd / n)?)?.to_dtype(x_dtype)?;
+
+        let d_gamma = (&dy * &x_hat)?
+            .reshape(((), hidden))?
+            .sum(0)?
+            .to_dtype(arg2.dtype())?;
+        let d_beta = dy.reshape(((), hidden))?.sum(0)?.to_dtype(arg2.dtype())?;
+        Ok((Some(dx), Some(d_gamma), Some(d_beta)))
+    }
+
     fn cpu_fwd(
         &self,
         s1: &CpuStorage,
@@ -941,7 +1013,7 @@ pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Resul
             beta.shape()
         )
     }
-    xs.apply_op3_no_bwd(alpha, beta, &LayerNorm { eps })
+    xs.apply_op3(alpha, beta, LayerNorm { eps })
 }
 
 // https://pytorch.org/docs/stable/generated/torch.nn.PixelShuffle.html
