@@ -31,19 +31,26 @@ use crate::rocm_backend::{
 };
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 
+mod device_ptr;
 mod dmmv;
 mod kernels;
 mod mmq;
 mod mmvq;
 mod moe;
 mod q8_1;
+mod quantize;
 
+pub use device_ptr::QRocmPtrGuard;
 use kernels::MATRIX_ROW_PADDING;
 
 #[cfg(test)]
 mod bench;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_device_ptr;
+#[cfg(test)]
+mod tests_imatrix;
 #[cfg(test)]
 mod tests_mmq;
 #[cfg(test)]
@@ -169,49 +176,6 @@ impl QRocmStorage {
             slice: RocmStorageSlice::F16(dst),
             device: self.device.clone(),
         })
-    }
-
-    pub fn quantize(&mut self, src: &RocmStorage) -> Result<()> {
-        let src = match &src.slice {
-            RocmStorageSlice::F32(data) => self.device.clone_dtoh(data)?,
-            slice => crate::bail!("only f32 can be quantized, got {:?}", slice.dtype()),
-        };
-        self.quantize_from_f32(&src)
-    }
-
-    pub fn quantize_onto(&mut self, src: &CpuStorage) -> Result<()> {
-        self.quantize_from_f32(src.as_slice::<f32>()?)
-    }
-
-    /// Quantization itself runs on the CPU; only the upload is device side.
-    fn quantize_from_f32(&mut self, src: &[f32]) -> Result<()> {
-        let mut qcpu_storage = crate::Device::Cpu.qzeros(src.len(), self.dtype)?;
-        match &mut qcpu_storage {
-            QStorage::Cpu(storage) => storage.from_float(src),
-            _ => crate::bail!("Device::Cpu.qzeros did not return a cpu storage"),
-        }
-        let data = qcpu_storage.data()?;
-        self.data = upload(&self.device, &data, self.dtype)?;
-        self.len = data.len();
-        Ok(())
-    }
-
-    pub fn quantize_imatrix(
-        &mut self,
-        _src: &RocmStorage,
-        _imatrix_weights: &[f32],
-        _n_per_row: usize,
-    ) -> Result<()> {
-        crate::bail!("imatrix quantization is not implemented for the ROCm backend")
-    }
-
-    pub fn quantize_imatrix_onto(
-        &mut self,
-        _src: &CpuStorage,
-        _imatrix_weights: &[f32],
-        _n_per_row: usize,
-    ) -> Result<()> {
-        crate::bail!("imatrix quantization is not implemented for the ROCm backend")
     }
 
     pub fn embedding(
