@@ -35,6 +35,7 @@ mod dmmv;
 mod kernels;
 mod mmq;
 mod mmvq;
+mod moe;
 mod q8_1;
 
 use kernels::MATRIX_ROW_PADDING;
@@ -355,15 +356,19 @@ impl QRocmStorage {
         Ok((out, out_shape.into()))
     }
 
+    /// `self` is a `(num_experts, n, k)` stack of expert weight matrices.
+    ///
+    /// See [`moe`] — the kernels are the MMVQ ones with the expert index folded
+    /// into the weight pointer.
     pub fn indexed_moe_forward(
         &self,
-        _self_shape: &Shape,
-        _input: &RocmStorage,
-        _input_l: &Layout,
-        _ids: &RocmStorage,
-        _ids_l: &Layout,
+        self_shape: &Shape,
+        input: &RocmStorage,
+        input_l: &Layout,
+        ids: &RocmStorage,
+        ids_l: &Layout,
     ) -> Result<(RocmStorage, Shape)> {
-        crate::bail!("indexed_moe_forward is not implemented for the ROCm backend")
+        moe::forward(self, self_shape, input, input_l, ids, ids_l)
     }
 }
 

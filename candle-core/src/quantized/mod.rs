@@ -852,13 +852,41 @@ impl QTensor {
                         false,
                     ))
                 }
-                _ => {
-                    panic!("Non-cuda indexed_moe_forward is not implemented!");
-                }
+                _ => crate::bail!(
+                    "indexed_moe_forward: the weights are on a cuda device but the input is {:?} \
+                     and the ids are {:?}",
+                    x.device(),
+                    ids.device()
+                ),
             },
-            _ => {
-                panic!("indexed_moe_forward is not implemented in this platform!");
-            }
+            #[cfg(feature = "rocm")]
+            QStorage::Rocm(s) => match (&*x.storage(), &*ids.storage()) {
+                (Storage::Rocm(x_storage), Storage::Rocm(ids_storage)) => {
+                    let (storage, out_shape) = s.indexed_moe_forward(
+                        self.shape(),
+                        x_storage,
+                        x.layout(),
+                        ids_storage,
+                        ids.layout(),
+                    )?;
+                    Ok(crate::tensor::from_storage(
+                        Storage::Rocm(storage),
+                        out_shape,
+                        crate::op::BackpropOp::none(),
+                        false,
+                    ))
+                }
+                _ => crate::bail!(
+                    "indexed_moe_forward: the weights are on a rocm device but the input is {:?} \
+                     and the ids are {:?}",
+                    x.device(),
+                    ids.device()
+                ),
+            },
+            storage => crate::bail!(
+                "indexed_moe_forward is not implemented for {:?} weights",
+                storage.device()
+            ),
         }
     }
 
@@ -951,9 +979,7 @@ impl QMatMul {
     pub fn indexed_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
         match self {
             Self::QTensor(t) => t.indexed_moe_forward(x, ids),
-            _ => {
-                panic!("Not implemented!")
-            }
+            _ => crate::bail!("indexed_moe_forward needs quantized weights, not a dense tensor"),
         }
     }
 

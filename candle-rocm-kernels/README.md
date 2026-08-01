@@ -310,13 +310,41 @@ favouring dense rather than where MMQ becomes decisive, because a wall-clock
 ratio does not show what the dense path *allocates* — 524 MB of transient for a
 4096x32000 `lm_head` at f32, which MMQ never materialises.
 
+### Mixture-of-experts
+
+`QRocmStorage::indexed_moe_forward` launches
+`indexed_moe_forward_{q2k,q3k,q4k,q5k,q6k,q8_0}_q8_1` from the shared
+`quantized.cu` — the MMVQ inner loop with the expert index folded into the
+weight pointer, so it inherits the same `q8_1` activation requantization. It
+takes a `(num_experts, n, k)` expert stack, `(batch, topk or 1, k)` f32
+activations and `(batch, topk)` u32 routing, and returns `(batch, topk, n)`.
+
+`candle_nn::moe::moe_gemm_gguf` is built on top of it: the CUDA entry point
+takes the routing already sorted by expert (`sorted_token_ids` is the
+permutation that sorted it), which `moe/rocm.rs` inverts with an arg-sort before
+handing the unsorted routing to the kernel. `is_prefill` and `dtype` are ignored
+— CUDA uses them to select a WMMA tile kernel, and there is only the one path
+here. That makes `candle_transformers::fused_moe::FusedMoeGGUF`, and so
+`quantized_qwen3_moe`, run on this backend.
+
+Fixing this up exposed a bug in the shared kernel: `indexed_moe_forward` strided
+between experts with a hard-coded `QK_K` rather than its own `qk` template
+parameter. The two agree for every K-quant instantiation, but `q8_0` passes
+`QK8_0` = 32, so its expert stride was an eighth of the expert matrix and every
+routed pair past expert 0 read the wrong weights.
+
 ### Deliberately not implemented
 
 - **The `fast_mmq` / `fast_mmvq` modules.** CUDA-only: they bind to
   `mmvq_gguf.cu` / `mmq_gguf/`, which use inline PTX, `nvcuda::wmma` and
   `__reduce_add_sync`. The plain `mul_mat_q*` kernels this backend does launch
   are the older, portable ones.
-- **MoE.** `indexed_moe_forward` errors; there are no fused MoE kernels.
+- **The dense fused MoE GEMM** (`candle_nn::moe::moe_gemm`, and the prefill half
+  of `moe_gemm_gguf`). Both bind to `candle-kernels/src/moe/moe_wmma.cu` and
+  `moe_wmma_gguf.cu`, which are `nvcuda::wmma` plus `<mma.h>` and are compiled
+  into a host-side static library (`libmoe.a`) this backend has no build step
+  for. The quantized MoE *is* implemented — see below — so `FusedMoeGGUF` runs
+  and `FusedMoe` does not.
 - **Flash attention.** `candle-flash-attn` is CUDA-only. `candle-nn`'s `sdpa`
   fast path is Metal-only on every backend.
 - **`quantize_imatrix` / `quantize_imatrix_onto`.** Error out; plain `quantize`
