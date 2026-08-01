@@ -10,6 +10,11 @@
 //! `~/.cache/candle-rocm/<arch>-<rocm-version>/` (override with
 //! `CANDLE_ROCM_CACHE_DIR`), so one binary runs on any GPU architecture without
 //! a rebuild.
+//!
+//! That machinery is open to downstream crates: [`KernelCache::custom_function`]
+//! compiles and launches a source this crate does not own, in the same dialect
+//! and with the same disk cache. `RocmDevice::get_or_load_custom_func` is the
+//! candle-level entry point.
 
 mod compile;
 mod error;
@@ -76,8 +81,9 @@ impl Module {
     /// Position in [`ALL_IDS`], i.e. the module's own [`Id`] as a `usize`.
     ///
     /// A dense index rather than the name, so a per-device store can be an
-    /// array instead of a map. [`KernelCache`] itself keys on the name; this is
-    /// for callers that want the cheaper lookup.
+    /// array instead of a map. [`KernelCache`] itself keys on the name — it has
+    /// to, since a custom module has no slot here — and this is for callers
+    /// that want the cheaper lookup.
     pub const fn index(&self) -> usize {
         self.index
     }

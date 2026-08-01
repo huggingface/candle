@@ -72,11 +72,24 @@ fn truncated_hex(hasher: Sha256) -> String {
     format!("{:x}", hasher.finalize())[..KEY_LEN].to_string()
 }
 
-/// Directory component for an architecture. `gcnArchName` can carry target
-/// features (`gfx942:sramecc+:xnack-`); the raw string still goes to the
-/// compiler and into the key, only the path is tamed.
-pub(crate) fn arch_dir_name(arch: &str) -> String {
-    arch.chars()
+/// Longest path component this will produce. A module name is caller text and
+/// need not be short — passing a whole kernel source as the name is a plausible
+/// slip — and the file name also carries a `_<key>` suffix, so anything near
+/// `NAME_MAX` fails the open with `File name too long` rather than missing the
+/// cache. Truncation cannot lose the identity of an entry: the key already
+/// covers the source, and it is what separates two entries that share a stem.
+const MAX_COMPONENT_LEN: usize = 64;
+
+/// Tames a string that is about to become part of a path.
+///
+/// Two callers need it. `gcnArchName` can carry target features
+/// (`gfx942:sramecc+:xnack-`), and a caller-supplied module name is arbitrary
+/// text. The raw string still goes to the compiler and into the key; only the
+/// path is tamed.
+pub(crate) fn path_component(name: &str) -> String {
+    // Every retained character is ASCII, so the truncation below cannot split a
+    // multi-byte sequence.
+    name.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
                 c
@@ -84,6 +97,7 @@ pub(crate) fn arch_dir_name(arch: &str) -> String {
                 '_'
             }
         })
+        .take(MAX_COMPONENT_LEN)
         .collect()
 }
 
@@ -290,11 +304,20 @@ mod tests {
     }
 
     #[test]
-    fn arch_dir_name_strips_target_features() {
-        assert_eq!(arch_dir_name("gfx1101"), "gfx1101");
+    fn a_path_component_strips_target_features() {
+        assert_eq!(path_component("gfx1101"), "gfx1101");
         assert_eq!(
-            arch_dir_name("gfx942:sramecc+:xnack-"),
+            path_component("gfx942:sramecc+:xnack-"),
             "gfx942_sramecc__xnack-"
         );
+    }
+
+    /// A module name is caller text. An over-long one used to reach the file
+    /// system intact and fail the open with `File name too long`, which reads
+    /// as a broken cache rather than as a bad name.
+    #[test]
+    fn a_path_component_is_bounded() {
+        let long = "x".repeat(4096);
+        assert_eq!(path_component(&long).len(), MAX_COMPONENT_LEN);
     }
 }

@@ -76,8 +76,9 @@ any GPU architecture without a rebuild. Results are cached on disk:
 ```
 ~/.cache/candle-rocm/{arch}-{rocm_version}/
     {module}_{key}.hsaco
-    {module}_{key}.lock      # advisory lock over one cache entry
-    src-{headers_key}/       # staged sources and shim headers
+    {module}_{key}.lock             # advisory lock over one cache entry
+    custom-{module}_{key}.hsaco     # a downstream crate's module; see below
+    src-{headers_key}/              # staged sources and shim headers
 ```
 
 `{key}` is the first 16 hex characters of a SHA-256 over **everything that can
@@ -107,6 +108,44 @@ version cannot read the bundle.
 
 Expect roughly 3–5 s per module on first use. `quantized.cu` is the outlier at
 about 70 s, being 4,845 lines.
+
+## Kernels of your own
+
+A crate that depends on `candle-core` with `features = ["rocm"]` can put its own
+`.cu` source through the same pipeline, without vendoring the shim or patching
+candle:
+
+```rust
+use candle_core::rocm_backend::{launch_config, RocmDevice};
+
+const GDN: &str = include_str!("gdn.cu");   // or any &str, generated or not
+
+let func = dev.get_or_load_custom_func("gdn_fwd_f32", "crane_gdn", GDN)?;
+let (grid, block) = launch_config(&dev, n);
+unsafe { func.launch(grid, block, 0, Some(dev.stream()), &mut args) }?;
+```
+
+This is the counterpart of `CudaDevice::get_or_load_custom_func`, and takes a
+source rather than a compiled object for the obvious reason: the CUDA one hands
+cudarc a PTX string, while here the source is what `hipcc` consumes. Compilation
+and caching are exactly as above — the source text is part of the key, so an
+edited kernel recompiles and an unchanged one is free from the second process
+onwards.
+
+The source is compiled the way candle's own modules are: the shim is
+force-included and `cuda_utils.cuh`, `compatibility.cuh` and
+`binary_op_macros.cuh` are on the include path, so a downstream kernel can be
+written in the same CUDA-syntax dialect as `candle-kernels/src/*.cu`. What it
+does *not* get is a say in the compile flags or its own staged headers; a module
+has to be one translation unit.
+
+Custom modules are namespaced apart from the built-ins, so naming one `unary`
+resolves to yours rather than to candle's. `KernelCache::custom_function` and
+`get_or_load_custom` are the same thing one layer down, for a caller holding the
+cache directly. Only `RocmDevice`, `SendSyncDeviceMemory`, `launch_config*` and
+`ParamBuffer` — all already public — are needed to get from a candle tensor to a
+launch; `rocm_backend/tests_custom_kernel.rs` is a worked example that uses
+nothing else.
 
 ## Environment variables
 
@@ -325,7 +364,8 @@ cargo test --manifest-path candle-rocm-kernels/Cargo.toml
 src/
   lib.rs           Id / Module / the eleven module constants
   compile/
-    mod.rs         KernelCache: hipcc invocation, disk and in-memory caches
+    mod.rs         KernelCache: hipcc invocation, disk and in-memory caches,
+                   built-in and custom module namespaces
     cache.rs       cache keys, cache locations, locking, atomic writes
     detect.rs      GPU architecture and ROCm toolchain detection
   error.rs         KernelError

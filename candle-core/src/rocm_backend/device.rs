@@ -222,6 +222,35 @@ impl RocmDevice {
         self.bind()?;
         self.kernel_manager.function(module, kernel_name).w()
     }
+
+    /// [`Self::get_or_load_func`] for a kernel candle does not ship.
+    ///
+    /// The counterpart of `CudaDevice::get_or_load_custom_func`, and the reason
+    /// it takes a source rather than a compiled object: the CUDA backend hands
+    /// cudarc a PTX string, while here `source` is CUDA-syntax HIP that
+    /// [`candle_rocm_kernels::KernelCache`] runs through `hipcc` on first use
+    /// and caches on disk, keyed on the source text among other things. So an
+    /// edited kernel recompiles and an unchanged one is free from the second
+    /// process onwards.
+    ///
+    /// The source is compiled exactly as candle's own modules are — the HIP
+    /// shim is force-included and `cuda_utils.cuh`, `compatibility.cuh` and
+    /// `binary_op_macros.cuh` are on the include path — so a downstream kernel
+    /// can be written in the same dialect as `candle-kernels/src/*.cu`.
+    ///
+    /// `module_name` names the on-disk cache entry and must be unique across
+    /// the custom modules of a process; it cannot collide with a built-in.
+    pub fn get_or_load_custom_func(
+        &self,
+        kernel_name: &str,
+        module_name: &str,
+        source: &str,
+    ) -> crate::Result<rocm_rs::hip::Function> {
+        self.bind()?;
+        self.kernel_manager
+            .custom_function(module_name, source, kernel_name)
+            .w()
+    }
 }
 
 /// Compute units on device `ordinal`.
