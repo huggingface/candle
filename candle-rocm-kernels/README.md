@@ -289,15 +289,26 @@ are what decide it:
 
 | dtype | MMQ from | measured against the dense path |
 |---|---|---|
-| Q4_0, Q4_1, Q6K | 4 Mi weight elements | 1.1-3.3x faster above it |
-| Q8_0, Q2K, Q4K | 16 Mi weight elements | 1.0-2.3x faster above it |
-| Q5_0, Q5_1 | never | flattens out at a wash (0.89-1.06x) |
-| Q3K, Q5K | never | slower at every size; Q3K by more than 2x throughout |
+| Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q4K, Q5K | 0.25 Mi weight elements | 1.05-6.2x faster, at every size swept |
+| Q6K | 1 Mi weight elements | 1.15-3.3x faster above it |
+| Q3K | 2 Mi weight elements | 1.04-1.7x faster above it |
+| Q2K | 4 Mi weight elements | 0.99-2.8x above it; a wash at batch 128, a win elsewhere |
 
-`bench_prefill_paths` prints the full sweep those come from. The thresholds sit
-where the ratio stops favouring dense rather than where MMQ becomes decisive,
-because a wall-clock ratio does not show what the dense path *allocates* —
-524 MB of transient for a 4096x32000 `lm_head` at f32.
+These were measured on **gfx1101 (RDNA3) with the RDNA tile geometry** — the
+`nwarps = 8` kernels that no longer spill — and are specific to it. The same
+sweep under the Ampere tile set had seven of the ten dtypes losing at every
+size, which is where the older, much higher thresholds came from. The first
+seven above have no measured crossover at all: they win at 0.25 Mi, the
+smallest weight matrix the sweep covers, and are floored there rather than at
+zero only because nothing smaller was measured.
+
+`bench_prefill_paths` prints the full sweep those come from, five timing
+repeats per cell. Individual repeats spread up to ~45% at the smallest sizes,
+where a call is 35 µs of mostly launch overhead, but the medians reproduce
+across whole runs to under 2%. The thresholds sit where the ratio stops
+favouring dense rather than where MMQ becomes decisive, because a wall-clock
+ratio does not show what the dense path *allocates* — 524 MB of transient for a
+4096x32000 `lm_head` at f32, which MMQ never materialises.
 
 ### Deliberately not implemented
 
@@ -305,9 +316,6 @@ because a wall-clock ratio does not show what the dense path *allocates* —
   `mmvq_gguf.cu` / `mmq_gguf/`, which use inline PTX, `nvcuda::wmma` and
   `__reduce_add_sync`. The plain `mul_mat_q*` kernels this backend does launch
   are the older, portable ones.
-- **MMQ for Q3K, Q5K, Q5_0 and Q5_1.** The kernels exist and are correct — the
-  tests launch them directly — but they measured no faster than dequantizing
-  and calling rocBLAS at any size, so `fwd` does not dispatch to them.
 - **MoE.** `indexed_moe_forward` errors; there are no fused MoE kernels.
 - **Flash attention.** `candle-flash-attn` is CUDA-only. `candle-nn`'s `sdpa`
   fast path is Metal-only on every backend.

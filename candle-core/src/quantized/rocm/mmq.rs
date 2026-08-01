@@ -127,47 +127,80 @@ pub(super) fn supports(dtype: GgmlDType, k: usize) -> bool {
 }
 
 /// Weight elements at or above which MMQ beats the dense dequantize, or `None`
-/// for a dtype where it never does.
+/// for a dtype with no `mul_mat_q*` kernel at all.
 ///
 /// Being *able* to run MMQ is not a reason to. The dense path dequantizes `n*k`
 /// weights and hands rocBLAS a plain GEMM, and rocBLAS is good: MMQ only comes
-/// out ahead once that materialisation is large enough to dominate, and for
-/// three dtypes it never does. Measured on gfx1101, `dense_ms / mmq_ms` (above
-/// 1 means MMQ wins), each cell the range over batches of 9, 32, 128 and 512 —
-/// `bench_prefill_paths` is what prints it:
+/// out ahead once that materialisation is large enough to dominate.
+///
+/// **Measured on gfx1101 (RDNA3, Navi 32) with the RDNA tile geometry**, i.e.
+/// the `nwarps = 8` kernels that no longer spill. Both halves of that matter.
+/// The same sweep under the Ampere tile set put seven of these ten dtypes below
+/// 1.0 at every size and Q3K below 0.55 throughout, which is where the previous
+/// thresholds came from; anyone porting this to another chip, or changing what
+/// [`MmqTiles`] reports, has to re-measure rather than trust the table.
+///
+/// `dense_ms / mmq_ms`, above 1 means MMQ wins. Each cell is the range over
+/// batches of 9, 32, 128 and 512 and over three independent runs, each of which
+/// is itself the median of five timing repeats; `bench_prefill_paths` prints
+/// it. Individual repeats spread up to ~45% at the smallest sizes, where a call
+/// is 35 µs and mostly launch overhead, but the medians reproduce across whole
+/// runs to under 2%, so the cells below are stable to about ±0.03.
 ///
 /// ```text
-/// weights   0.25 Mi     1 Mi        4 Mi        16 Mi       131 Mi
-/// Q4_0      0.61-0.75   0.66-1.25   1.10-1.35   1.54-1.94   1.69-3.27
-/// Q4_1      0.63-0.84   0.74-1.25   1.07-1.31   1.52-1.85   1.62-3.12
-/// Q8_0      0.54-0.79   0.58-1.08   0.94-1.10   1.25-1.49   1.35-1.51
-/// Q2K       0.43-0.55   0.48-0.81   0.75-0.86   0.97-1.23   1.12-2.34
-/// Q4K       0.44-0.56   0.49-0.76   0.75-0.84   0.93-1.13   1.03-1.99
-/// Q6K       0.86-1.01   0.96-1.17   1.22-1.54   1.22-2.12   1.15-2.53
-/// Q5_0      0.46-0.59   0.51-0.84   0.77-0.83   0.99-1.03   0.89-1.06
-/// Q5_1      0.46-0.59   0.51-0.83   0.78-0.84   0.98-1.03   0.89-1.05
-/// Q3K       0.20-0.29   0.22-0.41   0.33-0.35   0.42-0.47   0.49-0.54
-/// Q5K       0.41-0.54   0.45-0.49   0.47-0.76   0.54-1.04   0.51-1.11
+/// weights   0.25 Mi     0.5 Mi      1 Mi        2 Mi        4 Mi        16 Mi       125 Mi
+/// Q4_0      1.11-1.39   1.16-1.88   1.54-2.02   1.93-2.64   2.07-2.88   2.50-3.52   2.69-5.95
+/// Q4_1      1.12-1.30   1.17-1.62   1.47-1.94   1.83-2.52   1.95-2.73   2.33-3.36   2.52-5.51
+/// Q5_0      1.16-1.32   1.18-1.55   1.48-1.98   1.80-2.55   1.94-2.76   2.15-3.46   2.30-5.13
+/// Q5_1      1.14-1.29   1.16-1.50   1.44-1.95   1.74-2.51   1.86-2.69   2.09-3.33   2.25-4.89
+/// Q8_0      1.12-1.34   1.15-1.72   1.48-1.94   1.85-2.48   2.01-2.64   2.55-3.55   2.68-6.24
+/// Q4K       1.05-1.19   1.07-1.35   1.31-1.78   1.47-2.24   1.68-2.39   1.80-2.84   1.89-4.23
+/// Q5K       1.11-1.27   1.13-1.47   1.42-1.97   1.70-2.51   1.81-2.71   1.99-3.14   2.16-4.71
+/// Q6K       0.92-1.12   0.92-1.15   1.15-1.54   1.25-1.87   1.35-1.91   1.47-2.40   1.50-3.31
+/// Q3K       0.78-0.97   0.79-0.99   0.92-1.10   1.04-1.23   1.21-1.29   1.30-1.35   1.43-1.70
+/// Q2K       0.75-0.85   0.75-0.94   0.87-1.23   0.89-1.40   0.99-1.39   1.17-1.66   1.32-2.76
 /// ```
 ///
-/// The last four never earn it. Q5_0/Q5_1 flatten out at a wash, and Q3K and
-/// Q5K are worse than dense at every size measured — Q3K by more than 2x
-/// throughout — so they keep the dense path.
+/// Every dtype now earns MMQ somewhere, so the only `None` left is "no kernel".
+/// Seven win at every size swept and are floored at 0.25 Mi rather than at
+/// zero, because that is where the sweep bottoms out and nothing smaller was
+/// measured — no real weight matrix is below it anyway. The other three cross
+/// over inside the sweep, at the first size whose *worst* batch reaches 1.0:
+/// Q6K at 1 Mi, Q3K at 2 Mi, Q2K at 4 Mi.
 ///
-/// The table above was measured with the Ampere tile set, i.e. before gfx11
-/// started compiling these kernels at `nwarps = 8`; the thresholds are due a
-/// re-measurement under the RDNA geometry.
+/// Two of those crossings are soft, and are called for MMQ deliberately:
 ///
-/// The thresholds sit where the ratio first stops favouring dense rather than
-/// where it becomes decisive, because the timings understate the case for MMQ:
-/// the dense path also *allocates* the dequantized matrix, 524 MB of transient
-/// for a 4096x32000 `lm_head` at f32, which the ratio does not show.
+/// * Q2K at 4 Mi is a coin flip at batch 128 — 1.04, 0.99, 0.99 over the three
+///   runs — while its other three batches sit at 1.12-1.39. At 2 Mi that same
+///   batch is a flat 0.89 in all three runs, which is a real loss, so 4 Mi is
+///   the first size that is not worse than dense.
+/// * Q3K at 1 Mi depends on the shape, not just the product: 0.92-0.96 at
+///   1024x1024 but 1.03-1.10 at 512x2048. That is the one place the sweep
+///   contradicts "the product alone decides", and it is why Q3K waits for 2 Mi,
+///   where every shape and batch clears 1.04.
+///
+/// A wall-clock wash is not a wash overall, which is what makes those calls
+/// safe: the dense path also *allocates* the dequantized matrix — 16 MB of
+/// transient at 4 Mi weights, 524 MB for a 4096x32000 `lm_head` at f32 — and
+/// MMQ allocates none of it. So every threshold here sits where the ratio stops
+/// favouring dense rather than where MMQ becomes decisive. What that allocation
+/// does *not* buy is permission to go below the measured floor: at 0.5 Mi Q6K
+/// is a genuine 0.92 and saves 2 MB, which is not a trade worth making.
 fn min_work(dtype: GgmlDType) -> Option<usize> {
-    match dtype {
-        GgmlDType::Q4_0 | GgmlDType::Q4_1 | GgmlDType::Q6K => Some(4 << 20),
-        GgmlDType::Q8_0 | GgmlDType::Q2K | GgmlDType::Q4K => Some(16 << 20),
-        _ => None,
-    }
+    let min = match dtype {
+        GgmlDType::Q4_0
+        | GgmlDType::Q4_1
+        | GgmlDType::Q5_0
+        | GgmlDType::Q5_1
+        | GgmlDType::Q8_0
+        | GgmlDType::Q4K
+        | GgmlDType::Q5K => 256 << 10,
+        GgmlDType::Q6K => 1 << 20,
+        GgmlDType::Q3K => 2 << 20,
+        GgmlDType::Q2K => 4 << 20,
+        _ => return None,
+    };
+    Some(min)
 }
 
 /// Whether MMQ is the faster path for `n * k` weight elements of `dtype`.
