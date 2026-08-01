@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use super::alloc::{RocmAllocator, SendSyncDeviceMemory};
 #[cfg(feature = "miopen")]
 use super::wrappers::SendSyncMIOpenHandle;
-use super::wrappers::{SendSyncPseudoRng, SendSyncRocblasHandle, SendSyncStream};
+use super::wrappers::{RocmBlas, SendSyncPseudoRng, SendSyncRocblasHandle, SendSyncStream};
 use super::{rocm_error, RocmError, WrapErr};
 use rocm_rs::hip::Device as HipDevice;
 
@@ -109,6 +109,66 @@ impl RocmDevice {
             kernel_manager,
             param_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
+    }
+
+    /// A device with a stream of its own, the counterpart of
+    /// `CudaDevice::new_with_stream`.
+    ///
+    /// On CUDA the two constructors genuinely differ: `new` adopts the context's
+    /// *per-thread default* stream, which the rest of the process shares, and
+    /// `new_with_stream` creates a private one. Here there is nothing to choose
+    /// between, because [`Self::new`] already creates a private stream —
+    /// `HipDevice::get_stream` is `hipStreamCreate`, not a handle on the null
+    /// stream — so every ROCm device has had one all along.
+    ///
+    /// It is deliberately *not* a way to hand the device a stream you own, and
+    /// two devices never share one. The allocator recycles a freed block into
+    /// the next allocation of that size with no event standing between the two
+    /// uses, and what makes that sound is that all of the work touching the
+    /// block is queued on a single stream; see [`super::alloc`].
+    pub fn new_with_stream(device_id: usize) -> Result<Self> {
+        Self::new(device_id)
+    }
+
+    /// Whether buffers record HIP events to order their uses across streams.
+    /// Always `false` here.
+    ///
+    /// The CUDA answer varies because cudarc gives every `CudaSlice` a read and
+    /// a write event, waits on them whenever the slice is touched from a stream
+    /// other than its own, and waits on both again before freeing it. That is a
+    /// correctness mechanism, not a diagnostic — it is what lets a context hold
+    /// more than one stream — and `disable_event_tracking` is the opt-out for
+    /// callers who would rather synchronise by hand.
+    ///
+    /// This backend has no such mechanism and needs none: it orders everything
+    /// through the one stream per device described in [`super::alloc`], so the
+    /// state CUDA callers reach for by disabling event tracking is the only
+    /// state ROCm has.
+    pub fn is_event_tracking(&self) -> bool {
+        false
+    }
+
+    /// The counterpart of `CudaDevice::disable_event_tracking`. A no-op.
+    ///
+    /// Its postcondition — that no buffer allocated afterwards tracks its uses
+    /// with events — already holds before the call, as
+    /// [`Self::is_event_tracking`] reports. It exists so that a call site tuned
+    /// for CUDA compiles and means the same thing when pointed at ROCm.
+    ///
+    /// # Safety
+    ///
+    /// Nothing to uphold today. It stays `unsafe` to match the CUDA signature,
+    /// and so that a future ROCm implementation of event tracking could start
+    /// relying on the caller's own synchronisation without a breaking change.
+    pub unsafe fn disable_event_tracking(&self) {}
+
+    /// This device's rocBLAS handle, the counterpart of
+    /// `CudaDevice::cublas_handle`.
+    ///
+    /// The returned [`RocmBlas`] carries the stream the handle is bound to and
+    /// offers no way to rebind it; see its docs for why that matters.
+    pub fn rocblas_handle(&self) -> RocmBlas {
+        RocmBlas::new(self.blas.clone(), self.stream.clone())
     }
 
     /// Which MMQ tile geometry this device's `quantized.cu` was compiled with;
