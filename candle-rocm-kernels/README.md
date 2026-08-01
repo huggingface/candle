@@ -310,6 +310,26 @@ favouring dense rather than where MMQ becomes decisive, because a wall-clock
 ratio does not show what the dense path *allocates* — 524 MB of transient for a
 4096x32000 `lm_head` at f32, which MMQ never materialises.
 
+### Quantizing, and the raw weight pointer
+
+`quantize`, `quantize_onto`, `quantize_imatrix` and `quantize_imatrix_onto` all
+run the *CPU* quantizer and upload the result, exactly as `quantized/cuda.rs`
+does — there is no device-side quantizer on either backend, so a ROCm-quantized
+tensor is byte-identical to a CPU-quantized one
+(`quantized::rocm::tests_imatrix`). The imatrix pair rejects a dtype outside
+`Q2K`-`Q6K` up front, because `k_quants`' `from_float_imatrix` default body is a
+`panic!` and the dtype comes from a config file.
+
+`QRocmStorage::device_ptr` hands out the payload's device address for
+downstream HIP kernels. `device_ptr_with_guard` is the ordered form: it takes
+the *consumer's* stream, drains the device's own stream if that is a different
+one, and drains the consumer's stream when the guard drops. Both are needed
+because a freed block goes back on the allocator's free list rather than to the
+driver, so a pointer that escapes its storage aliases the next tensor. The
+guard borrows the storage, which makes that a compile error. `QStorage` exposes
+it as `rocm_device_ptr_with_guard`, separate from the CUDA
+`device_ptr_with_guard`, whose guard is tied to a `CudaStream`.
+
 ### Mixture-of-experts
 
 `QRocmStorage::indexed_moe_forward` launches
@@ -347,11 +367,6 @@ routed pair past expert 0 read the wrong weights.
   and `FusedMoe` does not.
 - **Flash attention.** `candle-flash-attn` is CUDA-only. `candle-nn`'s `sdpa`
   fast path is Metal-only on every backend.
-- **`quantize_imatrix` / `quantize_imatrix_onto`.** Error out; plain `quantize`
-  round-trips through the CPU quantizer.
-- **`device_ptr`** on quantized storage. `QStorage::device_ptr` errors for the
-  ROCm arm; only the CUDA path exposes it. Nothing on this backend needs it —
-  the quantized launchers take the buffer straight off `QRocmStorage`.
 - **fp8 arithmetic** as described above. Enabling it means validating the
   OCP-vs-NVIDIA E4M3 conversion on hardware first; only the bit-moves are safe
   on the strength of the encodings matching.

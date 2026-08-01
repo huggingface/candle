@@ -308,13 +308,8 @@ impl QStorage {
     pub fn device_ptr(&self) -> Result<*const u8> {
         match self {
             QStorage::Cuda(storage) => storage.device_ptr(),
-            // The ROCm quantized kernels take the buffer straight off
-            // `QRocmStorage`, so nothing here ever needs a raw pointer; the arm
-            // exists only because the match has to be exhaustive.
             #[cfg(feature = "rocm")]
-            QStorage::Rocm(_) => {
-                crate::bail!("device_ptr is not implemented for the ROCm backend")
-            }
+            QStorage::Rocm(storage) => storage.device_ptr(),
             QStorage::Metal(_) | QStorage::Cpu(_) => {
                 crate::bail!("not implemented");
             }
@@ -331,13 +326,31 @@ impl QStorage {
     )> {
         match self {
             QStorage::Cuda(storage) => storage.device_ptr_with_guard(stream),
+            // A HIP allocation cannot be ordered against a CUDA stream, and the
+            // guard would have to be a `SyncOnDrop` over that stream. See
+            // `rocm_device_ptr_with_guard` for the ROCm-side equivalent.
             #[cfg(feature = "rocm")]
             QStorage::Rocm(_) => {
-                crate::bail!("not implemented");
+                crate::bail!("a rocm storage cannot be guarded against a cuda stream");
             }
             QStorage::Metal(_) | QStorage::Cpu(_) => {
                 crate::bail!("not implemented");
             }
+        }
+    }
+
+    /// ROCm counterpart of [`Self::device_ptr_with_guard`].
+    ///
+    /// Separate because the guard is tied to a HIP stream rather than a CUDA
+    /// one; see [`crate::quantized::rocm::QRocmPtrGuard`] for what it holds.
+    #[cfg(feature = "rocm")]
+    pub fn rocm_device_ptr_with_guard<'a>(
+        &'a self,
+        stream: &'a crate::rocm_backend::rocm_rs::hip::Stream,
+    ) -> Result<(*const u8, crate::quantized::rocm::QRocmPtrGuard<'a>)> {
+        match self {
+            QStorage::Rocm(storage) => storage.device_ptr_with_guard(stream),
+            _ => crate::bail!("rocm_device_ptr_with_guard expects a rocm storage"),
         }
     }
 }
@@ -903,6 +916,15 @@ impl QTensor {
         crate::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
     )> {
         self.storage.device_ptr_with_guard(stream)
+    }
+
+    /// See [`QStorage::rocm_device_ptr_with_guard`].
+    #[cfg(feature = "rocm")]
+    pub fn rocm_device_ptr_with_guard<'a>(
+        &'a self,
+        stream: &'a crate::rocm_backend::rocm_rs::hip::Stream,
+    ) -> Result<(*const u8, crate::quantized::rocm::QRocmPtrGuard<'a>)> {
+        self.storage.rocm_device_ptr_with_guard(stream)
     }
 }
 
