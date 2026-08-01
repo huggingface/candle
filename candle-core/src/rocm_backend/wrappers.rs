@@ -9,6 +9,7 @@
 //! needs an allocator, not just a wrapper.
 
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 use rocm_rs::hip::Stream;
 use rocm_rs::rocrand::PseudoRng;
@@ -53,6 +54,47 @@ impl Deref for SendSyncRocblasHandle {
     type Target = rocm_rs::rocblas::Handle;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+/// A device's rocBLAS handle together with the stream it submits on.
+///
+/// Handed out by [`super::RocmDevice::rocblas_handle`] for downstream crates
+/// that call rocBLAS entry points candle does not wrap; creating a handle of
+/// their own would leave those calls on the null stream instead of the device's.
+///
+/// It carries the stream, and it deliberately does **not** deref to
+/// [`rocm_rs::rocblas::Handle`]. That type's `set_stream`, `set_math_mode` and
+/// `set_atomics_mode` all take `&self`, so handing one out would let safe code
+/// re-point the device's shared handle at another stream — invalidating the
+/// `Sync` justification on [`SendSyncRocblasHandle`] above, and with it the
+/// allocator's invariant that a recycled block is only ever touched by work
+/// queued on this one stream (see [`super::alloc`]). cudarc draws the same line:
+/// `CudaBlas::set_stream` is `unsafe` and takes `&mut self`, which the
+/// `Arc<CudaBlas>` its `cublas_handle` returns cannot produce.
+pub struct RocmBlas {
+    handle: Arc<SendSyncRocblasHandle>,
+    stream: Arc<SendSyncStream>,
+}
+
+impl RocmBlas {
+    pub(super) fn new(handle: Arc<SendSyncRocblasHandle>, stream: Arc<SendSyncStream>) -> Self {
+        Self { handle, stream }
+    }
+
+    /// The raw handle, for FFI calls into rocBLAS.
+    ///
+    /// Every call made through it runs on [`Self::stream`], and keeping it there
+    /// is a soundness requirement rather than a preference — see the type docs.
+    /// The handle stays valid for as long as this value lives; it belongs to the
+    /// device and must not be passed to `rocblas_destroy_handle`.
+    pub fn as_raw(&self) -> rocm_rs::rocblas::ffi::rocblas_handle {
+        self.handle.as_raw()
+    }
+
+    /// The stream this handle is bound to — the owning device's own.
+    pub fn stream(&self) -> &Stream {
+        &self.stream.0
     }
 }
 

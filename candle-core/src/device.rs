@@ -243,6 +243,14 @@ impl Device {
         Ok(Self::Rocm(crate::RocmDevice::new(ordinal)?))
     }
 
+    /// The ROCm counterpart of [`Self::new_cuda_with_stream`]. Identical to
+    /// [`Self::new_rocm`], because a ROCm device always gets a private stream —
+    /// see [`crate::RocmDevice::new_with_stream`].
+    #[cfg(feature = "rocm")]
+    pub fn new_rocm_with_stream(ordinal: usize) -> Result<Self> {
+        Ok(Self::Rocm(crate::RocmDevice::new_with_stream(ordinal)?))
+    }
+
     pub fn as_cuda_device(&self) -> Result<&crate::CudaDevice> {
         match self {
             Self::Cuda(d) => Ok(d),
