@@ -43,6 +43,52 @@ pub(crate) fn gpu_arch(ordinal: usize) -> Result<String, KernelError> {
     Ok(arch)
 }
 
+/// Which set of MMQ tile constants `quantized.cu` is compiled with.
+///
+/// The kernel carries one geometry per architecture and picks between them on
+/// the `RDNA2`/`RDNA3` defines this module supplies. The host has to launch the
+/// *same* geometry — the grid and block are computed from `mmq_x`, `mmq_y` and
+/// `nwarps` — so the choice cannot stay inside the compiler flags.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MmqTiles {
+    /// `MMQ_*_AMPERE`, `nwarps = 4`. Every non-RDNA target.
+    Ampere,
+    /// `MMQ_*_RDNA2`, `nwarps = 8`. RDNA2 and later.
+    Rdna2,
+}
+
+/// The `RDNA*` define that selects `arch`'s MMQ geometry, or `None` where the
+/// kernel's default (Ampere) set stands.
+///
+/// gfx12xx (RDNA4) takes the RDNA3 define: `quantized.cu` maps RDNA3 onto the
+/// RDNA2 tiles, which is the geometry RDNA4 wants as well, and adding a fourth
+/// spelling would select nothing new. gfx101x (RDNA1) is deliberately absent —
+/// its tile set is a third variant, and no candle CI or developer machine has
+/// the hardware to check it.
+pub(crate) fn rdna_define(arch: &str) -> Option<&'static str> {
+    match arch_number(arch)? {
+        1030..=1039 => Some("RDNA2"),
+        1100..=1299 => Some("RDNA3"),
+        _ => None,
+    }
+}
+
+/// [`MmqTiles`] for `arch`, in lockstep with [`rdna_define`].
+pub(crate) fn mmq_tiles(arch: &str) -> MmqTiles {
+    match rdna_define(arch) {
+        Some(_) => MmqTiles::Rdna2,
+        None => MmqTiles::Ampere,
+    }
+}
+
+/// The numeric part of a `gfx` target, e.g. `gfx1101:xnack-` -> 1101.
+///
+/// `None` for anything that is not purely numeric: `gfx90a` must not read as
+/// "90" and land in a range it was never meant to match.
+fn arch_number(arch: &str) -> Option<u32> {
+    arch.split(':').next()?.strip_prefix("gfx")?.parse().ok()
+}
+
 fn gcn_arch_name(ordinal: usize) -> Result<String, KernelError> {
     use rocm_rs::hip::ffi;
 
@@ -120,7 +166,29 @@ fn short_version(line: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::short_version;
+    use super::{mmq_tiles, rdna_define, short_version, MmqTiles};
+
+    #[test]
+    fn selects_the_rdna_mmq_geometry_per_architecture() {
+        assert_eq!(rdna_define("gfx1101"), Some("RDNA3"));
+        assert_eq!(rdna_define("gfx1101:xnack-"), Some("RDNA3"));
+        assert_eq!(rdna_define("gfx1151"), Some("RDNA3"));
+        assert_eq!(rdna_define("gfx1201"), Some("RDNA3"));
+        assert_eq!(rdna_define("gfx1030"), Some("RDNA2"));
+        // RDNA1 and the CDNA/Vega parts keep the kernel's default set. `gfx90a`
+        // must not be read as architecture 90.
+        assert_eq!(rdna_define("gfx1010"), None);
+        assert_eq!(rdna_define("gfx90a:sramecc+:xnack-"), None);
+        assert_eq!(rdna_define("gfx942"), None);
+        assert_eq!(rdna_define("not-a-gfx-target"), None);
+    }
+
+    #[test]
+    fn the_tile_set_follows_the_define() {
+        assert_eq!(mmq_tiles("gfx1101"), MmqTiles::Rdna2);
+        assert_eq!(mmq_tiles("gfx1030"), MmqTiles::Rdna2);
+        assert_eq!(mmq_tiles("gfx90a"), MmqTiles::Ampere);
+    }
 
     #[test]
     fn parses_the_hip_version_line() {

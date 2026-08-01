@@ -20,7 +20,7 @@ mod compile;
 mod error;
 mod wrappers;
 
-pub use compile::KernelCache;
+pub use compile::{KernelCache, MmqTiles};
 pub use error::KernelError;
 pub use wrappers::SendSyncModule;
 

@@ -11,8 +11,11 @@
 //! accumulates `mmq_x` output columns through `__dp4a`. The activations reach it
 //! as `q8_1` from [`super::q8_1`], the same requantization MMVQ uses.
 //!
-//! Kernel signature, tile sizes and launch geometry are taken from
-//! `quantized/cuda.rs::mul_mat_via_q8_1` rather than inferred.
+//! Kernel signature and launch geometry are taken from
+//! `quantized/cuda.rs::mul_mat_via_q8_1` rather than inferred. The tile sizes
+//! are not a constant: `quantized.cu` carries one set per architecture, and
+//! [`candle_rocm_kernels::MmqTiles`] reports which set the device's kernels were
+//! compiled with so [`plan`] can reproduce it.
 
 use super::kernels::{arg, launch_err, WARP_SIZE};
 use super::q8_1::{buffer_bytes, force_dmmv, pad, quantize_q8_1};
@@ -24,60 +27,101 @@ use crate::rocm_backend::{
     kernels, RocmDevice, RocmStorage, RocmStorageSlice, SendSyncDeviceMemory,
 };
 use crate::{DType, Layout, Result};
+use candle_rocm_kernels::MmqTiles;
 
 use super::kernels::MATRIX_ROW_PADDING;
 
-/// `nwarps` every `mul_mat_q*` entry point is compiled with
-/// (`NWARPS_*_AMPERE`), and so the y-extent of its thread block.
-const NWARPS: usize = 4;
+/// Entry-point name for `dtype`, and the `k` granularity its column loop steps
+/// in, or `None` for a dtype with no `mul_mat_q*` kernel at all.
+///
+/// `k` must be a multiple of the step. The kernel walks the shared dimension as
+/// `for (ib0 = 0; ib0 < blocks_per_row_x; ib0 += blocks_per_warp)` with no bound
+/// on the last step, so a `k` that leaves a partial step reads into the *next*
+/// weight row — a silently wrong result, not a fault. The value is
+/// `qk * (WARP_SIZE / qi)` for the dtype's `QK`/`QI` in `quantized.cu`, so
+/// unlike the tile sizes it does not move with the architecture.
+fn kernel(dtype: GgmlDType) -> Option<(&'static str, usize)> {
+    let plan = match dtype {
+        GgmlDType::Q4_0 => ("mul_mat_q4_0", 256),
+        GgmlDType::Q4_1 => ("mul_mat_q4_1", 256),
+        GgmlDType::Q5_0 => ("mul_mat_q5_0", 256),
+        GgmlDType::Q5_1 => ("mul_mat_q5_1", 256),
+        GgmlDType::Q8_0 => ("mul_mat_q8_0", 128),
+        GgmlDType::Q2K => ("mul_mat_q2_K", 512),
+        GgmlDType::Q3K => ("mul_mat_q3_K", 512),
+        GgmlDType::Q4K => ("mul_mat_q4_K", 256),
+        GgmlDType::Q5K => ("mul_mat_q5_K", 256),
+        GgmlDType::Q6K => ("mul_mat_q6_K", 256),
+        _ => return None,
+    };
+    Some(plan)
+}
 
-/// What one `mul_mat_q*` kernel needs from its dtype.
+/// What one `mul_mat_q*` launch needs. Everything here except `name` and
+/// `k_step` is per *architecture* as well as per dtype: `quantized.cu` carries
+/// one tile set per architecture and the host has to launch whichever the
+/// kernel was compiled with.
 struct Plan {
     name: &'static str,
-    /// Output columns per workgroup (`MMQ_X_*_AMPERE`).
+    /// Output columns per workgroup (`MMQ_X_*`).
     mmq_x: usize,
-    /// Output rows per workgroup (`MMQ_Y_*_AMPERE`).
+    /// Output rows per workgroup (`MMQ_Y_*`).
     mmq_y: usize,
-    /// `k` must be a multiple of this. The kernel walks the shared dimension as
-    /// `for (ib0 = 0; ib0 < blocks_per_row_x; ib0 += blocks_per_warp)` with no
-    /// bound on the last step, so a `k` that leaves a partial step reads into
-    /// the *next* weight row — a silently wrong result, not a fault. The value
-    /// is `qk * (WARP_SIZE / qi)` for the dtype's `QK`/`QI` in `quantized.cu`.
+    /// Warps per workgroup (`NWARPS_*`), and so the y-extent of the block.
+    nwarps: usize,
+    /// See [`kernel`].
     k_step: usize,
 }
 
-/// Tile geometry per dtype, from `quantized/cuda.rs::mul_mat_via_q8_1`. The
-/// dtypes missing here have no `mul_mat_q*` entry point at all.
-fn plan(dtype: GgmlDType) -> Option<Plan> {
-    let (name, mmq_x, mmq_y, k_step) = match dtype {
-        GgmlDType::Q4_0 => ("mul_mat_q4_0", 64, 128, 256),
-        GgmlDType::Q4_1 => ("mul_mat_q4_1", 64, 128, 256),
-        GgmlDType::Q5_0 => ("mul_mat_q5_0", 128, 64, 256),
-        GgmlDType::Q5_1 => ("mul_mat_q5_1", 128, 64, 256),
-        GgmlDType::Q8_0 => ("mul_mat_q8_0", 128, 64, 128),
-        GgmlDType::Q2K => ("mul_mat_q2_K", 64, 128, 512),
-        GgmlDType::Q3K => ("mul_mat_q3_K", 128, 128, 512),
-        GgmlDType::Q4K => ("mul_mat_q4_K", 64, 128, 256),
-        GgmlDType::Q5K => ("mul_mat_q5_K", 64, 128, 256),
-        GgmlDType::Q6K => ("mul_mat_q6_K", 64, 64, 256),
-        _ => return None,
+/// The geometry `quantized.cu` compiles `dtype`'s kernel with under `tiles`,
+/// mirroring the `MMQ_X_OF`/`MMQ_Y_OF`/`NWARPS_OF` selection there.
+///
+/// `nwarps` is uniform within a set — 4 for every `NWARPS_*_AMPERE`, 8 for every
+/// `NWARPS_*_RDNA2` — so it is not tabulated per dtype.
+fn plan(dtype: GgmlDType, tiles: MmqTiles) -> Option<Plan> {
+    let (name, k_step) = kernel(dtype)?;
+    let (mmq_x, mmq_y) = match tiles {
+        MmqTiles::Ampere => match dtype {
+            GgmlDType::Q5_0 | GgmlDType::Q5_1 | GgmlDType::Q8_0 => (128, 64),
+            GgmlDType::Q3K => (128, 128),
+            GgmlDType::Q6K => (64, 64),
+            _ => (64, 128),
+        },
+        MmqTiles::Rdna2 => match dtype {
+            GgmlDType::Q3K => (128, 64),
+            _ => (64, 128),
+        },
+    };
+    let nwarps = match tiles {
+        MmqTiles::Ampere => 4,
+        MmqTiles::Rdna2 => 8,
     };
     Some(Plan {
         name,
         mmq_x,
         mmq_y,
+        nwarps,
         k_step,
     })
 }
 
+/// `(mmq_x, mmq_y, nwarps)` for [`super::tests_mmq`], which checks the table
+/// above against the `#define`s in `quantized.cu` itself.
+#[cfg(test)]
+pub(super) fn geometry(dtype: GgmlDType, tiles: MmqTiles) -> Option<(usize, usize, usize)> {
+    plan(dtype, tiles).map(|p| (p.mmq_x, p.mmq_y, p.nwarps))
+}
+
 /// Whether `(dtype, k)` can go through MMQ at all.
 ///
-/// `n` and `b_size` are unconstrained: unlike the MMVQ kernels, `mul_mat_q`
-/// bounds-checks both coordinates of its store and clamps the activation
-/// column it loads, so a workgroup that overhangs the output is harmless.
+/// Architecture-independent: the tile sizes move with it but `k_step` does not,
+/// and `n` and `b_size` are unconstrained either way — unlike the MMVQ kernels,
+/// `mul_mat_q` bounds-checks both coordinates of its store and clamps the
+/// activation column it loads, so a workgroup that overhangs the output is
+/// harmless.
 pub(super) fn supports(dtype: GgmlDType, k: usize) -> bool {
-    match plan(dtype) {
-        Some(plan) => k > 0 && k.is_multiple_of(plan.k_step),
+    match kernel(dtype) {
+        Some((_, k_step)) => k > 0 && k.is_multiple_of(k_step),
         None => false,
     }
 }
@@ -109,6 +153,10 @@ pub(super) fn supports(dtype: GgmlDType, k: usize) -> bool {
 /// The last four never earn it. Q5_0/Q5_1 flatten out at a wash, and Q3K and
 /// Q5K are worse than dense at every size measured — Q3K by more than 2x
 /// throughout — so they keep the dense path.
+///
+/// The table above was measured with the Ampere tile set, i.e. before gfx11
+/// started compiling these kernels at `nwarps = 8`; the thresholds are due a
+/// re-measurement under the RDNA geometry.
 ///
 /// The thresholds sit where the ratio first stops favouring dense rather than
 /// where it becomes decisive, because the timings understate the case for MMQ:
@@ -156,7 +204,7 @@ pub(super) fn mul_mat_via_q8_1(
     if data_elems < ncols * nrows {
         crate::bail!("quantized mmq: data holds {data_elems} elems, need {ncols}x{nrows}")
     }
-    let plan = match plan(dtype) {
+    let plan = match plan(dtype, dev.mmq_tiles()) {
         Some(plan) => plan,
         None => crate::bail!("no ROCm mmq kernel for {dtype:?}"),
     };
@@ -196,7 +244,7 @@ pub(super) fn mul_mat_via_q8_1(
             nrows.div_ceil(plan.mmq_y) as u32,
             b_size.div_ceil(plan.mmq_x) as u32,
         ),
-        Dim3::new_2d(WARP_SIZE as u32, NWARPS as u32),
+        Dim3::new_2d(WARP_SIZE as u32, plan.nwarps as u32),
         0,
         Some(dev.stream()),
         &mut args,
