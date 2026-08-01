@@ -118,12 +118,7 @@ pub(super) fn copy_strided_src(
         RocmStorageSlice::F16(_) => copy_strided!(F16, "f16"),
         RocmStorageSlice::F32(_) => copy_strided!(F32, "f32"),
         RocmStorageSlice::F64(_) => copy_strided!(F64, "f64"),
-        // `unary.cu` gates `ucopy_f8_e4m3` on `__CUDA_ARCH__ >= 890` while the
-        // ROCm module is compiled at 800, so that symbol is not in the
-        // binary. F8E4M3 is exactly one byte and its payload is already held
-        // as `u8`, so `ucopy_u8` moves the identical bytes — this is the same
-        // reasoning `try_clone` uses for its raw buffer copy.
-        RocmStorageSlice::F8E4M3(_) => copy_strided!(F8E4M3, "u8"),
+        RocmStorageSlice::F8E4M3(_) => copy_strided!(F8E4M3, "f8_e4m3"),
     }
 
     Ok(())
@@ -237,9 +232,6 @@ pub(super) fn const_set(
         (RocmStorageSlice::F16(_), crate::scalar::Scalar::F16(v)) => const_set!(F16, "f16", f16, v),
         (RocmStorageSlice::I16(_), crate::scalar::Scalar::I16(v)) => const_set!(I16, "i16", i16, v),
         (RocmStorageSlice::I32(_), crate::scalar::Scalar::I32(v)) => const_set!(I32, "i32", i32, v),
-        // `RocmStorageSlice::F8E4M3` keeps its payload as bytes, and F8E4M3
-        // is exactly one byte, so `ptr_at` on the u8 buffer still lands on
-        // element `start_offset`.
         (RocmStorageSlice::F8E4M3(_), crate::scalar::Scalar::F8E4M3(v)) => {
             const_set!(F8E4M3, "f8_e4m3", float8::F8E4M3, v)
         }

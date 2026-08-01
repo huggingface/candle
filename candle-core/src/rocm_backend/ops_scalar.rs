@@ -28,9 +28,7 @@ impl Affine {
             RocmStorageSlice::F16(s) => RocmStorageSlice::F16(self.f(s, d, l)?),
             RocmStorageSlice::F32(s) => RocmStorageSlice::F32(self.f(s, d, l)?),
             RocmStorageSlice::F64(s) => RocmStorageSlice::F64(self.f(s, d, l)?),
-            RocmStorageSlice::F8E4M3(_) => {
-                crate::bail!("Affine does not support F8E4M3 for ROCm")
-            }
+            RocmStorageSlice::F8E4M3(s) => RocmStorageSlice::F8E4M3(self.f(s, d, l)?),
         };
         Ok(out)
     }
@@ -99,9 +97,7 @@ impl Powf {
             RocmStorageSlice::F16(s) => RocmStorageSlice::F16(self.f(s, d, l)?),
             RocmStorageSlice::F32(s) => RocmStorageSlice::F32(self.f(s, d, l)?),
             RocmStorageSlice::F64(s) => RocmStorageSlice::F64(self.f(s, d, l)?),
-            RocmStorageSlice::F8E4M3(_) => {
-                crate::bail!("Powf does not support F8E4M3 for ROCm")
-            }
+            RocmStorageSlice::F8E4M3(s) => RocmStorageSlice::F8E4M3(self.f(s, d, l)?),
         };
         Ok(out)
     }
@@ -170,9 +166,7 @@ impl Elu {
             RocmStorageSlice::F16(s) => RocmStorageSlice::F16(self.f(s, d, l)?),
             RocmStorageSlice::F32(s) => RocmStorageSlice::F32(self.f(s, d, l)?),
             RocmStorageSlice::F64(s) => RocmStorageSlice::F64(self.f(s, d, l)?),
-            RocmStorageSlice::F8E4M3(_) => {
-                crate::bail!("Elu does not support F8E4M3 for ROCm")
-            }
+            RocmStorageSlice::F8E4M3(s) => RocmStorageSlice::F8E4M3(self.f(s, d, l)?),
         };
         Ok(out)
     }

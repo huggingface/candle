@@ -51,6 +51,8 @@ mod tests_copy;
 #[cfg(test)]
 mod tests_custom_kernel;
 #[cfg(test)]
+mod tests_f8e4m3;
+#[cfg(test)]
 mod tests_gemm;
 #[cfg(test)]
 mod tests_indexing;
@@ -104,14 +106,7 @@ impl BackendStorage for RocmStorage {
 
     fn try_clone(&self, layout: &Layout) -> Result<Self> {
         let device = self.device.clone();
-        let slice = match &self.slice {
-            // `Map1` refuses F8E4M3 (it shares the u8 storage and would resolve
-            // to the u8 kernels), but a raw buffer copy is dtype agnostic.
-            RocmStorageSlice::F8E4M3(s) => {
-                RocmStorageSlice::F8E4M3(CloneBuffer.f(s, &device, layout)?)
-            }
-            slice => CloneBuffer.map(slice, &device, layout)?,
-        };
+        let slice = CloneBuffer.map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })
     }
 
@@ -134,12 +129,7 @@ impl BackendStorage for RocmStorage {
             RocmStorageSlice::F16(s) => Ok(CpuStorage::F16(self.device.clone_dtoh(s)?)),
             RocmStorageSlice::F32(s) => Ok(CpuStorage::F32(self.device.clone_dtoh(s)?)),
             RocmStorageSlice::F64(s) => Ok(CpuStorage::F64(self.device.clone_dtoh(s)?)),
-            RocmStorageSlice::F8E4M3(s) => {
-                let bytes = self.device.clone_dtoh(s)?;
-                let v: Vec<float8::F8E4M3> =
-                    bytes.into_iter().map(float8::F8E4M3::from_bits).collect();
-                Ok(CpuStorage::F8E4M3(v))
-            }
+            RocmStorageSlice::F8E4M3(s) => Ok(CpuStorage::F8E4M3(self.device.clone_dtoh(s)?)),
         }
     }
 

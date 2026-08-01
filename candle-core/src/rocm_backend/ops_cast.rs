@@ -2,6 +2,7 @@
 //!
 //! Split out of `mod.rs`, which is far over the workspace 400-line cap.
 
+use float8::F8E4M3;
 use half::{bf16, f16};
 
 use super::launch::{launch_config_layout, launch_kernel};
@@ -9,11 +10,37 @@ use super::params::dims_and_strides;
 use super::{kernels, rocm_error, RocmStorage, RocmStorageSlice};
 use crate::{DType, Layout, Result};
 
+/// How `cast.cu` spells `dtype` in a kernel name.
+///
+/// Only F8E4M3 differs from [`DType::as_str`], which yields `f8e4m3` where the
+/// kernels are `cast_f8_e4m3_f32`, `cast_bf16_f8_e4m3` and so on.
+fn cast_dtype_str(dtype: DType) -> &'static str {
+    match dtype {
+        DType::F8E4M3 => "f8_e4m3",
+        other => other.as_str(),
+    }
+}
+
 macro_rules! cast_launch {
     ($dev:expr, $grid:expr, $block:expr, $el:expr, $dims_len:expr, $ds_ptr:expr, $src_ptr:expr, $src_dtype:expr, $rust_type:ty, $variant:ident) => {{
+        cast_launch!(
+            $dev,
+            $grid,
+            $block,
+            $el,
+            $dims_len,
+            $ds_ptr,
+            $src_ptr,
+            $src_dtype,
+            $rust_type,
+            $variant,
+            stringify!($rust_type)
+        )
+    }};
+    ($dev:expr, $grid:expr, $block:expr, $el:expr, $dims_len:expr, $ds_ptr:expr, $src_ptr:expr, $src_dtype:expr, $rust_type:ty, $variant:ident, $dst_name:expr) => {{
         let out = $dev.alloc::<$rust_type>($el)?;
         let out_ptr = out.as_ptr();
-        let func_name = format!("cast_{}_{}", $src_dtype.as_str(), stringify!($rust_type));
+        let func_name = format!("cast_{}_{}", cast_dtype_str($src_dtype), $dst_name);
         unsafe {
             launch_kernel(
                 &$dev,
@@ -53,6 +80,32 @@ pub(super) fn to_dtype(
     let ds_ptr: *const usize = ds.as_ptr();
 
     let src_dtype = storage.slice.dtype();
+    // `cast.cu` instantiates fp8 against these and nothing else, in either
+    // direction (`CAST_OP_FP8` / `CAST_OP_FP8_INTO`, plus the identity pair).
+    // Checked once here so that both directions report the same way instead of
+    // one failing as a missing kernel at launch.
+    if src_dtype == DType::F8E4M3 || dtype == DType::F8E4M3 {
+        let partner = if src_dtype == DType::F8E4M3 {
+            dtype
+        } else {
+            src_dtype
+        };
+        if !matches!(
+            partner,
+            DType::F32
+                | DType::F64
+                | DType::F16
+                | DType::BF16
+                | DType::U8
+                | DType::I32
+                | DType::F8E4M3
+        ) {
+            return Err(rocm_error(format!(
+                "to_dtype {src_dtype:?} -> {dtype:?} is not supported on ROCm: \
+                 candle-kernels/src/cast.cu declares no such CAST_OP"
+            )));
+        }
+    }
     let slice = match dtype {
         DType::U8 => cast_launch!(
             dev,
@@ -150,20 +203,45 @@ pub(super) fn to_dtype(
                 F64
             )
         }
-        // Still real: the shared `cast.cu` declares no `CAST_OP` with an
-        // int16_t/int32_t source or destination (the only i32 entries are
-        // the fp8 pair below), so there is no kernel to launch.
-        DType::I16 | DType::I32 => {
-            return Err(rocm_error(
-                "i16/i32 dtypes are not supported for to_dtype on ROCm",
-            ))
+        // `cast.cu` ships exactly one i32 conversion in each direction, and both
+        // have an fp8 partner; there is no `CAST_OP` with an int16_t source or
+        // destination at all.
+        DType::I32 if src_dtype == DType::F8E4M3 => {
+            cast_launch!(
+                dev,
+                grid,
+                block,
+                el,
+                dims.len(),
+                ds_ptr,
+                src_ptr,
+                src_dtype,
+                i32,
+                I32
+            )
         }
-        // `cast.cu` does ship the f8e4m3 casts, but they are named
-        // `cast_*_f8_e4m3` while `DType::as_str` yields `f8e4m3` and
-        // `cast_launch!` derives the destination suffix from the Rust type
-        // (F8E4M3 is stored as `u8` here). Wiring that up is a separate
-        // change; the other four dtypes have no kernels at all.
-        DType::F8E4M3 | DType::F4 | DType::F6E2M3 | DType::F6E3M2 | DType::F8E8M0 => {
+        DType::I16 | DType::I32 => {
+            return Err(rocm_error(format!(
+                "to_dtype {src_dtype:?} -> {dtype:?} is not supported on ROCm: \
+                 candle-kernels/src/cast.cu declares no such CAST_OP"
+            )))
+        }
+        DType::F8E4M3 => {
+            cast_launch!(
+                dev,
+                grid,
+                block,
+                el,
+                dims.len(),
+                ds_ptr,
+                src_ptr,
+                src_dtype,
+                F8E4M3,
+                F8E4M3,
+                "f8_e4m3"
+            )
+        }
+        DType::F4 | DType::F6E2M3 | DType::F6E3M2 | DType::F8E8M0 => {
             return Err(rocm_error(format!(
                 "{dtype:?} dtype is not supported for to_dtype on ROCm"
             )))

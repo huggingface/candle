@@ -35,7 +35,7 @@ pub trait Map1 {
             S::F16(s) => S::F16(self.f(s, d, l)?),
             S::F32(s) => S::F32(self.f(s, d, l)?),
             S::F64(s) => S::F64(self.f(s, d, l)?),
-            S::F8E4M3(_) => crate::bail!("Map1 does not support F8E4M3 for ROCm"),
+            S::F8E4M3(s) => S::F8E4M3(self.f(s, d, l)?),
         };
         Ok(out)
     }
@@ -63,12 +63,7 @@ pub trait Map2 {
             (S::F16(a), S::F16(b)) => S::F16(self.f(a, l1, b, l2, d)?),
             (S::F32(a), S::F32(b)) => S::F32(self.f(a, l1, b, l2, d)?),
             (S::F64(a), S::F64(b)) => S::F64(self.f(a, l1, b, l2, d)?),
-            // Shares the u8 storage, so a generic `f` would silently resolve to
-            // the u8 kernels. Reject it here rather than let it fall through to
-            // the mismatch arm, which reads as a caller bug it is not.
-            (S::F8E4M3(_), S::F8E4M3(_)) => {
-                crate::bail!("Map2 does not support F8E4M3 for ROCm")
-            }
+            (S::F8E4M3(a), S::F8E4M3(b)) => S::F8E4M3(self.f(a, l1, b, l2, d)?),
             _ => crate::bail!("dtype mismatch in binary op"),
         };
         Ok(out)
@@ -98,9 +93,7 @@ pub trait Map2Any {
             (S::F16(a), S::F16(b)) => self.f(a, l1, b, l2, d)?,
             (S::F32(a), S::F32(b)) => self.f(a, l1, b, l2, d)?,
             (S::F64(a), S::F64(b)) => self.f(a, l1, b, l2, d)?,
-            (S::F8E4M3(_), S::F8E4M3(_)) => {
-                crate::bail!("Map2Any does not support F8E4M3 for ROCm")
-            }
+            (S::F8E4M3(a), S::F8E4M3(b)) => self.f(a, l1, b, l2, d)?,
             _ => crate::bail!("dtype mismatch in binary op"),
         };
         Ok(out)
@@ -132,7 +125,15 @@ pub trait Map1Any {
             S::F16(s) => self.f(s, d, l, S::F16)?,
             S::F32(s) => self.f(s, d, l, S::F32)?,
             S::F64(s) => self.f(s, d, l, S::F64)?,
-            S::F8E4M3(_) => crate::bail!("Map1Any does not support F8E4M3 for ROCm"),
+            // Not a dispatch limitation: upstream leaves every `SUM_OP`/`FAST_OP`
+            // fp8 instantiation in `reduce.cu` commented out, so at no
+            // `__CUDA_ARCH__` is there a kernel for `f` to launch. The error
+            // says so, and points at the one workaround that exists.
+            S::F8E4M3(_) => crate::bail!(
+                "reduce/argmin/argmax are not available for F8E4M3 on ROCm: \
+                 candle-kernels/src/reduce.cu instantiates no fp8 kernels. \
+                 Cast to f32 first."
+            ),
         };
         Ok(out)
     }
@@ -167,9 +168,7 @@ pub trait Map2InPlace {
             (S::F16(dst), S::F16(src)) => self.f(dst, dst_l, src, src_l, d),
             (S::F32(dst), S::F32(src)) => self.f(dst, dst_l, src, src_l, d),
             (S::F64(dst), S::F64(src)) => self.f(dst, dst_l, src, src_l, d),
-            (S::F8E4M3(_), S::F8E4M3(_)) => {
-                crate::bail!("Map2InPlace does not support F8E4M3 for ROCm")
-            }
+            (S::F8E4M3(dst), S::F8E4M3(src)) => self.f(dst, dst_l, src, src_l, d),
             _ => crate::bail!("dtype mismatch in binary op"),
         }
     }
@@ -210,10 +209,8 @@ pub trait Map3 {
             (S::F16(a), S::F16(b), S::F16(c)) => S::F16(self.f(a, l1, b, l2, c, l3, d)?),
             (S::F32(a), S::F32(b), S::F32(c)) => S::F32(self.f(a, l1, b, l2, c, l3, d)?),
             (S::F64(a), S::F64(b), S::F64(c)) => S::F64(self.f(a, l1, b, l2, c, l3, d)?),
-            // Same as `Map2`: F8E4M3 shares the u8 storage, so it is unsupported
-            // rather than a dtype mismatch.
-            (S::F8E4M3(_), S::F8E4M3(_), S::F8E4M3(_)) => {
-                crate::bail!("Map3 does not support F8E4M3 for ROCm")
+            (S::F8E4M3(a), S::F8E4M3(b), S::F8E4M3(c)) => {
+                S::F8E4M3(self.f(a, l1, b, l2, c, l3, d)?)
             }
             _ => crate::bail!("dtype mismatch in ternary op"),
         };
@@ -264,12 +261,35 @@ mod tests {
 
     #[test]
     fn unsupported_dtype_errors_instead_of_panicking() {
-        assert!(try_kernel_name::<float8::F8E4M3>("ucopy").is_err());
+        assert!(try_kernel_name::<crate::dummy_dtype::F8E8M0>("ucopy").is_err());
         // The infallible variant yields a name no module defines, so the
         // failure surfaces as "kernel not found" rather than an abort.
         assert_eq!(
-            kernel_name::<float8::F8E4M3>("ucopy"),
+            kernel_name::<crate::dummy_dtype::F8E8M0>("ucopy"),
             "ucopy_unsupported_dtype"
+        );
+    }
+
+    /// F8E4M3 carries its own type so the generic `f` reaches the fp8 kernels
+    /// rather than the u8 ones it would resolve to if the storage were shared.
+    #[test]
+    fn f8e4m3_resolves_to_the_fp8_kernels() {
+        assert_eq!(
+            try_kernel_name::<float8::F8E4M3>("ucopy").unwrap(),
+            "ucopy_f8_e4m3"
+        );
+        assert_eq!(
+            try_kernel_name::<float8::F8E4M3>("badd").unwrap(),
+            "badd_f8_e4m3"
+        );
+        // unary.cu and ternary.cu spell the same dtype differently.
+        assert_eq!(
+            try_kernel_name::<float8::F8E4M3>("uneg").unwrap(),
+            "uneg_fp8_e4m3"
+        );
+        assert_eq!(
+            try_kernel_name::<float8::F8E4M3>("where_u8").unwrap(),
+            "where_u8_fp8_e4m3"
         );
     }
 }
