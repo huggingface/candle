@@ -13,8 +13,9 @@
 
 use super::mmq;
 use crate::quantized::{GgmlDType, QMatMul, QStorage, QTensor};
-use crate::rocm_backend::RocmDevice;
+use crate::rocm_backend::{kernels, RocmDevice};
 use crate::{DType, Device, Module, Result, Tensor};
+use candle_rocm_kernels::MmqTiles;
 
 macro_rules! rocm_device {
     () => {
@@ -134,6 +135,67 @@ fn mmq_handles_a_long_shared_dimension() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The macro token `quantized.cu` spells `dtype` with, e.g. `Q2K` -> `Q2_K`.
+fn macro_dtype(dtype: GgmlDType) -> &'static str {
+    match dtype {
+        GgmlDType::Q4_0 => "Q4_0",
+        GgmlDType::Q4_1 => "Q4_1",
+        GgmlDType::Q5_0 => "Q5_0",
+        GgmlDType::Q5_1 => "Q5_1",
+        GgmlDType::Q8_0 => "Q8_0",
+        GgmlDType::Q2K => "Q2_K",
+        GgmlDType::Q3K => "Q3_K",
+        GgmlDType::Q4K => "Q4_K",
+        GgmlDType::Q5K => "Q5_K",
+        GgmlDType::Q6K => "Q6_K",
+        other => panic!("no mul_mat_q kernel for {other:?}"),
+    }
+}
+
+/// The value of `#define <name> <n>` in the kernel source.
+///
+/// The *last* definition wins, which is not pedantry: the `MMQ_*_AMPERE` names
+/// are defined twice, once under `#if defined(CUDA_USE_TENSOR_CORES)` and once
+/// under its `#else`. Nothing defines that macro, so the second is the live one.
+fn kernel_define(name: &str) -> usize {
+    let value = kernels::QUANTIZED
+        .source()
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            if fields.next() != Some("#define") || fields.next() != Some(name) {
+                return None;
+            }
+            fields.next()
+        })
+        .next_back()
+        .unwrap_or_else(|| panic!("no #define {name} in quantized.cu"));
+    value
+        .parse()
+        .unwrap_or_else(|e| panic!("#define {name} {value}: {e}"))
+}
+
+/// The host computes the grid and block from its own copy of the tile geometry,
+/// so a table that disagrees with the kernel's `#define`s is a wrong launch —
+/// a workgroup count that leaves part of the output untouched, or a block whose
+/// `threadIdx.y` runs past the `nwarps` the kernel indexes with. This checks the
+/// two against each other for every dtype and every architecture, which needs no
+/// GPU: the kernel source is compiled into the binary.
+#[test]
+fn the_host_tile_geometry_matches_the_kernel_source() {
+    for (tiles, set) in [(MmqTiles::Ampere, "AMPERE"), (MmqTiles::Rdna2, "RDNA2")] {
+        for dtype in MMQ_DTYPES {
+            let d = macro_dtype(dtype);
+            let want = (
+                kernel_define(&format!("MMQ_X_{d}_{set}")),
+                kernel_define(&format!("MMQ_Y_{d}_{set}")),
+                kernel_define(&format!("NWARPS_{d}_{set}")),
+            );
+            assert_eq!(mmq::geometry(dtype, tiles), Some(want), "{dtype:?} {set}");
+        }
+    }
 }
 
 /// The `k` and dtype conditions are correctness ones: a `k` the column loop

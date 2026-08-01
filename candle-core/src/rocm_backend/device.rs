@@ -111,6 +111,12 @@ impl RocmDevice {
         })
     }
 
+    /// Which MMQ tile geometry this device's `quantized.cu` was compiled with;
+    /// see `quantized::rocm::mmq`.
+    pub(crate) fn mmq_tiles(&self) -> candle_rocm_kernels::MmqTiles {
+        self.kernel_manager.mmq_tiles()
+    }
+
     pub(crate) fn param_cache(&self) -> &super::ParamCache {
         &self.param_cache
     }

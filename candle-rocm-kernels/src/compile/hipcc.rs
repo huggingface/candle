@@ -33,6 +33,7 @@ pub(crate) fn compile(
 
     let output = Command::new("hipcc")
         .args(cache::COMPILE_FLAGS)
+        .args(cache::arch_flag(arch))
         .arg(format!("--offload-arch={arch}"))
         .arg("-include")
         .arg(shim_dir.join("hip_compat.h"))

@@ -10,6 +10,8 @@ mod hipcc;
 #[cfg(test)]
 mod tests;
 
+pub use detect::MmqTiles;
+
 use crate::error::KernelError;
 use crate::wrappers::SendSyncModule;
 use crate::Module;
@@ -117,6 +119,13 @@ impl KernelCache {
             modules: RwLock::new(HashMap::new()),
             compiling: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Which MMQ tile geometry `quantized.cu` was compiled with for this
+    /// device. A `mul_mat_q*` launch has to derive its grid and block from the
+    /// same set, so the host cannot assume one.
+    pub fn mmq_tiles(&self) -> MmqTiles {
+        detect::mmq_tiles(&self.arch)
     }
 
     /// Return the loaded module, compiling it if this is the first use.

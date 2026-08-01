@@ -14,6 +14,19 @@ use std::path::{Path, PathBuf};
 /// directory itself.
 pub(crate) const COMPILE_FLAGS: &[&str] = &["--genco", "-O3", "-std=c++17", "-D__CUDA_ARCH__=800"];
 
+/// The one flag that does depend on the target: the `RDNA*` define selecting the
+/// MMQ tile geometry in `quantized.cu`. Same rule as [`COMPILE_FLAGS`] — a
+/// single definition feeds both the command line and the cache key.
+///
+/// It goes on every translation unit, not just `quantized.cu`, which is safe
+/// because that is the only source this crate compiles that tests for it. The
+/// `RDNA3`/`RDNA4` machinery in `candle-kernels/src/mmq_gguf` is a CUDA-only
+/// tree: none of the modules in [`crate::ALL_IDS`] includes it, and it is not
+/// among the staged [`crate::HEADERS`], so hipcc never sees it.
+pub(crate) fn arch_flag(arch: &str) -> Option<String> {
+    super::detect::rdna_define(arch).map(|define| format!("-D{define}"))
+}
+
 /// Hex characters kept from a SHA-256; enough to name a file uniquely.
 const KEY_LEN: usize = 16;
 
@@ -38,6 +51,9 @@ pub(crate) fn module_key(
     field(&mut hasher, arch.as_bytes());
     field(&mut hasher, toolchain.as_bytes());
     for flag in COMPILE_FLAGS {
+        field(&mut hasher, flag.as_bytes());
+    }
+    if let Some(flag) = arch_flag(arch) {
         field(&mut hasher, flag.as_bytes());
     }
     field(&mut hasher, source.as_bytes());
