@@ -1,0 +1,18 @@
+[package]
+name = "candle-nvfp4-kernels"
+version = "0.11.0"
+edition = "2021"
+
+description = "CUDA kernels for NVIDIA ModelOpt NVFP4 quantized linear layers in Candle."
+repository = "https://github.com/huggingface/candle"
+keywords = ["blas", "tensor", "machine-learning", "cuda", "quantization"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+cuda = []
+
+[build-dependencies]
+anyhow = "1"
+cudaforge = "0.1.2"
