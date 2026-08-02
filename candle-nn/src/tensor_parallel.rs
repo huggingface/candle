@@ -161,7 +161,7 @@ fn shard_len(features: usize, device_count: usize, name: &str) -> Result<usize> 
     if device_count == 0 {
         bail!("cannot shard {name} across an empty device list")
     }
-    if features % device_count != 0 {
+    if !features.is_multiple_of(device_count) {
         bail!("{name} ({features}) is not divisible by the device count ({device_count})")
     }
     Ok(features / device_count)
