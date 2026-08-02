@@ -8,7 +8,7 @@ use rocm_rs::hip::bindings;
 
 use super::launch::{launch_config_layout, launch_kernel};
 use super::params::dims_and_strides;
-use super::{kernels, RocmStorage, RocmStorageSlice};
+use super::{kernels, ops_transpose, RocmStorage, RocmStorageSlice};
 use crate::backend::BackendStorage;
 use crate::{Layout, Result};
 
@@ -61,6 +61,14 @@ pub(super) fn copy_strided_src(
         if result != bindings::hipError_t_hipSuccess {
             crate::bail!("hipMemcpyAsync failed with error {}", result);
         }
+        return Ok(());
+    }
+
+    // A swap of the last two dimensions is the one strided shape worth its own
+    // kernel: the generic path below reads or writes a whole row per element
+    // and lands at a few percent of peak. It declines when either allocation is
+    // short of the copy, which is why the clamps below still have to apply.
+    if ops_transpose::try_copy_transposed(src, dst, dst_offset, src_l)? {
         return Ok(());
     }
 

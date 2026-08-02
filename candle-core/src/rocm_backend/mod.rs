@@ -12,6 +12,7 @@
 //! | [`launch`] | kernel names, launch geometry, the launch itself |
 //! | [`params`] | the cached `[dims, strides…]` buffers kernels take |
 //! | [`utils`] | the `Map*` dtype-dispatch traits ops are written against |
+//! | [`ops_transpose`] | the shared-memory 2D transpose and its layout test |
 //! | `ops_*` | one family of operations each |
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
@@ -37,6 +38,7 @@ mod ops_indexing;
 mod ops_pool;
 mod ops_reduce;
 mod ops_scalar;
+mod ops_transpose;
 mod params;
 mod rng;
 mod slice;
@@ -62,6 +64,8 @@ mod tests_indexing;
 mod tests_rng;
 #[cfg(test)]
 mod tests_sort;
+#[cfg(test)]
+mod tests_transpose;
 #[cfg(all(test, feature = "ug"))]
 mod tests_ug;
 mod wrappers;
@@ -83,6 +87,7 @@ pub mod utils;
 pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, Map3, S};
 
 pub(crate) use error::rocm_error;
+pub(crate) use ops_transpose::transpose2d;
 
 use ops_elementwise::{CloneBuffer, Cmp, WhereCond};
 use ops_indexing::{Gather, IndexAdd, IndexSelect, Scatter, ScatterKind};
