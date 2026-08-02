@@ -260,6 +260,7 @@ struct Object {
 #[derive(Clone, Copy, PartialEq)]
 enum Obj {
     KeyOrEnd,
+    KeyRequired,
     Key,
     Colon,
     Value,
@@ -273,6 +274,7 @@ struct Array {
 #[derive(Clone, Copy, PartialEq)]
 enum Arr {
     ValueOrEnd,
+    ValueRequired,
     CommaOrEnd,
 }
 #[derive(Clone)]
@@ -303,6 +305,9 @@ enum Escape {
     None,
     Slash,
     Unicode(String),
+    HighSurrogateSlash(u16),
+    HighSurrogateU(u16),
+    LowSurrogate(u16, String),
 }
 #[derive(Clone, Copy)]
 enum Number {
@@ -419,7 +424,7 @@ impl Cursor {
         }
     }
     fn structural(&mut self, c: char) -> bool {
-        if c.is_whitespace() {
+        if json_whitespace(c) {
             return true;
         }
         if self.frames.is_empty() {
@@ -441,6 +446,15 @@ impl Cursor {
                         false
                     }
                 }
+                Obj::KeyRequired => {
+                    if c == '"' {
+                        self.set_object(Obj::Key, String::new());
+                        self.scalar = Some(Scalar::Key(Text::default()));
+                        true
+                    } else {
+                        false
+                    }
+                }
                 Obj::Colon => {
                     if c == ':' {
                         self.set_object(Obj::Value, object.key);
@@ -452,7 +466,7 @@ impl Cursor {
                 Obj::Value => self.start(object.value_schema(), c),
                 Obj::CommaOrEnd => {
                     if c == ',' {
-                        self.set_object(Obj::KeyOrEnd, String::new());
+                        self.set_object(Obj::KeyRequired, String::new());
                         true
                     } else if c == '}' {
                         self.close_object()
@@ -470,9 +484,10 @@ impl Cursor {
                         self.start(array.item_schema(), c)
                     }
                 }
+                Arr::ValueRequired => self.start(array.item_schema(), c),
                 Arr::CommaOrEnd => {
                     if c == ',' {
-                        self.set_array(Arr::ValueOrEnd);
+                        self.set_array(Arr::ValueRequired);
                         true
                     } else if c == ']' {
                         self.close_array()
@@ -484,7 +499,7 @@ impl Cursor {
         }
     }
     fn start(&mut self, schema: Schema, c: char) -> bool {
-        if c.is_whitespace() {
+        if json_whitespace(c) {
             return true;
         }
         match c {
@@ -548,7 +563,9 @@ impl Cursor {
                     object.state = Obj::CommaOrEnd;
                     true
                 }
-                Frame::Array(array) if array.state == Arr::ValueOrEnd => {
+                Frame::Array(array)
+                    if matches!(array.state, Arr::ValueOrEnd | Arr::ValueRequired) =>
+                {
                     array.state = Arr::CommaOrEnd;
                     true
                 }
@@ -633,10 +650,49 @@ impl Text {
                 hex.push(c);
                 if hex.len() == 4 {
                     let code = u32::from_str_radix(hex, 16).unwrap();
-                    let Some(c) = char::from_u32(code) else {
+                    match code {
+                        0xd800..=0xdbff => {
+                            self.escape = Escape::HighSurrogateSlash(code as u16);
+                        }
+                        0xdc00..=0xdfff => return TextResult::Invalid,
+                        _ => {
+                            self.value.push(char::from_u32(code).expect("valid scalar"));
+                            self.escape = Escape::None;
+                        }
+                    }
+                }
+                TextResult::More
+            }
+            Escape::HighSurrogateSlash(high) => {
+                if c == '\\' {
+                    self.escape = Escape::HighSurrogateU(*high);
+                    TextResult::More
+                } else {
+                    TextResult::Invalid
+                }
+            }
+            Escape::HighSurrogateU(high) => {
+                if c == 'u' {
+                    self.escape = Escape::LowSurrogate(*high, String::new());
+                    TextResult::More
+                } else {
+                    TextResult::Invalid
+                }
+            }
+            Escape::LowSurrogate(high, hex) => {
+                if !c.is_ascii_hexdigit() {
+                    return TextResult::Invalid;
+                }
+                hex.push(c);
+                if hex.len() == 4 {
+                    let low = u16::from_str_radix(hex, 16).unwrap();
+                    if !(0xdc00..=0xdfff).contains(&low) {
                         return TextResult::Invalid;
-                    };
-                    self.value.push(c);
+                    }
+                    let scalar =
+                        0x1_0000 + (((*high as u32 - 0xd800) << 10) | (low as u32 - 0xdc00));
+                    self.value
+                        .push(char::from_u32(scalar).expect("valid surrogate pair"));
                     self.escape = Escape::None;
                 }
                 TextResult::More
@@ -728,7 +784,10 @@ impl Array {
     }
 }
 fn delimiter(c: char) -> bool {
-    c.is_whitespace() || matches!(c, ',' | ']' | '}')
+    json_whitespace(c) || matches!(c, ',' | ']' | '}')
+}
+fn json_whitespace(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r')
 }
 fn schema_object(s: &Schema) -> bool {
     matches!(s, Schema::Object { .. } | Schema::Any)
@@ -773,16 +832,20 @@ fn number_prefix_possible(schema: &Schema, prefix: &str) -> bool {
         _ => true,
     }
 }
-fn number_matches(s: &Schema, state: Number, raw: &str) -> bool {
+fn number_matches(s: &Schema, _state: Number, raw: &str) -> bool {
+    let Ok(number) = raw.parse::<f64>() else {
+        return false;
+    };
+    if !number.is_finite() {
+        return false;
+    }
     match s {
         Schema::Any => true,
-        Schema::Number { integer } => {
-            !integer || !matches!(state, Number::Frac | Number::ExpDigits)
-        }
+        Schema::Number { integer } => !integer || number.fract() == 0.0,
         Schema::Enum(values) => values
             .iter()
             .filter(|value| value.is_number())
-            .any(|value| serde_json::to_string(value).is_ok_and(|value| value == raw)),
+            .any(|value| value.as_f64().is_some_and(|value| value == number)),
         _ => false,
     }
 }

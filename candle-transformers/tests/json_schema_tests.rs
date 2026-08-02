@@ -43,7 +43,16 @@ fn transitions_through_nested_arrays_and_number_phases() {
         "additionalProperties":false
     }"#;
     let mut processor = FsmLogitProcessor::new(Arc::new(compile_schema(schema).unwrap()));
-    processor.commit("{\"items\":[1,2]}");
+    for text in [
+        "{", "\"", "i", "t", "e", "m", "s", "\"", ":", "[", "1", ",", "2", "]", "}",
+    ] {
+        assert_eq!(
+            processor.allowed_token_ids(1, &[], |_| text.into()),
+            vec![0],
+            "{text}"
+        );
+        processor.commit(text);
+    }
     assert!(processor.is_complete());
 
     let mut processor = FsmLogitProcessor::new(Arc::new(compile_schema(schema).unwrap()));
@@ -94,4 +103,47 @@ fn tracks_escapes_literals_and_required_fields() {
     );
     processor.commit("\"ok\":true}");
     assert!(processor.is_complete());
+}
+
+#[test]
+fn rejects_trailing_commas_and_non_json_whitespace() {
+    let object = Arc::new(
+        compile_schema(
+            r#"{"type":"object","properties":{"a":{"type":"number"}},"required":["a"],"additionalProperties":false}"#,
+        )
+        .unwrap(),
+    );
+    let mut processor = FsmLogitProcessor::new(object);
+    processor.commit("{\"a\":1,");
+    assert!(processor
+        .allowed_token_ids(1, &[], |_| "}".into())
+        .is_empty());
+
+    let array = Arc::new(compile_schema(r#"{"type":"array","items":{"type":"number"}}"#).unwrap());
+    let mut processor = FsmLogitProcessor::new(array);
+    processor.commit("[1,");
+    assert!(processor
+        .allowed_token_ids(1, &[], |_| "]".into())
+        .is_empty());
+
+    let processor =
+        FsmLogitProcessor::new(Arc::new(compile_schema(r#"{"type":"number"}"#).unwrap()));
+    assert!(processor
+        .allowed_token_ids(1, &[], |_| "1\u{00a0}".into())
+        .is_empty());
+}
+
+#[test]
+fn accepts_surrogate_pairs_and_integral_decimal_forms() {
+    let mut string =
+        FsmLogitProcessor::new(Arc::new(compile_schema(r#"{"type":"string"}"#).unwrap()));
+    string.commit("\"\\uD83D\\uDE00\"");
+    assert!(string.is_complete());
+
+    for number in ["1.0", "1e0", "-0.0"] {
+        let mut integer =
+            FsmLogitProcessor::new(Arc::new(compile_schema(r#"{"type":"integer"}"#).unwrap()));
+        integer.commit(number);
+        assert!(integer.is_complete(), "{number}");
+    }
 }
