@@ -17,8 +17,10 @@
 //!   not cover. This is prefill. It declines the weight matrices too small to
 //!   beat a rocBLAS GEMM, which for most dtypes means only the ones below the
 //!   smallest size ever measured; see `mmq::min_work`.
-//! * dequantize-then-GEMM — everything left. Correct for every dtype, but
-//!   materialises the whole weight matrix in the activation's dtype.
+//! * [`dense`] — dequantize-then-GEMM, for everything left. Correct for every
+//!   dtype, but materialises the whole weight matrix in the activation's
+//!   dtype. At a prefill-sized batch of f16 it is also the *fastest* path, and
+//!   `dense::preferred` takes it ahead of MMQ.
 //!
 //! `CANDLE_ROCM_FORCE_DMMV=1` disables both `q8_1` paths, leaving DMMV and the
 //! dense dequantize.
@@ -31,6 +33,7 @@ use crate::rocm_backend::{
 };
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 
+mod dense;
 mod device_ptr;
 mod dmmv;
 mod kernels;
@@ -46,7 +49,11 @@ use kernels::MATRIX_ROW_PADDING;
 #[cfg(test)]
 mod bench;
 #[cfg(test)]
+mod bench_prefill;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_dense;
 #[cfg(test)]
 mod tests_device_ptr;
 #[cfg(test)]
@@ -298,25 +305,16 @@ impl QRocmStorage {
 
         // MMQ: everything the vector paths declined, prefill above all. It
         // reads the packed weights directly, so the dense fallback below it is
-        // only for the dtypes and shapes it has no kernel for.
-        if let Some(dst) = mmq::try_fwd(self, n, k, b_size, storage, layout)? {
-            return Ok(wrap(dst));
+        // otherwise only for the dtypes and shapes it has no kernel for — but
+        // at a prefill-sized batch of f16 the dense path is about twice as
+        // fast, and `dense::preferred` hands those to it instead.
+        if !dense::preferred(storage.dtype(), self.dtype, n, k, b_size) {
+            if let Some(dst) = mmq::try_fwd(self, n, k, b_size, storage, layout)? {
+                return Ok(wrap(dst));
+            }
         }
 
-        // An f16 activation gets the dedicated f16 dequantize kernel rather
-        // than a full f32 buffer plus a cast: half the peak memory, and one
-        // fewer pass over `n * k` elements. bf16 has no such kernel, and going
-        // via f16 would clip anything past 65504, so it keeps the f32 route.
-        let weights = match storage.dtype() {
-            DType::F32 => self.dequantize(n * k)?,
-            DType::F16 => self.dequantize_f16(n * k)?,
-            dtype @ (DType::BF16 | DType::F64) => self
-                .dequantize(n * k)?
-                .to_dtype(&Layout::contiguous((n, k)), dtype)?,
-            dtype => crate::bail!("quantized matmul expects a float input, got {dtype:?}"),
-        };
-        let rhs_l = Layout::new((k, n).into(), vec![1, k], 0).broadcast_as((b, k, n))?;
-        let out = storage.matmul(&weights, (b, m, n, k), layout, &rhs_l)?;
+        let out = dense::forward(self, (b, m, n, k), storage, layout)?;
         Ok((out, out_shape.into()))
     }
 
