@@ -17,7 +17,7 @@ pub enum SchemaCompileError {
 
 #[derive(Clone, Debug)]
 pub struct CompiledFsm {
-    schema: Schema,
+    schema: Arc<Schema>,
 }
 
 #[derive(Clone, Debug)]
@@ -29,9 +29,9 @@ enum Schema {
         integer: bool,
     },
     String,
-    Array(Box<Schema>),
+    Array(Arc<Schema>),
     Object {
-        properties: Vec<(String, Schema)>,
+        properties: Vec<(String, Arc<Schema>)>,
         required: Vec<String>,
         additional: bool,
     },
@@ -39,11 +39,14 @@ enum Schema {
 }
 
 /// Compile the supported, deliberately small JSON Schema subset into a shareable constraint.
+///
+/// Scalar string, boolean, and null `enum`/`const` values are supported. Numeric and composite
+/// enum values are rejected rather than being approximated by a lexical prefix check.
 pub fn compile_schema(schema: &str) -> Result<CompiledFsm, SchemaCompileError> {
     let value =
         serde_json::from_str(schema).map_err(|e| SchemaCompileError::InvalidJson(e.to_string()))?;
     Ok(CompiledFsm {
-        schema: Schema::compile(&value)?,
+        schema: Arc::new(Schema::compile(&value)?),
     })
 }
 
@@ -69,55 +72,110 @@ impl Schema {
                 return Err(SchemaCompileError::Unsupported(key.clone()));
             }
         }
+        let has_enum = object.contains_key("enum");
+        let has_const = object.contains_key("const");
+        if (has_enum || has_const)
+            && (has_enum && has_const
+                || object.keys().any(|key| {
+                    matches!(
+                        key.as_str(),
+                        "properties" | "required" | "additionalProperties" | "items"
+                    )
+                }))
+        {
+            return Err(SchemaCompileError::Unsupported(
+                "combined enum/const constraints".into(),
+            ));
+        }
+        if (has_enum || has_const) && object.contains_key("type") {
+            let ty = object
+                .get("type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| SchemaCompileError::Unsupported("non-string type".into()))?;
+            let values = if let Some(values) = object.get("enum") {
+                values.as_array().ok_or_else(|| {
+                    SchemaCompileError::InvalidSchema("enum must be an array".into())
+                })?
+            } else {
+                std::slice::from_ref(object.get("const").expect("const is present"))
+            };
+            if !values.iter().all(|value| type_matches(ty, value)) {
+                return Err(SchemaCompileError::InvalidSchema(
+                    "type conflicts with enum/const".into(),
+                ));
+            }
+        }
         if let Some(values) = object.get("enum") {
-            if values
+            let values = values
                 .as_array()
-                .is_some_and(|values| values.iter().any(Value::is_array))
-                || values
-                    .as_array()
-                    .is_some_and(|values| values.iter().any(Value::is_object))
+                .ok_or_else(|| SchemaCompileError::InvalidSchema("enum must be an array".into()))?;
+            if values.is_empty() {
+                return Err(SchemaCompileError::InvalidSchema(
+                    "enum must not be empty".into(),
+                ));
+            }
+            if values
+                .iter()
+                .any(|value| value.is_array() || value.is_object())
             {
                 return Err(SchemaCompileError::Unsupported("non-scalar enum".into()));
             }
-            return Ok(Self::Enum(
-                values
-                    .as_array()
-                    .ok_or_else(|| {
-                        SchemaCompileError::InvalidSchema("enum must be an array".into())
-                    })?
-                    .clone(),
-            ));
+            if values.iter().any(Value::is_number) {
+                return Err(SchemaCompileError::Unsupported("numeric enum".into()));
+            }
+            return Ok(Self::Enum(values.clone()));
         }
         if let Some(value) = object.get("const") {
             if value.is_array() || value.is_object() {
                 return Err(SchemaCompileError::Unsupported("non-scalar const".into()));
             }
+            if value.is_number() {
+                return Err(SchemaCompileError::Unsupported("numeric const".into()));
+            }
             return Ok(Self::Enum(vec![value.clone()]));
         }
-        let ty = object.get("type").and_then(Value::as_str).unwrap_or("any");
+        let object_keywords = object.contains_key("properties")
+            || object.contains_key("required")
+            || object.contains_key("additionalProperties");
+        let array_keywords = object.contains_key("items");
+        let ty = match object.get("type") {
+            None if !object_keywords && !array_keywords => return Ok(Self::Any),
+            None => {
+                return Err(SchemaCompileError::Unsupported(
+                    "structural keywords without their matching type".into(),
+                ))
+            }
+            Some(Value::String(ty)) => ty.as_str(),
+            Some(_) => return Err(SchemaCompileError::Unsupported("non-string type".into())),
+        };
+        if (object_keywords && ty != "object") || (array_keywords && ty != "array") {
+            return Err(SchemaCompileError::Unsupported(
+                "structural keywords without their matching type".into(),
+            ));
+        }
         match ty {
-            "any" => Ok(Self::Any),
             "null" => Ok(Self::Null),
             "boolean" => Ok(Self::Bool),
             "number" => Ok(Self::Number { integer: false }),
             "integer" => Ok(Self::Number { integer: true }),
             "string" => Ok(Self::String),
-            "array" => Ok(Self::Array(Box::new(Self::compile(
-                object.get("items").ok_or_else(|| {
-                    SchemaCompileError::InvalidSchema("array requires items".into())
-                })?,
-            )?))),
+            "array" => Ok(Self::Array(Arc::new(match object.get("items") {
+                Some(items) => Self::compile(items)?,
+                None => Self::Any,
+            }))),
             "object" => {
-                let properties = object
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .ok_or_else(|| {
-                        SchemaCompileError::InvalidSchema("object requires properties".into())
-                    })?
-                    .iter()
-                    .map(|(k, v)| Ok((k.clone(), Self::compile(v)?)))
-                    .collect::<Result<_, SchemaCompileError>>()?;
-                let required = object
+                let properties: Vec<(String, Arc<Schema>)> = match object.get("properties") {
+                    None => vec![],
+                    Some(properties) => properties
+                        .as_object()
+                        .ok_or_else(|| {
+                            SchemaCompileError::InvalidSchema("properties must be an object".into())
+                        })?
+                        .iter()
+                        .map(|(k, v)| Ok((k.clone(), Arc::new(Self::compile(v)?))))
+                        .collect::<Result<_, SchemaCompileError>>()?,
+                };
+                let required: Vec<String> = object
                     .get("required")
                     .map(|v| {
                         v.as_array()
@@ -140,10 +198,24 @@ impl Schema {
                     })
                     .transpose()?
                     .unwrap_or_default();
-                let additional = object
-                    .get("additionalProperties")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true);
+                let additional = match object.get("additionalProperties") {
+                    None => true,
+                    Some(Value::Bool(additional)) => *additional,
+                    Some(_) => {
+                        return Err(SchemaCompileError::Unsupported(
+                            "non-boolean additionalProperties".into(),
+                        ))
+                    }
+                };
+                if !additional
+                    && required
+                        .iter()
+                        .any(|key| !properties.iter().any(|(name, _)| name == key))
+                {
+                    return Err(SchemaCompileError::InvalidSchema(
+                        "required property is not declared".into(),
+                    ));
+                }
                 Ok(Self::Object {
                     properties,
                     required,
@@ -214,9 +286,10 @@ impl FsmLogitProcessor {
     }
     /// Advance after sampling the actual token (not necessarily the best-scoring one).
     pub fn commit(&mut self, token_text: &str) {
-        debug_assert!(self.cursor.clone().apply(token_text));
         let mut cursor = self.cursor.clone();
-        if cursor.apply(token_text) {
+        let accepted = cursor.apply(token_text);
+        debug_assert!(accepted, "committed text must be accepted by the cursor");
+        if accepted {
             self.cursor = cursor;
             self.text.push_str(token_text);
         }
@@ -228,6 +301,9 @@ impl FsmLogitProcessor {
         &self.text
     }
     fn accepts(&self, token: &str) -> bool {
+        if token.is_empty() {
+            return false;
+        }
         let mut cursor = self.cursor.clone();
         cursor.apply(token)
     }
@@ -235,7 +311,7 @@ impl FsmLogitProcessor {
 
 #[derive(Clone)]
 struct Cursor {
-    root: Schema,
+    root: Arc<Schema>,
     state: Root,
     frames: Vec<Frame>,
     scalar: Option<Scalar>,
@@ -252,7 +328,7 @@ enum Frame {
 }
 #[derive(Clone)]
 struct Object {
-    schema: Schema,
+    schema: Arc<Schema>,
     seen: Vec<String>,
     key: String,
     state: Obj,
@@ -268,7 +344,7 @@ enum Obj {
 }
 #[derive(Clone)]
 struct Array {
-    schema: Schema,
+    schema: Arc<Schema>,
     state: Arr,
 }
 #[derive(Clone, Copy, PartialEq)]
@@ -281,11 +357,11 @@ enum Arr {
 enum Scalar {
     Key(Text),
     String {
-        schema: Schema,
+        schema: Arc<Schema>,
         text: Text,
     },
     Number {
-        schema: Schema,
+        schema: Arc<Schema>,
         state: Number,
         raw: String,
     },
@@ -322,7 +398,7 @@ enum Number {
 }
 
 impl Cursor {
-    fn new(root: Schema) -> Self {
+    fn new(root: Arc<Schema>) -> Self {
         Self {
             root,
             state: Root::Value,
@@ -331,7 +407,7 @@ impl Cursor {
         }
     }
     fn apply(&mut self, text: &str) -> bool {
-        text.chars().all(|c| self.step(c))
+        self.state != Root::Done && text.chars().all(|c| self.step(c))
     }
     fn is_complete(&self) -> bool {
         self.frames.is_empty()
@@ -405,7 +481,7 @@ impl Cursor {
                 Some(next) => {
                     *state = next;
                     raw.push(c);
-                    if number_prefix_possible(schema, raw) {
+                    if number_prefix_possible(schema, *state, raw) {
                         self.scalar = Some(scalar);
                         true
                     } else {
@@ -438,7 +514,7 @@ impl Cursor {
                 Obj::KeyOrEnd => {
                     if c == '}' {
                         self.close_object()
-                    } else if c == '"' {
+                    } else if c == '"' && object.key_prefix_allowed("") {
                         self.set_object(Obj::Key, String::new());
                         self.scalar = Some(Scalar::Key(Text::default()));
                         true
@@ -447,7 +523,7 @@ impl Cursor {
                     }
                 }
                 Obj::KeyRequired => {
-                    if c == '"' {
+                    if c == '"' && object.key_prefix_allowed("") {
                         self.set_object(Obj::Key, String::new());
                         self.scalar = Some(Scalar::Key(Text::default()));
                         true
@@ -498,7 +574,7 @@ impl Cursor {
             },
         }
     }
-    fn start(&mut self, schema: Schema, c: char) -> bool {
+    fn start(&mut self, schema: Arc<Schema>, c: char) -> bool {
         if json_whitespace(c) {
             return true;
         }
@@ -535,7 +611,7 @@ impl Cursor {
             _ => false,
         }
     }
-    fn literal(&mut self, schema: Schema, expected: &'static str, at: usize) -> bool {
+    fn literal(&mut self, schema: Arc<Schema>, expected: &'static str, at: usize) -> bool {
         if schema_allows_literal(&schema, expected) {
             self.scalar = Some(Scalar::Literal { expected, at });
             true
@@ -543,8 +619,8 @@ impl Cursor {
             false
         }
     }
-    fn number(&mut self, schema: Schema, state: Number, raw: &str) -> bool {
-        if schema_allows_number(&schema) && number_prefix_possible(&schema, raw) {
+    fn number(&mut self, schema: Arc<Schema>, state: Number, raw: &str) -> bool {
+        if schema_allows_number(&schema) && number_prefix_possible(&schema, state, raw) {
             self.scalar = Some(Scalar::Number {
                 schema,
                 state,
@@ -724,7 +800,7 @@ impl Number {
 }
 impl Object {
     fn key_prefix_allowed(&self, key: &str) -> bool {
-        match &self.schema {
+        match &*self.schema {
             Schema::Object {
                 properties,
                 additional,
@@ -735,7 +811,7 @@ impl Object {
         }
     }
     fn key_allowed(&self, key: &str) -> bool {
-        match &self.schema {
+        match &*self.schema {
             Schema::Object {
                 properties,
                 additional,
@@ -745,8 +821,8 @@ impl Object {
             _ => false,
         }
     }
-    fn value_schema(&self) -> Schema {
-        match &self.schema {
+    fn value_schema(&self) -> Arc<Schema> {
+        match &*self.schema {
             Schema::Object {
                 properties,
                 additional,
@@ -757,17 +833,17 @@ impl Object {
                 .map(|(_, s)| s.clone())
                 .unwrap_or_else(|| {
                     if *additional {
-                        Schema::Any
+                        Arc::new(Schema::Any)
                     } else {
                         unreachable!()
                     }
                 }),
-            Schema::Any => Schema::Any,
+            Schema::Any => Arc::new(Schema::Any),
             _ => unreachable!(),
         }
     }
     fn valid(&self) -> bool {
-        match &self.schema {
+        match &*self.schema {
             Schema::Object { required, .. } => required.iter().all(|key| self.seen.contains(key)),
             Schema::Any => true,
             _ => false,
@@ -775,10 +851,10 @@ impl Object {
     }
 }
 impl Array {
-    fn item_schema(&self) -> Schema {
-        match &self.schema {
-            Schema::Array(item) => (**item).clone(),
-            Schema::Any => Schema::Any,
+    fn item_schema(&self) -> Arc<Schema> {
+        match &*self.schema {
+            Schema::Array(item) => Arc::clone(item),
+            Schema::Any => Arc::new(Schema::Any),
             _ => unreachable!(),
         }
     }
@@ -791,6 +867,18 @@ fn json_whitespace(c: char) -> bool {
 }
 fn schema_object(s: &Schema) -> bool {
     matches!(s, Schema::Object { .. } | Schema::Any)
+}
+fn type_matches(ty: &str, value: &Value) -> bool {
+    match ty {
+        "null" => value.is_null(),
+        "boolean" => value.is_boolean(),
+        "number" => value.is_number(),
+        "integer" => value.as_f64().is_some_and(|number| number.fract() == 0.0),
+        "string" => value.is_string(),
+        "array" => value.is_array(),
+        "object" => value.is_object(),
+        _ => false,
+    }
 }
 fn schema_array(s: &Schema) -> bool {
     matches!(s, Schema::Array(_) | Schema::Any)
@@ -812,7 +900,6 @@ fn schema_allows_literal(s: &Schema, literal: &str) -> bool {
 }
 fn schema_allows_number(s: &Schema) -> bool {
     matches!(s, Schema::Number { .. } | Schema::Any)
-        || matches!(s, Schema::Enum(values) if values.iter().any(Value::is_number))
 }
 fn string_prefix_possible(schema: &Schema, prefix: &str) -> bool {
     match schema {
@@ -823,29 +910,49 @@ fn string_prefix_possible(schema: &Schema, prefix: &str) -> bool {
         _ => true,
     }
 }
-fn number_prefix_possible(schema: &Schema, prefix: &str) -> bool {
-    match schema {
-        Schema::Enum(values) => values
-            .iter()
-            .filter(|value| value.is_number())
-            .any(|value| serde_json::to_string(value).is_ok_and(|value| value.starts_with(prefix))),
-        _ => true,
+fn number_prefix_possible(schema: &Schema, state: Number, prefix: &str) -> bool {
+    if !state.complete() || !json_number_is_finite(prefix) {
+        return !state.complete();
     }
+    !matches!(schema, Schema::Number { integer: true })
+        || !matches!(state, Number::ExpDigits)
+        || number_is_integer(prefix)
 }
 fn number_matches(s: &Schema, _state: Number, raw: &str) -> bool {
-    let Ok(number) = raw.parse::<f64>() else {
-        return false;
-    };
-    if !number.is_finite() {
+    if !json_number_is_finite(raw) {
         return false;
     }
     match s {
         Schema::Any => true,
-        Schema::Number { integer } => !integer || number.fract() == 0.0,
-        Schema::Enum(values) => values
-            .iter()
-            .filter(|value| value.is_number())
-            .any(|value| value.as_f64().is_some_and(|value| value == number)),
+        Schema::Number { integer } => !integer || number_is_integer(raw),
         _ => false,
     }
+}
+fn json_number_is_finite(raw: &str) -> bool {
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .and_then(|value| value.as_f64())
+        .is_some_and(f64::is_finite)
+}
+fn number_is_integer(raw: &str) -> bool {
+    let (mantissa, exponent) = match raw.find(['e', 'E']) {
+        Some(index) => (&raw[..index], &raw[index + 1..]),
+        None => (raw, "0"),
+    };
+    let mantissa = mantissa.strip_prefix('-').unwrap_or(mantissa);
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = format!("{whole}{fraction}");
+    if digits.bytes().all(|byte| byte == b'0') {
+        return true;
+    }
+    let Ok(exponent) = exponent.parse::<i128>() else {
+        return false;
+    };
+    let trailing_zeroes = digits
+        .bytes()
+        .rev()
+        .take_while(|byte| *byte == b'0')
+        .count() as i128;
+    let decimal_places = fraction.len() as i128 - exponent;
+    decimal_places <= 0 || trailing_zeroes >= decimal_places
 }
