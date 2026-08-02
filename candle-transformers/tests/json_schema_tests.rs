@@ -164,6 +164,16 @@ fn uses_decimal_arithmetic_for_integers_and_rejects_out_of_range_numbers() {
     assert!(processor
         .allowed_token_ids(1, &[], |_| "1e-400".into())
         .is_empty());
+
+    let mut exponent_prefix = FsmLogitProcessor::new(integer_schema);
+    exponent_prefix.commit("1.5e0");
+    assert!(!exponent_prefix.is_complete());
+    assert_eq!(
+        exponent_prefix.allowed_token_ids(1, &[], |_| "1".into()),
+        vec![0]
+    );
+    exponent_prefix.commit("1");
+    assert!(exponent_prefix.is_complete());
     let number_schema = Arc::new(compile_schema(r#"{"type":"number"}"#).unwrap());
     let processor = FsmLogitProcessor::new(number_schema);
     assert!(processor

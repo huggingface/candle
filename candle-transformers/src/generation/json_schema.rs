@@ -917,6 +917,11 @@ fn number_prefix_possible(schema: &Schema, state: Number, prefix: &str) -> bool 
     !matches!(schema, Schema::Number { integer: true })
         || !matches!(state, Number::ExpDigits)
         || number_is_integer(prefix)
+        || !has_negative_exponent(prefix)
+}
+fn has_negative_exponent(raw: &str) -> bool {
+    raw.find(['e', 'E'])
+        .is_some_and(|index| raw[index + 1..].starts_with('-'))
 }
 fn number_matches(s: &Schema, _state: Number, raw: &str) -> bool {
     if !json_number_is_finite(raw) {
