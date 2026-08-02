@@ -77,13 +77,15 @@ fn restricts_enum_prefixes_without_reparsing_the_document() {
 }
 
 #[test]
-fn rejects_the_wrong_scalar_kind_for_an_enum_at_the_first_transition() {
-    let processor = FsmLogitProcessor::new(Arc::new(compile_schema(r#"{"enum":[12]}"#).unwrap()));
-    let vocab = ["1", "\"", "t"];
-    assert_eq!(
-        processor.allowed_token_ids(vocab.len(), &[], |id| vocab[id as usize].into()),
-        vec![0]
-    );
+fn rejects_numeric_and_composite_enum_forms_at_compile_time() {
+    for schema in [
+        r#"{"enum":[12]}"#,
+        r#"{"const":1.0}"#,
+        r#"{"enum":[{"a":1}]}"#,
+        r#"{"const":[1]}"#,
+    ] {
+        assert!(compile_schema(schema).is_err(), "{schema}");
+    }
 }
 
 #[test]
@@ -145,5 +147,127 @@ fn accepts_surrogate_pairs_and_integral_decimal_forms() {
             FsmLogitProcessor::new(Arc::new(compile_schema(r#"{"type":"integer"}"#).unwrap()));
         integer.commit(number);
         assert!(integer.is_complete(), "{number}");
+    }
+}
+
+#[test]
+fn uses_decimal_arithmetic_for_integers_and_rejects_out_of_range_numbers() {
+    let integer_schema = Arc::new(compile_schema(r#"{"type":"integer"}"#).unwrap());
+    let mut decimal_prefix = FsmLogitProcessor::new(Arc::clone(&integer_schema));
+    decimal_prefix.commit("9007199254740992.5");
+    assert!(!decimal_prefix.is_complete());
+    assert!(decimal_prefix
+        .allowed_token_ids(1, &[0], |_| "ignored".into())
+        .is_empty());
+
+    let processor = FsmLogitProcessor::new(Arc::clone(&integer_schema));
+    assert!(processor
+        .allowed_token_ids(1, &[], |_| "1e-400".into())
+        .is_empty());
+    let number_schema = Arc::new(compile_schema(r#"{"type":"number"}"#).unwrap());
+    let processor = FsmLogitProcessor::new(number_schema);
+    assert!(processor
+        .allowed_token_ids(1, &[], |_| "1e400".into())
+        .is_empty());
+    let mut underflow =
+        FsmLogitProcessor::new(Arc::new(compile_schema(r#"{"type":"number"}"#).unwrap()));
+    underflow.commit("1e-400");
+    assert!(underflow.is_complete());
+}
+
+#[test]
+fn permits_compatible_scalar_type_and_enum_constraints() {
+    let mut processor = FsmLogitProcessor::new(Arc::new(
+        compile_schema(r#"{"type":"string","enum":["yes","no"]}"#).unwrap(),
+    ));
+    processor.commit("\"yes\"");
+    assert!(processor.is_complete());
+}
+
+#[test]
+fn rejects_schema_forms_the_compiler_does_not_implement() {
+    for schema in [
+        r#"{"type":["string","null"]}"#,
+        r#"{"type":"object","properties":{},"additionalProperties":{"type":"string"}}"#,
+        r#"{"type":"object","properties":{},"required":["missing"],"additionalProperties":false}"#,
+        r#"{"enum":[]}"#,
+        r#"{"enum":["x"],"type":"number"}"#,
+        r#"{"enum":["a"],"const":"b"}"#,
+        r#"{"properties":{"a":{"type":"string"}},"additionalProperties":false}"#,
+        r#"{"items":{"type":"string"}}"#,
+        r#"{"type":"any"}"#,
+    ] {
+        assert!(compile_schema(schema).is_err(), "{schema}");
+    }
+}
+
+#[test]
+fn never_advances_after_a_complete_root_value_or_into_an_impossible_key() {
+    let mut processor =
+        FsmLogitProcessor::new(Arc::new(compile_schema(r#"{"type":"string"}"#).unwrap()));
+    processor.commit("\"done\"");
+    assert!(processor.is_complete());
+    assert!(processor
+        .allowed_token_ids(1, &[], |_| " ".into())
+        .is_empty());
+
+    let processor = FsmLogitProcessor::new(Arc::new(
+        compile_schema(r#"{"type":"object","properties":{},"additionalProperties":false}"#)
+            .unwrap(),
+    ));
+    let mut processor = processor;
+    processor.commit("{");
+    let vocab = ["{", "\""];
+    let allowed = processor.allowed_token_ids(vocab.len(), &[], |id| vocab[id as usize].into());
+    assert!(allowed.is_empty());
+}
+
+#[test]
+fn ignores_empty_decoded_tokens() {
+    let processor =
+        FsmLogitProcessor::new(Arc::new(compile_schema(r#"{"type":"string"}"#).unwrap()));
+    let vocab = ["", "\""];
+    assert_eq!(
+        processor.allowed_token_ids(vocab.len(), &[], |id| vocab[id as usize].into()),
+        vec![1]
+    );
+}
+
+#[test]
+fn uses_json_schema_defaults_for_object_and_array_contents() {
+    let mut object =
+        FsmLogitProcessor::new(Arc::new(compile_schema(r#"{"type":"object"}"#).unwrap()));
+    object.commit("{\"anything\":[true]}");
+    assert!(object.is_complete());
+
+    let mut array =
+        FsmLogitProcessor::new(Arc::new(compile_schema(r#"{"type":"array"}"#).unwrap()));
+    array.commit("[null,{\"anything\":false}]");
+    assert!(array.is_complete());
+}
+
+#[test]
+fn accepts_the_unconstrained_json_schema() {
+    let mut processor = FsmLogitProcessor::new(Arc::new(compile_schema("{}").unwrap()));
+    processor.commit("[true,{\"nested\":null}]");
+    assert!(processor.is_complete());
+}
+
+#[test]
+fn permits_trailing_json_whitespace_in_the_finishing_token_only() {
+    for (schema, token) in [
+        (r#"{"type":"number"}"#, "1 "),
+        (r#"{"type":"string"}"#, "\"x\"\n"),
+        (
+            r#"{"type":"object","properties":{},"additionalProperties":false}"#,
+            "{}\r",
+        ),
+    ] {
+        let mut processor = FsmLogitProcessor::new(Arc::new(compile_schema(schema).unwrap()));
+        processor.commit(token);
+        assert!(processor.is_complete(), "{token:?}");
+        assert!(processor
+            .allowed_token_ids(1, &[], |_| " ".into())
+            .is_empty());
     }
 }
