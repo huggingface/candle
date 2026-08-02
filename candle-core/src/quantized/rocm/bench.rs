@@ -9,6 +9,9 @@
 //!
 //! `CANDLE_ROCM_FORCE_DMMV=1` in the environment pins the decode shapes to the
 //! DMMV kernel, which is how the DMMV and MMVQ paths are compared.
+//!
+//! [`super::bench_prefill`] holds the prefill-scale sweep and shares the timing
+//! helpers below; the filter above picks up both files.
 
 use crate::quantized::{GgmlDType, QMatMul, QTensor};
 use crate::{DType, Device, Module, Result, Tensor};
@@ -215,16 +218,20 @@ fn bench_prefill_paths() -> Result<()> {
 /// timed back to back inside a repeat, so a clock or occupancy drift moves both
 /// and largely cancels in the ratio; the spread of the ratio across repeats is
 /// what says whether a speedup near 1.0 is a real one.
-const REPS: usize = 5;
+pub(super) const REPS: usize = 5;
 
 /// Median of `xs`, which it sorts in place.
-fn median(xs: &mut [f64]) -> f64 {
+pub(super) fn median(xs: &mut [f64]) -> f64 {
     xs.sort_by(f64::total_cmp);
     xs[xs.len() / 2]
 }
 
 /// Mean wall time of `run` over `iters` iterations, in milliseconds.
-fn time(device: &Device, iters: usize, mut run: impl FnMut() -> Result<()>) -> Result<f64> {
+pub(super) fn time(
+    device: &Device,
+    iters: usize,
+    mut run: impl FnMut() -> Result<()>,
+) -> Result<f64> {
     for _ in 0..3 {
         run()?;
     }
@@ -237,13 +244,23 @@ fn time(device: &Device, iters: usize, mut run: impl FnMut() -> Result<()>) -> R
     Ok(start.elapsed().as_secs_f64() * 1e3 / iters as f64)
 }
 
+/// Every path end to end, through `QMatMul::forward` and so through the real
+/// dispatch — unlike [`bench_prefill_roofline`], which launches the candidates
+/// side by side to compare them. This is the one that says what a model
+/// actually pays, and the one to re-run after touching the dispatch order.
 #[test]
 #[ignore = "benchmark: needs a GPU and takes seconds"]
 fn bench_quantized_matmul() -> Result<()> {
     let device = rocm_device!();
     // A 4096x4096 projection and a 32000x4096 lm_head, the two shapes that
-    // dominate a decode step.
-    let shapes = [(4096usize, 4096usize), (4096, 32000)];
+    // dominate a decode step, then Qwen3.5-2B's MLP either way round — which
+    // is where the prefill batches below land.
+    let shapes = [
+        (4096usize, 4096usize),
+        (4096, 32000),
+        (2048, 8192),
+        (8192, 2048),
+    ];
     println!(
         "{:>6} {:>6} {:>7} {:>6} {:>5} {:>10}",
         "dtype", "m", "k", "n", "act", "ms"
@@ -256,6 +273,13 @@ fn bench_quantized_matmul() -> Result<()> {
                 (4, DType::F32),
                 (8, DType::F32),
                 (64, DType::F32),
+                // Prefill, in the dtype a served model runs: 1024 is one
+                // llama-benchy `--pp` chunk, and 256 straddles
+                // `dense::MIN_BATCH`.
+                (255, DType::F16),
+                (256, DType::F16),
+                (1024, DType::F16),
+                (1024, DType::F32),
             ] {
                 let iters = if m > 8 { 10 } else { 50 };
                 let ms = time_matmul(&device, dtype, m, k, n, act, iters)?;
