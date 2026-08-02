@@ -262,10 +262,10 @@ the same `candle-kernels` code the CUDA backend launches.
 | `avg_pool2d`, `max_pool2d` | shared kernel | no `F8E4M3` |
 | `upsample_nearest2d`, `upsample_bilinear2d` | shared kernel | |
 | `upsample_nearest1d` | **errors** | no kernel exists; CUDA errors here too |
-| `copy_strided_src`, `copy2d`, `const_set` | shared kernel + `hipMemcpy` | contiguous copies go through `hipMemcpy`/`hipMemcpy2D` |
+| `copy_strided_src`, `copy2d`, `const_set` | shared kernel + `hipMemcpy` | contiguous copies go through `hipMemcpy`/`hipMemcpy2D`; a swap of the last two dims takes `transpose2d_*`, see below |
 | `rand_uniform`, `rand_normal` | rocRAND | generated in `f32`/`f64`, then cast |
 | Quantized load / `dequantize` / `dequantize_f16` / `embedding` (`get_rows`) | shared kernel | all GGML block types |
-| Quantized `fwd` (matmul) | MMVQ / DMMV / MMQ / dequantize + GEMM | batch 1-8 fused, larger batches tiled where MMQ pays; see below |
+| Quantized `fwd` (matmul) | MMVQ / DMMV / MMQ / dequantize + GEMM | batch 1-8 fused, larger batches tiled where MMQ pays, prefill-sized f16 batches dense; see below |
 | `candle-nn`: `softmax_last_dim`, `rms_norm`, `layer_norm`, `sigmoid` | shared kernel | `rocm_fwd` on the custom op; f16/bf16/f32/f64 only |
 | `candle-nn`: `rope`, `rope_i`, `rope_thd` | shared kernel | f16/bf16/f32/f64 only |
 | `candle-nn`: `moe_gemm_gguf` | shared kernel | via `indexed_moe_forward`; see below |
@@ -336,6 +336,7 @@ shared `quantized.cu`:
 | 1 | `f32` legacy quant at 8 Mi elements or more | MMVQ (`mul_mat_vec_*_q8_1_cuda1`) |
 | 1 | `f16` / `bf16` | MMVQ, activation cast to `f32` first |
 | 2-8 | any float | MMVQ (`…_cuda<N>`) |
+| 256 or more | `f16`, under 32 Mi weight elements | dequantize to `f16`, reorient, rocBLAS GEMM |
 | any | any float, weights above the size threshold below | MMQ (`mul_mat_q*`) |
 | any | anything left | dequantize the weights, then rocBLAS GEMM |
 
@@ -380,6 +381,49 @@ across whole runs to under 2%. The thresholds sit where the ratio stops
 favouring dense rather than where MMQ becomes decisive, because a wall-clock
 ratio does not show what the dense path *allocates* — 524 MB of transient for a
 4096x32000 `lm_head` at f32, which MMQ never materialises.
+
+### The dense path at prefill, and the GEMM orientation
+
+MMQ is the cheapest path in memory, not the fastest at a prompt-sized batch. At
+Qwen3.5-2B's shapes (`bench_prefill_roofline`) it reaches 20-22 TOP/s against
+gfx1101's ~75 TOPS `dp4a` ceiling and 165-185 GB/s of weight traffic against
+624 GB/s of bandwidth — bound by neither. Raising `mmq_x` from 64 to 128 made
+Q8_0 and Q4_0 *worse*, so the 28% is the kernel design, not the tile geometry.
+
+What beats it is the fallback, given the right operand orientation. The
+dequantize kernels write the weights as `n` rows of `k`; describing that buffer
+as `(k, n)` with swapped strides reaches `gemm_config` as
+`Operation::Transpose`, and rocBLAS is erratic in that form on gfx1101 — the
+same f16 GEMM ranges 6-45 TFLOP/s with no monotonicity in the batch, against
+25-57 for the plain form. `quantized/rocm/dense.rs` therefore materialises the
+other orientation with `transpose2d_*` first. Worst cell over three dtypes and
+four shapes, `mmq_ms` over the dense path (above 1.0, dense wins):
+
+| batch | 128 | 256 | 384 | 512 | 1024 | 2048 |
+|---|---|---|---|---|---|---|
+| transposed rhs | 1.21 | 0.51 | 1.62 | 1.46 | 0.71 | 0.72 |
+| reoriented rhs | 0.85 | **1.19** | 1.38 | 1.55 | 1.36 | 1.90 |
+
+Reorienting is often the slower of the two, by up to 1.8x — what it buys is a
+path that is *predictable*, and the transposed row dips under 1.0 at three of
+six batches, so no threshold makes it safe to dispatch on. 256 is where the
+reoriented path wins everywhere; it peaks at 3.02x on 2048x4096.
+`dense::MIN_BATCH` and `MAX_WEIGHTS` carry that and the 32 Mi cap that keeps a
+vocabulary-sized matrix on MMQ. f32 and bf16 activations stay on MMQ: f32's
+GEMM peak is half f16's and its dequantize moves twice the bytes, and bf16 has
+no dequantize kernel of its own.
+
+End to end through `QMatMul::forward`, at 255 (MMQ) against 256 (dense) on the
+same shape: 1.2-2.1x, and 1.4-3.0x at larger batches.
+
+`transpose2d_*` itself is in `unary.cu` and is not quantized-specific:
+`copy_strided_src` routes any swap of the last two dimensions to it. It stages
+a 32x32 tile through LDS and walks the grid diagonally so concurrent blocks do
+not all land on one memory channel, moving 292-662 GB/s
+(`tests_transpose::bench_transpose_against_the_strided_copy`). The generic
+`ucopy_*` it pre-empts strides one side by a whole row — 3.4 ms, about 20 GB/s,
+for a 8192x2048 f16 `t()?.contiguous()` — so `dense::MIN_BATCH` is a function
+of this kernel's speed and has to be re-measured with it.
 
 ### Quantizing, and the raw weight pointer
 
