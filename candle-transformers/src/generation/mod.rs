@@ -7,8 +7,10 @@ use candle::{DType, Error, Result, Tensor};
 use rand::{distr::Distribution, SeedableRng};
 
 mod incremental_decoder;
+mod json_schema;
 mod stop_criteria;
 pub use incremental_decoder::IncrementalDecoder;
+pub use json_schema::{compile_schema, CompiledFsm, FsmLogitProcessor, SchemaCompileError};
 pub use stop_criteria::{FinishReason, StopCriteria};
 #[derive(Clone, PartialEq, Debug)]
 pub enum Sampling {
