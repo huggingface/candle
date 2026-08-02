@@ -3,6 +3,7 @@ members = [
     "candle-core",
     "candle-datasets",
     "candle-examples",
+    "candle-nvfp4-kernels",
     "candle-nn",
     "candle-pyo3",
     "candle-transformers",
