@@ -11,7 +11,10 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = []
-cuda = []
+cuda = ["candle-core/cuda"]
+
+[dependencies]
+candle-core = { path = "../candle-core", version = "0.11.0", optional = false }
 
 [build-dependencies]
 anyhow = "1"
