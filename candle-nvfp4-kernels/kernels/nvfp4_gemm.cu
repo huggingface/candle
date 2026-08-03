@@ -81,3 +81,15 @@ cleanup:
   cudaFree(d_output); cudaFree(d_scales); cudaFree(d_weight); cudaFree(d_input);
   return status;
 }
+
+extern "C" int candle_nvfp4_linear_f32_device(
+    const float* input, const uint8_t* weight, const uint8_t* scales,
+    float tensor_scale, float* output, int64_t tokens, int64_t rows, int64_t cols,
+    void* stream_ptr) {
+  if (!valid(rows, cols, tokens) || !input || !weight || !scales || !output)
+    return cudaErrorInvalidValue;
+  const auto stream = static_cast<cudaStream_t>(stream_ptr);
+  linear_f32<<<unsigned((tokens * rows + 255) / 256), 256, 0, stream>>>(
+      input, weight, scales, tensor_scale, output, tokens, rows, cols);
+  return cudaGetLastError();
+}
