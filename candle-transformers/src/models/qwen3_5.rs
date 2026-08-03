@@ -3,6 +3,45 @@ use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{conv1d_no_bias, Activation, Conv1d, Conv1dConfig, VarBuilder};
 use std::sync::Arc;
 
+/// A linear projection inside a Qwen 3.5 layer.
+///
+/// Implement this trait to load projections whose weights are stored in a
+/// format other than Candle's dense tensors, while retaining the model's
+/// attention, linear-attention, norms, cache handling, and residual wiring.
+pub trait Projection: Send + Sync {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor>;
+}
+
+impl<T: Module + Send + Sync> Projection for T {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        Module::forward(self, xs)
+    }
+}
+
+#[derive(Clone)]
+enum ProjectionImpl {
+    Dense(Linear),
+    Custom(Arc<dyn Projection>),
+}
+
+impl std::fmt::Debug for ProjectionImpl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dense(linear) => linear.fmt(f),
+            Self::Custom(_) => f.write_str("dyn Projection"),
+        }
+    }
+}
+
+impl ProjectionImpl {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Dense(linear) => Module::forward(linear, xs),
+            Self::Custom(projection) => projection.forward(xs),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
     pub text_config: TextConfig,
@@ -108,11 +147,11 @@ pub struct Qwen3_5GatedDeltaNet {
     dt_bias_f32: Tensor,
     neg_a_f32: Tensor,
 
-    in_proj_qkv: Linear,
-    in_proj_z: Linear,
-    in_proj_b: Linear,
-    in_proj_a: Linear,
-    out_proj: Linear,
+    in_proj_qkv: ProjectionImpl,
+    in_proj_z: ProjectionImpl,
+    in_proj_b: ProjectionImpl,
+    in_proj_a: ProjectionImpl,
+    out_proj: ProjectionImpl,
 
     norm_weight: Tensor,
     norm_eps: f64,
@@ -176,11 +215,69 @@ impl Qwen3_5GatedDeltaNet {
             conv1d,
             dt_bias_f32,
             neg_a_f32,
-            in_proj_qkv,
-            in_proj_z,
-            in_proj_b,
-            in_proj_a,
-            out_proj,
+            in_proj_qkv: ProjectionImpl::Dense(in_proj_qkv),
+            in_proj_z: ProjectionImpl::Dense(in_proj_z),
+            in_proj_b: ProjectionImpl::Dense(in_proj_b),
+            in_proj_a: ProjectionImpl::Dense(in_proj_a),
+            out_proj: ProjectionImpl::Dense(out_proj),
+            norm_weight,
+            norm_eps: cfg.text_config.rms_norm_eps,
+            conv_state: None,
+            recurrent_state: None,
+        })
+    }
+
+    fn new_with_projections<F>(cfg: &Config, vb: VarBuilder, projections: &F) -> Result<Self>
+    where
+        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize) -> Result<Box<dyn Projection>>,
+    {
+        let hidden_size = cfg.text_config.hidden_size;
+        let num_v_heads = cfg.text_config.linear_num_value_heads;
+        let num_k_heads = cfg.text_config.linear_num_key_heads;
+        let head_k_dim = cfg.text_config.linear_key_head_dim;
+        let head_v_dim = cfg.text_config.linear_value_head_dim;
+        let key_dim = head_k_dim * num_k_heads;
+        let value_dim = head_v_dim * num_v_heads;
+        let conv_dim = key_dim * 2 + value_dim;
+        let conv_kernel_size = cfg.text_config.linear_conv_kernel_dim;
+        let conv1d = conv1d_no_bias(
+            conv_dim,
+            conv_dim,
+            conv_kernel_size,
+            Conv1dConfig {
+                padding: 0,
+                stride: 1,
+                dilation: 1,
+                groups: conv_dim,
+                ..Default::default()
+            },
+            vb.pp("conv1d"),
+        )?;
+        let dt_bias_f32 = vb.get(num_v_heads, "dt_bias")?.to_dtype(DType::F32)?;
+        let neg_a_f32 = (&vb.get(num_v_heads, "A_log")?.to_dtype(DType::F32)?.exp()? * -1.0)?;
+        let in_proj_qkv = projections("in_proj_qkv", vb.clone(), hidden_size, conv_dim)?;
+        let in_proj_z = projections("in_proj_z", vb.clone(), hidden_size, value_dim)?;
+        let in_proj_b = projections("in_proj_b", vb.clone(), hidden_size, num_v_heads)?;
+        let in_proj_a = projections("in_proj_a", vb.clone(), hidden_size, num_v_heads)?;
+        let out_proj = projections("out_proj", vb.clone(), value_dim, hidden_size)?;
+        let norm_weight = vb.get(head_v_dim, "norm.weight")?;
+        Ok(Self {
+            num_v_heads,
+            num_k_heads,
+            head_k_dim,
+            head_v_dim,
+            key_dim,
+            value_dim,
+            conv_kernel_size,
+            conv_dim,
+            conv1d,
+            dt_bias_f32,
+            neg_a_f32,
+            in_proj_qkv: ProjectionImpl::Custom(Arc::from(in_proj_qkv)),
+            in_proj_z: ProjectionImpl::Custom(Arc::from(in_proj_z)),
+            in_proj_b: ProjectionImpl::Custom(Arc::from(in_proj_b)),
+            in_proj_a: ProjectionImpl::Custom(Arc::from(in_proj_a)),
+            out_proj: ProjectionImpl::Custom(Arc::from(out_proj)),
             norm_weight,
             norm_eps: cfg.text_config.rms_norm_eps,
             conv_state: None,
@@ -384,10 +481,10 @@ impl Qwen3_5TextRotaryEmbedding {
 
 #[derive(Debug, Clone)]
 pub struct Qwen3_5Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: ProjectionImpl,
+    k_proj: ProjectionImpl,
+    v_proj: ProjectionImpl,
+    o_proj: ProjectionImpl,
     q_norm: Qwen3_5RmsNorm,
     k_norm: Qwen3_5RmsNorm,
     num_heads: usize,
@@ -438,15 +535,69 @@ impl Qwen3_5Attention {
         let k_norm = Qwen3_5RmsNorm::new(head_dim, cfg.text_config.rms_norm_eps, vb.pp("k_norm"))?;
 
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
-            o_proj,
+            q_proj: ProjectionImpl::Dense(q_proj),
+            k_proj: ProjectionImpl::Dense(k_proj),
+            v_proj: ProjectionImpl::Dense(v_proj),
+            o_proj: ProjectionImpl::Dense(o_proj),
             q_norm,
             k_norm,
             num_heads,
             num_kv_heads,
             num_kv_groups,
+            head_dim,
+            rotary_emb,
+            kv_cache: None,
+        })
+    }
+
+    fn new_with_projections<F>(
+        cfg: &Config,
+        rotary_emb: Arc<Qwen3_5TextRotaryEmbedding>,
+        vb: VarBuilder,
+        projections: &F,
+    ) -> Result<Self>
+    where
+        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize) -> Result<Box<dyn Projection>>,
+    {
+        let head_dim = cfg.head_dim();
+        let num_heads = cfg.text_config.num_attention_heads;
+        let num_kv_heads = cfg.text_config.num_key_value_heads;
+        let q_proj = projections(
+            "q_proj",
+            vb.clone(),
+            cfg.text_config.hidden_size,
+            num_heads * head_dim * 2,
+        )?;
+        let k_proj = projections(
+            "k_proj",
+            vb.clone(),
+            cfg.text_config.hidden_size,
+            num_kv_heads * head_dim,
+        )?;
+        let v_proj = projections(
+            "v_proj",
+            vb.clone(),
+            cfg.text_config.hidden_size,
+            num_kv_heads * head_dim,
+        )?;
+        let o_proj = projections(
+            "o_proj",
+            vb.clone(),
+            num_heads * head_dim,
+            cfg.text_config.hidden_size,
+        )?;
+        let q_norm = Qwen3_5RmsNorm::new(head_dim, cfg.text_config.rms_norm_eps, vb.pp("q_norm"))?;
+        let k_norm = Qwen3_5RmsNorm::new(head_dim, cfg.text_config.rms_norm_eps, vb.pp("k_norm"))?;
+        Ok(Self {
+            q_proj: ProjectionImpl::Custom(Arc::from(q_proj)),
+            k_proj: ProjectionImpl::Custom(Arc::from(k_proj)),
+            v_proj: ProjectionImpl::Custom(Arc::from(v_proj)),
+            o_proj: ProjectionImpl::Custom(Arc::from(o_proj)),
+            q_norm,
+            k_norm,
+            num_heads,
+            num_kv_heads,
+            num_kv_groups: num_heads / num_kv_heads,
             head_dim,
             rotary_emb,
             kv_cache: None,
@@ -522,9 +673,9 @@ impl Qwen3_5Attention {
 
 #[derive(Debug, Clone)]
 pub struct Qwen3_5MLP {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+    gate_proj: ProjectionImpl,
+    up_proj: ProjectionImpl,
+    down_proj: ProjectionImpl,
     act_fn: Activation,
 }
 
@@ -536,17 +687,34 @@ impl Qwen3_5MLP {
         let up_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("up_proj"))?;
         let down_proj = linear_no_bias(intermediate_sz, hidden_sz, vb.pp("down_proj"))?;
         Ok(Self {
-            gate_proj,
-            up_proj,
-            down_proj,
+            gate_proj: ProjectionImpl::Dense(gate_proj),
+            up_proj: ProjectionImpl::Dense(up_proj),
+            down_proj: ProjectionImpl::Dense(down_proj),
+            act_fn: cfg.text_config.hidden_act,
+        })
+    }
+
+    fn new_with_projections<F>(cfg: &Config, vb: VarBuilder, projections: &F) -> Result<Self>
+    where
+        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize) -> Result<Box<dyn Projection>>,
+    {
+        let hidden_sz = cfg.text_config.hidden_size;
+        let intermediate_sz = cfg.text_config.intermediate_size;
+        let gate_proj = projections("gate_proj", vb.clone(), hidden_sz, intermediate_sz)?;
+        let up_proj = projections("up_proj", vb.clone(), hidden_sz, intermediate_sz)?;
+        let down_proj = projections("down_proj", vb, intermediate_sz, hidden_sz)?;
+        Ok(Self {
+            gate_proj: ProjectionImpl::Custom(Arc::from(gate_proj)),
+            up_proj: ProjectionImpl::Custom(Arc::from(up_proj)),
+            down_proj: ProjectionImpl::Custom(Arc::from(down_proj)),
             act_fn: cfg.text_config.hidden_act,
         })
     }
 
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
-        let rhs = xs.apply(&self.up_proj)?;
-        (lhs * rhs)?.apply(&self.down_proj)
+        let lhs = self.gate_proj.forward(xs)?.apply(&self.act_fn)?;
+        let rhs = self.up_proj.forward(xs)?;
+        self.down_proj.forward(&(lhs * rhs)?)
     }
 }
 
@@ -596,6 +764,55 @@ impl Qwen3_5DecoderLayer {
             vb.pp("post_attention_layernorm"),
         )?;
 
+        Ok(Self {
+            token_mixer,
+            mlp,
+            input_layernorm,
+            post_attention_layernorm,
+        })
+    }
+
+    fn new_with_projections<F>(
+        cfg: &Config,
+        layer_idx: usize,
+        rotary_emb: Arc<Qwen3_5TextRotaryEmbedding>,
+        vb: VarBuilder,
+        projections: &F,
+    ) -> Result<Self>
+    where
+        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize) -> Result<Box<dyn Projection>>,
+    {
+        let layer_type = cfg
+            .text_config
+            .layer_types
+            .get(layer_idx)
+            .map(String::as_str)
+            .unwrap_or("full_attention");
+        let token_mixer = if layer_type == "linear_attention" {
+            TokenMixer::LinearAttention(Qwen3_5GatedDeltaNet::new_with_projections(
+                cfg,
+                vb.pp("linear_attn"),
+                projections,
+            )?)
+        } else {
+            TokenMixer::FullAttention(Qwen3_5Attention::new_with_projections(
+                cfg,
+                rotary_emb,
+                vb.pp("self_attn"),
+                projections,
+            )?)
+        };
+        let mlp = Qwen3_5MLP::new_with_projections(cfg, vb.pp("mlp"), projections)?;
+        let input_layernorm = Qwen3_5RmsNorm::new(
+            cfg.text_config.hidden_size,
+            cfg.text_config.rms_norm_eps,
+            vb.pp("input_layernorm"),
+        )?;
+        let post_attention_layernorm = Qwen3_5RmsNorm::new(
+            cfg.text_config.hidden_size,
+            cfg.text_config.rms_norm_eps,
+            vb.pp("post_attention_layernorm"),
+        )?;
         Ok(Self {
             token_mixer,
             mlp,
@@ -684,6 +901,51 @@ impl Model {
         })
     }
 
+    /// Loads Qwen 3.5 while replacing every layer projection with the result of
+    /// `projections`. The factory receives the projection name, a `VarBuilder`
+    /// rooted at its containing attention, linear-attention, or MLP module, and
+    /// its input and output dimensions.
+    pub fn new_with_projections<F>(cfg: &Config, vb: VarBuilder, projections: F) -> Result<Self>
+    where
+        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize) -> Result<Box<dyn Projection>>,
+    {
+        let vb_m = vb.pp("model").pp("language_model");
+        let embed_tokens = candle_nn::embedding(
+            cfg.text_config.vocab_size,
+            cfg.text_config.hidden_size,
+            vb_m.pp("embed_tokens"),
+        )?;
+        let rotary_emb = Arc::new(Qwen3_5TextRotaryEmbedding::new(
+            vb.dtype(),
+            cfg,
+            vb_m.device(),
+        )?);
+        let vb_l = vb_m.pp("layers");
+        let layers = (0..cfg.text_config.num_hidden_layers)
+            .map(|layer_idx| {
+                Qwen3_5DecoderLayer::new_with_projections(
+                    cfg,
+                    layer_idx,
+                    rotary_emb.clone(),
+                    vb_l.pp(layer_idx),
+                    &projections,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let norm = Qwen3_5RmsNorm::new(
+            cfg.text_config.hidden_size,
+            cfg.text_config.rms_norm_eps,
+            vb_m.pp("norm"),
+        )?;
+        Ok(Self {
+            embed_tokens,
+            layers,
+            norm,
+            device: vb.device().clone(),
+            dtype: vb.dtype(),
+        })
+    }
+
     fn prepare_causal_attention_mask(
         &self,
         b_size: usize,
@@ -712,7 +974,7 @@ impl Model {
             Some(self.prepare_causal_attention_mask(b_size, seq_len, seqlen_offset)?)
         };
 
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = Module::forward(&self.embed_tokens, input_ids)?;
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?;
         }
@@ -760,5 +1022,83 @@ impl ModelForCausalLM {
 
     pub fn clear_kv_cache(&mut self) {
         self.base_model.clear_kv_cache();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    fn tiny_config() -> Config {
+        Config {
+            text_config: TextConfig {
+                vocab_size: 8,
+                hidden_size: 4,
+                intermediate_size: 6,
+                num_hidden_layers: 2,
+                num_attention_heads: 2,
+                num_key_value_heads: 1,
+                head_dim: Some(2),
+                max_position_embeddings: 8,
+                rms_norm_eps: 1e-5,
+                rope_parameters: RopeParameters {
+                    rope_theta: 10_000.,
+                },
+                attention_bias: false,
+                hidden_act: Activation::Silu,
+                layer_types: vec!["full_attention".into(), "linear_attention".into()],
+                linear_num_key_heads: 1,
+                linear_num_value_heads: 1,
+                linear_key_head_dim: 2,
+                linear_value_head_dim: 2,
+                linear_conv_kernel_dim: 2,
+            },
+        }
+    }
+
+    #[test]
+    fn projection_factory_matches_dense_model() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        // Both constructors draw from the same VarMap, as they would when
+        // loading a checkpoint, so this isolates the projection seam.
+        let varmap = candle_nn::VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let mut dense = Model::new(&cfg, vb.clone())?;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let factory_seen = Arc::clone(&seen);
+        let mut custom =
+            Model::new_with_projections(&cfg, vb, move |name, vb, in_dim, out_dim| {
+                factory_seen.lock().unwrap().push(name.to_owned());
+                Ok(Box::new(linear_no_bias(in_dim, out_dim, vb.pp(name))?))
+            })?;
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+                "in_proj_qkv",
+                "in_proj_z",
+                "in_proj_b",
+                "in_proj_a",
+                "out_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj"
+            ]
+        );
+        let tokens = Tensor::from_vec(vec![1u32, 2, 3], (1, 3), &device)?;
+        assert_eq!(
+            dense.forward(&tokens, 0)?.to_vec3::<f32>()?,
+            custom.forward(&tokens, 0)?.to_vec3::<f32>()?,
+        );
+        Ok(())
     }
 }
