@@ -1,6 +1,6 @@
 #![allow(clippy::approx_constant)]
 use anyhow::{Context, Result};
-use candle_core::{test_device, test_utils, DType, Device, Shape, Tensor, Var};
+use candle_core::{op::BinaryOp, test_device, test_utils, DType, Device, Shape, Tensor, Var};
 
 fn simple_grad(device: &Device) -> Result<()> {
     let x = Var::new(&[3f32, 1., 4.], device)?;
@@ -61,6 +61,154 @@ fn matmul_grad(device: &Device) -> Result<()> {
             [[15., 15.], [17., 17.], [19., 19.]]
         ]
     );
+    Ok(())
+}
+
+const BINARY_OPS: [BinaryOp; 6] = [
+    BinaryOp::Add,
+    BinaryOp::Sub,
+    BinaryOp::Mul,
+    BinaryOp::Div,
+    BinaryOp::Minimum,
+    BinaryOp::Maximum,
+];
+
+fn binary_op_name(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Add => "add",
+        BinaryOp::Sub => "sub",
+        BinaryOp::Mul => "mul",
+        BinaryOp::Div => "div",
+        BinaryOp::Minimum => "minimum",
+        BinaryOp::Maximum => "maximum",
+    }
+}
+
+fn apply_binary_op(op: BinaryOp, lhs: &Tensor, rhs: &Tensor) -> candle_core::Result<Tensor> {
+    match op {
+        BinaryOp::Add => lhs.add(rhs),
+        BinaryOp::Sub => lhs.sub(rhs),
+        BinaryOp::Mul => lhs.mul(rhs),
+        BinaryOp::Div => lhs.div(rhs),
+        BinaryOp::Minimum => lhs.minimum(rhs),
+        BinaryOp::Maximum => lhs.maximum(rhs),
+    }
+}
+
+fn apply_broadcast_binary_op(
+    op: BinaryOp,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> candle_core::Result<Tensor> {
+    match op {
+        BinaryOp::Add => lhs.broadcast_add(rhs),
+        BinaryOp::Sub => lhs.broadcast_sub(rhs),
+        BinaryOp::Mul => lhs.broadcast_mul(rhs),
+        BinaryOp::Div => lhs.broadcast_div(rhs),
+        BinaryOp::Minimum => lhs.broadcast_minimum(rhs),
+        BinaryOp::Maximum => lhs.broadcast_maximum(rhs),
+    }
+}
+
+fn assert_zero_grad(grads: &candle_core::backprop::GradStore, var: &Var) -> Result<()> {
+    let grad = grads.get(var).context("no gradient for variable")?;
+    assert_eq!(grad.dims(), var.dims());
+    assert_eq!(
+        grad.flatten_all()?.to_vec1::<f32>()?,
+        vec![0.; grad.elem_count()]
+    );
+    Ok(())
+}
+
+fn empty_binary_grad(device: &Device) -> Result<()> {
+    for op in BINARY_OPS {
+        let lhs = Var::zeros((0, 3), DType::F32, device)?;
+        let rhs = Var::zeros((0, 3), DType::F32, device)?;
+        let output = apply_binary_op(op, &lhs, &rhs)?;
+        assert_ne!(output.id(), lhs.id(), "{} returned lhs", binary_op_name(op));
+        assert_eq!(output.dims(), &[0, 3]);
+        assert!(output.is_contiguous());
+        assert_eq!(output.flatten_all()?.to_vec1::<f32>()?, Vec::<f32>::new());
+
+        let grads = output.sum_all()?.backward()?;
+        assert_zero_grad(&grads, &lhs)?;
+        assert_zero_grad(&grads, &rhs)?;
+    }
+
+    for op in [BinaryOp::Add, BinaryOp::Minimum] {
+        let lhs = Tensor::zeros((0, 3), DType::F32, device)?;
+        let rhs = Var::zeros((0, 3), DType::F32, device)?;
+        let output = apply_binary_op(op, &lhs, &rhs)?;
+        let grads = output.sum_all()?.backward()?;
+        assert_zero_grad(&grads, &rhs)?;
+    }
+
+    let lhs = Var::zeros((0, 3), DType::F32, device)?;
+    for output in [lhs.minimum(1f64)?, lhs.maximum(1f64)?] {
+        assert_ne!(output.id(), lhs.id());
+        let grads = output.sum_all()?.backward()?;
+        assert_zero_grad(&grads, &lhs)?;
+    }
+
+    for op in [BinaryOp::Add, BinaryOp::Minimum] {
+        let lhs = Var::zeros((0, 2, 3), DType::F32, device)?;
+        let rhs = Var::zeros((0, 2, 3), DType::F32, device)?;
+        let lhs_view = lhs.transpose(1, 2)?;
+        let rhs_view = rhs.transpose(1, 2)?;
+        assert!(!lhs_view.is_contiguous());
+        assert!(!rhs_view.is_contiguous());
+        let output = apply_binary_op(op, &lhs_view, &rhs_view)?;
+        assert!(output.is_contiguous());
+        let grads = output.sum_all()?.backward()?;
+        assert_zero_grad(&grads, &lhs)?;
+        assert_zero_grad(&grads, &rhs)?;
+    }
+    Ok(())
+}
+
+fn empty_broadcast_binary_grad(device: &Device) -> Result<()> {
+    for op in BINARY_OPS {
+        let lhs = Var::zeros((0, 1), DType::F32, device)?;
+        let rhs = Var::zeros((1, 3), DType::F32, device)?;
+        let output = apply_broadcast_binary_op(op, &lhs, &rhs)?;
+        assert_eq!(output.dims(), &[0, 3]);
+        let grads = output.sum_all()?.backward()?;
+        assert_zero_grad(&grads, &lhs)?;
+        assert_zero_grad(&grads, &rhs)?;
+    }
+    Ok(())
+}
+
+fn empty_binary_validation(device: &Device) -> Result<()> {
+    for op in BINARY_OPS {
+        let name = binary_op_name(op);
+        let lhs = Tensor::zeros((0, 3), DType::F32, device)?;
+        let rhs = Tensor::zeros((0, 4), DType::F64, device)?;
+        let err = apply_binary_op(op, &lhs, &rhs).unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with(&format!("shape mismatch in {name}")),
+            "unexpected error: {err}"
+        );
+
+        let rhs = Tensor::zeros((0, 3), DType::F64, device)?;
+        let err = apply_binary_op(op, &lhs, &rhs).unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with(&format!("dtype mismatch in {name}")),
+            "unexpected error: {err}"
+        );
+
+        if !device.is_cpu() {
+            let lhs = Tensor::zeros((0, 3), DType::F32, &Device::Cpu)?;
+            let err = apply_binary_op(op, &lhs, &rhs).unwrap_err();
+            assert!(
+                err.to_string()
+                    .starts_with(&format!("device mismatch in {name}")),
+                "unexpected error: {err}"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -547,6 +695,24 @@ test_device!(
     matmul_grad_cpu,
     matmul_grad_gpu,
     matmul_grad_metal
+);
+test_device!(
+    empty_binary_grad,
+    empty_binary_grad_cpu,
+    empty_binary_grad_gpu,
+    empty_binary_grad_metal
+);
+test_device!(
+    empty_broadcast_binary_grad,
+    empty_broadcast_binary_grad_cpu,
+    empty_broadcast_binary_grad_gpu,
+    empty_broadcast_binary_grad_metal
+);
+test_device!(
+    empty_binary_validation,
+    empty_binary_validation_cpu,
+    empty_binary_validation_gpu,
+    empty_binary_validation_metal
 );
 test_device!(
     grad_descent,
