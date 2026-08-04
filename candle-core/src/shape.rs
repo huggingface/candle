@@ -128,8 +128,45 @@ impl Shape {
     }
 
     /// The total number of elements, this is the product of all dimension sizes.
+    ///
+    /// This is unchecked: on shapes whose dimension product overflows `usize`
+    /// (e.g. attacker/model-controlled GGUF dimensions such as `[2^32, 2^32]`)
+    /// it silently wraps in release builds. Prefer [`Shape::elem_count_checked`]
+    /// whenever the dimensions come from an untrusted source.
     pub fn elem_count(&self) -> usize {
         self.0.iter().product()
+    }
+
+    /// Checked variant of [`Shape::elem_count`]: returns the product of all
+    /// dimension sizes, or an [`Error::ShapeElementCountOverflow`] when that
+    /// product does not fit in a `usize`.
+    ///
+    /// A shape containing any zero dimension has an element count of `0`
+    /// regardless of the other dimensions, so this short-circuits to `Ok(0)`
+    /// in that case — making the result independent of dimension order (e.g.
+    /// both `[usize::MAX, 2, 0]` and `[0, usize::MAX, 2]` return `Ok(0)`).
+    ///
+    /// Use this on shapes built from untrusted input (e.g. GGUF/GGML tensor
+    /// dimensions read from a file); keep using `elem_count` for shapes that
+    /// originate from trusted tensor construction, where the product is known
+    /// not to overflow.
+    pub fn elem_count_checked(&self) -> Result<usize> {
+        // A zero dimension makes the element count 0 regardless of the other
+        // dimensions, so scan for one first — before any multiply — to make
+        // the result independent of dimension order (e.g. both
+        // `[usize::MAX, 2, 0]` and `[0, usize::MAX, 2]` return `Ok(0)`).
+        if self.0.contains(&0) {
+            return Ok(0);
+        }
+        let mut acc: usize = 1;
+        for &dim in self.0.iter() {
+            acc = acc
+                .checked_mul(dim)
+                .ok_or(crate::Error::ShapeElementCountOverflow {
+                    shape: self.clone(),
+                })?;
+        }
+        Ok(acc)
     }
 
     /// The strides given in number of elements for a contiguous n-dimensional
@@ -630,5 +667,48 @@ mod tests {
         assert_eq!(shape.dims(), &[2, 3, 4, 5, 6]);
         let shape = Shape::from((2, 3, 4, 5, 6, 7));
         assert_eq!(shape.dims(), &[2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn elem_count_checked_matches_unchecked() {
+        let shape = Shape::from((2, 3, 4));
+        assert_eq!(shape.elem_count_checked().unwrap(), 24);
+        assert_eq!(shape.elem_count_checked().unwrap(), shape.elem_count());
+
+        // Edge cases: scalar and single-dim shapes.
+        assert_eq!(Shape::from(()).elem_count_checked().unwrap(), 1);
+        assert_eq!(Shape::from(7).elem_count_checked().unwrap(), 7);
+        assert_eq!(Shape::from(0).elem_count_checked().unwrap(), 0);
+    }
+
+    #[test]
+    fn elem_count_checked_rejects_overflow() {
+        // Mirrors the GGUF report (#3816): two large dimensions whose product
+        // exceeds usize. The unchecked `elem_count` wraps to 0 in release, but
+        // the checked variant must reject the shape instead.
+        let max = usize::MAX;
+        let shape = Shape::from(vec![max, max]);
+        assert!(shape.elem_count_checked().is_err());
+    }
+
+    #[test]
+    fn elem_count_checked_zero_dim_is_order_independent() {
+        // A zero dimension makes the element count 0 no matter how large the
+        // other dimensions are, and that must hold regardless of dimension
+        // order — otherwise the same shape could be accepted or rejected
+        // based purely on how the loader happened to order the dims.
+        let max = usize::MAX;
+        assert_eq!(
+            Shape::from(vec![max, 2, 0]).elem_count_checked().unwrap(),
+            0
+        );
+        assert_eq!(
+            Shape::from(vec![0, max, 2]).elem_count_checked().unwrap(),
+            0
+        );
+        assert_eq!(
+            Shape::from(vec![2, 0, max]).elem_count_checked().unwrap(),
+            0
+        );
     }
 }
