@@ -60,11 +60,8 @@ pub struct MetalDevice {
     pub(crate) private_buffers: Arc<RwLock<BufferMap>>,
 
     /// Bytes allocated since the last pool sweep. The residency set wires every
-    /// pooled buffer and only [`Self::drop_unused_buffers`] unwires them — with
-    /// no sync in a long encode (whole-image inference) the wired set grows to
-    /// every temporary of the run and the GPU aborts with
-    /// kIOGPUCommandBufferCallbackErrorOutOfMemory. Crossing the sweep budget
-    /// forces a wait + sweep to bound the peak (JOURNAL vtracer 2026-08-04).
+    /// pooled buffer; crossing the sweep budget forces a wait + sweep so wired
+    /// memory stays bounded in long encodes.
     pub(crate) alloc_since_sweep: Arc<std::sync::atomic::AtomicUsize>,
 
     /// Simple keeper struct to keep track of the already compiled kernels so we can reuse them.
@@ -143,8 +140,11 @@ impl MetalDevice {
         use std::sync::atomic::Ordering;
         let total = self.alloc_since_sweep.fetch_add(incoming, Ordering::Relaxed) + incoming;
         if total >= sweep_budget() {
+            if !self.commands.try_flush_and_wait().map_err(MetalError::from)? {
+                return Ok(());
+            }
             self.alloc_since_sweep.store(0, Ordering::Relaxed);
-            self.wait_until_completed()?;
+            self.drop_unused_buffers()?;
             if std::env::var("CANDLE_METAL_LOG_SWEEP").is_ok() {
                 let gauge = |m: &BufferMap| -> (usize, usize) {
                     m.iter().map(|(sz, v)| (v.len(), sz * v.len())).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1))

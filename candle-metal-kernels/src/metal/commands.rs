@@ -232,6 +232,36 @@ impl Commands {
         self.flush_and_wait()
     }
 
+    pub fn try_flush_and_wait(&self) -> Result<bool, MetalKernelError> {
+        let to_wait = {
+            let mut state = match self.state.try_lock() {
+                Ok(g) => g,
+                Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+                Err(std::sync::TryLockError::Poisoned(e)) => {
+                    return Err(MetalKernelError::LockError(e.to_string()))
+                }
+            };
+            if self.compute_count.load(Ordering::Acquire) > 0 {
+                self.commit_swap_locked(&mut state, 0)?;
+            }
+            std::mem::take(&mut state.in_flight)
+        };
+        if let Some(last) = to_wait.last() {
+            Self::ensure_completed(last)?;
+        }
+        for cb in &to_wait[..to_wait.len().saturating_sub(1)] {
+            if cb.status() == MTLCommandBufferStatus::Error {
+                let msg = cb
+                    .error()
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "unknown error".to_string());
+                return Err(MetalKernelError::CommandBufferError(msg));
+            }
+        }
+        self.prev_ce_outputs.lock()?.clear();
+        Ok(true)
+    }
+
     pub fn flush_and_wait(&self) -> Result<(), MetalKernelError> {
         let to_wait = {
             let mut state = self.state.lock()?;
@@ -277,9 +307,8 @@ impl Commands {
             // queue is FIFO: everything committed before cb is done too
             let mut state = self.state.lock()?;
             // A GPU-side abort (e.g. kIOGPUCommandBufferCallbackErrorOutOfMemory)
-            // leaves an earlier CB in Error status with its outputs unwritten.
-            // Silently dropping it here turns the abort into downstream garbage
-            // reads — surface it instead (JOURNAL vtracer 2026-08-04).
+            // leaves an earlier CB in Error status with its outputs unwritten;
+            // surface it instead of silently dropping it.
             for c in state.in_flight.iter() {
                 if c.status() == MTLCommandBufferStatus::Error {
                     let msg = c
