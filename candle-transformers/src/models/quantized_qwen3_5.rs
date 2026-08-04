@@ -82,17 +82,24 @@ impl Module for MlpWeights {
 pub struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
+    rotary_dim: usize,
 }
 
 impl RotaryEmbedding {
     pub fn new(
         dtype: DType,
         head_dim: usize,
+        rotary_dim: usize,
         max_position_embeddings: usize,
         rope_theta: f64,
         dev: &Device,
     ) -> Result<Self> {
-        let dim = head_dim;
+        if rotary_dim == 0 || rotary_dim > head_dim || !rotary_dim.is_multiple_of(2) {
+            candle::bail!(
+                "invalid Qwen 3.5 rotary dimension {rotary_dim} for head dimension {head_dim}"
+            )
+        }
+        let dim = rotary_dim;
         let max_seq_len = max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
@@ -107,6 +114,7 @@ impl RotaryEmbedding {
         Ok(Self {
             sin: freqs.sin()?,
             cos: freqs.cos()?,
+            rotary_dim,
         })
     }
 
@@ -114,8 +122,30 @@ impl RotaryEmbedding {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
         let sin = self.sin.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
-        let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-        let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+        let apply = |x: &Tensor| -> Result<Tensor> {
+            let rotated = candle_nn::rotary_emb::rope(
+                &x.narrow(D::Minus1, 0, self.rotary_dim)?.contiguous()?,
+                &cos,
+                &sin,
+            )?;
+            if self.rotary_dim == x.dim(D::Minus1)? {
+                Ok(rotated)
+            } else {
+                Tensor::cat(
+                    &[
+                        &rotated,
+                        &x.narrow(
+                            D::Minus1,
+                            self.rotary_dim,
+                            x.dim(D::Minus1)? - self.rotary_dim,
+                        )?,
+                    ],
+                    D::Minus1,
+                )
+            }
+        };
+        let q_embed = apply(q)?;
+        let k_embed = apply(k)?;
         Ok((q_embed, k_embed))
     }
 }
@@ -633,6 +663,10 @@ impl ModelWeights {
         let max_position_embeddings = md_get("qwen3.context_length")?.to_u32()? as usize;
         let rms_norm_eps = md_get("qwen3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
         let rope_freq_base = md_get("qwen3.rope.freq_base")?.to_f32()? as f64;
+        let rotary_dim = md_get("qwen3.rope.dimension_count")
+            .and_then(|value| value.to_u32())
+            .map(|value| value as usize)
+            .unwrap_or(head_dim);
 
         let full_attention_interval = md_get("qwen3.full_attention_interval")?.to_u32()? as usize;
 
@@ -659,6 +693,7 @@ impl ModelWeights {
         let rotary = Arc::new(RotaryEmbedding::new(
             dtype,
             head_dim,
+            rotary_dim,
             max_position_embeddings,
             rope_freq_base,
             device,
