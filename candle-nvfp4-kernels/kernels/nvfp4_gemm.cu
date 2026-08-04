@@ -48,6 +48,11 @@ bool valid(int64_t rows, int64_t cols, int64_t tokens) {
 
 extern "C" int candle_nvfp4_cuda_is_available() {
   int device;
+  return cudaGetDevice(&device) == cudaSuccess ? 1 : 0;
+}
+
+extern "C" int candle_nvfp4_cuda_supports_fp4_tensor_cores() {
+  int device;
   cudaDeviceProp properties{};
   return cudaGetDevice(&device) == cudaSuccess &&
                  cudaGetDeviceProperties(&properties, device) == cudaSuccess &&
