@@ -229,7 +229,7 @@ impl Qwen3_5GatedDeltaNet {
 
     fn new_with_projections<F>(cfg: &Config, vb: VarBuilder, projections: &F) -> Result<Self>
     where
-        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize) -> Result<Box<dyn Projection>>,
+        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize, bool) -> Result<Box<dyn Projection>>,
     {
         let hidden_size = cfg.text_config.hidden_size;
         let num_v_heads = cfg.text_config.linear_num_value_heads;
@@ -255,11 +255,11 @@ impl Qwen3_5GatedDeltaNet {
         )?;
         let dt_bias_f32 = vb.get(num_v_heads, "dt_bias")?.to_dtype(DType::F32)?;
         let neg_a_f32 = (&vb.get(num_v_heads, "A_log")?.to_dtype(DType::F32)?.exp()? * -1.0)?;
-        let in_proj_qkv = projections("in_proj_qkv", vb.clone(), hidden_size, conv_dim)?;
-        let in_proj_z = projections("in_proj_z", vb.clone(), hidden_size, value_dim)?;
-        let in_proj_b = projections("in_proj_b", vb.clone(), hidden_size, num_v_heads)?;
-        let in_proj_a = projections("in_proj_a", vb.clone(), hidden_size, num_v_heads)?;
-        let out_proj = projections("out_proj", vb.clone(), value_dim, hidden_size)?;
+        let in_proj_qkv = projections("in_proj_qkv", vb.clone(), hidden_size, conv_dim, false)?;
+        let in_proj_z = projections("in_proj_z", vb.clone(), hidden_size, value_dim, false)?;
+        let in_proj_b = projections("in_proj_b", vb.clone(), hidden_size, num_v_heads, false)?;
+        let in_proj_a = projections("in_proj_a", vb.clone(), hidden_size, num_v_heads, false)?;
+        let out_proj = projections("out_proj", vb.clone(), value_dim, hidden_size, false)?;
         let norm_weight = vb.get(head_v_dim, "norm.weight")?;
         Ok(Self {
             num_v_heads,
@@ -557,7 +557,7 @@ impl Qwen3_5Attention {
         projections: &F,
     ) -> Result<Self>
     where
-        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize) -> Result<Box<dyn Projection>>,
+        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize, bool) -> Result<Box<dyn Projection>>,
     {
         let head_dim = cfg.head_dim();
         let num_heads = cfg.text_config.num_attention_heads;
@@ -567,24 +567,28 @@ impl Qwen3_5Attention {
             vb.clone(),
             cfg.text_config.hidden_size,
             num_heads * head_dim * 2,
+            cfg.text_config.attention_bias,
         )?;
         let k_proj = projections(
             "k_proj",
             vb.clone(),
             cfg.text_config.hidden_size,
             num_kv_heads * head_dim,
+            cfg.text_config.attention_bias,
         )?;
         let v_proj = projections(
             "v_proj",
             vb.clone(),
             cfg.text_config.hidden_size,
             num_kv_heads * head_dim,
+            cfg.text_config.attention_bias,
         )?;
         let o_proj = projections(
             "o_proj",
             vb.clone(),
             num_heads * head_dim,
             cfg.text_config.hidden_size,
+            cfg.text_config.attention_bias,
         )?;
         let q_norm = Qwen3_5RmsNorm::new(head_dim, cfg.text_config.rms_norm_eps, vb.pp("q_norm"))?;
         let k_norm = Qwen3_5RmsNorm::new(head_dim, cfg.text_config.rms_norm_eps, vb.pp("k_norm"))?;
@@ -696,13 +700,13 @@ impl Qwen3_5MLP {
 
     fn new_with_projections<F>(cfg: &Config, vb: VarBuilder, projections: &F) -> Result<Self>
     where
-        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize) -> Result<Box<dyn Projection>>,
+        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize, bool) -> Result<Box<dyn Projection>>,
     {
         let hidden_sz = cfg.text_config.hidden_size;
         let intermediate_sz = cfg.text_config.intermediate_size;
-        let gate_proj = projections("gate_proj", vb.clone(), hidden_sz, intermediate_sz)?;
-        let up_proj = projections("up_proj", vb.clone(), hidden_sz, intermediate_sz)?;
-        let down_proj = projections("down_proj", vb, intermediate_sz, hidden_sz)?;
+        let gate_proj = projections("gate_proj", vb.clone(), hidden_sz, intermediate_sz, false)?;
+        let up_proj = projections("up_proj", vb.clone(), hidden_sz, intermediate_sz, false)?;
+        let down_proj = projections("down_proj", vb, intermediate_sz, hidden_sz, false)?;
         Ok(Self {
             gate_proj: ProjectionImpl::Custom(Arc::from(gate_proj)),
             up_proj: ProjectionImpl::Custom(Arc::from(up_proj)),
@@ -780,7 +784,7 @@ impl Qwen3_5DecoderLayer {
         projections: &F,
     ) -> Result<Self>
     where
-        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize) -> Result<Box<dyn Projection>>,
+        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize, bool) -> Result<Box<dyn Projection>>,
     {
         let layer_type = cfg
             .text_config
@@ -904,10 +908,11 @@ impl Model {
     /// Loads Qwen 3.5 while replacing every layer projection with the result of
     /// `projections`. The factory receives the projection name, a `VarBuilder`
     /// rooted at its containing attention, linear-attention, or MLP module, and
-    /// its input and output dimensions.
+    /// its input and output dimensions, and whether the dense projection has a
+    /// bias.
     pub fn new_with_projections<F>(cfg: &Config, vb: VarBuilder, projections: F) -> Result<Self>
     where
-        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize) -> Result<Box<dyn Projection>>,
+        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize, bool) -> Result<Box<dyn Projection>>,
     {
         let vb_m = vb.pp("model").pp("language_model");
         let embed_tokens = candle_nn::embedding(
@@ -991,7 +996,7 @@ impl Model {
 #[derive(Debug, Clone)]
 pub struct ModelForCausalLM {
     pub base_model: Model,
-    pub lm_head: Linear,
+    lm_head: ProjectionImpl,
 }
 
 impl ModelForCausalLM {
@@ -1008,16 +1013,48 @@ impl ModelForCausalLM {
         };
         Ok(Self {
             base_model,
+            lm_head: ProjectionImpl::Dense(lm_head),
+        })
+    }
+
+    /// Loads Qwen 3.5 with custom layer and language-model projections.
+    ///
+    /// The factory receives `true` for the four attention projections when
+    /// `attention_bias` is enabled, and `false` for all other projections. It
+    /// is also called for `lm_head` when that tensor is present; otherwise the
+    /// language model head remains tied to the input embeddings.
+    pub fn new_with_projections<F>(cfg: &Config, vb: VarBuilder, projections: F) -> Result<Self>
+    where
+        F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize, bool) -> Result<Box<dyn Projection>>,
+    {
+        let base_model = Model::new_with_projections(cfg, vb.clone(), &projections)?;
+        let lm_head = if vb.contains_tensor("lm_head.weight") {
+            ProjectionImpl::Custom(Arc::from(projections(
+                "lm_head",
+                vb.clone(),
+                cfg.text_config.hidden_size,
+                cfg.text_config.vocab_size,
+                false,
+            )?))
+        } else {
+            ProjectionImpl::Dense(Linear::from_weights(
+                base_model.embed_tokens.embeddings().clone(),
+                None,
+            ))
+        };
+        Ok(Self {
+            base_model,
             lm_head,
         })
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (_b_size, seq_len) = input_ids.dims2()?;
-        self.base_model
+        let xs = self
+            .base_model
             .forward(input_ids, seqlen_offset)?
-            .narrow(1, seq_len - 1, 1)?
-            .apply(&self.lm_head)
+            .narrow(1, seq_len - 1, 1)?;
+        self.lm_head.forward(&xs)
     }
 
     pub fn clear_kv_cache(&mut self) {
@@ -1030,7 +1067,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    fn tiny_config() -> Config {
+    fn tiny_config(attention_bias: bool) -> Config {
         Config {
             text_config: TextConfig {
                 vocab_size: 8,
@@ -1045,7 +1082,7 @@ mod tests {
                 rope_parameters: RopeParameters {
                     rope_theta: 10_000.,
                 },
-                attention_bias: false,
+                attention_bias,
                 hidden_act: Activation::Silu,
                 layer_types: vec!["full_attention".into(), "linear_attention".into()],
                 linear_num_key_heads: 1,
@@ -1059,41 +1096,82 @@ mod tests {
 
     #[test]
     fn projection_factory_matches_dense_model() -> Result<()> {
+        for attention_bias in [false, true] {
+            let device = Device::Cpu;
+            let cfg = tiny_config(attention_bias);
+            // Both constructors draw from the same VarMap, as they would when
+            // loading a checkpoint, so this isolates the projection seam.
+            let varmap = candle_nn::VarMap::new();
+            let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+            let mut dense = Model::new(&cfg, vb.clone())?;
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let factory_seen = Arc::clone(&seen);
+            let mut custom = Model::new_with_projections(
+                &cfg,
+                vb,
+                move |name, vb, in_dim, out_dim, has_bias| {
+                    factory_seen
+                        .lock()
+                        .unwrap()
+                        .push((name.to_owned(), has_bias));
+                    Ok(Box::new(linear_b(in_dim, out_dim, has_bias, vb.pp(name))?))
+                },
+            )?;
+
+            assert_eq!(
+                *seen.lock().unwrap(),
+                vec![
+                    ("q_proj".into(), attention_bias),
+                    ("k_proj".into(), attention_bias),
+                    ("v_proj".into(), attention_bias),
+                    ("o_proj".into(), attention_bias),
+                    ("gate_proj".into(), false),
+                    ("up_proj".into(), false),
+                    ("down_proj".into(), false),
+                    ("in_proj_qkv".into(), false),
+                    ("in_proj_z".into(), false),
+                    ("in_proj_b".into(), false),
+                    ("in_proj_a".into(), false),
+                    ("out_proj".into(), false),
+                    ("gate_proj".into(), false),
+                    ("up_proj".into(), false),
+                    ("down_proj".into(), false),
+                ]
+            );
+            let tokens = Tensor::from_vec(vec![1u32, 2, 3], (1, 3), &device)?;
+            assert_eq!(
+                dense.forward(&tokens, 0)?.to_vec3::<f32>()?,
+                custom.forward(&tokens, 0)?.to_vec3::<f32>()?,
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn projection_factory_includes_untied_lm_head() -> Result<()> {
         let device = Device::Cpu;
-        let cfg = tiny_config();
-        // Both constructors draw from the same VarMap, as they would when
-        // loading a checkpoint, so this isolates the projection seam.
+        let cfg = tiny_config(true);
         let varmap = candle_nn::VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-        let mut dense = Model::new(&cfg, vb.clone())?;
+        // Materialise an untied output head before either constructor checks
+        // whether the checkpoint provides it.
+        let _ = vb.get(
+            (cfg.text_config.vocab_size, cfg.text_config.hidden_size),
+            "lm_head.weight",
+        )?;
+        let mut dense = ModelForCausalLM::new(&cfg, vb.clone())?;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let factory_seen = Arc::clone(&seen);
-        let mut custom =
-            Model::new_with_projections(&cfg, vb, move |name, vb, in_dim, out_dim| {
+        let mut custom = ModelForCausalLM::new_with_projections(
+            &cfg,
+            vb,
+            move |name, vb, in_dim, out_dim, has_bias| {
                 factory_seen.lock().unwrap().push(name.to_owned());
-                Ok(Box::new(linear_no_bias(in_dim, out_dim, vb.pp(name))?))
-            })?;
+                Ok(Box::new(linear_b(in_dim, out_dim, has_bias, vb.pp(name))?))
+            },
+        )?;
 
-        assert_eq!(
-            *seen.lock().unwrap(),
-            vec![
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj",
-                "in_proj_qkv",
-                "in_proj_z",
-                "in_proj_b",
-                "in_proj_a",
-                "out_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj"
-            ]
-        );
+        assert_eq!(seen.lock().unwrap().last(), Some(&"lm_head".to_owned()));
         let tokens = Tensor::from_vec(vec![1u32, 2, 3], (1, 3), &device)?;
         assert_eq!(
             dense.forward(&tokens, 0)?.to_vec3::<f32>()?,
