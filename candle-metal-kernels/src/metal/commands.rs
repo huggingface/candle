@@ -276,6 +276,22 @@ impl Commands {
             Self::ensure_completed(&cb)?;
             // queue is FIFO: everything committed before cb is done too
             let mut state = self.state.lock()?;
+            // A GPU-side abort (e.g. kIOGPUCommandBufferCallbackErrorOutOfMemory)
+            // leaves an earlier CB in Error status with its outputs unwritten.
+            // Silently dropping it here turns the abort into downstream garbage
+            // reads — surface it instead (JOURNAL vtracer 2026-08-04).
+            for c in state.in_flight.iter() {
+                if c.status() == MTLCommandBufferStatus::Error {
+                    let msg = c
+                        .error()
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "unknown error".to_string());
+                    state
+                        .in_flight
+                        .retain(|c| c.status() != MTLCommandBufferStatus::Completed);
+                    return Err(MetalKernelError::CommandBufferError(msg));
+                }
+            }
             state
                 .in_flight
                 .retain(|c| c.status() != MTLCommandBufferStatus::Completed);
