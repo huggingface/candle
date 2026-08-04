@@ -20,6 +20,7 @@ pub const BLOCK_SIZE: usize = 16;
 #[cfg(feature = "cuda")]
 unsafe extern "C" {
     fn candle_nvfp4_cuda_is_available() -> c_int;
+    fn candle_nvfp4_cuda_supports_fp4_tensor_cores() -> c_int;
     fn candle_nvfp4_linear_f32_host_batched(
         input: *const f32,
         weight: *const u8,
@@ -43,8 +44,7 @@ unsafe extern "C" {
     ) -> c_int;
 }
 
-/// Whether the active CUDA device meets the native NVFP4 execution contract
-/// (compute capability 10.0 / Blackwell or newer).
+/// Whether a CUDA device is active and can execute the portable NVFP4 kernel.
 #[cfg(feature = "cuda")]
 pub fn is_available() -> bool {
     unsafe { candle_nvfp4_cuda_is_available() == 1 }
@@ -52,6 +52,18 @@ pub fn is_available() -> bool {
 
 #[cfg(not(feature = "cuda"))]
 pub fn is_available() -> bool {
+    false
+}
+
+/// Whether the active CUDA device has native FP4 tensor cores (Blackwell or
+/// newer). The current portable kernel does not require this capability.
+#[cfg(feature = "cuda")]
+pub fn supports_fp4_tensor_cores() -> bool {
+    unsafe { candle_nvfp4_cuda_supports_fp4_tensor_cores() == 1 }
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn supports_fp4_tensor_cores() -> bool {
     false
 }
 
@@ -132,9 +144,7 @@ pub fn linear_f32_host_batched(
     validate(input, packed_weight, weight_scale_e4m3, rows, cols, tokens)?;
     let _ = tensor_scale;
     if !is_available() {
-        return Err(
-            "NVFP4 CUDA kernels require compute capability 10.0 (Blackwell) or newer".into(),
-        );
+        return Err("NVFP4 CUDA kernels require an active CUDA device".into());
     }
     #[cfg(feature = "cuda")]
     {
@@ -215,9 +225,7 @@ impl Nvfp4Linear {
             candle_core::bail!("Nvfp4Linear requires a CUDA device")
         }
         if !is_available() {
-            candle_core::bail!(
-                "NVFP4 CUDA kernels require compute capability 10.0 (Blackwell) or newer"
-            )
+            candle_core::bail!("Nvfp4Linear requires an active CUDA device")
         }
         Ok(Self {
             packed_weight: Tensor::from_slice(packed_weight, (rows, cols / 2), device)?,
@@ -363,6 +371,13 @@ impl candle_core::CustomOp3 for Nvfp4Matmul {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cuda_capability_signals_are_false_without_cuda_feature() {
+        assert!(!is_available());
+        assert!(!supports_fp4_tensor_cores());
+    }
+
     #[test]
     fn shape_validation_rejects_malformed_packed_tensors() {
         assert!(validate(&[0.; 16], &[0; 7], &[0; 1], 1, 16, 1).is_err());
