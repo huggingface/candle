@@ -59,6 +59,14 @@ pub struct MetalDevice {
     /// Intermediate compute buffers don't need CPU access so Private avoids coherency overhead.
     pub(crate) private_buffers: Arc<RwLock<BufferMap>>,
 
+    /// Bytes allocated since the last pool sweep. The residency set wires every
+    /// pooled buffer and only [`Self::drop_unused_buffers`] unwires them — with
+    /// no sync in a long encode (whole-image inference) the wired set grows to
+    /// every temporary of the run and the GPU aborts with
+    /// kIOGPUCommandBufferCallbackErrorOutOfMemory. Crossing the sweep budget
+    /// forces a wait + sweep to bound the peak (JOURNAL vtracer 2026-08-04).
+    pub(crate) alloc_since_sweep: Arc<std::sync::atomic::AtomicUsize>,
+
     /// Simple keeper struct to keep track of the already compiled kernels so we can reuse them.
     /// Heavily used by [`candle_metal_kernels`]
     pub(crate) kernels: Arc<Kernels>,
@@ -126,6 +134,30 @@ impl MetalDevice {
 
     pub fn metal_device(&self) -> &Device {
         &self.device
+    }
+
+    /// Called before taking a pool lock in the allocate paths: if the bytes
+    /// allocated since the last sweep exceed the budget, drain the GPU and
+    /// sweep so wired memory is released before growing the pool further.
+    fn maybe_sweep(&self, incoming: usize) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        let total = self.alloc_since_sweep.fetch_add(incoming, Ordering::Relaxed) + incoming;
+        if total >= sweep_budget() {
+            self.alloc_since_sweep.store(0, Ordering::Relaxed);
+            self.wait_until_completed()?;
+            if std::env::var("CANDLE_METAL_LOG_SWEEP").is_ok() {
+                let gauge = |m: &BufferMap| -> (usize, usize) {
+                    m.iter().map(|(sz, v)| (v.len(), sz * v.len())).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1))
+                };
+                let (ns, bs) = gauge(&self.buffers.read().unwrap());
+                let (np, bp) = gauge(&self.private_buffers.read().unwrap());
+                eprintln!(
+                    "[sweep] after drain: shared {} bufs {:.2} GB, private {} bufs {:.2} GB",
+                    ns, bs as f64 / 1e9, np, bp as f64 / 1e9
+                );
+            }
+        }
+        Ok(())
     }
 
     fn drop_unused_buffers(&self) -> Result<()> {
@@ -226,9 +258,13 @@ impl MetalDevice {
         _name: &str,
     ) -> Result<Arc<Buffer>> {
         let size = element_count * dtype.size_in_bytes();
+        self.maybe_sweep(size)?;
         let mut buffers = self.private_buffers.write().map_err(MetalError::from)?;
-        if let Some(b) = find_available_buffer(size, &buffers) {
-            return Ok(b.clone());
+        if !no_pool_reuse() {
+            if let Some(b) = find_available_buffer(size, &buffers) {
+                // Cloning also ensures we increment the strong count
+                return Ok(b.clone());
+            }
         }
         let size = buf_size(size);
         let subbuffers = buffers.entry(size).or_insert(vec![]);
@@ -308,10 +344,13 @@ impl MetalDevice {
 
     /// The critical allocator algorithm
     pub fn allocate_buffer(&self, size: usize) -> Result<Arc<Buffer>> {
+        self.maybe_sweep(size)?;
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
-        if let Some(b) = find_available_buffer(size, &buffers) {
-            // Cloning also ensures we increment the strong count
-            return Ok(b.clone());
+        if !no_pool_reuse() {
+            if let Some(b) = find_available_buffer(size, &buffers) {
+                // Cloning also ensures we increment the strong count
+                return Ok(b.clone());
+            }
         }
         let size = buf_size(size);
         let subbuffers = buffers.entry(size).or_insert(vec![]);
@@ -349,8 +388,37 @@ impl MetalDevice {
     }
 }
 
+
+/// Sweep budget: force a wait + pool sweep after this many freshly-allocated
+/// bytes. Tunable via CANDLE_METAL_SWEEP_BYTES; default 6 GiB.
+fn sweep_budget() -> usize {
+    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("CANDLE_METAL_SWEEP_BYTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(6 << 30)
+    })
+}
+
+/// Debug kill-switch: `CANDLE_METAL_NO_POOL=1` disables buffer-pool reuse so
+/// every allocation is fresh — used to bisect pool-recycling races.
+fn no_pool_reuse() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("CANDLE_METAL_NO_POOL").is_ok_and(|v| v == "1"))
+}
+
 fn buf_size(size: usize) -> usize {
-    size.next_power_of_two()
+    // Power-of-two bucketing wastes up to 2x; above 64MB (whole-image im2col
+    // scratch is ~800MB) that overhead alone can push the GPU working set into
+    // kIOGPUCommandBufferCallbackErrorOutOfMemory territory. Large sizes round
+    // to a 32MB grain instead — still few buckets, half the waste.
+    const GRAIN: usize = 32 << 20;
+    if size <= (64 << 20) {
+        size.next_power_of_two()
+    } else {
+        size.div_ceil(GRAIN) * GRAIN
+    }
 }
 
 /// Applies the [`BufferBuilder`] label, clearing any stale label on a reused pooled buffer.

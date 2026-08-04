@@ -2061,6 +2061,7 @@ impl BackendDevice for MetalDevice {
             commands: Arc::new(commands),
             buffers: Arc::new(RwLock::new(HashMap::new())),
             private_buffers: Arc::new(RwLock::new(HashMap::new())),
+            alloc_since_sweep: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             kernels,
             seed,
             seed_value: Arc::new(RwLock::new(299792458)),
