@@ -129,6 +129,127 @@ fn mm_layout(device: &Device) -> Result<()> {
     Ok(())
 }
 
+/// FP8 E4M3 matmul with NN layout (both contiguous).
+/// Falls back to cast→BF16 since FP8 tensor cores require TN layout.
+fn matmul_fp8(device: &Device) -> Result<()> {
+    if !device.is_cuda() {
+        return Ok(());
+    }
+    let a_data: Vec<f32> = (0..256).map(|i| (i % 7) as f32 * 0.5 - 1.5).collect();
+    let b_data: Vec<f32> = (0..256).map(|i| (i % 5) as f32 * 0.4 - 0.8).collect();
+    let a_f32 = Tensor::from_slice(&a_data, (16, 16), device)?;
+    let b_f32 = Tensor::from_slice(&b_data, (16, 16), device)?;
+    let expected = a_f32.matmul(&b_f32)?;
+
+    let a_fp8 = a_f32.to_dtype(DType::F8E4M3)?;
+    let b_fp8 = b_f32.to_dtype(DType::F8E4M3)?;
+    let c = a_fp8.matmul(&b_fp8)?;
+    // NN layout falls back to BF16 matmul
+    assert_eq!(c.dtype(), DType::BF16);
+
+    let c_f32 = c.to_dtype(DType::F32)?;
+    let diff = (&expected - &c_f32)?.abs()?.max(0)?.max(0)?;
+    let max_err = diff.to_vec0::<f32>()?;
+    assert!(max_err < 2.0, "fp8 matmul max error: {max_err}");
+    Ok(())
+}
+
+/// FP8 matmul with TN layout (A transposed, B contiguous).
+/// This exercises native FP8 tensor cores via cuBLASLt.
+/// Matches nn::Linear pattern: x.matmul(&w.t())
+fn matmul_fp8_rect(device: &Device) -> Result<()> {
+    if !device.is_cuda() {
+        return Ok(());
+    }
+    // Simulate x (32, 64) @ w.t() where w is (48, 64) → w.t() is (64, 48)
+    let m = 32;
+    let k = 64;
+    let n = 48;
+    let x_data: Vec<f32> = (0..(m * k)).map(|i| (i % 11) as f32 * 0.1 - 0.5).collect();
+    let w_data: Vec<f32> = (0..(n * k)).map(|i| (i % 9) as f32 * 0.1 - 0.4).collect();
+    let x_f32 = Tensor::from_slice(&x_data, (m, k), device)?;
+    let w_f32 = Tensor::from_slice(&w_data, (n, k), device)?;
+    let expected = x_f32.matmul(&w_f32.t()?)?; // x @ w.t()
+
+    let x_fp8 = x_f32.to_dtype(DType::F8E4M3)?;
+    let w_fp8 = w_f32.to_dtype(DType::F8E4M3)?;
+    let c = x_fp8.matmul(&w_fp8.t()?)?; // TN layout → native FP8 matmul
+    assert_eq!(c.dtype(), DType::BF16);
+
+    let c_f32 = c.to_dtype(DType::F32)?;
+    let diff = (&expected - &c_f32)?.abs()?.max(0)?.max(0)?;
+    let max_err = diff.to_vec0::<f32>()?;
+    assert!(max_err < 2.0, "fp8 TN matmul max error: {max_err}");
+    Ok(())
+}
+
+/// FP8 batched matmul with TN layout.
+fn matmul_fp8_batched(device: &Device) -> Result<()> {
+    if !device.is_cuda() {
+        return Ok(());
+    }
+    // Batch of 2: x (2, 16, 64) @ w.t() where w is (2, 32, 64) → w.t() is (2, 64, 32)
+    let batch = 2;
+    let m = 16;
+    let k = 64;
+    let n = 32;
+    let x_data: Vec<f32> = (0..(batch * m * k))
+        .map(|i| (i % 13) as f32 * 0.1 - 0.6)
+        .collect();
+    let w_data: Vec<f32> = (0..(batch * n * k))
+        .map(|i| (i % 7) as f32 * 0.1 - 0.3)
+        .collect();
+    let x_f32 = Tensor::from_slice(&x_data, (batch, m, k), device)?;
+    let w_f32 = Tensor::from_slice(&w_data, (batch, n, k), device)?;
+    let expected = x_f32.matmul(&w_f32.transpose(1, 2)?)?;
+
+    let x_fp8 = x_f32.to_dtype(DType::F8E4M3)?;
+    let w_fp8 = w_f32.to_dtype(DType::F8E4M3)?;
+    let c = x_fp8.matmul(&w_fp8.transpose(1, 2)?)?;
+    assert_eq!(c.dtype(), DType::BF16);
+    assert_eq!(c.dims(), &[batch, m, n]);
+
+    let c_f32 = c.to_dtype(DType::F32)?;
+    let diff = (&expected - &c_f32)?.abs()?;
+    let max_err = diff.max(0)?.max(0)?.max(0)?.to_vec0::<f32>()?;
+    assert!(max_err < 4.0, "fp8 batched TN matmul max error: {max_err}");
+    Ok(())
+}
+
+/// Mixed BF16 × FP8 matmul — simulates FP8 weights with BF16 activations.
+/// This is the "manual cast" pattern used by ComfyUI for FP8 inference.
+fn matmul_fp8_mixed(device: &Device) -> Result<()> {
+    if !device.is_cuda() {
+        return Ok(());
+    }
+    // Simulate nn::Linear: x (BF16) @ w.t() (FP8)
+    let m = 32;
+    let k = 64;
+    let n = 48;
+    let x_data: Vec<f32> = (0..(m * k)).map(|i| (i % 11) as f32 * 0.1 - 0.5).collect();
+    let w_data: Vec<f32> = (0..(n * k)).map(|i| (i % 9) as f32 * 0.1 - 0.4).collect();
+    let x_bf16 = Tensor::from_slice(&x_data, (m, k), device)?.to_dtype(DType::BF16)?;
+    let w_f32 = Tensor::from_slice(&w_data, (n, k), device)?;
+    let expected = x_bf16.to_dtype(DType::F32)?.matmul(&w_f32.t()?)?;
+
+    // FP8 weight with BF16 activation — should auto-cast FP8→BF16
+    let w_fp8 = w_f32.to_dtype(DType::F8E4M3)?;
+    let c = x_bf16.matmul(&w_fp8.t()?)?;
+    assert_eq!(c.dtype(), DType::BF16);
+
+    let c_f32 = c.to_dtype(DType::F32)?;
+    let diff = (&expected - &c_f32)?.abs()?.max(0)?.max(0)?;
+    let max_err = diff.to_vec0::<f32>()?;
+    assert!(max_err < 2.0, "mixed BF16×FP8 matmul max error: {max_err}");
+    Ok(())
+}
+
+test_device!(
+    matmul_fp8_mixed,
+    matmul_fp8_mixed_cpu,
+    matmul_fp8_mixed_gpu,
+    matmul_fp8_mixed_metal
+);
 test_device!(matmul, matmul_cpu, matmul_gpu, matmul_metal);
 test_device!(
     matmul_bf16,
@@ -144,3 +265,16 @@ test_device!(
 );
 test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal);
 test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal);
+test_device!(matmul_fp8, matmul_fp8_cpu, matmul_fp8_gpu, matmul_fp8_metal);
+test_device!(
+    matmul_fp8_rect,
+    matmul_fp8_rect_cpu,
+    matmul_fp8_rect_gpu,
+    matmul_fp8_rect_metal
+);
+test_device!(
+    matmul_fp8_batched,
+    matmul_fp8_batched_cpu,
+    matmul_fp8_batched_gpu,
+    matmul_fp8_batched_metal
+);

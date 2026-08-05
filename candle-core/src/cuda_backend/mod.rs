@@ -6,6 +6,7 @@ use crate::{builder_arg as barg, CpuStorage, DType, Layout, Result, WithDType};
 pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
+use cudarc::cublaslt;
 use cudarc::driver::{
     CudaSlice, DevicePtr, DeviceRepr, LaunchConfig, PushKernelArg, ValidAsZeroBits,
 };
@@ -1376,6 +1377,269 @@ impl CudaStorage {
     }
 }
 
+/// FP8 × FP8 → BF16 matmul via cuBLASLt.
+///
+/// Uses mixed-precision: FP8 E4M3 inputs with FP32 accumulation and BF16 output.
+/// Requires sm_89+ (Ada Lovelace / RTX 4090) for hardware FP8 tensor cores.
+fn gemm_fp8_to_bf16(
+    dev: &CudaDevice,
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs: &impl DevicePtr<float8::F8E4M3>,
+    lhs_l: &Layout,
+    rhs: &impl DevicePtr<float8::F8E4M3>,
+    rhs_l: &Layout,
+    out: &mut impl cudarc::driver::DevicePtrMut<bf16>,
+) -> Result<()> {
+    use cublaslt::result as lt;
+    use cublaslt::sys as lt_sys;
+    use cublaslt::MatmulShared;
+
+    let lhs_stride = lhs_l.stride();
+    let rhs_stride = rhs_l.stride();
+    let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
+    let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
+    let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
+    let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
+
+    // cuBLAS uses column-major, so we compute C^T = B^T @ A^T
+    // "a" in cuBLAS terms is rhs (the n×k matrix), "b" is lhs (the m×k matrix)
+    let (lda, transa) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
+        (n as i64, false)
+    } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
+        (k as i64, true)
+    } else {
+        Err(CudaError::MatMulNonContiguous {
+            lhs_stride: lhs_l.clone(),
+            rhs_stride: rhs_l.clone(),
+            mnk: (m, n, k),
+        })?
+    };
+    let (ldb, transb) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
+        (k as i64, false)
+    } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
+        (m as i64, true)
+    } else {
+        Err(CudaError::MatMulNonContiguous {
+            lhs_stride: lhs_l.clone(),
+            rhs_stride: rhs_l.clone(),
+            mnk: (m, n, k),
+        })?
+    };
+
+    let stride_a: i64 = match rhs_stride[..rhs_stride.len() - 2] {
+        [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride as i64,
+        [_, stride] if rhs_l.dims()[0] == 1 => stride as i64,
+        [stride, _] if rhs_l.dims()[1] == 1 => stride as i64,
+        [stride] => stride as i64,
+        [] => (n * k) as i64,
+        _ => Err(CudaError::MatMulNonContiguous {
+            lhs_stride: lhs_l.clone(),
+            rhs_stride: rhs_l.clone(),
+            mnk: (m, n, k),
+        })?,
+    };
+    let stride_b: i64 = match lhs_stride[..lhs_stride.len() - 2] {
+        [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride as i64,
+        [_, stride] if lhs_l.dims()[0] == 1 => stride as i64,
+        [stride, _] if lhs_l.dims()[1] == 1 => stride as i64,
+        [stride] => stride as i64,
+        [] => (m * k) as i64,
+        _ => Err(CudaError::MatMulNonContiguous {
+            lhs_stride: lhs_l.clone(),
+            rhs_stride: rhs_l.clone(),
+            mnk: (m, n, k),
+        })?,
+    };
+    let stride_c = (m * n) as i64;
+
+    let blas_lt = &dev.blas_lt;
+    let stream = blas_lt.stream();
+    let handle = *blas_lt.handle();
+
+    let (a_rows, a_cols) = if transa {
+        (k as u64, n as u64)
+    } else {
+        (n as u64, k as u64)
+    };
+    let (b_rows, b_cols) = if transb {
+        (m as u64, k as u64)
+    } else {
+        (k as u64, m as u64)
+    };
+
+    // Create matrix layouts: A and B are FP8, C is BF16
+    let a_layout =
+        lt::create_matrix_layout(lt_sys::cudaDataType_t::CUDA_R_8F_E4M3, a_rows, a_cols, lda)
+            .w()?;
+    let b_layout =
+        lt::create_matrix_layout(lt_sys::cudaDataType_t::CUDA_R_8F_E4M3, b_rows, b_cols, ldb)
+            .w()?;
+    let c_layout = lt::create_matrix_layout(
+        lt_sys::cudaDataType_t::CUDA_R_16BF,
+        n as u64,
+        m as u64,
+        n as i64,
+    )
+    .w()?;
+    let d_layout = lt::create_matrix_layout(
+        lt_sys::cudaDataType_t::CUDA_R_16BF,
+        n as u64,
+        m as u64,
+        n as i64,
+    )
+    .w()?;
+
+    // Set batch parameters if batched
+    if b > 1 {
+        let batch_sz = b as core::ffi::c_int;
+        unsafe {
+            for (layout, stride) in [
+                (a_layout, stride_a),
+                (b_layout, stride_b),
+                (c_layout, stride_c),
+                (d_layout, stride_c),
+            ] {
+                lt::set_matrix_layout_attribute(
+                    layout,
+                    lt_sys::cublasLtMatrixLayoutAttribute_t::CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT,
+                    (&batch_sz) as *const _ as *const _,
+                    core::mem::size_of::<core::ffi::c_int>(),
+                )
+                .w()?;
+                lt::set_matrix_layout_attribute(
+                    layout,
+                    lt_sys::cublasLtMatrixLayoutAttribute_t::CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET,
+                    (&stride) as *const _ as *const _,
+                    core::mem::size_of::<i64>(),
+                )
+                .w()?;
+            }
+        }
+    }
+
+    // Create matmul descriptor: FP32 compute, FP32 scale type
+    let matmul_desc = lt::create_matmul_desc(
+        lt_sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+        lt_sys::cudaDataType_t::CUDA_R_32F,
+    )
+    .w()?;
+
+    // Set transpose flags
+    if transa {
+        let op = cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T as i32;
+        unsafe {
+            lt::set_matmul_desc_attribute(
+                matmul_desc,
+                lt_sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_TRANSA,
+                (&op) as *const _ as *const _,
+                core::mem::size_of::<i32>(),
+            )
+            .w()?;
+        }
+    }
+    if transb {
+        let op = cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T as i32;
+        unsafe {
+            lt::set_matmul_desc_attribute(
+                matmul_desc,
+                lt_sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_TRANSB,
+                (&op) as *const _ as *const _,
+                core::mem::size_of::<i32>(),
+            )
+            .w()?;
+        }
+    }
+
+    // FP8 matmul requires per-tensor scale pointers on device (set to 1.0 for unscaled)
+    let scale_one = stream.clone_htod(&[1.0f32]).w()?;
+    let (scale_dev, _rec_s) = scale_one.device_ptr(stream);
+    unsafe {
+        lt::set_matmul_desc_attribute(
+            matmul_desc,
+            lt_sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER,
+            (&scale_dev) as *const _ as *const _,
+            core::mem::size_of::<cudarc::driver::sys::CUdeviceptr>(),
+        )
+        .w()?;
+        lt::set_matmul_desc_attribute(
+            matmul_desc,
+            lt_sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+            (&scale_dev) as *const _ as *const _,
+            core::mem::size_of::<cudarc::driver::sys::CUdeviceptr>(),
+        )
+        .w()?;
+    }
+
+    // Allocate our own workspace (4 MiB, 32 MiB for Hopper+)
+    let ws_size: usize = 4_194_304;
+    let ws_buf = unsafe { stream.alloc::<u8>(ws_size) }.w()?;
+
+    // Create preferences and get heuristic
+    let matmul_pref = lt::create_matmul_pref().w()?;
+    unsafe {
+        lt::set_matmul_pref_attribute(
+            matmul_pref,
+            lt_sys::cublasLtMatmulPreferenceAttributes_t::CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+            (&ws_size) as *const _ as *const _,
+            core::mem::size_of::<usize>(),
+        )
+        .w()?;
+    }
+
+    let heuristic = unsafe {
+        lt::get_matmul_algo_heuristic(
+            handle,
+            matmul_desc,
+            a_layout,
+            b_layout,
+            c_layout,
+            d_layout,
+            matmul_pref,
+        )
+    }
+    .w()?;
+
+    // Launch matmul: rhs is "a" in cuBLAS terms, lhs is "b"
+    let (a_ptr, _rec_a) = rhs.device_ptr(stream);
+    let (b_ptr, _rec_b) = lhs.device_ptr(stream);
+    let (c_ptr, _rec_c) = out.device_ptr_mut(stream);
+    let (w_ptr, _rec_w) = ws_buf.device_ptr(stream);
+
+    unsafe {
+        lt::matmul(
+            handle,
+            matmul_desc,
+            (&1.0f32) as *const f32 as *const _,
+            (&0.0f32) as *const f32 as *const _,
+            a_ptr as *const _,
+            a_layout,
+            b_ptr as *const _,
+            b_layout,
+            c_ptr as *const _,
+            c_layout,
+            c_ptr as *mut _,
+            d_layout,
+            (&heuristic.algo) as *const _,
+            w_ptr as *mut _,
+            ws_size,
+            stream.cu_stream() as *mut _,
+        )
+    }
+    .w()?;
+
+    // Cleanup descriptors
+    unsafe {
+        lt::destroy_matrix_layout(a_layout).w()?;
+        lt::destroy_matrix_layout(b_layout).w()?;
+        lt::destroy_matrix_layout(c_layout).w()?;
+        lt::destroy_matrix_layout(d_layout).w()?;
+        lt::destroy_matmul_desc(matmul_desc).w()?;
+        lt::destroy_matmul_pref(matmul_pref).w()?;
+    }
+
+    Ok(())
+}
+
 fn gemm_config<T>(
     alpha: T,
     beta: T,
@@ -2280,6 +2544,57 @@ impl BackendStorage for CudaStorage {
                 }
                 .w()?;
                 CudaStorageSlice::F64(out)
+            }
+            // FP8 × FP8 → BF16 via cuBLASLt mixed-precision matmul.
+            // FP8 tensor cores require TN layout (A transposed, B non-transposed).
+            // This naturally matches nn::Linear: x.matmul(&w.t()).
+            // For non-TN layouts, fall back to cast→BF16 matmul.
+            (CudaStorageSlice::F8E4M3(lhs_fp8), CudaStorageSlice::F8E4M3(rhs_fp8)) => {
+                let lhs_fp8 = &lhs_fp8.slice(lhs_l.start_offset()..);
+                let rhs_fp8 = &rhs_fp8.slice(rhs_l.start_offset()..);
+                let mut out = unsafe { dev.alloc::<bf16>(elem_count)? };
+                match gemm_fp8_to_bf16(dev, (b, m, n, k), lhs_fp8, lhs_l, rhs_fp8, rhs_l, &mut out)
+                {
+                    Ok(()) => CudaStorageSlice::BF16(out),
+                    Err(_) => {
+                        // FP8 TN layout not available — cast to BF16 and use regular matmul.
+                        let lhs_bf16 = self.to_dtype(lhs_l, DType::BF16)?;
+                        let rhs_bf16 = rhs.to_dtype(rhs_l, DType::BF16)?;
+                        return lhs_bf16.matmul(&rhs_bf16, (b, m, n, k), lhs_l, rhs_l);
+                    }
+                }
+            }
+            // Mixed BF16 × FP8 — cast FP8 side to BF16, then BF16 matmul.
+            // This enables "manual cast" mode: FP8 weights stay in VRAM at 1 byte/param,
+            // cast to BF16 on-the-fly per matmul (ComfyUI-style FP8 inference).
+            (CudaStorageSlice::BF16(_), CudaStorageSlice::F8E4M3(_))
+            | (CudaStorageSlice::F8E4M3(_), CudaStorageSlice::BF16(_)) => {
+                let lhs_bf16 = if self.dtype() == DType::F8E4M3 {
+                    self.to_dtype(lhs_l, DType::BF16)?
+                } else {
+                    self.try_clone(lhs_l)?
+                };
+                let rhs_bf16 = if rhs.dtype() == DType::F8E4M3 {
+                    rhs.to_dtype(rhs_l, DType::BF16)?
+                } else {
+                    rhs.try_clone(rhs_l)?
+                };
+                return lhs_bf16.matmul(&rhs_bf16, (b, m, n, k), lhs_l, rhs_l);
+            }
+            // Mixed F16 × FP8 — same pattern.
+            (CudaStorageSlice::F16(_), CudaStorageSlice::F8E4M3(_))
+            | (CudaStorageSlice::F8E4M3(_), CudaStorageSlice::F16(_)) => {
+                let lhs_f16 = if self.dtype() == DType::F8E4M3 {
+                    self.to_dtype(lhs_l, DType::F16)?
+                } else {
+                    self.try_clone(lhs_l)?
+                };
+                let rhs_f16 = if rhs.dtype() == DType::F8E4M3 {
+                    rhs.to_dtype(rhs_l, DType::F16)?
+                } else {
+                    rhs.try_clone(rhs_l)?
+                };
+                return lhs_f16.matmul(&rhs_f16, (b, m, n, k), lhs_l, rhs_l);
             }
             _ => Err(CudaError::InternalError("dtype mismatch in matmul op"))?,
         };
