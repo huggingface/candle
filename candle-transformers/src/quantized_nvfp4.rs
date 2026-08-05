@@ -1,0 +1,526 @@
+//! Loading NVIDIA ModelOpt NVFP4 (W4A16) checkpoints from safetensors.
+//!
+//! ModelOpt / compressed-tensors NVFP4 checkpoints store each packed linear
+//! weight as three tensors instead of one dense weight:
+//!   - `weight_packed`: a `U8` tensor of shape `[out_dim, in_dim / 2]`, packing
+//!     two E2M1 values per byte (low then high nibble).
+//!   - `weight_scale`: an `F8E4M3` tensor of shape `[out_dim, in_dim / block_size]`,
+//!     one scale per `block_size`-wide block of the input dimension
+//!     (`block_size` is 16 for NVFP4).
+//!   - `weight_scale_2`: a scalar `f32` tensor that scales the whole matrix.
+//!
+//! `weight[i, j] = e2m1(packed[i, j]) * e4m3(weight_scale[i, j / block_size]) * weight_scale_2`.
+//!
+//! This module never reinterprets the packed bytes as `f32`: [`dequantize_nvfp4`]
+//! decodes each nibble and scale byte explicitly through [`unpack_e2m1`] and
+//! `float8::F8E4M3::to_bits`, and [`nvfp4_linear`] refuses to materialize a
+//! dense tensor larger than an explicit byte budget. See the `nvfp4-cuda`
+//! feature's [`cuda`] submodule for a path that keeps the packed weight
+//! device-resident instead of expanding it 8x into a dense `f32` tensor.
+
+use candle::{DType, Result, Tensor};
+use candle_nn::{Linear, Module, VarBuilder};
+
+/// Number of input columns sharing one `weight_scale` byte.
+pub const BLOCK_SIZE: usize = 16;
+
+/// What backs a linear layer's weight in a checkpoint that may mix dense,
+/// block-wise FP8, and packed NVFP4 layers (as ModelOpt exports do).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backing {
+    /// A plain dense `weight` tensor.
+    Dense,
+    /// A block-wise FP8 weight (`weight` + `weight_scale_inv`), e.g. as used
+    /// by DeepSeek-V3-style checkpoints.
+    Fp8Block,
+    /// A packed NVFP4 weight (`weight_packed` + `weight_scale` + `weight_scale_2`).
+    Nvfp4,
+}
+
+/// Dequantizes a block-wise FP8 weight into a dense `[out_dim, in_dim]` `f32`
+/// tensor. `weight` is an `F8E4M3` tensor of shape `[out_dim, in_dim]` and
+/// `scale` is an `f32` tensor of shape
+/// `[ceil(out_dim / block_size), ceil(in_dim / block_size)]` holding one
+/// scale per `block_size x block_size` block of `weight`.
+pub fn dequantize_fp8_block(weight: &Tensor, scale: &Tensor, block_size: usize) -> Result<Tensor> {
+    let (out_dim, in_dim) = weight.dims2()?;
+    let (scale_rows, scale_cols) = scale.dims2()?;
+    if scale_rows != out_dim.div_ceil(block_size) || scale_cols != in_dim.div_ceil(block_size) {
+        candle::bail!(
+            "fp8: scale shape {:?} does not match weight shape {:?} for block_size {block_size}",
+            (scale_rows, scale_cols),
+            (out_dim, in_dim),
+        )
+    }
+    let weight = weight.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+    let scale = scale.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+    let mut out = vec![0f32; out_dim * in_dim];
+    for (row, weight_row) in weight.iter().enumerate() {
+        let scale_row = &scale[row / block_size];
+        for (col, &w) in weight_row.iter().enumerate() {
+            out[row * in_dim + col] = w * scale_row[col / block_size];
+        }
+    }
+    Tensor::from_vec(out, (out_dim, in_dim), &candle::Device::Cpu)
+}
+
+fn fp8_block_linear(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: VarBuilder,
+    block_size: usize,
+) -> Result<Linear> {
+    let weight = vb.get_with_hints_dtype(
+        (out_dim, in_dim),
+        "weight",
+        Default::default(),
+        DType::F8E4M3,
+    )?;
+    let scale = vb.get_with_hints_dtype(
+        (out_dim.div_ceil(block_size), in_dim.div_ceil(block_size)),
+        "weight_scale_inv",
+        Default::default(),
+        DType::F32,
+    )?;
+    let weight = dequantize_fp8_block(&weight, &scale, block_size)?
+        .to_dtype(vb.dtype())?
+        .to_device(vb.device())?;
+    let bias = if bias {
+        Some(vb.get(out_dim, "bias")?)
+    } else {
+        None
+    };
+    Ok(Linear::new(weight, bias))
+}
+
+/// Inspects the tensor names available at `vb`'s current path to determine
+/// what backs the linear layer, without reading any tensor data.
+pub fn detect_backing(vb: &VarBuilder) -> Backing {
+    if vb.contains_tensor("weight_packed") && vb.contains_tensor("weight_scale_2") {
+        Backing::Nvfp4
+    } else if vb.contains_tensor("weight_scale_inv") {
+        Backing::Fp8Block
+    } else {
+        Backing::Dense
+    }
+}
+
+fn unpack_e2m1(nibble: u8) -> f32 {
+    const TABLE: [f32; 16] = [
+        0., 0.5, 1., 1.5, 2., 3., 4., 6., 0., -0.5, -1., -1.5, -2., -3., -4., -6.,
+    ];
+    TABLE[(nibble & 0xf) as usize]
+}
+
+/// Dequantizes a packed NVFP4 weight into a dense `[out_dim, in_dim]` `f32`
+/// tensor on the CPU.
+///
+/// `packed_weight` is a `U8` tensor of shape `[out_dim, in_dim / 2]` and
+/// `weight_scale` is an `F8E4M3` tensor of shape
+/// `[out_dim, in_dim / block_size]`. Fails without allocating if the
+/// resulting dense tensor would exceed `max_dense_bytes`, since unpacking
+/// NVFP4 expands its footprint roughly 8x (4-bit weights plus one scale byte
+/// per `block_size` values, versus 32-bit floats).
+pub fn dequantize_nvfp4(
+    packed_weight: &Tensor,
+    weight_scale: &Tensor,
+    weight_scale_2: f32,
+    block_size: usize,
+    max_dense_bytes: usize,
+) -> Result<Tensor> {
+    let (out_dim, packed_in_dim) = packed_weight.dims2()?;
+    let in_dim = packed_in_dim * 2;
+    let (scale_rows, scale_cols) = weight_scale.dims2()?;
+    if scale_rows != out_dim || scale_cols != in_dim.div_ceil(block_size) {
+        candle::bail!(
+            "nvfp4: weight_scale shape {:?} does not match packed weight shape {:?} for block_size {block_size}",
+            (scale_rows, scale_cols),
+            (out_dim, in_dim),
+        )
+    }
+    if packed_weight.dtype() != DType::U8 {
+        candle::bail!(
+            "nvfp4: weight_packed must be u8, got {:?}",
+            packed_weight.dtype()
+        )
+    }
+    if weight_scale.dtype() != DType::F8E4M3 {
+        candle::bail!(
+            "nvfp4: weight_scale must be f8e4m3, got {:?}",
+            weight_scale.dtype()
+        )
+    }
+    let dense_bytes = out_dim
+        .checked_mul(in_dim)
+        .and_then(|n| n.checked_mul(std::mem::size_of::<f32>()))
+        .ok_or_else(|| candle::Error::Msg("nvfp4: dense weight size overflows usize".into()))?;
+    if dense_bytes > max_dense_bytes {
+        candle::bail!(
+            "nvfp4: dequantizing a [{out_dim}, {in_dim}] weight would allocate {dense_bytes} bytes, \
+             exceeding the {max_dense_bytes}-byte budget; raise Nvfp4Config::max_dense_bytes or use \
+             the nvfp4-cuda fused path instead"
+        )
+    }
+
+    let packed = packed_weight.to_vec2::<u8>()?;
+    let scale = weight_scale.to_vec2::<float8::F8E4M3>()?;
+
+    let mut out = vec![0f32; out_dim * in_dim];
+    for row in 0..out_dim {
+        let packed_row = &packed[row];
+        let scale_row = &scale[row];
+        for col in 0..in_dim {
+            let byte = packed_row[col / 2];
+            let nibble = if col % 2 == 0 { byte & 0xf } else { byte >> 4 };
+            let block_scale = e4m3_to_f32(scale_row[col / block_size].to_bits());
+            out[row * in_dim + col] = unpack_e2m1(nibble) * block_scale * weight_scale_2;
+        }
+    }
+    Tensor::from_vec(out, (out_dim, in_dim), &candle::Device::Cpu)
+}
+
+fn e4m3_to_f32(byte: u8) -> f32 {
+    let sign = if byte & 0x80 == 0 { 1. } else { -1. };
+    let exponent = (byte >> 3) & 0xf;
+    let mantissa = byte & 0x7;
+    if exponent == 0 {
+        sign * mantissa as f32 / 512.
+    } else if exponent == 0xf && mantissa == 0x7 {
+        f32::NAN
+    } else {
+        sign * (1. + mantissa as f32 / 8.) * 2f32.powi(exponent as i32 - 7)
+    }
+}
+
+/// Configuration for [`nvfp4_linear`] and [`auto_linear`].
+#[derive(Debug, Clone, Copy)]
+pub struct Nvfp4Config {
+    pub block_size: usize,
+    /// Refuses to dequantize a packed weight into a dense tensor larger than
+    /// this many bytes. Only applies to the CPU dequantization fallback; the
+    /// `nvfp4-cuda` fused path never expands the weight.
+    pub max_dense_bytes: usize,
+}
+
+impl Default for Nvfp4Config {
+    fn default() -> Self {
+        Self {
+            block_size: BLOCK_SIZE,
+            // A generous but explicit guardrail: refuse rather than silently
+            // blow past available memory on an 8x unpack.
+            max_dense_bytes: 4 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
+/// Builds a dense [`candle_nn::Linear`] layer from a packed NVFP4 checkpoint,
+/// reading `weight_packed` (`U8`), `weight_scale` (`F8E4M3`), `weight_scale_2`
+/// (scalar `f32`) and an optional `bias` tensor at the current `VarBuilder`
+/// path, dequantizing on the CPU.
+pub fn nvfp4_linear(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: VarBuilder,
+    cfg: Nvfp4Config,
+) -> Result<Linear> {
+    let packed_weight = vb.get_with_hints_dtype(
+        (out_dim, in_dim / 2),
+        "weight_packed",
+        Default::default(),
+        DType::U8,
+    )?;
+    let weight_scale = vb.get_with_hints_dtype(
+        (out_dim, in_dim.div_ceil(cfg.block_size)),
+        "weight_scale",
+        Default::default(),
+        DType::F8E4M3,
+    )?;
+    let weight_scale_2 = vb
+        .get_with_hints_dtype((), "weight_scale_2", Default::default(), DType::F32)?
+        .to_scalar::<f32>()?;
+    let weight = dequantize_nvfp4(
+        &packed_weight,
+        &weight_scale,
+        weight_scale_2,
+        cfg.block_size,
+        cfg.max_dense_bytes,
+    )?
+    .to_dtype(vb.dtype())?
+    .to_device(vb.device())?;
+    let bias = if bias {
+        Some(vb.get(out_dim, "bias")?)
+    } else {
+        None
+    };
+    Ok(Linear::new(weight, bias))
+}
+
+/// A linear projection whose backing (dense, block-wise FP8, or packed
+/// NVFP4) was determined automatically from the checkpoint. See
+/// [`auto_linear`].
+#[derive(Debug, Clone)]
+pub enum AutoLinear {
+    Dense(Linear),
+    Fp8Block(Linear),
+    Nvfp4(Linear),
+    #[cfg(feature = "nvfp4-cuda")]
+    Nvfp4Cuda(cuda::Nvfp4LinearCuda),
+}
+
+impl Module for AutoLinear {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Dense(l) | Self::Fp8Block(l) | Self::Nvfp4(l) => l.forward(xs),
+            #[cfg(feature = "nvfp4-cuda")]
+            Self::Nvfp4Cuda(l) => l.forward(xs),
+        }
+    }
+}
+
+/// A ModelOpt-aware weight source: detects what backs the linear layer at
+/// `vb`'s current path (dense, block-wise FP8, or packed NVFP4) and builds a
+/// compatible projection, so callers stop needing to special-case each
+/// checkpoint's tensor layout themselves.
+///
+/// On a CUDA device with the `nvfp4-cuda` feature enabled and the fused
+/// kernel available, NVFP4 layers stay packed and device-resident. Otherwise
+/// NVFP4 (and FP8) layers are dequantized to a dense tensor at load time,
+/// bounded by `cfg.max_dense_bytes`.
+pub fn auto_linear(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: VarBuilder,
+    cfg: Nvfp4Config,
+) -> Result<AutoLinear> {
+    match detect_backing(&vb) {
+        Backing::Nvfp4 => {
+            #[cfg(feature = "nvfp4-cuda")]
+            if vb.device().is_cuda() && candle_nvfp4_kernels::is_available() {
+                return Ok(AutoLinear::Nvfp4Cuda(cuda::Nvfp4LinearCuda::new(
+                    in_dim, out_dim, bias, vb, cfg,
+                )?));
+            }
+            Ok(AutoLinear::Nvfp4(nvfp4_linear(
+                in_dim, out_dim, bias, vb, cfg,
+            )?))
+        }
+        Backing::Fp8Block => Ok(AutoLinear::Fp8Block(fp8_block_linear(
+            in_dim,
+            out_dim,
+            bias,
+            vb,
+            cfg.block_size,
+        )?)),
+        Backing::Dense => Ok(AutoLinear::Dense(candle_nn::linear_b(
+            in_dim, out_dim, bias, vb,
+        )?)),
+    }
+}
+
+/// Fused path: keeps the NVFP4 weight packed and device-resident, running
+/// the kernel from `candle-nvfp4-kernels` on every forward pass instead of
+/// dequantizing once at load time.
+#[cfg(feature = "nvfp4-cuda")]
+pub mod cuda {
+    use super::Nvfp4Config;
+    use candle::{DType, Module, Result, Tensor};
+    use candle_nn::VarBuilder;
+
+    #[derive(Debug, Clone)]
+    pub struct Nvfp4LinearCuda {
+        inner: candle_nvfp4_kernels::Nvfp4Linear,
+        bias: Option<Tensor>,
+    }
+
+    impl Nvfp4LinearCuda {
+        pub fn new(
+            in_dim: usize,
+            out_dim: usize,
+            bias: bool,
+            vb: VarBuilder,
+            cfg: Nvfp4Config,
+        ) -> Result<Self> {
+            let packed_weight = vb
+                .get_with_hints_dtype(
+                    (out_dim, in_dim / 2),
+                    "weight_packed",
+                    Default::default(),
+                    DType::U8,
+                )?
+                .to_vec2::<u8>()?
+                .concat();
+            let weight_scale = vb
+                .get_with_hints_dtype(
+                    (out_dim, in_dim.div_ceil(cfg.block_size)),
+                    "weight_scale",
+                    Default::default(),
+                    DType::F8E4M3,
+                )?
+                .to_vec2::<float8::F8E4M3>()?
+                .into_iter()
+                .flatten()
+                .map(|v| v.to_bits())
+                .collect::<Vec<u8>>();
+            let weight_scale_2 = vb
+                .get_with_hints_dtype((), "weight_scale_2", Default::default(), DType::F32)?
+                .to_scalar::<f32>()?;
+            let inner = candle_nvfp4_kernels::Nvfp4Linear::new(
+                &packed_weight,
+                &weight_scale,
+                weight_scale_2,
+                out_dim,
+                in_dim,
+                vb.device(),
+            )?;
+            let bias = if bias {
+                Some(vb.get(out_dim, "bias")?)
+            } else {
+                None
+            };
+            Ok(Self { inner, bias })
+        }
+    }
+
+    impl Module for Nvfp4LinearCuda {
+        fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+            let ys = self.inner.forward(xs)?;
+            match &self.bias {
+                None => Ok(ys),
+                Some(bias) => ys.broadcast_add(bias),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle::Device;
+
+    fn pack_row(values: &[f32]) -> Vec<u8> {
+        // Reverse-maps a value to its nearest E2M1 code (test inputs are
+        // chosen to be exact codepoints, so nearest is exact).
+        const CODES: [f32; 16] = [
+            0., 0.5, 1., 1.5, 2., 3., 4., 6., 0., -0.5, -1., -1.5, -2., -3., -4., -6.,
+        ];
+        let nibbles: Vec<u8> = values
+            .iter()
+            .map(|v| {
+                CODES
+                    .iter()
+                    .position(|c| c == v)
+                    .unwrap_or_else(|| panic!("{v} is not an exact E2M1 codepoint"))
+                    as u8
+            })
+            .collect();
+        nibbles
+            .chunks(2)
+            .map(|pair| pair[0] | (pair[1] << 4))
+            .collect()
+    }
+
+    #[test]
+    fn e4m3_roundtrip_matches_known_values() {
+        assert_eq!(e4m3_to_f32(0x38), 1.0);
+        assert_eq!(e4m3_to_f32(0x40), 2.0);
+        assert_eq!(e4m3_to_f32(0xb8), -1.0);
+    }
+
+    #[test]
+    fn dequantize_nvfp4_matches_manual_computation() -> Result<()> {
+        let device = Device::Cpu;
+        let out_dim = 2;
+        let in_dim = 32; // two blocks of 16
+        let row0: Vec<f32> = vec![
+            0., 0.5, 1., 1.5, 2., 3., 4., 6., -0.5, -1., -1.5, -2., -3., -4., -6., 0.,
+        ];
+
+        let packed_row = pack_row(&row0);
+        let packed_bytes: Vec<u8> = [
+            packed_row.clone(),
+            packed_row.clone(),
+            packed_row.clone(),
+            packed_row,
+        ]
+        .concat();
+        let packed_weight = Tensor::from_vec(packed_bytes, (out_dim, in_dim / 2), &device)?;
+
+        // 1.0, 2.0 per row, built from raw E4M3 bit patterns (not a numeric
+        // cast, which would round 0x38/0x40 as if they were integers).
+        let scale_bytes: Vec<float8::F8E4M3> = [0x38u8, 0x40u8, 0x38u8, 0x40u8]
+            .into_iter()
+            .map(float8::F8E4M3::from_bits)
+            .collect();
+        let weight_scale = Tensor::from_vec(scale_bytes, (out_dim, in_dim / BLOCK_SIZE), &device)?;
+
+        let tensor_scale = 0.5f32;
+        let dequant = dequantize_nvfp4(
+            &packed_weight,
+            &weight_scale,
+            tensor_scale,
+            BLOCK_SIZE,
+            1 << 30,
+        )?;
+        let dequant = dequant.to_vec2::<f32>()?;
+
+        for row in 0..out_dim {
+            for col in 0..in_dim {
+                let block_scale = if col < BLOCK_SIZE { 1.0 } else { 2.0 };
+                let expected = row0[col % BLOCK_SIZE] * block_scale * tensor_scale;
+                assert!(
+                    (dequant[row][col] - expected).abs() < 1e-5,
+                    "mismatch at ({row},{col}): {} vs {expected}",
+                    dequant[row][col]
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn dequantize_nvfp4_refuses_over_budget_allocation() {
+        let device = Device::Cpu;
+        let out_dim = 4096;
+        let in_dim = 4096;
+        let packed_weight = Tensor::zeros((out_dim, in_dim / 2), DType::U8, &device).unwrap();
+        let weight_scale =
+            Tensor::zeros((out_dim, in_dim / BLOCK_SIZE), DType::F8E4M3, &device).unwrap();
+        let err =
+            dequantize_nvfp4(&packed_weight, &weight_scale, 1.0, BLOCK_SIZE, 1024).unwrap_err();
+        assert!(err.to_string().contains("budget"));
+    }
+
+    #[test]
+    fn detect_backing_reads_tensor_names() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = candle_nn::VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        assert_eq!(detect_backing(&vb.pp("dense")), Backing::Dense);
+
+        let _ = vb.pp("nvfp4").get_with_hints_dtype(
+            (4, 2),
+            "weight_packed",
+            Default::default(),
+            DType::U8,
+        )?;
+        let _ = vb.pp("nvfp4").get_with_hints_dtype(
+            (),
+            "weight_scale_2",
+            Default::default(),
+            DType::F32,
+        )?;
+        assert_eq!(detect_backing(&vb.pp("nvfp4")), Backing::Nvfp4);
+
+        let _ = vb.pp("fp8").get_with_hints_dtype(
+            (2, 2),
+            "weight_scale_inv",
+            Default::default(),
+            DType::F32,
+        )?;
+        assert_eq!(detect_backing(&vb.pp("fp8")), Backing::Fp8Block);
+        Ok(())
+    }
+}
