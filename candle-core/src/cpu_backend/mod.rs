@@ -1,7 +1,7 @@
 //! Implementation of Backend Fns for CPU
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
+use crate::{DType, Error, IntDType, Layout, NdIter, Result, Shape, WithDType};
 use float8::F8E4M3;
 use half::{bf16, f16};
 use rayon::prelude::*;
@@ -84,6 +84,39 @@ impl Map2U8 for Cmp {
 
 struct WCond<'a, T: IntDType>(&'a [T], &'a Layout);
 
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn where_impl<I, T, P, R, G>(
+    nd_iter: NdIter<3>,
+    ys_to_set: &mut [T],
+    pred: &[I],
+    t: &[T],
+    f: &[T],
+    pred_fn: P,
+    t_fn: R,
+    f_fn: G,
+) where
+    I: IntDType,
+    T: Copy,
+    P: Fn(usize, usize, usize) -> usize,
+    R: Fn(usize, usize, usize) -> usize,
+    G: Fn(usize, usize, usize) -> usize,
+{
+    let inner_size = nd_iter.inner_size;
+    let [inner_ps, inner_ts, inner_fs] = nd_iter.inner_strides;
+    let mut dst_off = 0usize;
+    for [p_off, t_off, f_off] in nd_iter {
+        for i in 0..inner_size {
+            let ep = pred[pred_fn(p_off, i, inner_ps)];
+            let et = t[t_fn(t_off, i, inner_ts)];
+            let ef = f[f_fn(f_off, i, inner_fs)];
+
+            ys_to_set[dst_off + i] = if ep.is_true() { et } else { ef };
+        }
+        dst_off += inner_size;
+    }
+}
+
 impl<I: IntDType> Map2 for WCond<'_, I> {
     const OP: &'static str = "where";
     #[inline(always)]
@@ -102,18 +135,57 @@ impl<I: IntDType> Map2 for WCond<'_, I> {
                     .map(|(p, (&t, &f))| if p.is_true() { t } else { f })
                     .collect::<Vec<_>>()
             }
-            _ => self
-                .1
-                .strided_index()
-                .zip(t_l.strided_index().zip(f_l.strided_index()))
-                .map(|(i_p, (i_t, i_f))| {
-                    if self.0[i_p].is_true() {
-                        t[i_t]
-                    } else {
-                        f[i_f]
+            _ => {
+                // Same allocation strategy as `binary_map_vec`
+                let el_count = self.1.shape().elem_count();
+
+                let mut ys: Vec<T> = Vec::with_capacity(el_count);
+                let ys_to_set = unsafe {
+                    let s = ys.spare_capacity_mut();
+                    std::mem::transmute::<&mut [std::mem::MaybeUninit<T>], &mut [T]>(s)
+                };
+
+                let nd_iter = NdIter::new([self.1, t_l, f_l]);
+                let [inner_ps, inner_ts, inner_fs] = nd_iter.inner_strides;
+
+                let offset = |off, i, _| off + i;
+                let boffset = |off, _, _| off;
+
+                match (inner_ps, inner_ts, inner_fs) {
+                    (1, 1, 1) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, offset, offset);
                     }
-                })
-                .collect::<Vec<_>>(),
+                    (1, 1, 0) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, offset, boffset);
+                    }
+                    (1, 0, 1) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, boffset, offset);
+                    }
+                    (1, 0, 0) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, boffset, boffset);
+                    }
+                    (0, 1, 1) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, boffset, offset, offset);
+                    }
+                    (0, 1, 0) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, boffset, offset, boffset);
+                    }
+                    (0, 0, 1) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, boffset, boffset, offset);
+                    }
+                    (0, 0, 0) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, boffset, boffset, boffset);
+                    }
+                    _ => {
+                        let offset = |off, i, inner| off + i * inner;
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, offset, offset);
+                    }
+                }
+
+                // SAFETY: all el_count elements have been written in the dispatch loop above.
+                unsafe { ys.set_len(el_count) };
+                ys
+            }
         };
         Ok(vs)
     }
