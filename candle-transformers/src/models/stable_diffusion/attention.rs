@@ -3,6 +3,59 @@ use candle::{DType, IndexOp, Result, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
 
+// Keep the temporary FP32 attention-score tensor at or below 1 GiB. At
+// 1024x1024, SD1.5 classifier-free guidance otherwise produces exactly 2^32
+// scores in the first self-attention layer, which exceeds CUDA kernels and
+// allocators that use 32-bit element indexing.
+const MAX_MATH_ATTENTION_SCORE_ELEMENTS: usize = 1 << 28;
+
+fn attention_query_chunk_len(
+    batch: usize,
+    query_len: usize,
+    key_len: usize,
+    max_score_elements: usize,
+) -> Option<usize> {
+    let score_elements = batch
+        .checked_mul(query_len)
+        .and_then(|elements| elements.checked_mul(key_len))
+        .unwrap_or(usize::MAX);
+    if score_elements <= max_score_elements {
+        return None;
+    }
+
+    let elements_per_query = batch.saturating_mul(key_len).max(1);
+    Some((max_score_elements / elements_per_query).max(1))
+}
+
+fn math_attention(
+    query: &Tensor,
+    key: &Tensor,
+    value: &Tensor,
+    scale: f64,
+    max_score_elements: usize,
+) -> Result<Tensor> {
+    let (batch, query_len, _) = query.dims3()?;
+    let key_len = key.dim(1)?;
+
+    let key_t = (key.t()? * scale)?;
+    let Some(chunk_len) = attention_query_chunk_len(batch, query_len, key_len, max_score_elements)
+    else {
+        let scores = query.matmul(&key_t)?;
+        return nn::ops::softmax_last_dim(&scores)?.matmul(value);
+    };
+
+    // Softmax is independent for every query row, so slicing the query axis is
+    // exact: every chunk still attends over the complete key/value sequence.
+    let mut chunks = Vec::with_capacity(query_len.div_ceil(chunk_len));
+    for start in (0..query_len).step_by(chunk_len) {
+        let len = chunk_len.min(query_len - start);
+        let query_chunk = query.narrow(1, start, len)?;
+        let scores = query_chunk.matmul(&key_t)?;
+        chunks.push(nn::ops::softmax_last_dim(&scores)?.matmul(value)?);
+    }
+    Tensor::cat(&chunks, 1)
+}
+
 #[derive(Debug)]
 struct GeGlu {
     proj: nn::Linear,
@@ -150,15 +203,17 @@ impl CrossAttention {
         slice_size: usize,
     ) -> Result<Tensor> {
         let batch_size_attention = query.dim(0)?;
-        let mut hidden_states = Vec::with_capacity(batch_size_attention / slice_size);
+        if slice_size == 0 {
+            candle::bail!("attention slice size must be greater than zero")
+        }
+        let mut hidden_states = Vec::with_capacity(batch_size_attention.div_ceil(slice_size));
         let in_dtype = query.dtype();
         let query = query.to_dtype(DType::F32)?;
         let key = key.to_dtype(DType::F32)?;
         let value = value.to_dtype(DType::F32)?;
 
-        for i in 0..batch_size_attention / slice_size {
-            let start_idx = i * slice_size;
-            let end_idx = (i + 1) * slice_size;
+        for start_idx in (0..batch_size_attention).step_by(slice_size) {
+            let end_idx = (start_idx + slice_size).min(batch_size_attention);
 
             let xs = query
                 .i(start_idx..end_idx)?
@@ -166,7 +221,7 @@ impl CrossAttention {
             let xs = nn::ops::softmax(&xs, D::Minus1)?.matmul(&value.i(start_idx..end_idx)?)?;
             hidden_states.push(xs)
         }
-        let hidden_states = Tensor::stack(&hidden_states, 0)?.to_dtype(in_dtype)?;
+        let hidden_states = Tensor::cat(&hidden_states, 0)?.to_dtype(in_dtype)?;
         self.reshape_batch_dim_to_heads(&hidden_states)
     }
 
@@ -195,12 +250,17 @@ impl CrossAttention {
             let query = query.to_dtype(DType::F32)?;
             let key = key.to_dtype(DType::F32)?;
             let value = value.to_dtype(DType::F32)?;
-            let xs = query.matmul(&(key.t()? * self.scale)?)?;
             let xs = {
                 let _enter = self.span_softmax.enter();
-                nn::ops::softmax_last_dim(&xs)?
+                math_attention(
+                    &query,
+                    &key,
+                    &value,
+                    self.scale,
+                    MAX_MATH_ATTENTION_SCORE_ELEMENTS,
+                )?
             };
-            xs.matmul(&value)?.to_dtype(in_dtype)?
+            xs.to_dtype(in_dtype)?
         };
         self.reshape_batch_dim_to_heads(&xs)
     }
@@ -221,6 +281,63 @@ impl CrossAttention {
             Some(slice_size) => self.sliced_attention(&query, &key, &value, slice_size)?,
         };
         self.to_out.forward(&xs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{attention_query_chunk_len, math_attention, MAX_MATH_ATTENTION_SCORE_ELEMENTS};
+    use candle::{Device, Tensor};
+
+    #[test]
+    fn chunked_math_attention_matches_unsliced_attention() -> candle::Result<()> {
+        let device = Device::Cpu;
+        let query = Tensor::from_vec(
+            (0..30).map(|value| value as f32 / 17.0).collect(),
+            (2, 5, 3),
+            &device,
+        )?;
+        let key = Tensor::from_vec(
+            (0..42).map(|value| value as f32 / 19.0).collect(),
+            (2, 7, 3),
+            &device,
+        )?;
+        let value = Tensor::from_vec(
+            (0..56).map(|value| value as f32 / 23.0).collect(),
+            (2, 7, 4),
+            &device,
+        )?;
+
+        let unsliced = math_attention(&query, &key, &value, 0.5, usize::MAX)?;
+        // At most two query rows per chunk: 2 batches * 2 rows * 7 keys.
+        let chunked = math_attention(&query, &key, &value, 0.5, 28)?;
+        let unsliced = unsliced.flatten_all()?.to_vec1::<f32>()?;
+        let chunked = chunked.flatten_all()?.to_vec1::<f32>()?;
+
+        for (actual, expected) in chunked.iter().zip(unsliced.iter()) {
+            assert!((actual - expected).abs() < 1e-5, "{actual} != {expected}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sd15_1024_cfg_attention_is_chunked_below_u32_boundary() {
+        // SD1.5 CFG has 2 batches * 8 heads and a 128x128 latent sequence.
+        assert_eq!(
+            16usize * 16_384 * 16_384,
+            1usize << 32,
+            "the issue shape lands exactly on the 32-bit element boundary"
+        );
+        assert_eq!(
+            attention_query_chunk_len(16, 16_384, 16_384, MAX_MATH_ATTENTION_SCORE_ELEMENTS),
+            Some(1_024)
+        );
+
+        // Native 512x512 generation remains on the existing unsliced path.
+        assert_eq!(
+            attention_query_chunk_len(16, 4_096, 4_096, MAX_MATH_ATTENTION_SCORE_ELEMENTS),
+            None
+        );
     }
 }
 
