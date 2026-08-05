@@ -53,6 +53,7 @@ candle-kernels = { path = "./candle-kernels", version = "0.11.0" }
 candle-lora-kernels = { path = "./candle-lora-kernels", version = "0.11.0" }
 candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.11.0" }
 candle-nn = { path = "./candle-nn", version = "0.11.0" }
+candle-nvfp4-kernels = { path = "./candle-nvfp4-kernels", version = "0.11.0", default-features = false }
 candle-onnx = { path = "./candle-onnx", version = "0.11.0" }
 candle-transformers = { path = "./candle-transformers", version = "0.11.0" }
 candle-ug = { path = "./candle-ug", version = "0.11.0" }

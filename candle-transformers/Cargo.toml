@@ -19,7 +19,9 @@ candle-flashinfer-kernels = { workspace = true, optional = true }
 candle-fp8-kernels = { workspace = true, optional = true }
 candle-gptq-kernels = { workspace = true, optional = true }
 candle-nn = { workspace = true }
+candle-nvfp4-kernels = { workspace = true, optional = true }
 fancy-regex = { workspace = true }
+float8 = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 num-traits = { workspace = true }
 rand = { workspace = true }
@@ -45,5 +47,6 @@ fp8-metal = ["metal", "dep:candle-fp8-kernels", "candle-fp8-kernels/metal"]
 gptq-cuda = ["cuda", "dep:candle-gptq-kernels", "candle-gptq-kernels/cuda"]
 gptq-metal = ["metal", "dep:candle-gptq-kernels", "candle-gptq-kernels/metal"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl"]
+nvfp4-cuda = ["cuda", "dep:candle-nvfp4-kernels", "candle-nvfp4-kernels/cuda"]
 metal = ["candle/metal", "candle-nn/metal"]
 metal-debug-labels = ["metal", "candle/metal-debug-labels", "candle-nn/metal-debug-labels"]
