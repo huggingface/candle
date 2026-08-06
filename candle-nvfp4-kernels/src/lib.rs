@@ -373,6 +373,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(not(feature = "cuda"))]
     fn cuda_capability_signals_are_false_without_cuda_feature() {
         assert!(!is_available());
         assert!(!supports_fp4_tensor_cores());
