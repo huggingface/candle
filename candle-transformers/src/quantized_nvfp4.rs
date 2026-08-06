@@ -284,6 +284,16 @@ impl Default for Nvfp4Config {
 /// in their checkpoint-native, ~1x-footprint form, and each output row is
 /// decoded on the fly during [`forward`](Module::forward). See the module
 /// docs for where this sits in [`auto_linear`]'s execution preference order.
+///
+/// Unlike [`nvfp4_linear`], `forward` here ignores the `VarBuilder`'s dtype
+/// entirely: decoding and the matmul both run in `f32`, and only the output
+/// is rounded to the input's dtype at the very end. [`nvfp4_linear`]
+/// instead rounds the dense weight to the `VarBuilder`'s dtype (e.g. `bf16`)
+/// once at load time, so every subsequent matmul runs at that lower
+/// precision. On a reduced-precision checkpoint the two paths therefore
+/// aren't bit-identical -- this one is the more accurate of the two, since
+/// it defers rounding instead of compounding it into the weight -- see
+/// `nvfp4_linear_packed_precision_differs_from_dense_at_reduced_precision`.
 #[derive(Debug, Clone)]
 pub struct Nvfp4LinearPacked {
     /// Row-major `[out_dim, in_dim / 2]`, two E2M1 nibbles per byte.
@@ -980,6 +990,141 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Covers the precision note on [`Nvfp4LinearPacked`]'s docs: at a
+    /// reduced-precision `VarBuilder` dtype, `nvfp4_linear` rounds the dense
+    /// weight to that dtype once at load time (so rounding error compounds
+    /// into every accumulation of the matmul), while `Nvfp4LinearPacked`
+    /// always computes in `f32` and rounds only the final output. Neither is
+    /// a bug, but they aren't bit-identical, and the `f32`-only parity test
+    /// above doesn't exercise this at all.
+    #[test]
+    fn nvfp4_linear_packed_precision_differs_from_dense_at_reduced_precision() -> Result<()> {
+        let device = Device::Cpu;
+        let out_dim = 2;
+        let in_dim = 32; // two blocks of 16
+        let row0: Vec<f32> = vec![
+            0., 0.5, 1., 1.5, 2., 3., 4., 6., -0.5, -1., -1.5, -2., -3., -4., -6., 0.,
+        ];
+        let packed_row = pack_row(&row0);
+        let packed_bytes: Vec<u8> = [
+            packed_row.clone(),
+            packed_row.clone(),
+            packed_row.clone(),
+            packed_row,
+        ]
+        .concat();
+        let scale_bytes: Vec<float8::F8E4M3> = [0x38u8, 0x40u8, 0x38u8, 0x40u8]
+            .into_iter()
+            .map(float8::F8E4M3::from_bits)
+            .collect();
+
+        let mut tensors = std::collections::HashMap::new();
+        tensors.insert(
+            "layer.weight".to_string(),
+            Tensor::from_vec(packed_bytes, (out_dim, in_dim / 2), &device)?,
+        );
+        tensors.insert(
+            "layer.weight_scale".to_string(),
+            Tensor::from_vec(scale_bytes, (out_dim, in_dim / BLOCK_SIZE), &device)?,
+        );
+        // A non-power-of-two tensor scale: a power-of-two scale wouldn't
+        // cost any f16 mantissa bits and would defeat the point of this
+        // test, since E2M1 codepoints are already exact in f16.
+        tensors.insert(
+            "layer.weight_scale_2".to_string(),
+            Tensor::from_vec(vec![1f32 / 3.], (), &device)?,
+        );
+        let vb_f32 = VarBuilder::from_tensors(tensors.clone(), DType::F32, &device);
+        // candle-core's default CPU matmul only supports F16/F32/F64, not
+        // BF16 -- nvfp4_linear's dense path would fail outright at BF16
+        // here regardless of anything in this module, so this test uses
+        // F16 to isolate the rounding-order question it's actually about.
+        let vb_f16 = VarBuilder::from_tensors(tensors, DType::F16, &device);
+
+        // Nvfp4LinearPacked never reads vb.dtype() (see nvfp4_linear_packed):
+        // building it from an f32 VarBuilder is enough, the reduced
+        // precision below comes entirely from the input/output dtype.
+        let packed = nvfp4_linear_packed(
+            in_dim,
+            out_dim,
+            false,
+            vb_f32.pp("layer"),
+            Nvfp4Config::default(),
+        )?;
+        // nvfp4_linear does read vb.dtype() and rounds the dense weight to
+        // it, so this one needs the f16 VarBuilder.
+        let dense_f16 = nvfp4_linear(
+            in_dim,
+            out_dim,
+            false,
+            vb_f16.pp("layer"),
+            Nvfp4Config::default(),
+        )?;
+
+        let xs_f16 = Tensor::rand(0f32, 1f32, (3, 5, in_dim), &device)?.to_dtype(DType::F16)?;
+        // What Nvfp4LinearPacked::forward computes with internally: xs_f16
+        // upconverted to f32, losslessly (f16 -> f32 never rounds).
+        let xs_ref = xs_f16.to_dtype(DType::F32)?;
+
+        // True f32 reference: same dequantized weight and input as both
+        // paths compute from, no rounding anywhere.
+        let reference = packed.forward(&xs_ref)?.to_vec3::<f32>()?;
+
+        // Packed's only rounding step is the final output cast to f16, so
+        // this must match `reference` rounded to f16 exactly.
+        let packed_out = packed
+            .forward(&xs_f16)?
+            .to_dtype(DType::F32)?
+            .to_vec3::<f32>()?;
+        let rounded_reference = Tensor::new(reference.clone(), &device)?
+            .to_dtype(DType::F16)?
+            .to_dtype(DType::F32)?
+            .to_vec3::<f32>()?;
+        for (p_batch, r_batch) in packed_out.iter().zip(rounded_reference.iter()) {
+            for (p_row, r_row) in p_batch.iter().zip(r_batch.iter()) {
+                for (p, r) in p_row.iter().zip(r_row.iter()) {
+                    assert_eq!(
+                        p, r,
+                        "packed's f16 output should equal the f32 reference rounded once at the end"
+                    );
+                }
+            }
+        }
+
+        // Dense rounds the weight to f16 before the matmul, so its error
+        // compounds across all in_dim=32 accumulations instead of rounding
+        // once at the end like the packed path does. Compare each against
+        // the same f32 reference rather than asserting an absolute
+        // threshold, since the right magnitude depends on the random input:
+        // dense's compounded error must exceed packed's single
+        // rounding-only error, not just be nonzero.
+        let dense_out = dense_f16
+            .forward(&xs_f16)?
+            .to_dtype(DType::F32)?
+            .to_vec3::<f32>()?;
+        let mut dense_max_abs_diff = 0f32;
+        let mut packed_max_abs_diff = 0f32;
+        for ((d_batch, p_batch), r_batch) in dense_out
+            .iter()
+            .zip(packed_out.iter())
+            .zip(reference.iter())
+        {
+            for ((d_row, p_row), r_row) in d_batch.iter().zip(p_batch.iter()).zip(r_batch.iter()) {
+                for ((d, p), r) in d_row.iter().zip(p_row.iter()).zip(r_row.iter()) {
+                    dense_max_abs_diff = dense_max_abs_diff.max((d - r).abs());
+                    packed_max_abs_diff = packed_max_abs_diff.max((p - r).abs());
+                }
+            }
+        }
+        assert!(
+            dense_max_abs_diff > packed_max_abs_diff,
+            "expected dense's compounded f16 rounding ({dense_max_abs_diff}) to diverge \
+             from the f32 reference more than packed's single final rounding \
+             ({packed_max_abs_diff})"
+        );
         Ok(())
     }
 }
