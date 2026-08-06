@@ -1040,6 +1040,289 @@ fn simple_eval_(
                 let output = input.tanh()?;
                 values.insert(node.output[0].clone(), output);
             }
+            "GlobalMaxPool" => {
+                let xs = get(&node.input[0])?;
+                let rank = xs.rank();
+                if rank < 3 {
+                    bail!("GlobalMaxPool expects an input of rank >= 3, got {rank}")
+                }
+                let mut output = xs.clone();
+                for dim in 2..rank {
+                    output = output.max_keepdim(dim)?;
+                }
+                values.insert(node.output[0].clone(), output);
+            }
+            "ThresholdedRelu" => {
+                let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(1.0) as f64;
+                let xs = get(&node.input[0])?;
+                let mask = xs.gt(alpha)?.to_dtype(xs.dtype())?;
+                values.insert(node.output[0].clone(), (xs * mask)?);
+            }
+            "Round" => {
+                // The spec rounds halves to the nearest even value.
+                let xs = get(&node.input[0])?;
+                let frac = (xs - xs.floor()?)?;
+                let is_half = frac.eq(0.5)?.to_dtype(xs.dtype())?;
+                let to_even = ((xs / 2.)?.round()? * 2.)?;
+                let output =
+                    ((&is_half * to_even)? + ((is_half * -1.)? + 1.)?.mul(&xs.round()?)?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Reciprocal" => {
+                let xs = get(&node.input[0])?;
+                values.insert(node.output[0].clone(), xs.recip()?);
+            }
+            "Max" | "Sum" | "Mean" => {
+                if node.input.is_empty() {
+                    bail!("{} expects at least one input", node.op_type)
+                }
+                let mut output = get(&node.input[0])?.clone();
+                for name in node.input.iter().skip(1) {
+                    let rhs = get(name)?;
+                    output = match node.op_type.as_str() {
+                        "Max" => output.broadcast_maximum(rhs)?,
+                        _ => output.broadcast_add(rhs)?,
+                    };
+                }
+                if node.op_type == "Mean" {
+                    output = (output / node.input.len() as f64)?;
+                }
+                values.insert(node.output[0].clone(), output);
+            }
+            "Mod" => {
+                let fmod = get_attr_opt::<i64>(node, "fmod")?.copied().unwrap_or(0);
+                let a = get(&node.input[0])?;
+                let b = get(&node.input[1])?;
+                let dtype = a.dtype();
+                // Compute in f64 so the floor/trunc formulas hold for integer dtypes too.
+                let af = a.to_dtype(DType::F64)?;
+                let bf = b.to_dtype(DType::F64)?;
+                let q = af.broadcast_div(&bf)?;
+                let q = if fmod != 0 {
+                    // C fmod truncates; trunc(x) = sign(x) * floor(|x|).
+                    let sign = (q.ge(0.0)?.to_dtype(DType::F64)? * 2.)?.affine(1., -1.)?;
+                    (q.abs()?.floor()? * sign)?
+                } else {
+                    q.floor()?
+                };
+                let output = (af - q.broadcast_mul(&bf)?)?.to_dtype(dtype)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Hardmax" => {
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(-1);
+                let xs = get(&node.input[0])?;
+                let dim = if axis < 0 {
+                    (xs.rank() as i64 + axis) as usize
+                } else {
+                    axis as usize
+                };
+                let indices = xs.argmax_keepdim(dim)?;
+                let n = xs.dim(dim)? as u32;
+                let mut iota_shape = vec![1usize; xs.rank()];
+                iota_shape[dim] = n as usize;
+                let iota = Tensor::arange(0u32, n, xs.device())?.reshape(iota_shape)?;
+                let output = iota
+                    .broadcast_eq(&indices.to_dtype(DType::U32)?)?
+                    .to_dtype(xs.dtype())?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Celu" => {
+                let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(1.0) as f64;
+                let xs = get(&node.input[0])?;
+                let zeros = xs.zeros_like()?;
+                let neg = (((xs / alpha)?.exp()? - 1.0)? * alpha)?.minimum(&zeros)?;
+                let output = (xs.maximum(&zeros)? + neg)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "EyeLike" => {
+                let k = get_attr_opt::<i64>(node, "k")?.copied().unwrap_or(0);
+                let xs = get(&node.input[0])?;
+                let (rows, cols) = xs.dims2()?;
+                let mut data = vec![0f32; rows * cols];
+                for i in 0..rows {
+                    let j = i as i64 + k;
+                    if (0..cols as i64).contains(&j) {
+                        data[i * cols + j as usize] = 1.;
+                    }
+                }
+                let output =
+                    Tensor::from_vec(data, (rows, cols), xs.device())?.to_dtype(xs.dtype())?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "TopK" => {
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(-1);
+                let largest = get_attr_opt::<i64>(node, "largest")?.copied().unwrap_or(1) != 0;
+                let xs = get(&node.input[0])?;
+                let k = get(&node.input[1])?
+                    .to_dtype(DType::I64)?
+                    .flatten_all()?
+                    .to_vec1::<i64>()?;
+                let [k] = k.as_slice() else {
+                    bail!("TopK expects a single-element K tensor")
+                };
+                let k = *k as usize;
+                let rank = xs.rank();
+                let dim = if axis < 0 {
+                    (rank as i64 + axis) as usize
+                } else {
+                    axis as usize
+                };
+                let last = rank - 1;
+                let xs_t = if dim == last {
+                    xs.clone()
+                } else {
+                    xs.transpose(dim, last)?.contiguous()?
+                };
+                if k > xs_t.dim(last)? {
+                    bail!(
+                        "TopK k {k} is larger than the axis size {}",
+                        xs_t.dim(last)?
+                    )
+                }
+                let (sorted, sorted_idx) = xs_t.sort_last_dim(!largest)?;
+                let vals = sorted.narrow(last, 0, k)?;
+                let idxs = sorted_idx.narrow(last, 0, k)?.to_dtype(DType::I64)?;
+                let (vals, idxs) = if dim == last {
+                    (vals, idxs)
+                } else {
+                    (
+                        vals.transpose(dim, last)?.contiguous()?,
+                        idxs.transpose(dim, last)?.contiguous()?,
+                    )
+                };
+                values.insert(node.output[0].clone(), vals);
+                if node.output.len() > 1 {
+                    values.insert(node.output[1].clone(), idxs);
+                }
+            }
+            "Softplus" => {
+                let xs = get(&node.input[0])?;
+                let zeros = xs.zeros_like()?;
+                // ln(1 + e^x) in a numerically stable form.
+                let output = (xs.maximum(&zeros)? + (xs.abs()?.neg()?.exp()? + 1.0)?.log()?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Shrink" => {
+                let lambd = get_attr_opt::<f32>(node, "lambd")?.copied().unwrap_or(0.5) as f64;
+                let bias = get_attr_opt::<f32>(node, "bias")?.copied().unwrap_or(0.0) as f64;
+                let xs = get(&node.input[0])?;
+                // y = x + bias if x < -lambd, x - bias if x > lambd, else 0.
+                let below = xs.lt(-lambd)?.to_dtype(xs.dtype())?;
+                let above = xs.gt(lambd)?.to_dtype(xs.dtype())?;
+                let output = ((xs + bias)? * &below)?.add(&((xs - bias)? * &above)?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Softsign" => {
+                let xs = get(&node.input[0])?;
+                let output = xs.broadcast_div(&(xs.abs()? + 1.0)?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "HardSigmoid" => {
+                let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(0.2) as f64;
+                let beta = get_attr_opt::<f32>(node, "beta")?.copied().unwrap_or(0.5) as f64;
+                let xs = get(&node.input[0])?;
+                let output = ((xs * alpha)? + beta)?
+                    .maximum(&xs.zeros_like()?)?
+                    .minimum(&xs.ones_like()?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Elu" => {
+                let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(1.0) as f64;
+                let xs = get(&node.input[0])?;
+                let zeros = xs.zeros_like()?;
+                let neg = ((xs.minimum(&zeros)?.exp()? - 1.0)? * alpha)?;
+                let output = (xs.maximum(&zeros)? + neg)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Mish" => {
+                // x * tanh(softplus(x)), softplus computed in a numerically stable form.
+                let xs = get(&node.input[0])?;
+                let zeros = xs.zeros_like()?;
+                let softplus = (xs.maximum(&zeros)? + (xs.abs()?.neg()?.exp()? + 1.0)?.log()?)?;
+                let output = (xs * softplus.tanh()?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "LpNormalization" => {
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(-1);
+                let p = get_attr_opt::<i64>(node, "p")?.copied().unwrap_or(2);
+                let xs = get(&node.input[0])?;
+                let dim = if axis < 0 {
+                    (xs.rank() as i64 + axis) as usize
+                } else {
+                    axis as usize
+                };
+                let norm = match p {
+                    1 => xs.abs()?.sum_keepdim(dim)?,
+                    2 => xs.sqr()?.sum_keepdim(dim)?.sqrt()?,
+                    p => bail!("LpNormalization only supports p = 1 or 2, got {p}"),
+                };
+                let output = xs.broadcast_div(&norm)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "InstanceNormalization" => {
+                let eps = get_attr_opt::<f32>(node, "epsilon")?
+                    .copied()
+                    .unwrap_or(1e-5);
+                let xs = get(&node.input[0])?;
+                let scale = get(&node.input[1])?;
+                let bias = get(&node.input[2])?;
+                let rank = xs.rank();
+                if rank < 3 {
+                    bail!("InstanceNormalization expects an input of rank >= 3, got {rank}")
+                }
+                let spatial: Vec<usize> = (2..rank).collect();
+                let mean = xs.mean_keepdim(spatial.clone())?;
+                let centered = xs.broadcast_sub(&mean)?;
+                let var = centered.sqr()?.mean_keepdim(spatial)?;
+                let normed = centered.broadcast_div(&(var + eps as f64)?.sqrt()?)?;
+                let channel_shape: Vec<usize> = xs
+                    .dims()
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, v)| if idx == 1 { *v } else { 1 })
+                    .collect();
+                let output = normed
+                    .broadcast_mul(&scale.reshape(channel_shape.as_slice())?)?
+                    .broadcast_add(&bias.reshape(channel_shape.as_slice())?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "GroupNormalization" => {
+                let eps = get_attr_opt::<f32>(node, "epsilon")?
+                    .copied()
+                    .unwrap_or(1e-5);
+                let num_groups = *get_attr::<i64>(node, "num_groups")? as usize;
+                let xs = get(&node.input[0])?;
+                let scale = get(&node.input[1])?;
+                let bias = get(&node.input[2])?;
+                let rank = xs.rank();
+                if rank < 3 {
+                    bail!("GroupNormalization expects an input of rank >= 3, got {rank}")
+                }
+                let dims = xs.dims().to_vec();
+                let (n, c) = (dims[0], dims[1]);
+                if num_groups == 0 || c % num_groups != 0 {
+                    bail!("GroupNormalization: {c} channels not divisible into {num_groups} groups")
+                }
+                let spatial: usize = dims[2..].iter().product();
+                // Normalize over each group of channels together with the spatial dims.
+                let grouped = xs.reshape((n, num_groups, c / num_groups * spatial))?;
+                let mean = grouped.mean_keepdim(2)?;
+                let centered = grouped.broadcast_sub(&mean)?;
+                let var = centered.sqr()?.mean_keepdim(2)?;
+                let normed = centered
+                    .broadcast_div(&(var + eps as f64)?.sqrt()?)?
+                    .reshape(dims.as_slice())?;
+                let channel_shape: Vec<usize> = xs
+                    .dims()
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, v)| if idx == 1 { *v } else { 1 })
+                    .collect();
+                let output = normed
+                    .broadcast_mul(&scale.reshape(channel_shape.as_slice())?)?
+                    .broadcast_add(&bias.reshape(channel_shape.as_slice())?)?;
+                values.insert(node.output[0].clone(), output);
+            }
             "Sigmoid" => {
                 let input = get(&node.input[0])?;
                 let output = candle_nn::ops::sigmoid(input)?;
