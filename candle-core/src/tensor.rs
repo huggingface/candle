@@ -1514,8 +1514,7 @@ impl Tensor {
 
         let c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
         let batching: usize = a_dims[..dim - 2].iter().product();
-        let batching_b: usize = b_dims[..dim - 2].iter().product();
-        if k != k2 || batching != batching_b {
+        if k != k2 || a_dims[..dim - 2] != b_dims[..dim - 2] {
             Err(Error::ShapeMismatchBinaryOp {
                 lhs: self.shape().clone(),
                 rhs: rhs.shape().clone(),
