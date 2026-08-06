@@ -140,14 +140,19 @@ pub fn nvfp4_weight_tensor_name(vb: &VarBuilder) -> &'static str {
 /// Reads `name` as an `f32` tensor holding exactly one element, accepting
 /// either a rank-0 scalar or a rank-1 `[1]` tensor: ModelOpt exporters have
 /// used both shapes for `weight_scale_2` across versions.
+///
+/// Tries the shapes with ordinary, shape-checked reads rather than
+/// `get_unchecked`, since some `SimpleBackend`s reject it outright (e.g.
+/// `VarMap`, used to build a randomly-initialized `VarBuilder`). Note this
+/// module still isn't reachable from a `ShardedVarBuilder` (used for
+/// tensor-parallel loading): that's a different `VarBuilderArgs<B>`
+/// instantiation than the concrete `VarBuilder` these functions take, so
+/// it's a type-level gap this fix doesn't close.
 fn read_scalar_f32(vb: &VarBuilder, name: &str) -> Result<f32> {
-    let t = vb.get_unchecked_dtype(name, DType::F32)?;
-    if t.elem_count() != 1 {
-        candle::bail!(
-            "nvfp4: {name} must hold exactly one element, got shape {:?}",
-            t.shape()
-        )
+    if let Ok(t) = vb.get_with_hints_dtype((), name, Default::default(), DType::F32) {
+        return t.to_scalar::<f32>();
     }
+    let t = vb.get_with_hints_dtype(1, name, Default::default(), DType::F32)?;
     t.reshape(())?.to_scalar::<f32>()
 }
 
@@ -596,9 +601,11 @@ mod tests {
     #[test]
     fn nvfp4_linear_reads_the_modelopt_naming_convention() -> Result<()> {
         // A layer using ModelOpt's naming (packed weight under `.weight`,
-        // no `.weight_packed`) must load through the same auto_linear/
-        // nvfp4_linear path as the compressed-tensors naming; this is what
-        // Backing::Nvfp4 promises once detect_backing returns it.
+        // no `.weight_packed`) must load through nvfp4_linear the same way
+        // as the compressed-tensors naming; this is what nvfp4_weight_tensor_name
+        // promises once detect_backing returns Backing::Nvfp4. See
+        // auto_linear_dispatches_by_detected_backing for the auto_linear
+        // entry point built on top of this.
         let device = Device::Cpu;
         let out_dim = 2;
         let in_dim = 32;
@@ -639,6 +646,86 @@ mod tests {
         let linear = nvfp4_linear(in_dim, out_dim, false, layer, Nvfp4Config::default())?;
         let output = linear.forward(&Tensor::zeros((1, in_dim), DType::F32, &device)?)?;
         assert_eq!(output.dims(), &[1, out_dim]);
+        Ok(())
+    }
+
+    #[test]
+    fn auto_linear_dispatches_by_detected_backing() -> Result<()> {
+        let device = Device::Cpu;
+        let in_dim = 4;
+        let out_dim = 2;
+        let mut tensors = std::collections::HashMap::new();
+
+        // Dense: a plain `.weight`, nothing else.
+        tensors.insert(
+            "dense.weight".to_string(),
+            Tensor::zeros((out_dim, in_dim), DType::F32, &device)?,
+        );
+
+        // Block-wise FP8 (DeepSeek-style): `.weight` + `.weight_scale_inv`.
+        tensors.insert(
+            "fp8.weight".to_string(),
+            Tensor::zeros((out_dim, in_dim), DType::F8E4M3, &device)?,
+        );
+        tensors.insert(
+            "fp8.weight_scale_inv".to_string(),
+            Tensor::from_vec(vec![1f32], (1, 1), &device)?,
+        );
+
+        // NVFP4, ModelOpt naming: `.weight` (packed) + `.weight_scale` +
+        // `.weight_scale_2`, no `.weight_packed`.
+        let row: Vec<f32> = vec![
+            0., 0.5, 1., 1.5, 2., 3., 4., 6., 0., 0., 0., 0., 0., 0., 0., 0.,
+        ];
+        let packed_row = pack_row(&row);
+        tensors.insert(
+            "nvfp4.weight".to_string(),
+            Tensor::from_vec(
+                [packed_row.clone(), packed_row].concat(),
+                (out_dim, in_dim / 2),
+                &device,
+            )?,
+        );
+        tensors.insert(
+            "nvfp4.weight_scale".to_string(),
+            Tensor::from_vec(
+                vec![float8::F8E4M3::from_bits(0x38); out_dim],
+                (out_dim, in_dim.div_ceil(BLOCK_SIZE)),
+                &device,
+            )?,
+        );
+        tensors.insert(
+            "nvfp4.weight_scale_2".to_string(),
+            Tensor::from_vec(vec![1f32], (), &device)?,
+        );
+
+        let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
+        let input = Tensor::zeros((1, in_dim), DType::F32, &device)?;
+
+        let dense = auto_linear(
+            in_dim,
+            out_dim,
+            false,
+            vb.pp("dense"),
+            Nvfp4Config::default(),
+        )?;
+        assert!(matches!(dense, AutoLinear::Dense(_)));
+        assert_eq!(dense.forward(&input)?.dims(), &[1, out_dim]);
+
+        let fp8 = auto_linear(in_dim, out_dim, false, vb.pp("fp8"), Nvfp4Config::default())?;
+        assert!(matches!(fp8, AutoLinear::Fp8Block(_)));
+        assert_eq!(fp8.forward(&input)?.dims(), &[1, out_dim]);
+
+        let nvfp4 = auto_linear(
+            in_dim,
+            out_dim,
+            false,
+            vb.pp("nvfp4"),
+            Nvfp4Config::default(),
+        )?;
+        assert!(matches!(nvfp4, AutoLinear::Nvfp4(_)));
+        assert_eq!(nvfp4.forward(&input)?.dims(), &[1, out_dim]);
+
         Ok(())
     }
 }
