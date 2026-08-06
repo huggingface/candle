@@ -673,10 +673,10 @@ mod tests {
         );
 
         // NVFP4, ModelOpt naming: `.weight` (packed) + `.weight_scale` +
-        // `.weight_scale_2`, no `.weight_packed`.
-        let row: Vec<f32> = vec![
-            0., 0.5, 1., 1.5, 2., 3., 4., 6., 0., 0., 0., 0., 0., 0., 0., 0.,
-        ];
+        // `.weight_scale_2`, no `.weight_packed`. `row` must have exactly
+        // `in_dim` values: it's one row of the packed weight, not a full
+        // BLOCK_SIZE-wide block (in_dim=4 here is smaller than BLOCK_SIZE).
+        let row: Vec<f32> = vec![0., 0.5, 1., 1.5];
         let packed_row = pack_row(&row);
         tensors.insert(
             "nvfp4.weight".to_string(),
