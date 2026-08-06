@@ -1,19 +1,29 @@
 //! Loading NVIDIA ModelOpt NVFP4 (W4A16) checkpoints from safetensors.
 //!
-//! ModelOpt / compressed-tensors NVFP4 checkpoints store each packed linear
-//! weight as three tensors instead of one dense weight:
-//!   - `weight_packed`: a `U8` tensor of shape `[out_dim, in_dim / 2]`, packing
-//!     two E2M1 values per byte (low then high nibble).
+//! NVFP4 checkpoints store each packed linear weight as three tensors
+//! instead of one dense weight:
+//!   - the packed weight: a `U8` tensor of shape `[out_dim, in_dim / 2]`,
+//!     packing two E2M1 values per byte (low then high nibble). ModelOpt
+//!     exports this as `.weight` (e.g. `nvidia/Llama-3.3-70B-Instruct-FP4`);
+//!     compressed-tensors checkpoints (llm-compressor / vLLM) use
+//!     `.weight_packed` instead. See [`nvfp4_weight_tensor_name`].
 //!   - `weight_scale`: an `F8E4M3` tensor of shape `[out_dim, in_dim / block_size]`,
 //!     one scale per `block_size`-wide block of the input dimension
 //!     (`block_size` is 16 for NVFP4).
-//!   - `weight_scale_2`: a scalar `f32` tensor that scales the whole matrix.
+//!   - `weight_scale_2`: an `f32` tensor holding exactly one element (rank 0
+//!     or `[1]` depending on the exporter) that scales the whole matrix.
+//!     Its presence is the unambiguous signal that a layer is NVFP4-backed;
+//!     see [`detect_backing`].
 //!
 //! `weight[i, j] = e2m1(packed[i, j]) * e4m3(weight_scale[i, j / block_size]) * weight_scale_2`.
 //!
+//! Activations are not quantized in W4A16, so an `input_scale` tensor some
+//! checkpoints also carry alongside these three is intentionally never read
+//! here.
+//!
 //! This module never reinterprets the packed bytes as `f32`: [`dequantize_nvfp4`]
 //! decodes each nibble and scale byte explicitly through [`unpack_e2m1`] and
-//! `float8::F8E4M3::to_bits`, and [`nvfp4_linear`] refuses to materialize a
+//! `float8::F8E4M3::to_f32`, and [`nvfp4_linear`] refuses to materialize a
 //! dense tensor larger than an explicit byte budget. See the `nvfp4-cuda`
 //! feature's [`cuda`] submodule for a path that keeps the packed weight
 //! device-resident instead of expanding it 8x into a dense `f32` tensor.
@@ -33,7 +43,9 @@ pub enum Backing {
     /// A block-wise FP8 weight (`weight` + `weight_scale_inv`), e.g. as used
     /// by DeepSeek-V3-style checkpoints.
     Fp8Block,
-    /// A packed NVFP4 weight (`weight_packed` + `weight_scale` + `weight_scale_2`).
+    /// A packed NVFP4 weight: `weight_scale` + `weight_scale_2`, plus the
+    /// packed weight itself under `.weight` (ModelOpt) or `.weight_packed`
+    /// (compressed-tensors) -- see [`nvfp4_weight_tensor_name`].
     Nvfp4,
 }
 
@@ -96,14 +108,47 @@ fn fp8_block_linear(
 
 /// Inspects the tensor names available at `vb`'s current path to determine
 /// what backs the linear layer, without reading any tensor data.
+///
+/// `weight_scale_2` alone is the NVFP4 signal: both the ModelOpt and
+/// compressed-tensors export conventions include it, and neither a dense nor
+/// a block-wise-FP8 layer has one. The packed weight's own tensor name
+/// differs between the two conventions -- see [`nvfp4_weight_tensor_name`].
 pub fn detect_backing(vb: &VarBuilder) -> Backing {
-    if vb.contains_tensor("weight_packed") && vb.contains_tensor("weight_scale_2") {
+    if vb.contains_tensor("weight_scale_2") {
         Backing::Nvfp4
     } else if vb.contains_tensor("weight_scale_inv") {
         Backing::Fp8Block
     } else {
         Backing::Dense
     }
+}
+
+/// The tensor name holding the packed NVFP4 weight at `vb`'s current path:
+/// `weight_packed` under the compressed-tensors convention (llm-compressor /
+/// vLLM) if present, otherwise `weight` -- the ModelOpt convention, e.g.
+/// `nvidia/Llama-3.3-70B-Instruct-FP4`, which does not use `weight_packed`
+/// at all. Only meaningful once [`detect_backing`] has returned
+/// [`Backing::Nvfp4`].
+pub fn nvfp4_weight_tensor_name(vb: &VarBuilder) -> &'static str {
+    if vb.contains_tensor("weight_packed") {
+        "weight_packed"
+    } else {
+        "weight"
+    }
+}
+
+/// Reads `name` as an `f32` tensor holding exactly one element, accepting
+/// either a rank-0 scalar or a rank-1 `[1]` tensor: ModelOpt exporters have
+/// used both shapes for `weight_scale_2` across versions.
+fn read_scalar_f32(vb: &VarBuilder, name: &str) -> Result<f32> {
+    let t = vb.get_unchecked_dtype(name, DType::F32)?;
+    if t.elem_count() != 1 {
+        candle::bail!(
+            "nvfp4: {name} must hold exactly one element, got shape {:?}",
+            t.shape()
+        )
+    }
+    t.reshape(())?.to_scalar::<f32>()
 }
 
 fn unpack_e2m1(nibble: u8) -> f32 {
@@ -173,24 +218,11 @@ pub fn dequantize_nvfp4(
         for col in 0..in_dim {
             let byte = packed_row[col / 2];
             let nibble = if col % 2 == 0 { byte & 0xf } else { byte >> 4 };
-            let block_scale = e4m3_to_f32(scale_row[col / block_size].to_bits());
+            let block_scale = scale_row[col / block_size].to_f32();
             out[row * in_dim + col] = unpack_e2m1(nibble) * block_scale * weight_scale_2;
         }
     }
     Tensor::from_vec(out, (out_dim, in_dim), &candle::Device::Cpu)
-}
-
-fn e4m3_to_f32(byte: u8) -> f32 {
-    let sign = if byte & 0x80 == 0 { 1. } else { -1. };
-    let exponent = (byte >> 3) & 0xf;
-    let mantissa = byte & 0x7;
-    if exponent == 0 {
-        sign * mantissa as f32 / 512.
-    } else if exponent == 0xf && mantissa == 0x7 {
-        f32::NAN
-    } else {
-        sign * (1. + mantissa as f32 / 8.) * 2f32.powi(exponent as i32 - 7)
-    }
 }
 
 /// Configuration for [`nvfp4_linear`] and [`auto_linear`].
@@ -215,9 +247,10 @@ impl Default for Nvfp4Config {
 }
 
 /// Builds a dense [`candle_nn::Linear`] layer from a packed NVFP4 checkpoint,
-/// reading `weight_packed` (`U8`), `weight_scale` (`F8E4M3`), `weight_scale_2`
-/// (scalar `f32`) and an optional `bias` tensor at the current `VarBuilder`
-/// path, dequantizing on the CPU.
+/// reading the packed weight ([`nvfp4_weight_tensor_name`], `U8`),
+/// `weight_scale` (`F8E4M3`), `weight_scale_2` (one-element `f32`) and an
+/// optional `bias` tensor at the current `VarBuilder` path, dequantizing on
+/// the CPU.
 pub fn nvfp4_linear(
     in_dim: usize,
     out_dim: usize,
@@ -227,7 +260,7 @@ pub fn nvfp4_linear(
 ) -> Result<Linear> {
     let packed_weight = vb.get_with_hints_dtype(
         (out_dim, in_dim / 2),
-        "weight_packed",
+        nvfp4_weight_tensor_name(&vb),
         Default::default(),
         DType::U8,
     )?;
@@ -237,9 +270,7 @@ pub fn nvfp4_linear(
         Default::default(),
         DType::F8E4M3,
     )?;
-    let weight_scale_2 = vb
-        .get_with_hints_dtype((), "weight_scale_2", Default::default(), DType::F32)?
-        .to_scalar::<f32>()?;
+    let weight_scale_2 = read_scalar_f32(&vb, "weight_scale_2")?;
     let weight = dequantize_nvfp4(
         &packed_weight,
         &weight_scale,
@@ -325,7 +356,7 @@ pub fn auto_linear(
 /// dequantizing once at load time.
 #[cfg(feature = "nvfp4-cuda")]
 pub mod cuda {
-    use super::Nvfp4Config;
+    use super::{nvfp4_weight_tensor_name, read_scalar_f32, Nvfp4Config};
     use candle::{DType, Module, Result, Tensor};
     use candle_nn::VarBuilder;
 
@@ -346,12 +377,12 @@ pub mod cuda {
             let packed_weight = vb
                 .get_with_hints_dtype(
                     (out_dim, in_dim / 2),
-                    "weight_packed",
+                    nvfp4_weight_tensor_name(&vb),
                     Default::default(),
                     DType::U8,
                 )?
-                .to_vec2::<u8>()?
-                .concat();
+                .flatten_all()?
+                .to_vec1::<u8>()?;
             let weight_scale = vb
                 .get_with_hints_dtype(
                     (out_dim, in_dim.div_ceil(cfg.block_size)),
@@ -359,14 +390,12 @@ pub mod cuda {
                     Default::default(),
                     DType::F8E4M3,
                 )?
-                .to_vec2::<float8::F8E4M3>()?
+                .flatten_all()?
+                .to_vec1::<float8::F8E4M3>()?
                 .into_iter()
-                .flatten()
                 .map(|v| v.to_bits())
                 .collect::<Vec<u8>>();
-            let weight_scale_2 = vb
-                .get_with_hints_dtype((), "weight_scale_2", Default::default(), DType::F32)?
-                .to_scalar::<f32>()?;
+            let weight_scale_2 = read_scalar_f32(&vb, "weight_scale_2")?;
             let inner = candle_nvfp4_kernels::Nvfp4Linear::new(
                 &packed_weight,
                 &weight_scale,
@@ -420,13 +449,6 @@ mod tests {
             .chunks(2)
             .map(|pair| pair[0] | (pair[1] << 4))
             .collect()
-    }
-
-    #[test]
-    fn e4m3_roundtrip_matches_known_values() {
-        assert_eq!(e4m3_to_f32(0x38), 1.0);
-        assert_eq!(e4m3_to_f32(0x40), 2.0);
-        assert_eq!(e4m3_to_f32(0xb8), -1.0);
     }
 
     #[test]
@@ -500,19 +522,42 @@ mod tests {
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
         assert_eq!(detect_backing(&vb.pp("dense")), Backing::Dense);
 
-        let _ = vb.pp("nvfp4").get_with_hints_dtype(
+        // ModelOpt convention: the packed weight is `.weight`, there is no
+        // `.weight_packed` (e.g. nvidia/Llama-3.3-70B-Instruct-FP4).
+        let _ = vb.pp("modelopt").get_with_hints_dtype(
             (4, 2),
-            "weight_packed",
+            "weight",
             Default::default(),
             DType::U8,
         )?;
-        let _ = vb.pp("nvfp4").get_with_hints_dtype(
+        let _ = vb.pp("modelopt").get_with_hints_dtype(
             (),
             "weight_scale_2",
             Default::default(),
             DType::F32,
         )?;
-        assert_eq!(detect_backing(&vb.pp("nvfp4")), Backing::Nvfp4);
+        assert_eq!(detect_backing(&vb.pp("modelopt")), Backing::Nvfp4);
+        assert_eq!(nvfp4_weight_tensor_name(&vb.pp("modelopt")), "weight");
+
+        // compressed-tensors convention (llm-compressor / vLLM): the packed
+        // weight is `.weight_packed`, alongside `.weight_scale_2`.
+        let _ = vb.pp("compressed_tensors").get_with_hints_dtype(
+            (4, 2),
+            "weight_packed",
+            Default::default(),
+            DType::U8,
+        )?;
+        let _ = vb.pp("compressed_tensors").get_with_hints_dtype(
+            (),
+            "weight_scale_2",
+            Default::default(),
+            DType::F32,
+        )?;
+        assert_eq!(detect_backing(&vb.pp("compressed_tensors")), Backing::Nvfp4);
+        assert_eq!(
+            nvfp4_weight_tensor_name(&vb.pp("compressed_tensors")),
+            "weight_packed"
+        );
 
         let _ = vb.pp("fp8").get_with_hints_dtype(
             (2, 2),
@@ -521,6 +566,79 @@ mod tests {
             DType::F32,
         )?;
         assert_eq!(detect_backing(&vb.pp("fp8")), Backing::Fp8Block);
+        Ok(())
+    }
+
+    #[test]
+    fn read_scalar_f32_accepts_rank_0_or_rank_1() -> Result<()> {
+        let device = Device::Cpu;
+        let mut tensors = std::collections::HashMap::new();
+        tensors.insert(
+            "rank0.s".to_string(),
+            Tensor::from_vec(vec![0.25f32], (), &device)?,
+        );
+        tensors.insert(
+            "rank1.s".to_string(),
+            Tensor::from_vec(vec![0.25f32], 1, &device)?,
+        );
+        tensors.insert(
+            "not_scalar.s".to_string(),
+            Tensor::from_vec(vec![0.25f32, 0.5], 2, &device)?,
+        );
+        let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
+
+        assert_eq!(read_scalar_f32(&vb.pp("rank0"), "s")?, 0.25);
+        assert_eq!(read_scalar_f32(&vb.pp("rank1"), "s")?, 0.25);
+        assert!(read_scalar_f32(&vb.pp("not_scalar"), "s").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn nvfp4_linear_reads_the_modelopt_naming_convention() -> Result<()> {
+        // A layer using ModelOpt's naming (packed weight under `.weight`,
+        // no `.weight_packed`) must load through the same auto_linear/
+        // nvfp4_linear path as the compressed-tensors naming; this is what
+        // Backing::Nvfp4 promises once detect_backing returns it.
+        let device = Device::Cpu;
+        let out_dim = 2;
+        let in_dim = 32;
+        let row0: Vec<f32> = vec![
+            0., 0.5, 1., 1.5, 2., 3., 4., 6., -0.5, -1., -1.5, -2., -3., -4., -6., 0.,
+        ];
+        let packed_row = pack_row(&row0);
+        let packed_bytes: Vec<u8> = [
+            packed_row.clone(),
+            packed_row.clone(),
+            packed_row.clone(),
+            packed_row,
+        ]
+        .concat();
+        let scale_bytes: Vec<float8::F8E4M3> = [0x38u8, 0x38u8, 0x38u8, 0x38u8]
+            .into_iter()
+            .map(float8::F8E4M3::from_bits)
+            .collect();
+
+        let mut tensors = std::collections::HashMap::new();
+        tensors.insert(
+            "layer.weight".to_string(),
+            Tensor::from_vec(packed_bytes, (out_dim, in_dim / 2), &device)?,
+        );
+        tensors.insert(
+            "layer.weight_scale".to_string(),
+            Tensor::from_vec(scale_bytes, (out_dim, in_dim / BLOCK_SIZE), &device)?,
+        );
+        tensors.insert(
+            "layer.weight_scale_2".to_string(),
+            Tensor::from_vec(vec![0.5f32], (), &device)?,
+        );
+        let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
+        let layer = vb.pp("layer");
+
+        assert_eq!(detect_backing(&layer), Backing::Nvfp4);
+        assert_eq!(nvfp4_weight_tensor_name(&layer), "weight");
+        let linear = nvfp4_linear(in_dim, out_dim, false, layer, Nvfp4Config::default())?;
+        let output = linear.forward(&Tensor::zeros((1, in_dim), DType::F32, &device)?)?;
+        assert_eq!(output.dims(), &[1, out_dim]);
         Ok(())
     }
 }
