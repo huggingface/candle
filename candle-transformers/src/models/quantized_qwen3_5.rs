@@ -446,7 +446,7 @@ impl GatedDeltaNetWeights {
 
         let mixed_qkv = if use_precomputed_states {
             let conv_state = self.conv_state.as_mut().unwrap();
-            let conv_state_data = Tensor::cat(&[conv_state, &mixed_qkv], 2)?;
+            let conv_state_data = Tensor::cat(&[&*conv_state, &mixed_qkv], 2)?;
             *conv_state = conv_state_data.narrow(2, 1, self.conv_kernel_size - 1)?;
             let out = conv_state_data.conv1d(&self.conv1d_weight, 0, 1, 1, self.conv_dim)?;
             candle_nn::ops::silu(&out)?
