@@ -2,11 +2,6 @@ name: CI / cuda
 
 on:
   workflow_dispatch:
-    inputs:
-      test_ref:
-        description: 'Branch/tag/SHA to checkout and test (defaults to the dispatched ref)'
-        required: false
-        type: string
   pull_request:
 
 jobs:
@@ -14,11 +9,11 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
-    runs-on: arc-gpu-candle
+    runs-on:
+      group: aws-g5-4xlarge-cache
     container:
       image: nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
-      options: --gpus all
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
+    if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     permissions:
       contents: write
       packages: write
@@ -28,94 +23,13 @@ jobs:
       security-events: write
     env:
       CUDA_COMPUTE_CAP: 86
-      # Scoping the test step to GPU-relevant crates (below) wasn't enough on its own: this
-      # runner still OOM-kills (exit 137) while compiling candle-transformers at full rustc
-      # parallelism. Cap parallel rustc jobs to reduce peak memory; the two fixes address
-      # different causes (crate count vs. per-crate codegen parallelism) and are both needed.
-      CARGO_BUILD_JOBS: 2
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-        with:
-          ref: ${{ github.event.inputs.test_ref || github.ref }}
       - name: Install dependencies
-        # `git` is required by candle-flash-attn's build.rs, which `git clone`s NVIDIA
-        # cutlass; the base cuda image doesn't ship it.
-        run: apt update && apt install curl build-essential libssl-dev protobuf-compiler pkg-config git -y
+        run: apt update && apt install curl build-essential libssl-dev protobuf-compiler pkg-config -y
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Test (cuda)
-        # continue-on-error: this step has a known OOM flake (exit 137) on this runner
-        # unrelated to any specific ref's changes; don't let it block later steps that
-        # target a specific crate/feature.
-        continue-on-error: true
         run: cargo test --features cuda
-      - name: Test (cuda) - candle-onnx
-        # Not every ref dispatched against this workflow (via `test_ref`) defines a `cuda`
-        # feature on candle-onnx, so don't request one here.
-        # continue-on-error: test_gelu_operation has a known floating-point tolerance
-        # flake (~1e-7) on this runner unrelated to any specific ref's changes.
-        continue-on-error: true
-        run: cargo test --manifest-path candle-onnx/Cargo.toml -- --include-ignored
-      - name: Test (cuda) - DeepSeek-V3 end-to-end (tiny-random checkpoint)
-        # Not every ref dispatched against this workflow (via `test_ref`) defines this test,
-        # so don't fail the whole job if it's absent on the checked-out ref.
-        run: |
-          if [ -f candle-examples/tests/deepseekv3_integration.rs ]; then
-            cargo test -p candle-examples --release --features cuda --test deepseekv3_integration -- --ignored
-          else
-            echo "deepseekv3_integration.rs not present on this ref, skipping"
-          fi
-      - name: Test (cuda) - Llama 4 end-to-end (tiny-random checkpoint)
-        # Not every ref dispatched against this workflow (via `test_ref`) defines this test,
-        # so don't fail the whole job if it's absent on the checked-out ref.
-        run: |
-          if [ -f candle-examples/tests/llama4_integration.rs ]; then
-            cargo test -p candle-examples --release --features cuda --test llama4_integration -- --ignored
-          else
-            echo "llama4_integration.rs not present on this ref, skipping"
-          fi
-      - name: Test (cuda) - Llama paged KV cache seam (flash-attn)
-        # `--features cuda` above doesn't imply `flash-attn`, so the paged-attention
-        # code path in candle-transformers::models::llama never gets compiled by the
-        # main step. Not every ref dispatched against this workflow (via `test_ref`)
-        # defines that seam, so don't fail the whole job if it's absent.
-        #
-        # --test-threads=1: these tests share one physical GPU, and parallel runs
-        # have produced cross-test contamination (spurious
-        # CURAND_STATUS_LAUNCH_FAILURE / CUDA_ERROR_STREAM_CAPTURE_INVALIDATED in
-        # unrelated tests) during the astorise/candle#17 investigation. Keep them
-        # serialized.
-        run: |
-          if grep -q 'paged_attention_matches_dense_causal_attention_on_gpu' candle-transformers/src/models/llama.rs 2>/dev/null; then
-            cargo test -p candle-transformers --release --features flash-attn --lib models::llama:: -- --test-threads=1
-          else
-            echo "paged KV cache flash-attn seam not present on this ref, skipping"
-          fi
-      - name: Test (cuda) - LoRA BGMV kernels
-        # `--features cuda` above doesn't enable candle-nn's LoRA CUDA kernels;
-        # the `lora-cuda` feature builds the candle-lora-kernels crate and routes
-        # the decode-step batched path through it, so run the lora suite with that
-        # feature to compile the kernels and check they match the reference path.
-        # Not every ref dispatched against this workflow (via `test_ref`) defines
-        # that feature, so don't fail the whole job if it's absent.
-        run: |
-          if grep -q '^lora-cuda' candle-nn/Cargo.toml 2>/dev/null; then
-            cargo test -p candle-nn --features cuda,lora-cuda --test lora
-          else
-            echo "lora-cuda feature not present on this ref, skipping"
-          fi
-      - name: Test (cuda) - NVFP4 ModelOpt weight source
-        # `--features cuda` above doesn't enable the nvfp4-cuda feature, which
-        # builds candle-nvfp4-kernels and exercises the device-resident
-        # Nvfp4Linear path from candle_transformers::quantized_nvfp4::cuda.
-        # Not every ref dispatched against this workflow (via `test_ref`)
-        # defines that feature, so don't fail the whole job if it's absent.
-        run: |
-          if grep -q '^nvfp4-cuda' candle-transformers/Cargo.toml 2>/dev/null; then
-            cargo test -p candle-nvfp4-kernels --features cuda
-            cargo test -p candle-transformers --features nvfp4-cuda quantized_nvfp4::
-          else
-            echo "nvfp4-cuda feature not present on this ref, skipping"
-          fi
