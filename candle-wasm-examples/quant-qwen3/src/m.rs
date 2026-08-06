@@ -46,6 +46,15 @@ impl Model {
         let _prof = ProfileGuard::new("total_load");
         console_error_panic_hook::set_once();
 
+        // Build marker: confirms which kernels the LOADED wasm actually has, so a
+        // stale cached pkg can't masquerade as a fresh build. Check this in console.
+        console_log!(
+            "build flags: simd128={} relaxed-simd={} atomics={}",
+            cfg!(target_feature = "simd128"),
+            cfg!(target_feature = "relaxed-simd"),
+            cfg!(target_feature = "atomics"),
+        );
+
         let device = Device::Cpu;
 
         let _prof = ProfileGuard::new("load_tokenizer");

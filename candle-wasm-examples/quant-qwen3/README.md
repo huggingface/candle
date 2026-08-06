@@ -35,7 +35,13 @@ pip install huggingface-hub tqdm
 - wasm-pack: `cargo install wasm-pack`
 
 ### Browser
-- Modern browser with WebAssembly SIMD support (Chrome 91+, Firefox 89+, Safari 16.4+)
+The default build uses wasm threads (SharedArrayBuffer) and relaxed-SIMD, so it
+requires a recent browser served with cross-origin isolation (COOP/COEP, which
+`serve.py` sets): Chrome 114+, Firefox 120+, Safari 18+.
+
+For older SIMD-only browsers (Chrome 91+, Firefox 89+, Safari 16.4+), drop
+`+relaxed-simd` from `.cargo/config.toml` and rebuild; this loses the Q4_K
+relaxed-dot speedup but still runs under plain WebAssembly SIMD.
 
 ## Quick Start
 

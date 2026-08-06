@@ -265,6 +265,103 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> f32
     }
 }
 
+// Relaxed-SIMD variant of vec_dot_q4k_q8k: identical scale/min handling, but the
+// dot core uses i32x4_relaxed_dot_i8x16_i7x16_add (one fused extend+multiply+
+// accumulate over 16 lanes) instead of widen + i16 multiply + i32 extend. The
+// 4-bit weights in aux8 are 0..15, valid i7x16 operands. Lanes summed at the end.
+// Big win on all-Q4 models where the Q4_K lm_head is the dominant matmul.
+#[cfg(target_feature = "relaxed-simd")]
+pub(crate) fn vec_dot_q4k_q8k_relaxed(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_q4k_q8k_relaxed: {n} is not divisible by {QK_K}"
+    );
+    const KMASK1: u32 = 0x3f3f3f3f;
+    const KMASK2: u32 = 0x0f0f0f0f;
+    const KMASK3: u32 = 0x03030303;
+
+    let mut utmp: [u32; 4] = [0; 4];
+    let mut scales: [u8; 8] = [0; 8];
+    let mut mins: [u8; 8] = [0; 8];
+
+    let mut aux8: [u8; QK_K] = [0; QK_K];
+    let mut sums = f32x4_splat(0f32);
+    unsafe {
+        for (y, x) in ys.iter().zip(xs.iter()) {
+            let q4 = &x.qs;
+            let q8 = &y.qs;
+
+            for j in 0..QK_K / 64 {
+                let q4_1 = v128_load(q4.as_ptr().add(32 * j) as *const v128);
+                let q4_2 = v128_load(q4.as_ptr().add(32 * j + 16) as *const v128);
+                v128_store(
+                    aux8.as_mut_ptr().add(64 * j) as *mut v128,
+                    v128_and(q4_1, u8x16_splat(0x0F)),
+                );
+                v128_store(
+                    aux8.as_mut_ptr().add(64 * j + 16) as *mut v128,
+                    v128_and(q4_2, u8x16_splat(0x0F)),
+                );
+                v128_store(
+                    aux8.as_mut_ptr().add(64 * j + 32) as *mut v128,
+                    u8x16_shr(q4_1, 4),
+                );
+                v128_store(
+                    aux8.as_mut_ptr().add(64 * j + 48) as *mut v128,
+                    u8x16_shr(q4_2, 4),
+                );
+            }
+
+            LittleEndian::read_u32_into(&x.scales, &mut utmp[0..3]);
+
+            utmp[3] = ((utmp[2] >> 4) & KMASK2) | (((utmp[1] >> 6) & KMASK3) << 4);
+            let uaux = utmp[1] & KMASK1;
+            utmp[1] = (utmp[2] & KMASK2) | (((utmp[0] >> 6) & KMASK3) << 4);
+            utmp[2] = uaux;
+            utmp[0] &= KMASK1;
+
+            LittleEndian::write_u32_into(&utmp[0..2], &mut scales);
+            LittleEndian::write_u32_into(&utmp[2..4], &mut mins);
+
+            let mut sumi = i32x4_splat(0);
+            for j in (0..QK_K / 16).step_by(4) {
+                let bsums = i32x4_load_extend_i16x4(y.bsums.as_ptr().add(j));
+                let (m1, m2) = (mins[j / 2] as i32, mins[j / 2 + 1] as i32);
+                let mins = i32x4(m1, m1, m2, m2);
+                sumi = i32x4_add(sumi, i32x4_mul(bsums, mins));
+            }
+
+            let mut aux32 = i32x4_splat(0i32);
+            for (scale_i, scale) in scales.iter().enumerate() {
+                let scale = i32x4_splat(*scale as i32);
+                let base = 32 * scale_i;
+                // 32 values per sub-block = two 16-wide relaxed dots; scale applied
+                // to the summed dot. q8 = i8x16 operand, aux8 (0..15) = i7x16 operand.
+                let mut sub = i32x4_splat(0);
+                let q8a = v128_load(q8.as_ptr().add(base) as *const v128);
+                let w_a = v128_load(aux8.as_ptr().add(base) as *const v128);
+                sub = i32x4_relaxed_dot_i8x16_i7x16_add(q8a, w_a, sub);
+                let q8b = v128_load(q8.as_ptr().add(base + 16) as *const v128);
+                let w_b = v128_load(aux8.as_ptr().add(base + 16) as *const v128);
+                sub = i32x4_relaxed_dot_i8x16_i7x16_add(q8b, w_b, sub);
+                aux32 = i32x4_add(aux32, i32x4_mul(scale, sub));
+            }
+            let aux32 = f32x4_convert_i32x4(aux32);
+            let d = f32x4_splat(x.d.to_f32() * y.d);
+            sums = f32x4_add(sums, f32x4_mul(aux32, d));
+            let dmin = x.dmin.to_f32() * y.d;
+            let dmin = f32x4_splat(dmin);
+            let sumi = f32x4_convert_i32x4(sumi);
+            sums = f32x4_sub(sums, f32x4_mul(sumi, dmin));
+        }
+        let sums = f32x4_extract_lane::<0>(sums)
+            + f32x4_extract_lane::<1>(sums)
+            + f32x4_extract_lane::<2>(sums)
+            + f32x4_extract_lane::<3>(sums);
+        sums
+    }
+}
+
 #[inline(always)]
 pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> f32 {
     debug_assert!(
