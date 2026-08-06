@@ -159,3 +159,66 @@ impl LogitsProcessor {
         Ok(next_token)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle::{Device, Result, Tensor};
+
+    #[test]
+    fn sample_with_topk_then_topp() -> Result<()> {
+        let mut lp = LogitsProcessor::from_sampling(
+            42,
+            Sampling::TopKThenTopP {
+                k: 2,
+                p: 0.9,
+                temperature: 1.0,
+            },
+        );
+        let logits = Tensor::new(&[0.1, 0.2, 0.3, 0.4], &Device::Cpu)?;
+        let token = lp.sample(&logits)?;
+        assert!(token == 2 || token == 3);
+        Ok(())
+    }
+
+    #[test]
+    fn sample_with_very_low_temperature_maps_to_argmax() -> Result<()> {
+        let mut lp = LogitsProcessor::new(42, Some(1e-8), Some(0.5));
+        let logits = Tensor::new(&[0.1, 0.4, 0.2, 0.3], &Device::Cpu)?;
+        let token = lp.sample(&logits)?;
+        assert_eq!(token, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn sample_f_with_modifier() -> Result<()> {
+        let mut lp = LogitsProcessor::from_sampling(42, Sampling::All { temperature: 1.0 });
+        let logits = Tensor::new(&[0.0f64, 0.0, 0.0, 100.0], &Device::Cpu)?;
+        let token = lp.sample_f(&logits, |prs| {
+            prs[3] = 0.0;
+        })?;
+        assert_ne!(token, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn sample_with_single_logit() -> Result<()> {
+        let logits = Tensor::new(&[5.0], &Device::Cpu)?;
+
+        let mut lp = LogitsProcessor::new(42, None, None);
+        assert_eq!(lp.sample(&logits)?, 0);
+
+        let mut lp = LogitsProcessor::from_sampling(42, Sampling::All { temperature: 1.0 });
+        assert_eq!(lp.sample(&logits)?, 0);
+
+        let mut lp =
+            LogitsProcessor::from_sampling(42, Sampling::TopK { k: 1, temperature: 1.0 });
+        assert_eq!(lp.sample(&logits)?, 0);
+
+        let mut lp =
+            LogitsProcessor::from_sampling(42, Sampling::TopP { p: 0.5, temperature: 1.0 });
+        assert_eq!(lp.sample(&logits)?, 0);
+
+        Ok(())
+    }
+}
