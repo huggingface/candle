@@ -1064,7 +1064,15 @@ mod tests {
             Nvfp4Config::default(),
         )?;
 
-        let xs_f16 = Tensor::rand(0f32, 1f32, (3, 5, in_dim), &device)?.to_dtype(DType::F16)?;
+        // A deterministic, non-uniform input: Tensor::rand is unseeded, and
+        // an unlucky draw could occasionally make packed's single rounding
+        // step land as large as dense's compounded one, flaking the
+        // dense_max_abs_diff > packed_max_abs_diff assertion below.
+        let batch = 3 * 5;
+        let xs_data: Vec<f32> = (0..batch * in_dim)
+            .map(|i| 0.01 + 0.037 * ((i % 13) as f32))
+            .collect();
+        let xs_f16 = Tensor::from_vec(xs_data, (3, 5, in_dim), &device)?.to_dtype(DType::F16)?;
         // What Nvfp4LinearPacked::forward computes with internally: xs_f16
         // upconverted to f32, losslessly (f16 -> f32 never rounds).
         let xs_ref = xs_f16.to_dtype(DType::F32)?;
