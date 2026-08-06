@@ -27,6 +27,25 @@
 //! dense tensor larger than an explicit byte budget. See the `nvfp4-cuda`
 //! feature's [`cuda`] submodule for a path that keeps the packed weight
 //! device-resident instead of expanding it 8x into a dense `f32` tensor.
+//!
+//! [`auto_linear`] picks among three execution paths, in this order
+//! (huggingface/candle#3857 -- NVFP4 had no execution path off CUDA):
+//!
+//!   1. `nvfp4-cuda` fused kernel ([`cuda::Nvfp4LinearCuda`]): packed and
+//!      device-resident, used only on a CUDA device with the kernel
+//!      available.
+//!   2. [`Nvfp4LinearPacked`]: a CPU operator that keeps the weight in its
+//!      packed form (~1x the checkpoint's footprint, not 8x) and decodes
+//!      each output row on the fly during `forward`, trading some compute
+//!      for memory. This is the default off CUDA -- on a CPU host or Apple
+//!      Silicon, where the dense fallback below can OOM or refuse to run,
+//!      memory is the actual blocker, not speed. There is no Metal kernel
+//!      yet; on a Metal device this path still round-trips through host
+//!      memory rather than running on-device.
+//!   3. [`nvfp4_linear`]: dequantizes to a dense tensor once at load time.
+//!      Opt in via `Nvfp4Config::force_dense_fallback` when raw forward-pass
+//!      throughput matters more than resident memory and the checkpoint
+//!      fits within `max_dense_bytes`.
 
 use candle::{DType, Result, Tensor};
 use candle_nn::{Linear, Module, VarBuilder};
@@ -230,14 +249,22 @@ pub fn dequantize_nvfp4(
     Tensor::from_vec(out, (out_dim, in_dim), &candle::Device::Cpu)
 }
 
-/// Configuration for [`nvfp4_linear`] and [`auto_linear`].
+/// Configuration for [`nvfp4_linear`], [`nvfp4_linear_packed`] and
+/// [`auto_linear`].
 #[derive(Debug, Clone, Copy)]
 pub struct Nvfp4Config {
     pub block_size: usize,
     /// Refuses to dequantize a packed weight into a dense tensor larger than
     /// this many bytes. Only applies to the CPU dequantization fallback; the
-    /// `nvfp4-cuda` fused path never expands the weight.
+    /// `nvfp4-cuda` fused path and the CPU packed path never expand the
+    /// weight.
     pub max_dense_bytes: usize,
+    /// When [`auto_linear`] can't use the `nvfp4-cuda` fused path, it
+    /// defaults to [`Nvfp4LinearPacked`] (packed, ~1x footprint). Set this to
+    /// dequantize to a dense tensor once at load time instead
+    /// ([`nvfp4_linear`]), trading resident memory for forward-pass
+    /// throughput; still bounded by `max_dense_bytes`.
+    pub force_dense_fallback: bool,
 }
 
 impl Default for Nvfp4Config {
@@ -247,6 +274,131 @@ impl Default for Nvfp4Config {
             // A generous but explicit guardrail: refuse rather than silently
             // blow past available memory on an 8x unpack.
             max_dense_bytes: 4 * 1024 * 1024 * 1024,
+            force_dense_fallback: false,
+        }
+    }
+}
+
+/// A CPU operator for a packed NVFP4 linear layer that never materializes a
+/// dense `[out_dim, in_dim]` weight: the packed weight and block scales stay
+/// in their checkpoint-native, ~1x-footprint form, and each output row is
+/// decoded on the fly during [`forward`](Module::forward). See the module
+/// docs for where this sits in [`auto_linear`]'s execution preference order.
+#[derive(Debug, Clone)]
+pub struct Nvfp4LinearPacked {
+    /// Row-major `[out_dim, in_dim / 2]`, two E2M1 nibbles per byte.
+    packed_weight: Vec<u8>,
+    /// Row-major `[out_dim, in_dim.div_ceil(block_size)]`, decoded to `f32`.
+    weight_scale: Vec<f32>,
+    weight_scale_2: f32,
+    in_dim: usize,
+    out_dim: usize,
+    block_size: usize,
+    bias: Option<Tensor>,
+}
+
+/// Builds a [`Nvfp4LinearPacked`] from a packed NVFP4 checkpoint, reading the
+/// same tensors as [`nvfp4_linear`] (packed weight, `weight_scale`,
+/// `weight_scale_2`, optional `bias`) but keeping them packed instead of
+/// dequantizing to a dense tensor.
+pub fn nvfp4_linear_packed(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: VarBuilder,
+    cfg: Nvfp4Config,
+) -> Result<Nvfp4LinearPacked> {
+    let packed_weight = vb
+        .get_with_hints_dtype(
+            (out_dim, in_dim / 2),
+            nvfp4_weight_tensor_name(&vb),
+            Default::default(),
+            DType::U8,
+        )?
+        .flatten_all()?
+        .to_vec1::<u8>()?;
+    let weight_scale = vb
+        .get_with_hints_dtype(
+            (out_dim, in_dim.div_ceil(cfg.block_size)),
+            "weight_scale",
+            Default::default(),
+            DType::F8E4M3,
+        )?
+        .flatten_all()?
+        .to_vec1::<float8::F8E4M3>()?
+        .into_iter()
+        .map(|v| v.to_f32())
+        .collect();
+    let weight_scale_2 = read_scalar_f32(&vb, "weight_scale_2")?;
+    let bias = if bias {
+        Some(vb.get(out_dim, "bias")?)
+    } else {
+        None
+    };
+    Ok(Nvfp4LinearPacked {
+        packed_weight,
+        weight_scale,
+        weight_scale_2,
+        in_dim,
+        out_dim,
+        block_size: cfg.block_size,
+        bias,
+    })
+}
+
+impl Module for Nvfp4LinearPacked {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let target_dtype = xs.dtype();
+        let target_device = xs.device().clone();
+        let dims = xs.dims();
+        let Some((&last, leading)) = dims.split_last() else {
+            candle::bail!("nvfp4: input tensor must have at least one dimension")
+        };
+        if last != self.in_dim {
+            candle::bail!(
+                "nvfp4: expected last input dim {}, got {:?}",
+                self.in_dim,
+                dims
+            )
+        }
+        let batch: usize = leading.iter().product();
+
+        let xs_host = xs
+            .reshape((batch, self.in_dim))?
+            .to_device(&candle::Device::Cpu)?
+            .to_dtype(DType::F32)?;
+        let xs_vec = xs_host.to_vec2::<f32>()?;
+
+        let packed_row_len = self.in_dim / 2;
+        let n_blocks = self.in_dim.div_ceil(self.block_size);
+        let mut out = vec![0f32; batch * self.out_dim];
+        let mut row_buf = vec![0f32; self.in_dim];
+        for (o, (packed_row, scale_row)) in self
+            .packed_weight
+            .chunks(packed_row_len)
+            .zip(self.weight_scale.chunks(n_blocks))
+            .enumerate()
+        {
+            for (col, val) in row_buf.iter_mut().enumerate() {
+                let byte = packed_row[col / 2];
+                let nibble = if col % 2 == 0 { byte & 0xf } else { byte >> 4 };
+                *val = unpack_e2m1(nibble) * scale_row[col / self.block_size] * self.weight_scale_2;
+            }
+            for (b, x_row) in xs_vec.iter().enumerate() {
+                let acc: f32 = row_buf.iter().zip(x_row.iter()).map(|(w, x)| w * x).sum();
+                out[b * self.out_dim + o] = acc;
+            }
+        }
+
+        let mut out_shape = leading.to_vec();
+        out_shape.push(self.out_dim);
+        let out_tensor = Tensor::from_vec(out, (batch, self.out_dim), &candle::Device::Cpu)?
+            .reshape(out_shape)?
+            .to_device(&target_device)?
+            .to_dtype(target_dtype)?;
+        match &self.bias {
+            None => Ok(out_tensor),
+            Some(bias) => out_tensor.broadcast_add(bias),
         }
     }
 }
@@ -300,7 +452,13 @@ pub fn nvfp4_linear(
 pub enum AutoLinear {
     Dense(Linear),
     Fp8Block(Linear),
+    /// Dense NVFP4 fallback: dequantized once at load time. Only produced
+    /// when [`Nvfp4Config::force_dense_fallback`] is set; see
+    /// [`Nvfp4Packed`](Self::Nvfp4Packed) for the default off-CUDA path.
     Nvfp4(Linear),
+    /// Packed NVFP4 CPU operator: the default off-CUDA path. See
+    /// [`Nvfp4LinearPacked`].
+    Nvfp4Packed(Nvfp4LinearPacked),
     #[cfg(feature = "nvfp4-cuda")]
     Nvfp4Cuda(cuda::Nvfp4LinearCuda),
 }
@@ -309,6 +467,7 @@ impl Module for AutoLinear {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Dense(l) | Self::Fp8Block(l) | Self::Nvfp4(l) => l.forward(xs),
+            Self::Nvfp4Packed(l) => l.forward(xs),
             #[cfg(feature = "nvfp4-cuda")]
             Self::Nvfp4Cuda(l) => l.forward(xs),
         }
@@ -322,8 +481,12 @@ impl Module for AutoLinear {
 ///
 /// On a CUDA device with the `nvfp4-cuda` feature enabled and the fused
 /// kernel available, NVFP4 layers stay packed and device-resident. Otherwise
-/// NVFP4 (and FP8) layers are dequantized to a dense tensor at load time,
-/// bounded by `cfg.max_dense_bytes`.
+/// they default to [`Nvfp4LinearPacked`], which keeps the weight packed
+/// (~1x footprint) and decodes on the fly; set
+/// `cfg.force_dense_fallback` to dequantize to a dense tensor at load time
+/// instead, bounded by `cfg.max_dense_bytes`. FP8 layers are always
+/// dequantized to a dense tensor at load time. See the module docs for the
+/// full preference order.
 pub fn auto_linear(
     in_dim: usize,
     out_dim: usize,
@@ -339,7 +502,12 @@ pub fn auto_linear(
                     in_dim, out_dim, bias, vb, cfg,
                 )?));
             }
-            Ok(AutoLinear::Nvfp4(nvfp4_linear(
+            if cfg.force_dense_fallback {
+                return Ok(AutoLinear::Nvfp4(nvfp4_linear(
+                    in_dim, out_dim, bias, vb, cfg,
+                )?));
+            }
+            Ok(AutoLinear::Nvfp4Packed(nvfp4_linear_packed(
                 in_dim, out_dim, bias, vb, cfg,
             )?))
         }
@@ -723,9 +891,89 @@ mod tests {
             vb.pp("nvfp4"),
             Nvfp4Config::default(),
         )?;
-        assert!(matches!(nvfp4, AutoLinear::Nvfp4(_)));
+        assert!(matches!(nvfp4, AutoLinear::Nvfp4Packed(_)));
         assert_eq!(nvfp4.forward(&input)?.dims(), &[1, out_dim]);
 
+        let nvfp4_dense = auto_linear(
+            in_dim,
+            out_dim,
+            false,
+            vb.pp("nvfp4"),
+            Nvfp4Config {
+                force_dense_fallback: true,
+                ..Nvfp4Config::default()
+            },
+        )?;
+        assert!(matches!(nvfp4_dense, AutoLinear::Nvfp4(_)));
+        assert_eq!(nvfp4_dense.forward(&input)?.dims(), &[1, out_dim]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn nvfp4_linear_packed_matches_dense_dequantization() -> Result<()> {
+        let device = Device::Cpu;
+        let out_dim = 2;
+        let in_dim = 32; // two blocks of 16
+        let row0: Vec<f32> = vec![
+            0., 0.5, 1., 1.5, 2., 3., 4., 6., -0.5, -1., -1.5, -2., -3., -4., -6., 0.,
+        ];
+        let packed_row = pack_row(&row0);
+        let packed_bytes: Vec<u8> = [
+            packed_row.clone(),
+            packed_row.clone(),
+            packed_row.clone(),
+            packed_row,
+        ]
+        .concat();
+        let scale_bytes: Vec<float8::F8E4M3> = [0x38u8, 0x40u8, 0x38u8, 0x40u8]
+            .into_iter()
+            .map(float8::F8E4M3::from_bits)
+            .collect();
+
+        let mut tensors = std::collections::HashMap::new();
+        tensors.insert(
+            "layer.weight".to_string(),
+            Tensor::from_vec(packed_bytes, (out_dim, in_dim / 2), &device)?,
+        );
+        tensors.insert(
+            "layer.weight_scale".to_string(),
+            Tensor::from_vec(scale_bytes, (out_dim, in_dim / BLOCK_SIZE), &device)?,
+        );
+        tensors.insert(
+            "layer.weight_scale_2".to_string(),
+            Tensor::from_vec(vec![0.5f32], (), &device)?,
+        );
+        let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
+
+        let dense = nvfp4_linear(
+            in_dim,
+            out_dim,
+            false,
+            vb.pp("layer"),
+            Nvfp4Config::default(),
+        )?;
+        let packed = nvfp4_linear_packed(
+            in_dim,
+            out_dim,
+            false,
+            vb.pp("layer"),
+            Nvfp4Config::default(),
+        )?;
+
+        // A batched, non-trivial input exercises the row/batch loops in
+        // Nvfp4LinearPacked::forward, not just the zero vector.
+        let xs = Tensor::rand(0f32, 1f32, (3, 5, in_dim), &device)?;
+        let dense_out = dense.forward(&xs)?.to_vec3::<f32>()?;
+        let packed_out = packed.forward(&xs)?.to_vec3::<f32>()?;
+
+        for (d_batch, p_batch) in dense_out.iter().zip(packed_out.iter()) {
+            for (d_row, p_row) in d_batch.iter().zip(p_batch.iter()) {
+                for (d, p) in d_row.iter().zip(p_row.iter()) {
+                    assert!((d - p).abs() < 1e-4, "{d} vs {p}");
+                }
+            }
+        }
         Ok(())
     }
 }
