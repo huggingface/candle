@@ -288,8 +288,11 @@ impl Default for Nvfp4Config {
 pub struct Nvfp4LinearPacked {
     /// Row-major `[out_dim, in_dim / 2]`, two E2M1 nibbles per byte.
     packed_weight: Vec<u8>,
-    /// Row-major `[out_dim, in_dim.div_ceil(block_size)]`, decoded to `f32`.
-    weight_scale: Vec<f32>,
+    /// Row-major `[out_dim, in_dim.div_ceil(block_size)]`, kept as raw
+    /// `F8E4M3` bytes (not decoded to `f32`) so this struct's footprint
+    /// matches the checkpoint's, not 4x it; decoded per block in
+    /// `forward`.
+    weight_scale: Vec<float8::F8E4M3>,
     weight_scale_2: f32,
     in_dim: usize,
     out_dim: usize,
@@ -325,10 +328,7 @@ pub fn nvfp4_linear_packed(
             DType::F8E4M3,
         )?
         .flatten_all()?
-        .to_vec1::<float8::F8E4M3>()?
-        .into_iter()
-        .map(|v| v.to_f32())
-        .collect();
+        .to_vec1::<float8::F8E4M3>()?;
     let weight_scale_2 = read_scalar_f32(&vb, "weight_scale_2")?;
     let bias = if bias {
         Some(vb.get(out_dim, "bias")?)
@@ -382,7 +382,8 @@ impl Module for Nvfp4LinearPacked {
             for (col, val) in row_buf.iter_mut().enumerate() {
                 let byte = packed_row[col / 2];
                 let nibble = if col % 2 == 0 { byte & 0xf } else { byte >> 4 };
-                *val = unpack_e2m1(nibble) * scale_row[col / self.block_size] * self.weight_scale_2;
+                let block_scale = scale_row[col / self.block_size].to_f32();
+                *val = unpack_e2m1(nibble) * block_scale * self.weight_scale_2;
             }
             for (b, x_row) in xs_vec.iter().enumerate() {
                 let acc: f32 = row_buf.iter().zip(x_row.iter()).map(|(w, x)| w * x).sum();
@@ -448,7 +449,12 @@ pub fn nvfp4_linear(
 /// A linear projection whose backing (dense, block-wise FP8, or packed
 /// NVFP4) was determined automatically from the checkpoint. See
 /// [`auto_linear`].
+///
+/// `#[non_exhaustive]`: a Metal-backed NVFP4 variant is expected future work
+/// (huggingface/candle#3857), and this should not be a breaking change for
+/// downstream matches when it lands.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum AutoLinear {
     Dense(Linear),
     Fp8Block(Linear),
