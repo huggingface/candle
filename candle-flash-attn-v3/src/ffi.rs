@@ -16,6 +16,10 @@ extern "C" {
         v_ptr: *const c_void,
         o_ptr: *const c_void,
         softmax_lse_ptr: *const c_void,
+        // Zero-initialized int32 global counter for the DynamicPersistentTileScheduler
+        // (causal/local non-varlen path). Leaving it NULL makes the causal kernel fail
+        // with an illegal global atomic.
+        tile_count_semaphore_ptr: *const c_void,
         alibi_slopes_ptr: *const c_void,
 
         cu_seqlens_q_ptr: *const i32,

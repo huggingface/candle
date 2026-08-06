@@ -205,6 +205,7 @@ extern "C" void run_mha_v3(
     void *v_ptr,
     void *o_ptr,
     void *softmax_lse_ptr,
+    void *tile_count_semaphore_ptr,
     void *alibi_slopes_ptr,
 
     int32_t *cu_seqlens_q_ptr,
@@ -260,6 +261,11 @@ extern "C" void run_mha_v3(
     params.o_ptr = o_ptr;
 
     params.softmax_lse_ptr = softmax_lse_ptr;
+    // Global tile counter for the DynamicPersistentTileScheduler, which is selected for
+    // the causal/local (non-varlen) path and does an atomicAdd on this pointer. The
+    // caller passes a zero-initialized int32; without it the pointer stays NULL after
+    // the memset above and the causal kernel performs an illegal global atomic.
+    params.tile_count_semaphore = static_cast<int *>(tile_count_semaphore_ptr);
     params.alibi_slopes_ptr = alibi_slopes_ptr;
 
     // All stride are in elements, not bytes.
