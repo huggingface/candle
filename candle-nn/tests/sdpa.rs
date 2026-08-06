@@ -184,4 +184,54 @@ mod metal_sdpa_tests {
         assert!(error <= 0.0013, "{}", error);
         Ok(())
     }
+
+    #[test]
+    fn sdpa_causal_partial_query_tile() -> Result<()> {
+        // R is not a multiple of the kernel's BQ tile and L is much larger, so the
+        // final query tile pads past the allocated K/V blocks.
+        const BS: usize = 1;
+        const H: usize = 12;
+        const R: usize = 6;
+        const PREFIX: usize = 376;
+        const L: usize = PREFIX + R;
+        const DK: usize = 64;
+
+        let scale: f64 = f64::from(DK as u32).sqrt().recip();
+        let device = Device::new_metal(0)?;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x00CA_55A1);
+        let q = randn(&mut rng, (BS, H, R, DK), &device)?;
+        let k = randn(&mut rng, (BS, H, L, DK), &device)?;
+        let v = randn(&mut rng, (BS, H, L, DK), &device)?;
+
+        let mut mask_values = vec![0f32; R * L];
+        for row in 0..R {
+            for column in (PREFIX + row + 1)..L {
+                mask_values[row * L + column] = f32::NEG_INFINITY;
+            }
+        }
+        let mask = Tensor::from_vec(mask_values, (R, L), &device)?.broadcast_as((BS, H, R, L))?;
+        let ground_truth = {
+            let att = ((q.matmul(&k.t()?)? * scale)?.to_dtype(DType::F32)? + mask)?;
+            candle_nn::ops::softmax_last_dim(&att)?
+                .to_dtype(q.dtype())?
+                .matmul(&v)?
+        };
+
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, None, true, scale as f32, 1.)?;
+        let values = sdpa_output
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        assert!(
+            values.iter().all(|v| v.is_finite()),
+            "causal SDPA produced non-finite output"
+        );
+        let error = (&ground_truth - &sdpa_output)?
+            .abs()?
+            .to_dtype(DType::F32)?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(error < 0.05, "{}", error);
+        Ok(())
+    }
 }
