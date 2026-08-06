@@ -159,6 +159,32 @@ METAL_FUNC void im2col1d(
 }
 
 template <typename T>
+METAL_FUNC void upsample_nearest1d(
+    constant size_t &w_out,
+    constant float &w_scale,
+    constant size_t *src_dims,
+    constant size_t *src_s,
+    device const T *src,
+    device T *dst,
+    uint tid
+) {
+  const size_t c = src_dims[1];
+  const size_t w_in = src_dims[2];
+
+  if (tid >= src_dims[0] * c * w_out) return;
+
+  const size_t b_idx = tid / (w_out * c);
+  const size_t c_idx = (tid / w_out) % c;
+  const size_t dst_w = tid % w_out;
+
+  size_t src_w = static_cast<size_t>(dst_w * w_scale);
+  if (src_w >= w_in) src_w = w_in - 1;
+
+  const size_t src_i = b_idx * src_s[0] + c_idx * src_s[1] + src_w * src_s[2];
+  dst[tid] = src[src_i];
+}
+
+template <typename T>
 METAL_FUNC void upsample_nearest2d(
     constant size_t &w_out,
     constant size_t &h_out,
@@ -332,6 +358,19 @@ kernel void FN_NAME(  \
     uint tid [[ thread_position_in_grid ]] \
 ) {  \
   col2im1d<T>(dst_el, l_out, l_in, c_out, k_size, stride, src, dst, tid); \
+} \
+
+#define UPSAMPLE_NEAREST1D_OP(TYPENAME, FN_NAME) \
+kernel void FN_NAME(  \
+    constant size_t &w_out, \
+    constant float &w_scale, \
+    constant size_t *dims, \
+    constant size_t *strides, \
+    device const TYPENAME *src, \
+    device TYPENAME *dst, \
+    uint tid [[ thread_position_in_grid ]] \
+) {  \
+  upsample_nearest1d<TYPENAME>(w_out, w_scale, dims, strides, src, dst, tid); \
 } \
 
 #define UPSAMPLE_NEAREST2D_OP(TYPENAME, FN_NAME) \
@@ -668,6 +707,14 @@ IM2COL1D_OP(uint8_t, im2col1d_u8)
 IM2COL1D_OP(uint32_t, im2col1d_u32)
 #if defined(__HAVE_BFLOAT__)
 IM2COL1D_OP(bfloat, im2col1d_bf16)
+#endif
+
+UPSAMPLE_NEAREST1D_OP(float, upsample_nearest1d_f32)
+UPSAMPLE_NEAREST1D_OP(half, upsample_nearest1d_f16)
+UPSAMPLE_NEAREST1D_OP(uint8_t, upsample_nearest1d_u8)
+UPSAMPLE_NEAREST1D_OP(uint32_t, upsample_nearest1d_u32)
+#if defined(__HAVE_BFLOAT__)
+UPSAMPLE_NEAREST1D_OP(bfloat, upsample_nearest1d_bf16)
 #endif
 
 UPSAMPLE_NEAREST2D_OP(float, upsample_nearest2d_f32)
