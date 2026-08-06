@@ -79,6 +79,16 @@ pub trait BackendStorage: Sized {
         _: Option<f64>,
     ) -> Result<Self>;
 
+    fn upsample_bicubic2d(
+        &self,
+        _: &Layout,
+        _: usize,
+        _: usize,
+        _: bool,
+        _: Option<f64>,
+        _: Option<f64>,
+    ) -> Result<Self>;
+
     fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self>;
 
     fn scatter_set(
