@@ -907,6 +907,49 @@ impl candle::CustomOp3 for LayerNorm {
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
     }
+
+    fn bwd(
+        &self,
+        xs: &Tensor,
+        alpha: &Tensor,
+        beta: &Tensor,
+        _res: &Tensor,
+        grad_res: &Tensor,
+    ) -> Result<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
+        // y = (x - mean) / sqrt(var + eps) * alpha + beta, statistics over the last dim.
+        let x_dtype = xs.dtype();
+        let internal_dtype = match x_dtype {
+            DType::F16 | DType::BF16 => DType::F32,
+            d => d,
+        };
+        let n = xs.dim(D::Minus1)?;
+        let xs = xs.to_dtype(internal_dtype)?;
+        let grad = grad_res.to_dtype(internal_dtype)?;
+        let alpha_i = alpha.to_dtype(internal_dtype)?;
+
+        let mean = (xs.sum_keepdim(D::Minus1)? / n as f64)?;
+        let centered = xs.broadcast_sub(&mean)?;
+        let var = (centered.sqr()?.sum_keepdim(D::Minus1)? / n as f64)?;
+        let std = (var + self.eps as f64)?.sqrt()?;
+        let x_hat = centered.broadcast_div(&std)?;
+
+        // g is the gradient with respect to the normalized activations:
+        // grad_x = (g - mean(g) - x_hat * mean(g * x_hat)) / std
+        let g = grad.broadcast_mul(&alpha_i)?;
+        let g_mean = (g.sum_keepdim(D::Minus1)? / n as f64)?;
+        let gx_mean = ((&g * &x_hat)?.sum_keepdim(D::Minus1)? / n as f64)?;
+        let grad_x = ((g.broadcast_sub(&g_mean)? - x_hat.broadcast_mul(&gx_mean)?)?
+            .broadcast_div(&std)?)
+        .to_dtype(x_dtype)?;
+
+        let grad_alpha = (&grad * &x_hat)?
+            .reshape(((), n))?
+            .sum(0)?
+            .to_dtype(alpha.dtype())?;
+        let grad_beta = grad.reshape(((), n))?.sum(0)?.to_dtype(beta.dtype())?;
+
+        Ok((Some(grad_x), Some(grad_alpha), Some(grad_beta)))
+    }
 }
 
 pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {
@@ -941,7 +984,7 @@ pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Resul
             beta.shape()
         )
     }
-    xs.apply_op3_no_bwd(alpha, beta, &LayerNorm { eps })
+    xs.apply_op3(alpha, beta, LayerNorm { eps })
 }
 
 // https://pytorch.org/docs/stable/generated/torch.nn.PixelShuffle.html
