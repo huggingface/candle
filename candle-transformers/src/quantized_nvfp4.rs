@@ -466,14 +466,14 @@ mod tests {
         )?;
         let dequant = dequant.to_vec2::<f32>()?;
 
-        for row in 0..out_dim {
+        for (row, dequant_row) in dequant.iter().enumerate().take(out_dim) {
             for col in 0..in_dim {
                 let block_scale = if col < BLOCK_SIZE { 1.0 } else { 2.0 };
                 let expected = row0[col % BLOCK_SIZE] * block_scale * tensor_scale;
                 assert!(
-                    (dequant[row][col] - expected).abs() < 1e-5,
+                    (dequant_row[col] - expected).abs() < 1e-5,
                     "mismatch at ({row},{col}): {} vs {expected}",
-                    dequant[row][col]
+                    dequant_row[col]
                 );
             }
         }
