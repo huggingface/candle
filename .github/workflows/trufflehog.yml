@@ -13,3 +13,10 @@ jobs:
           fetch-depth: 0
       - name: Secret Scanning
         uses: trufflesecurity/trufflehog@6bd2d14f7a4bc1e569fa3550efa7ec632a4fa67b  # main
+        with:
+          # New-branch pushes have no base commit, so trufflehog falls back to
+          # scanning full history. That resurfaces two known false positives on
+          # candle-pyo3/tests/native/test_tensor.py (Python `test_...` function
+          # names shaped like Lob API keys, e.g. test_tensor_can_be_constructed_from_list)
+          # inherited from upstream history. Lob is unrelated to this project.
+          extra_args: --exclude-detectors=Lob
