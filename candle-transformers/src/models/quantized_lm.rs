@@ -75,7 +75,8 @@ pub enum Architecture {
     Qwen2,
     /// [`quantized_qwen3`], `general.architecture = "qwen3"`.
     Qwen3,
-    /// [`quantized_qwen3_5`], `general.architecture = "qwen3_5"`.
+    /// [`quantized_qwen3_5`], `general.architecture = "qwen35"` (real Unsloth checkpoints) or
+    /// the `"qwen3_5"` alias.
     Qwen3_5,
     /// [`quantized_qwen3_moe`], `general.architecture = "qwen3moe"`. CUDA only.
     Qwen3Moe,
@@ -94,6 +95,7 @@ pub const SUPPORTED_ARCHITECTURES: &[&str] = &[
     "phi3",
     "qwen2",
     "qwen3",
+    "qwen35",
     "qwen3_5",
     "qwen3moe",
 ];
@@ -113,7 +115,9 @@ impl Architecture {
             "phi3" => Self::Phi3,
             "qwen2" => Self::Qwen2,
             "qwen3" => Self::Qwen3,
-            "qwen3_5" => Self::Qwen3_5,
+            // Real Unsloth-converted Qwen3.5 GGUFs report "qwen35" (no underscore); "qwen3_5"
+            // is kept as an alias for other conversion paths that may emit it.
+            "qwen35" | "qwen3_5" => Self::Qwen3_5,
             "qwen3moe" => Self::Qwen3Moe,
             _ => return None,
         };
@@ -125,6 +129,13 @@ impl Architecture {
         let name = architecture_name(ct)?;
         match Self::from_name(name) {
             Some(arch) => Ok(arch),
+            // "qwen35moe" is a real, known architecture value (the MoE sibling of "qwen35"),
+            // just not one this crate implements yet. Say so explicitly instead of lumping it
+            // in with genuinely unrecognized names.
+            None if name == "qwen35moe" => candle::bail!(
+                "qwen35moe (Qwen3.5 MoE) gguf checkpoints are not supported yet; \
+                 only the dense qwen35/qwen3_5 backend is implemented"
+            ),
             None => candle::bail!(
                 "unsupported gguf architecture {name:?}, expected one of {SUPPORTED_ARCHITECTURES:?}"
             ),
@@ -134,7 +145,8 @@ impl Architecture {
     /// The canonical `general.architecture` value for this backend.
     ///
     /// This is not a round-trip of [`Architecture::from_name`] for the aliased families:
-    /// a `gemma2` file resolves to [`Architecture::Gemma3`], whose name is `"gemma3"`.
+    /// a `gemma2` file resolves to [`Architecture::Gemma3`], whose name is `"gemma3"`, and
+    /// a `qwen3_5` file resolves to [`Architecture::Qwen3_5`], whose name is `"qwen35"`.
     pub fn name(&self) -> &'static str {
         match self {
             Self::Llama => "llama",
@@ -145,7 +157,7 @@ impl Architecture {
             Self::Phi3 => "phi3",
             Self::Qwen2 => "qwen2",
             Self::Qwen3 => "qwen3",
-            Self::Qwen3_5 => "qwen3_5",
+            Self::Qwen3_5 => "qwen35",
             Self::Qwen3Moe => "qwen3moe",
         }
     }
@@ -401,6 +413,11 @@ mod tests {
             );
         }
         assert_eq!(Architecture::from_name("qwen3"), Some(Architecture::Qwen3));
+        // "qwen35" is what real Unsloth checkpoints report; "qwen3_5" is kept as an alias.
+        assert_eq!(
+            Architecture::from_name("qwen35"),
+            Some(Architecture::Qwen3_5)
+        );
         assert_eq!(
             Architecture::from_name("qwen3_5"),
             Some(Architecture::Qwen3_5)
@@ -451,7 +468,24 @@ mod tests {
         let err = Architecture::from_content(&ct).unwrap_err().to_string();
         assert!(err.contains("mamba"), "{err}");
         assert!(err.contains("qwen3moe"), "{err}");
-        assert!(err.contains("qwen3_5"), "{err}");
+        assert!(err.contains("qwen35"), "{err}");
+    }
+
+    #[test]
+    fn qwen35moe_gets_a_distinct_not_yet_supported_error() {
+        // "qwen35moe" is a real architecture value, just not implemented yet: it must not be
+        // reported as an unrecognized name alongside things like "mamba".
+        let ct = content(&[(
+            "general.architecture",
+            Value::String("qwen35moe".to_string()),
+        )]);
+        let err = Architecture::from_content(&ct).unwrap_err().to_string();
+        assert!(err.contains("qwen35moe"), "{err}");
+        assert!(err.contains("not supported yet"), "{err}");
+        assert!(
+            !err.contains("expected one of"),
+            "should not be reported as an unrecognized name: {err}"
+        );
     }
 
     #[test]
