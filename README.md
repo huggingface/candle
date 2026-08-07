@@ -124,6 +124,8 @@ We also provide some command line based examples using state of the art models:
   text-to-speech.
 - [Parler-TTS](./candle-examples/examples/parler-tts/): large text-to-speech
   model.
+- [Qwen3-ASR](./candle-examples/examples/qwen3-asr/): multilingual automatic
+  speech recognition (52+ languages, 22 Chinese dialects).
 - [T5](./candle-examples/examples/t5), [Bert](./candle-examples/examples/bert/),
   [JinaBert](./candle-examples/examples/jina-bert/) : useful for sentence embeddings.
 - [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
@@ -249,6 +251,7 @@ If you have an addition to this list, please submit a pull request.
         - EnCodec, audio compression model.
         - MetaVoice-1B, text-to-speech model.
         - Parler-TTS, text-to-speech model.
+        - Qwen3-ASR, multilingual speech-to-text (52+ languages).
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT,
           ConvNeXTv2, MobileOne, EfficientVit (MSRA), MobileNetv4, Hiera, FastViT.
