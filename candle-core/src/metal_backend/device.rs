@@ -353,9 +353,9 @@ fn buf_size(size: usize) -> usize {
     size.next_power_of_two()
 }
 
-/// How many size classes above its own a request may be served from when reusing a
-/// pooled buffer. See [`reuse_cap`].
-const REUSE_SLACK: usize = 4;
+/// How many power-of-two size classes above its own a request may be served from when
+/// reusing a pooled buffer. See [`reuse_cap`].
+const REUSE_SLACK: u32 = 2;
 
 /// The largest pooled buffer a request of `size` bytes may be reused from.
 ///
@@ -368,8 +368,16 @@ const REUSE_SLACK: usize = 4;
 /// tensors of 9-12 MB each were served from the 256 MB class that the attention scores
 /// use, forcing 46 new 256 MB allocations. Peak activations 15.12 GB, against 4.38 GB
 /// with this cap in place, and the memory-vs-chunk-size curve was non-monotonic.
+///
+/// The cap is deliberately loose. Restricting reuse to the exact size class also removes
+/// the pathology, but costs +36 % at chunk 128 (2.95 GB against 2.19 GB) by forbidding
+/// harmless reuse; allowing only one class above costs +29 %. Two classes is the knee.
+///
+/// Every pooled buffer is allocated at [`buf_size`], so the map is keyed by powers of two
+/// and only power-of-two steps are representable: a cap of `3 * buf_size` would admit
+/// exactly the same buffers as `2 * buf_size`. Hence the shift.
 fn reuse_cap(size: usize) -> usize {
-    REUSE_SLACK.saturating_mul(buf_size(size))
+    buf_size(size).saturating_mul(1usize << REUSE_SLACK)
 }
 
 /// Applies the [`BufferBuilder`] label, clearing any stale label on a reused pooled buffer.
@@ -513,6 +521,9 @@ mod tests {
         // not force exact-size matching, which measured worse (2.95 GB vs 2.19 GB at
         // chunk 128) because it also forbids harmless reuse.
         assert!(reuse_cap(kv) >= buf_size(kv));
+        // 9 MB rounds to the 16 MB class, and REUSE_SLACK = 2 classes above it is 64 MB.
+        assert_eq!(buf_size(kv), 16 << 20);
+        assert_eq!(reuse_cap(kv), buf_size(kv) << REUSE_SLACK);
         assert_eq!(reuse_cap(kv), 64 << 20);
     }
 
