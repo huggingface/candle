@@ -87,7 +87,9 @@ pub struct RotaryEmbedding {
 
 impl RotaryEmbedding {
     pub fn new(
-        dtype: DType,
+        // Kept for call-site compatibility but deliberately unused: the angle table is always
+        // built in f32. See the comment on the table construction below.
+        _dtype: DType,
         head_dim: usize,
         rotary_dim: usize,
         max_position_embeddings: usize,
@@ -106,9 +108,29 @@ impl RotaryEmbedding {
             .map(|i| 1f32 / rope_theta.powf(i as f64 / dim as f64) as f32)
             .collect();
         let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
+        // The angle table MUST be built in f32, never in the model dtype.
+        //
+        // Storing positions and angles in f16 wrecks RoPE at long context, because the angle
+        // `position * inv_freq` grows without bound while f16's absolute resolution grows with
+        // magnitude. Measured against an f64 reference, with this model's rope_theta of 1e7:
+        //
+        //   position |  angle error  |  max cos error
+        //          0 |      0        |   0
+        //          1 |   0.0002 rad  |   0.0002
+        //       2048 |   0.40   rad  |   0.036
+        //       5304 |   0.81   rad  |   0.727   <-- on a quantity bounded in [-1, 1]
+        //
+        // At 5304 the rotation is essentially random, and f16 cannot even distinguish adjacent
+        // positions there (spacing is 4), so different tokens collapse onto the same angle. This
+        // made candle's Qwen3.5 agree with llama.cpp on only 2 of 128 greedy token ids on the
+        // identical GGUF, while a 1-token prompt matched to ~3 decimals -- position 0 has angle 0,
+        // which is exact in any precision, so short prompts hid the fault.
+        //
+        // `apply` still casts to the activation dtype at use. That is fine: sin/cos are bounded by
+        // 1, so a late f16 cast costs a bounded ~1e-3, not 0.73.
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
+            .to_dtype(DType::F32)?
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
         Ok(Self {
