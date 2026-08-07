@@ -16,7 +16,9 @@ default = []
 #simd-flash-attn = ["candle-nn/simd-flash-attn", "candle-transformers/simd-flash-attn"]
 
 [dependencies]
-candle = { workspace = true }
+# wasm-threads: route the quantized matmul through rayon (backed by
+# wasm-bindgen-rayon). Requires the worker pool to be initialized before inference.
+candle = { workspace = true, features = ["wasm-threads"] }
 candle-nn = { workspace = true }
 candle-transformers = { workspace = true} #, features = ["simd-flash-attn"] }
 tokenizers = { workspace = true, features = ["unstable_wasm"] }
@@ -35,6 +37,9 @@ safetensors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 rayon = { workspace = true }
+# no-bundler: worker glue loads via URL so the built pkg/ works on a plain static
+# host; the default bundler import resolves to /pkg/ and is rejected as a module.
+wasm-bindgen-rayon = { version = "1.2", features = ["no-bundler"] }
 tracing = { workspace = true }
 libc = "0.2"
 

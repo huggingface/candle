@@ -1048,11 +1048,13 @@ pub struct RawInterleavedKvCache {
 }
 
 impl RawInterleavedKvCache {
-    /// Create a new cache with space for `max_seq` positions.
-    pub fn new(h_kv: usize, d: usize, max_seq: usize) -> Self {
+    // Reserve a small initial buffer; write_kv grows it on demand (geometric
+    // doubling), so memory tracks the tokens actually cached, not a fixed max.
+    const INIT_POSITIONS: usize = 256;
+    pub fn new(h_kv: usize, d: usize) -> Self {
         let pos_stride = h_kv * 2 * d;
         Self {
-            buf: vec![0f32; max_seq * pos_stride],
+            buf: vec![0f32; Self::INIT_POSITIONS * pos_stride],
             h_kv,
             d,
             pos_stride,

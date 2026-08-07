@@ -1,9 +1,10 @@
-use candle::quantized::gguf_file;
+use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use candle_wasm_chat_template::{ChatTemplate, ChatTemplateOptions, Conversation, Message};
 use js_sys::Date;
-use std::io::Cursor;
+use std::collections::HashMap;
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
 
@@ -46,24 +47,21 @@ impl Model {
         let _prof = ProfileGuard::new("total_load");
         console_error_panic_hook::set_once();
 
+        // Build marker: confirms which kernels the LOADED wasm actually has, so a
+        // stale cached pkg can't masquerade as a fresh build. Check this in console.
+        console_log!(
+            "build flags: simd128={} relaxed-simd={} atomics={}",
+            cfg!(target_feature = "simd128"),
+            cfg!(target_feature = "relaxed-simd"),
+            cfg!(target_feature = "atomics"),
+        );
+
         let device = Device::Cpu;
 
         let _prof = ProfileGuard::new("load_tokenizer");
         console_log!("Loading tokenizer...");
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
-
-        // Get EOS token
-        let eos_token = match tokenizer.get_vocab(true).get("<|endoftext|>") {
-            Some(&token) => token,
-            None => match tokenizer.get_vocab(true).get("<|im_end|>") {
-                Some(&token) => token,
-                None => {
-                    console_log!("Warning: no EOS token found, using 0");
-                    0
-                }
-            },
-        };
 
         let start = Date::now();
         console_log!(
@@ -87,22 +85,7 @@ impl Model {
         let load_time = (Date::now() - start) / 1000.0;
         console_log!("Quantized model loaded in {:.2}s", load_time);
 
-        let logits_processor = LogitsProcessor::new(299792458, None, None);
-
-        Ok(Self {
-            model,
-            tokenizer,
-            logits_processor,
-            repeat_penalty: 1.,
-            repeat_last_n: 64,
-            eos_token,
-            enable_thinking: true,
-            kv_tokens: Vec::new(),
-            current_gen_tokens: Vec::new(),
-            conversation: None,
-            current_response: String::new(),
-            is_first_turn: true,
-        })
+        Ok(Model::assemble(model, tokenizer))
     }
 
     // ========================================================================
@@ -611,5 +594,215 @@ impl Model {
         };
 
         Ok(token_str)
+    }
+}
+
+impl Model {
+    // Shared assembly of a Model from a built QuantizedQwen3 + tokenizer, used by
+    // both the all-at-once `load` and the streaming `ModelLoader::finish`.
+    fn assemble(model: QuantizedQwen3, tokenizer: Tokenizer) -> Model {
+        let eos_token = match tokenizer.get_vocab(true).get("<|endoftext|>") {
+            Some(&t) => t,
+            None => match tokenizer.get_vocab(true).get("<|im_end|>") {
+                Some(&t) => t,
+                None => {
+                    console_log!("Warning: no EOS token found, using 0");
+                    0
+                }
+            },
+        };
+        Model {
+            model,
+            tokenizer,
+            logits_processor: LogitsProcessor::new(299792458, None, None),
+            repeat_penalty: 1.,
+            repeat_last_n: 64,
+            eos_token,
+            enable_thinking: true,
+            kv_tokens: Vec::new(),
+            current_gen_tokens: Vec::new(),
+            conversation: None,
+            current_response: String::new(),
+            is_first_turn: true,
+        }
+    }
+}
+
+// Read+Seek over a sliding window of the gguf byte stream. `base` is the file
+// offset of buf[0]; the streaming loader only builds tensors whose bytes are
+// fully inside the window, so absolute seeks always land within `buf`.
+struct WindowReader<'a> {
+    buf: &'a [u8],
+    base: u64,
+    pos: u64,
+}
+
+impl Read for WindowReader<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let start = self.pos.saturating_sub(self.base) as usize;
+        if start >= self.buf.len() {
+            return Ok(0);
+        }
+        let n = (self.buf.len() - start).min(out.len());
+        out[..n].copy_from_slice(&self.buf[start..start + n]);
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl Seek for WindowReader<'_> {
+    fn seek(&mut self, p: SeekFrom) -> std::io::Result<u64> {
+        self.pos = match p {
+            SeekFrom::Start(o) => o,
+            SeekFrom::Current(d) => (self.pos as i64 + d) as u64,
+            // End maps to the window end in file coords; gguf only uses End(0)
+            // for a bounds check, and the tensor read is fully inside the window.
+            SeekFrom::End(d) => ((self.base + self.buf.len() as u64) as i64 + d) as u64,
+        };
+        Ok(self.pos)
+    }
+}
+
+// Build one tensor from the buffered window via a WindowReader.
+fn build_tensor(
+    buf: &[u8],
+    base: u64,
+    content: &gguf_file::Content,
+    name: &str,
+    device: &Device,
+) -> candle::Result<QTensor> {
+    let mut wr = WindowReader { buf, base, pos: 0 };
+    content.tensor(&mut wr, name, device)
+}
+
+// The gguf header carries the full token list, so it can be several MB. Start
+// attempting the parse here, backing off exponentially on failure so the metadata
+// is rescanned O(log) times rather than once per small chunk.
+const INITIAL_PARSE_AT: usize = 256 * 1024;
+
+// Streaming gguf loader. JS pushes fetch chunks; tensors are quantized in file
+// order and the consumed bytes are dropped as we go, so the full input buffer is
+// never held alongside the built QTensors (the all-at-once path peaks at ~2x).
+#[wasm_bindgen]
+pub struct ModelLoader {
+    buf: Vec<u8>,
+    base: u64,
+    content: Option<gguf_file::Content>,
+    data_offset: u64,
+    order: Vec<String>,
+    next: usize,
+    tensors: HashMap<String, QTensor>,
+    next_parse_at: usize,
+}
+
+#[wasm_bindgen]
+impl ModelLoader {
+    #[wasm_bindgen(constructor)]
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> ModelLoader {
+        console_error_panic_hook::set_once();
+        ModelLoader {
+            buf: Vec::new(),
+            base: 0,
+            content: None,
+            data_offset: 0,
+            order: Vec::new(),
+            next: 0,
+            tensors: HashMap::new(),
+            next_parse_at: INITIAL_PARSE_AT,
+        }
+    }
+
+    // Push one chunk from the network stream.
+    pub fn push(&mut self, chunk: &[u8]) -> Result<(), JsError> {
+        self.buf.extend_from_slice(chunk);
+
+        if self.content.is_none() {
+            if self.buf.len() < self.next_parse_at {
+                return Ok(());
+            }
+            let mut cur = Cursor::new(&self.buf[..]);
+            if let Ok(content) = gguf_file::Content::read(&mut cur) {
+                // Tensor data starts at the aligned tensor_data_offset, which may
+                // sit past the cursor (alignment padding after the info table).
+                // Anchor the window there, and wait until that padding is buffered
+                // so the first tensor's bytes are never read early.
+                let data_offset = content.tensor_data_offset;
+                if (self.buf.len() as u64) < data_offset {
+                    self.next_parse_at = data_offset as usize;
+                    return Ok(());
+                }
+                self.data_offset = data_offset;
+                let mut order: Vec<String> = content.tensor_infos.keys().cloned().collect();
+                order.sort_by_key(|n| content.tensor_infos[n].offset);
+                self.order = order;
+                self.content = Some(content);
+                self.buf.drain(0..data_offset as usize);
+                self.base = data_offset;
+            } else {
+                // Header not fully arrived; wait for the buffer to roughly double.
+                self.next_parse_at = self.buf.len() * 2;
+                return Ok(());
+            }
+        }
+
+        self.build_ready()
+    }
+
+    // Build every tensor whose successor's start has arrived (so its own bytes are
+    // fully buffered), dropping consumed bytes. The final tensor is built in finish.
+    fn build_ready(&mut self) -> Result<(), JsError> {
+        let ModelLoader {
+            buf,
+            base,
+            content,
+            data_offset,
+            order,
+            next,
+            tensors,
+            ..
+        } = self;
+        let content = match content.as_ref() {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+        let device = Device::Cpu;
+        while *next + 1 < order.len() {
+            let next_start = *data_offset + content.tensor_infos[&order[*next + 1]].offset;
+            if (*base + buf.len() as u64) < next_start {
+                break;
+            }
+            let qt = build_tensor(&buf[..], *base, content, &order[*next], &device)?;
+            tensors.insert(order[*next].clone(), qt);
+            *next += 1;
+            let new_start = *data_offset + content.tensor_infos[&order[*next]].offset;
+            buf.drain(0..(new_start - *base) as usize);
+            *base = new_start;
+        }
+        Ok(())
+    }
+
+    // Build any remaining tensors and assemble the model. Consumes the loader.
+    pub fn finish(mut self, tokenizer: Vec<u8>) -> Result<Model, JsError> {
+        let content = self
+            .content
+            .take()
+            .ok_or_else(|| JsError::new("gguf header never fully parsed"))?;
+        let device = Device::Cpu;
+        while self.next < self.order.len() {
+            let name = &self.order[self.next];
+            let qt = build_tensor(&self.buf[..], self.base, &content, name, &device)?;
+            self.tensors.insert(name.clone(), qt);
+            self.next += 1;
+        }
+        let model = QuantizedQwen3::from_gguf_tensors(content.metadata, self.tensors, &device)?;
+        let tokenizer =
+            Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
+        // Post-load footprint before any generation.
+        console_log!(
+            "[ModelLoader] streaming load complete. {}",
+            crate::profiler::get_wasm_memory_info()
+        );
+        Ok(Model::assemble(model, tokenizer))
     }
 }

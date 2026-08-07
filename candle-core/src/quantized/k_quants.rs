@@ -1434,7 +1434,10 @@ impl GgmlType for BlockQ4K {
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q4k_q8k(n, xs, ys);
 
-        #[cfg(target_feature = "simd128")]
+        #[cfg(all(target_feature = "simd128", target_feature = "relaxed-simd"))]
+        return super::simd128::vec_dot_q4k_q8k_relaxed(n, xs, ys);
+
+        #[cfg(all(target_feature = "simd128", not(target_feature = "relaxed-simd")))]
         return super::simd128::vec_dot_q4k_q8k(n, xs, ys);
 
         Self::vec_dot_unopt(n, xs, ys)
@@ -2427,28 +2430,75 @@ pub fn matmul<T: GgmlType>(
             }
         }
         let n_quad = n & !3;
+        let n_tail = n - n_quad;
+        // wasm32 has no barrier pool: wasm-threads uses rayon, otherwise serial.
+        #[cfg(not(target_arch = "wasm32"))]
         let quads_total = n_quad / 4;
-        let n_tail = n - n_quad; // 0..=3
+        #[cfg(not(target_arch = "wasm32"))]
         let pool = crate::utils::barrier_pool();
-        // Workers 0..n_workers + calling thread as worker n_workers.
-        let n_total = pool.n_workers() + 1;
-        let quads_per_thread = quads_total.div_ceil(n_total);
+        #[cfg(not(target_arch = "wasm32"))]
+        let quads_per_thread = quads_total.div_ceil(pool.n_workers() + 1);
         let lhs_b: &[T::VecDotType] = lhs_b;
 
         for row_idx in 0..m {
             let lhs_row = &lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
             let dst_row = &mut dst[row_idx * n..(row_idx + 1) * n];
             let (main, tail) = dst_row.split_at_mut(n_quad);
-            let main_ptr = main.as_mut_ptr() as usize;
 
-            pool.execute(|tid| {
-                let start = tid * quads_per_thread;
-                if start >= quads_total {
-                    return;
-                }
-                let end = quads_total.min((tid + 1) * quads_per_thread);
-                let main_ptr = main_ptr as *mut f32;
-                for quad_idx in start..end {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let main_ptr = main.as_mut_ptr() as usize;
+                pool.execute(|tid| {
+                    let start = tid * quads_per_thread;
+                    if start >= quads_total {
+                        return;
+                    }
+                    let end = quads_total.min((tid + 1) * quads_per_thread);
+                    let main_ptr = main_ptr as *mut f32;
+                    for quad_idx in start..end {
+                        let col = quad_idx * 4;
+                        let (d0, d1, d2, d3) = T::vec_dot_4(
+                            k,
+                            &rhs_t[col * k_in_blocks..(col + 1) * k_in_blocks],
+                            &rhs_t[(col + 1) * k_in_blocks..(col + 2) * k_in_blocks],
+                            &rhs_t[(col + 2) * k_in_blocks..(col + 3) * k_in_blocks],
+                            &rhs_t[(col + 3) * k_in_blocks..(col + 4) * k_in_blocks],
+                            lhs_row,
+                        );
+                        unsafe {
+                            let base = main_ptr.add(quad_idx * 4);
+                            *base = d0;
+                            *base.add(1) = d1;
+                            *base.add(2) = d2;
+                            *base.add(3) = d3;
+                        }
+                    }
+                });
+            }
+            #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
+            {
+                use rayon::prelude::*;
+                main.par_chunks_mut(4)
+                    .enumerate()
+                    .for_each(|(quad_idx, out4)| {
+                        let col = quad_idx * 4;
+                        let (d0, d1, d2, d3) = T::vec_dot_4(
+                            k,
+                            &rhs_t[col * k_in_blocks..(col + 1) * k_in_blocks],
+                            &rhs_t[(col + 1) * k_in_blocks..(col + 2) * k_in_blocks],
+                            &rhs_t[(col + 2) * k_in_blocks..(col + 3) * k_in_blocks],
+                            &rhs_t[(col + 3) * k_in_blocks..(col + 4) * k_in_blocks],
+                            lhs_row,
+                        );
+                        out4[0] = d0;
+                        out4[1] = d1;
+                        out4[2] = d2;
+                        out4[3] = d3;
+                    });
+            }
+            #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
+            {
+                for (quad_idx, out4) in main.chunks_mut(4).enumerate() {
                     let col = quad_idx * 4;
                     let (d0, d1, d2, d3) = T::vec_dot_4(
                         k,
@@ -2458,15 +2508,12 @@ pub fn matmul<T: GgmlType>(
                         &rhs_t[(col + 3) * k_in_blocks..(col + 4) * k_in_blocks],
                         lhs_row,
                     );
-                    unsafe {
-                        let base = main_ptr.add(quad_idx * 4);
-                        *base = d0;
-                        *base.add(1) = d1;
-                        *base.add(2) = d2;
-                        *base.add(3) = d3;
-                    }
+                    out4[0] = d0;
+                    out4[1] = d1;
+                    out4[2] = d2;
+                    out4[3] = d3;
                 }
-            });
+            }
             if n_tail >= 2 {
                 let col = n_quad;
                 let (d0, d1) = T::vec_dot_2(
