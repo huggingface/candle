@@ -514,9 +514,18 @@ impl GatedDeltaNetWeights {
             self.neg_a_f32.broadcast_mul(&softplus)?
         };
 
+        // TILED, not interleaved. When num_v_heads != num_k_heads, llama.cpp broadcasts q/k with
+        // `ggml_repeat_4d(q_conv, head_k_dim, num_v_heads, ...)` (src/models/qwen35.cpp:441-445),
+        // and ggml's repeat is cyclic (`dst[i] = src[i % src_ne]`), so v-head h reads k-head
+        // `h % num_k_heads`. `repeat_interleave` would give `h / repeat_n` instead, permuting the
+        // k-head/v-head pairing against the layout the GGUF converter wrote.
+        //
+        // Invisible on Qwen3.5-0.8B, where group_count == num_v_heads == 16 so repeat_n == 1 and
+        // both forms are the identity. LIVE on Qwen3.6-35B-A3B: group_count 16 vs
+        // ssm.inner_size/ssm.state_size = 4096/128 = 32, so repeat_n == 2.
         let repeat_n = self.num_v_heads / self.num_k_heads;
-        let q = repeat_interleave(&q, repeat_n, 2)?;
-        let k = repeat_interleave(&k, repeat_n, 2)?;
+        let q = repeat_tiled(&q, repeat_n, 2)?;
+        let k = repeat_tiled(&k, repeat_n, 2)?;
 
         let initial_state = if use_precomputed_states {
             self.recurrent_state.as_ref()
@@ -546,6 +555,20 @@ impl GatedDeltaNetWeights {
     }
 }
 
+/// Repeat along `dim` in TILED order: `[a,b,c]` -> `[a,b,c,a,b,c]`.
+///
+/// This is ggml's `repeat` semantics (`dst[i] = src[i % src_ne]`) and is what llama.cpp uses to
+/// broadcast q/k up to `num_v_heads`. Contrast [`repeat_interleave`], which produces GROUPED order
+/// `[a,a,b,b,c,c]` — the two agree only when `repeats == 1`.
+fn repeat_tiled(x: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
+    if repeats == 1 {
+        return Ok(x.clone());
+    }
+    let xs = vec![x.clone(); repeats];
+    Tensor::cat(&xs, dim)
+}
+
+#[allow(dead_code)]
 fn repeat_interleave(img: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
     if repeats == 1 {
         return Ok(img.clone());
