@@ -326,7 +326,11 @@ impl GatedDeltaNetWeights {
             .dequantize(&gg.device)?
             .unsqueeze(1)?;
 
-        let a_log = gg
+        // NOT a log. The GGUF converter already stores -exp(A_log) in `ssm_a`
+        // (llama.cpp conversion/qwen.py:381: `data_torch = -torch.exp(data_torch)`), so this
+        // tensor is used VERBATIM as the decay coefficient. llama.cpp does exactly that:
+        // src/models/qwen35.cpp:377 `ggml_mul(alpha_softplus, ssm_a)`.
+        let neg_a = gg
             .tensor(&format!("{prefix}.ssm_a"))?
             .dequantize(&gg.device)?;
         let dt_bias = gg
@@ -334,7 +338,14 @@ impl GatedDeltaNetWeights {
             .dequantize(&gg.device)?;
 
         let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?;
-        let neg_a_f32 = (&a_log.to_dtype(DType::F32)?.exp()? * -1.0)?;
+        // Applying -exp() here would be the SECOND application: every value in every ssm_a
+        // tensor of this checkpoint is already strictly negative (verified across all 18 layers,
+        // e.g. blk.0 spans -1.2941..-0.0014, blk.1 reaches -10.5843). Re-mapping x |-> -e^x
+        // compresses them all into (-1, 0) AND inverts their order, because the map is
+        // monotonically decreasing: the longest-memory head -0.0014 became -0.9986, the
+        // strongest decay -10.5843 became -0.000025. That silently swapped every head's memory
+        // horizon and cost candle 126 of 128 token ids against llama.cpp on a 5304-token prompt.
+        let neg_a_f32 = neg_a.to_dtype(DType::F32)?;
 
         let norm_weight = gg
             .tensor(&format!("{prefix}.ssm_norm.weight"))?
