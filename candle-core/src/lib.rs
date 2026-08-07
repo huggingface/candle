@@ -58,6 +58,8 @@ pub mod cpu_backend;
 #[cfg(feature = "cuda")]
 pub mod cuda_backend;
 mod custom_op;
+#[cfg(feature = "ug")]
+mod custom_op_ug;
 mod device;
 pub mod display;
 mod dtype;
@@ -76,6 +78,8 @@ pub mod npy;
 pub mod op;
 pub mod pickle;
 pub mod quantized;
+#[cfg(feature = "rocm")]
+pub mod rocm_backend;
 pub mod safetensors;
 pub mod scalar;
 pub mod shape;
@@ -93,9 +97,9 @@ mod variable;
 pub use cuda_backend::cudnn;
 
 pub use cpu_backend::{CpuStorage, CpuStorageRef};
-#[cfg(feature = "ug")]
-pub use custom_op::UgIOp1;
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
+#[cfg(feature = "ug")]
+pub use custom_op_ug::UgIOp1;
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
 pub use dummy_dtype::{F4, F6E2M3, F6E3M2, F8E8M0};
@@ -117,6 +121,16 @@ pub use cuda_backend as cuda;
 pub use dummy_cuda_backend as cuda;
 
 pub use cuda::{CudaDevice, CudaStorage};
+
+#[cfg(feature = "rocm")]
+pub use rocm_backend::{RocmDevice, RocmStorage};
+
+/// Mirrors `candle::cuda`, so that knobs like
+/// `set_gemm_reduced_precision_f16` are reachable at the same path shape on
+/// either backend. There is no `dummy_rocm_backend` counterpart: unlike `cuda`,
+/// which candle always exposes, this alias exists only under the feature.
+#[cfg(feature = "rocm")]
+pub use rocm_backend as rocm;
 
 #[cfg(feature = "metal")]
 pub use metal_backend::{MetalDevice, MetalError, MetalStorage};

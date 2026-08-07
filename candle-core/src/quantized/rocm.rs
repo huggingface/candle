@@ -1,0 +1,351 @@
+//! Quantized (GGUF/GGML) storage backed by a ROCm device.
+//!
+//! Modelled on [`crate::quantized::cuda`]: the ROCm backend compiles the same
+//! `candle-kernels/src/quantized.cu` sources, so the on-device layout — padded
+//! rows above all — has to match byte for byte.
+//!
+//! Matrix multiplication takes one of four paths, tried in this order:
+//!
+//! * [`mmvq`] — a batch of one to eight rows against the packed weights, with
+//!   the activations requantized to `q8_1`. Covers f32, f16 and bf16
+//!   activations and every dtype with an `mul_mat_vec_*_q8_1_cuda<N>` kernel.
+//!   It declines a batch of one where DMMV is cheaper, which is most of a
+//!   decode step; see `mmvq::dmmv_is_faster`.
+//! * [`dmmv`] — the fused dequantize-and-GEMV, for a single f32 activation row.
+//!   No requantization, so it is also the more accurate of the two.
+//! * [`mmq`] — the tiled `q8_1` matmul, for the batches the vector kernels do
+//!   not cover. This is prefill. It declines the weight matrices too small to
+//!   beat a rocBLAS GEMM, which for most dtypes means only the ones below the
+//!   smallest size ever measured; see `mmq::min_work`.
+//! * [`dense`] — dequantize-then-GEMM, for everything left. Correct for every
+//!   dtype, but materialises the whole weight matrix in the activation's
+//!   dtype. At a prefill-sized batch of f16 it is also the *fastest* path, and
+//!   `dense::preferred` takes it ahead of MMQ.
+//!
+//! `CANDLE_ROCM_FORCE_DMMV=1` disables both `q8_1` paths, leaving DMMV and the
+//! dense dequantize.
+
+use super::{GgmlDType, QStorage};
+use crate::backend::{BackendDevice, BackendStorage};
+use crate::quantized::k_quants::GgmlType;
+use crate::rocm_backend::{
+    rocm_error, RocmDevice, RocmStorage, RocmStorageSlice, SendSyncDeviceMemory,
+};
+use crate::{CpuStorage, DType, Layout, Result, Shape};
+
+mod dense;
+mod device_ptr;
+mod dmmv;
+mod kernels;
+mod mmq;
+mod mmvq;
+mod moe;
+mod q8_1;
+mod quantize;
+
+pub use device_ptr::QRocmPtrGuard;
+use kernels::MATRIX_ROW_PADDING;
+
+#[cfg(test)]
+mod bench;
+#[cfg(test)]
+mod bench_prefill;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod tests_dense;
+#[cfg(test)]
+mod tests_device_ptr;
+#[cfg(test)]
+mod tests_imatrix;
+#[cfg(test)]
+mod tests_mmq;
+#[cfg(test)]
+mod tests_mmvq;
+
+pub struct QRocmStorage {
+    /// Quantized payload followed by `MATRIX_ROW_PADDING` elements worth of
+    /// zeroed blocks. See [`padded_len`].
+    data: SendSyncDeviceMemory<u8>,
+    /// Length of the *logical* payload in bytes; `data` is longer.
+    len: usize,
+    dtype: GgmlDType,
+    device: RocmDevice,
+}
+
+/// Allocation size for a payload of `len` bytes.
+///
+/// The quantized kernels read whole padded rows, so every buffer carries
+/// `MATRIX_ROW_PADDING` extra elements. Mirrors `quantized/cuda.rs`.
+fn padded_len(len: usize, dtype: GgmlDType) -> usize {
+    len + MATRIX_ROW_PADDING * dtype.type_size() / dtype.block_size()
+}
+
+/// Upload `data` into a freshly allocated, zero-padded device buffer.
+fn upload(device: &RocmDevice, data: &[u8], dtype: GgmlDType) -> Result<SendSyncDeviceMemory<u8>> {
+    let mut inner = device.alloc_zeros::<u8>(padded_len(data.len(), dtype))?;
+    // `copy_from_host` clamps to the shorter of the two, so the padding stays
+    // zeroed.
+    inner
+        .copy_from_host(data)
+        .map_err(|e| rocm_error(format!("failed to upload quantized data: {e}")))?;
+    Ok(inner)
+}
+
+/// Dequantize `n` blocks of `buffer` on the CPU.
+///
+/// `buffer` comes back from the device as a plain `Vec<u8>` with no alignment
+/// guarantee beyond a byte, hence the unaligned reads.
+fn deq<T: GgmlType>(buffer: &[u8], n: usize, dst: &mut [f32]) -> Result<()> {
+    let size = std::mem::size_of::<T>();
+    if buffer.len() < n * size {
+        crate::bail!(
+            "quantized buffer holds {} bytes, expected at least {}",
+            buffer.len(),
+            n * size
+        )
+    }
+    let mut blocks = Vec::with_capacity(n);
+    for i in 0..n {
+        // SAFETY: the bounds check above covers `n * size` bytes and
+        // `read_unaligned` accepts any alignment. Every ggml block type is
+        // plain old data, so the copy is a bit-for-bit move.
+        blocks.push(unsafe { (buffer.as_ptr().add(i * size) as *const T).read_unaligned() });
+    }
+    T::to_float(&blocks, dst);
+    Ok(())
+}
+
+impl QRocmStorage {
+    pub fn zeros(device: &RocmDevice, el_count: usize, dtype: GgmlDType) -> Result<Self> {
+        let len = el_count.div_ceil(dtype.block_size()) * dtype.type_size();
+        let padded =
+            (el_count + MATRIX_ROW_PADDING).div_ceil(dtype.block_size()) * dtype.type_size();
+        Ok(Self {
+            data: device.alloc_zeros::<u8>(padded)?,
+            len,
+            dtype,
+            device: device.clone(),
+        })
+    }
+
+    pub fn dtype(&self) -> GgmlDType {
+        self.dtype
+    }
+
+    pub fn device(&self) -> &RocmDevice {
+        &self.device
+    }
+
+    pub fn storage_size_in_bytes(&self) -> usize {
+        self.len
+    }
+
+    /// The quantized payload, without the trailing padding.
+    pub fn data(&self) -> Result<Vec<u8>> {
+        let mut out = vec![0u8; self.len];
+        // `copy_to_host` clamps to the shorter of the two buffers.
+        self.data
+            .copy_to_host(&mut out)
+            .map_err(|e| rocm_error(format!("failed to read quantized data: {e}")))?;
+        Ok(out)
+    }
+
+    pub fn dequantize(&self, elem_count: usize) -> Result<RocmStorage> {
+        if kernels::has_dequantize_kernel(self.dtype) {
+            let dst = kernels::dequantize_f32(&self.data, self.dtype, elem_count, &self.device)?;
+            return Ok(RocmStorage {
+                slice: RocmStorageSlice::F32(dst),
+                device: self.device.clone(),
+            });
+        }
+        // No kernel for this dtype — round-trip through the host.
+        let buffer = self.data()?;
+        let mut out = vec![0f32; elem_count];
+        let block_len = elem_count / self.dtype.block_size();
+        match self.dtype {
+            GgmlDType::F32 => deq::<f32>(&buffer, block_len, &mut out)?,
+            GgmlDType::F16 => deq::<half::f16>(&buffer, block_len, &mut out)?,
+            GgmlDType::BF16 => deq::<half::bf16>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q8_1 => deq::<crate::quantized::BlockQ8_1>(&buffer, block_len, &mut out)?,
+            dtype => crate::bail!("unsupported dtype for ROCm dequantize {dtype:?}"),
+        }
+        self.device.storage_from_cpu_storage(&CpuStorage::F32(out))
+    }
+
+    pub fn dequantize_f16(&self, elem_count: usize) -> Result<RocmStorage> {
+        if !kernels::has_dequantize_kernel(self.dtype) {
+            let f32 = self.dequantize(elem_count)?;
+            return f32.to_dtype(&Layout::contiguous(elem_count), DType::F16);
+        }
+        let dst = kernels::dequantize_f16(&self.data, self.dtype, elem_count, &self.device)?;
+        Ok(RocmStorage {
+            slice: RocmStorageSlice::F16(dst),
+            device: self.device.clone(),
+        })
+    }
+
+    pub fn embedding(
+        &self,
+        rows: usize,
+        hidden: usize,
+        ids: &RocmStorage,
+        ids_l: &Layout,
+    ) -> Result<RocmStorage> {
+        if !hidden.is_multiple_of(self.dtype.block_size()) {
+            crate::bail!(
+                "quantized embedding hidden size {hidden} is not divisible by block size {}",
+                self.dtype.block_size()
+            )
+        }
+        let expected_size = rows * hidden * self.dtype.type_size() / self.dtype.block_size();
+        if self.len != expected_size {
+            crate::bail!(
+                "quantized tensor has {} bytes, expected {expected_size}",
+                self.len
+            )
+        }
+        let ids_mem = match &ids.slice {
+            RocmStorageSlice::U32(mem) => mem,
+            slice => crate::bail!(
+                "quantized embedding expects u32 ids, got {:?}",
+                slice.dtype()
+            ),
+        };
+        let (o1, o2) = match ids_l.contiguous_offsets() {
+            Some(offsets) => offsets,
+            None => Err(crate::Error::RequiresContiguous {
+                op: "quantized-embedding",
+            }
+            .bt())?,
+        };
+        let dst = kernels::get_rows(
+            &self.data,
+            self.dtype,
+            hidden,
+            ids_mem,
+            o1,
+            o2 - o1,
+            &self.device,
+        )?;
+        Ok(RocmStorage {
+            slice: RocmStorageSlice::F32(dst),
+            device: self.device.clone(),
+        })
+    }
+
+    /// `self` is the transposed weight matrix of shape `(n, k)`.
+    ///
+    /// See the module docs for the three paths and the order they are tried in.
+    /// The dense fallback lays the dequantized weights out as `n` rows of `k`,
+    /// so the `(k, n)` operand the GEMM wants is that same buffer viewed with
+    /// swapped strides.
+    pub fn fwd(
+        &self,
+        self_shape: &Shape,
+        storage: &RocmStorage,
+        layout: &Layout,
+    ) -> Result<(RocmStorage, Shape)> {
+        let (n, k) = self_shape.dims2()?;
+        let (b, m, k2) = match layout.shape().dims() {
+            &[b, m, k2] => (b, m, k2),
+            &[m, k2] => (1, m, k2),
+            s => crate::bail!("unexpected shape for quantized matmul input {s:?}"),
+        };
+        if k2 != k {
+            crate::bail!(
+                "mismatch on quantized matmul dim {self_shape:?} {:?}",
+                layout.shape()
+            )
+        }
+        let mut out_shape = layout.shape().dims().to_vec();
+        out_shape.pop();
+        out_shape.push(n);
+        let wrap = |dst| {
+            (
+                RocmStorage {
+                    slice: RocmStorageSlice::F32(dst),
+                    device: self.device.clone(),
+                },
+                Shape::from(out_shape.clone()),
+            )
+        };
+
+        let b_size = b * m;
+        if b_size <= mmvq::MAX_BATCH {
+            if let Some(dst) = mmvq::try_fwd(self, n, k, b_size, storage, layout)? {
+                return Ok(wrap(dst));
+            }
+        }
+
+        // DMMV: a single f32 activation vector against the packed weights. The
+        // kernels reduce with `__shfl_xor(width = 32)` and index only lanes
+        // below 32, so they are correct on a 32-lane RDNA wavefront;
+        // `dmmv_decode_matches_a_dequantized_matmul` pins that on hardware for
+        // all ten dtypes.
+        if b_size == 1 && dmmv::has_kernel(self.dtype) {
+            if let RocmStorageSlice::F32(y) = &storage.slice {
+                if let Some((o1, o2)) = layout.contiguous_offsets() {
+                    if o2 - o1 == k {
+                        let dst = dmmv::mul_mat_vec(
+                            &self.data,
+                            self.len,
+                            y,
+                            o1,
+                            self.dtype,
+                            k,
+                            n,
+                            &self.device,
+                        )?;
+                        return Ok(wrap(dst));
+                    }
+                }
+            }
+        }
+
+        // MMQ: everything the vector paths declined, prefill above all. It
+        // reads the packed weights directly, so the dense fallback below it is
+        // otherwise only for the dtypes and shapes it has no kernel for — but
+        // at a prefill-sized batch of f16 the dense path is about twice as
+        // fast, and `dense::preferred` hands those to it instead.
+        if !dense::preferred(storage.dtype(), self.dtype, n, k, b_size) {
+            if let Some(dst) = mmq::try_fwd(self, n, k, b_size, storage, layout)? {
+                return Ok(wrap(dst));
+            }
+        }
+
+        let out = dense::forward(self, (b, m, n, k), storage, layout)?;
+        Ok((out, out_shape.into()))
+    }
+
+    /// `self` is a `(num_experts, n, k)` stack of expert weight matrices.
+    ///
+    /// See [`moe`] — the kernels are the MMVQ ones with the expert index folded
+    /// into the weight pointer.
+    pub fn indexed_moe_forward(
+        &self,
+        self_shape: &Shape,
+        input: &RocmStorage,
+        input_l: &Layout,
+        ids: &RocmStorage,
+        ids_l: &Layout,
+    ) -> Result<(RocmStorage, Shape)> {
+        moe::forward(self, self_shape, input, input_l, ids, ids_l)
+    }
+}
+
+pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
+    device: &RocmDevice,
+    data: &[T],
+) -> Result<QStorage> {
+    let data = unsafe {
+        std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
+    };
+    let dtype = T::DTYPE;
+    Ok(QStorage::Rocm(QRocmStorage {
+        data: upload(device, data, dtype)?,
+        len: data.len(),
+        dtype,
+        device: device.clone(),
+    }))
+}
