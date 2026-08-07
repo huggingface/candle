@@ -98,7 +98,14 @@ rocm-shim-test:
 	    && echo "compiled" || { echo "FAILED"; sed -n '1,20p' $$tmp/$$n.err; exit 1; }; \
 	done; \
 	hipcc --offload-arch=$(ROCM_ARCH) -std=c++17 -I $$shim -o $$tmp/shim_test $$shim/shim_test.hip \
-	  && $$tmp/shim_test
+	  && $$tmp/shim_test || exit 1; \
+	rocm_inc=$$(hipconfig --rocmpath 2>/dev/null || echo /opt/rocm)/include/hip/amd_detail; \
+	if grep -lq atomicAdd $$rocm_inc/amd_hip_fp16.h $$rocm_inc/amd_hip_bf16.h 2>/dev/null; then \
+	  echo "coexist test skipped: HIP headers define 16-bit atomicAdd (shim_test above covered coexistence)"; \
+	else \
+	  hipcc --offload-arch=$(ROCM_ARCH) -std=c++17 -I $$shim -o $$tmp/shim_coexist_test \
+	    $$shim/shim_coexist_test.hip && $$tmp/shim_coexist_test; \
+	fi
 
 rocm-info:
 	rocminfo | grep -E '^\s*(Name|Marketing Name|Uuid):' || true

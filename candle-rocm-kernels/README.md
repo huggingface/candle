@@ -632,6 +632,16 @@ spellings, and `__dp4a` (which on gfx11/gfx12 lowers to `v_dot4_i32_iu8` via
 `__builtin_amdgcn_sudot4` rather than to the portable loop) — on real
 hardware.
 
+The 16-bit `atomicAdd` fallbacks are constrained function templates rather
+than plain overloads: ROCm >= 7.14 defines `atomicAdd(__half*, __half)` and
+the `__hip_bfloat16` counterpart in its own headers, and overload resolution
+prefers such a non-template exactly-matching overload over the shim's
+template, so newer toolchains use their native atomics and older ones
+instantiate the CAS loop. On toolchains whose headers lack the overloads,
+`make rocm-shim-test` additionally runs `shim_coexist_test.hip`, which
+recreates the >= 7.14 header layering with sentinel overloads and asserts the
+non-template wins.
+
 The cache keying itself is covered by unit tests:
 
 ```

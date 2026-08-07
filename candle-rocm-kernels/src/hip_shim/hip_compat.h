@@ -18,12 +18,30 @@
 // ---------------------------------------------------------------------------
 // Atomics
 // ---------------------------------------------------------------------------
-// HIP has atomicAdd for float/double/int, but not for the 16-bit float types.
-// reduce.cu's SUM_OP instantiates sum_f16 and sum_bf16, both of which need one.
-// Implemented with a 32-bit CAS over the containing aligned word, which is the
-// same trick CUDA's own pre-sm_70 fallback uses.
+// reduce.cu's SUM_OP instantiates sum_f16 and sum_bf16, both of which need an
+// atomicAdd for the 16-bit float types. Older HIP (up to at least 7.2) does not
+// provide one; newer ROCm (observed on 7.14) defines both overloads in its own
+// amd_hip_fp16.h / amd_hip_bf16.h, so a plain function here would be a
+// redefinition there, and a version gate would have to guess the exact release
+// the overloads appeared in. The fallbacks are therefore constrained function
+// *templates*: a template may coexist with a same-signature non-template, and
+// overload resolution prefers the non-template on an otherwise equal match, so
+// the header's own (hardware) atomics win wherever they exist and the CAS loop
+// below is instantiated only where they don't.
+//
+// The loop CASes the containing aligned 32-bit word, which is the same trick
+// CUDA's own pre-sm_70 fallback uses.
+namespace candle_hip {
+template <typename A, typename B> struct is_same { static constexpr bool value = false; };
+template <typename A> struct is_same<A, A> { static constexpr bool value = true; };
+template <bool C, typename T = void> struct enable_if {};
+template <typename T> struct enable_if<true, T> { using type = T; };
+} // namespace candle_hip
+
 #define CANDLE_HIP_ATOMIC_ADD_16(TYPE, TO_BITS, FROM_BITS)                     \
-    __device__ __forceinline__ TYPE atomicAdd(TYPE *address, TYPE val) {       \
+    template <typename T, typename candle_hip::enable_if<                      \
+                              candle_hip::is_same<T, TYPE>::value, int>::type = 0> \
+    __device__ __forceinline__ T atomicAdd(T *address, T val) {                \
         unsigned int *base =                                                   \
             (unsigned int *)((char *)address - ((size_t)address & 2));         \
         bool upper = ((size_t)address & 2) != 0;                               \
