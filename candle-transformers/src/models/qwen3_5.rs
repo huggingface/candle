@@ -136,6 +136,7 @@ fn l2_norm(x: &Tensor) -> Result<Tensor> {
     x.broadcast_mul(&inv_norm)
 }
 
+#[allow(dead_code)]
 fn repeat_interleave(x: &Tensor, n: usize, dim: usize) -> Result<Tensor> {
     if n == 1 {
         return Ok(x.clone());
@@ -146,6 +147,20 @@ fn repeat_interleave(x: &Tensor, n: usize, dim: usize) -> Result<Tensor> {
     let mut final_dims = x.dims().to_vec();
     final_dims[dim] *= n;
     expanded.reshape(final_dims.as_slice())
+}
+
+/// Repeat along `dim` in TILED order: `[a,b,c]` -> `[a,b,c,a,b,c]`.
+///
+/// This is ggml's `repeat` semantics (`dst[i] = src[i % src_ne]`), which is what llama.cpp uses to
+/// broadcast q/k up to `num_v_heads` for the GGUF-derived checkpoints this architecture targets.
+/// Contrast [`repeat_interleave`], which produces GROUPED order `[a,a,b,b,c,c]` — the two agree
+/// only when `n == 1`.
+fn repeat_tiled(x: &Tensor, n: usize, dim: usize) -> Result<Tensor> {
+    if n == 1 {
+        return Ok(x.clone());
+    }
+    let xs = vec![x.clone(); n];
+    Tensor::cat(&xs, dim)
 }
 
 #[derive(Debug, Clone)]
@@ -435,9 +450,11 @@ impl Qwen3_5GatedDeltaNet {
             self.neg_a_f32.broadcast_mul(&softplus)?
         };
 
+        // TILED, not interleaved: matches ggml's cyclic broadcast (see repeat_tiled doc comment
+        // and the equivalent fix in quantized_qwen3_5.rs). A no-op when repeat_n == 1.
         let repeat_n = self.num_v_heads / self.num_k_heads;
-        let q = repeat_interleave(&q, repeat_n, 2)?;
-        let k = repeat_interleave(&k, repeat_n, 2)?;
+        let q = repeat_tiled(&q, repeat_n, 2)?;
+        let k = repeat_tiled(&k, repeat_n, 2)?;
 
         let initial_state = if use_precomputed_states {
             self.recurrent_state.as_ref()
@@ -467,7 +484,11 @@ pub struct Qwen3_5TextRotaryEmbedding {
 }
 
 impl Qwen3_5TextRotaryEmbedding {
-    pub fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
+    // `dtype` is kept for call-site compatibility but deliberately unused: the angle table is
+    // always built in f32, then cast down at use in `apply`. Building it in the model dtype
+    // (e.g. f16) loses absolute precision as `position * inv_freq` grows, corrupting long-context
+    // rotations (see the equivalent fix in quantized_qwen3_5.rs::RotaryEmbedding).
+    pub fn new(_dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
         let dim = (cfg.head_dim() as f64 * cfg.text_config.partial_rotary_factor) as usize;
         if dim == 0 || dim > cfg.head_dim() || !dim.is_multiple_of(2) {
             candle::bail!(
@@ -481,9 +502,9 @@ impl Qwen3_5TextRotaryEmbedding {
             .map(|i| 1f32 / cfg.rope_theta().powf(i as f64 / dim as f64) as f32)
             .collect();
         let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
+            .to_dtype(DType::F32)?
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
         Ok(Self {
@@ -495,8 +516,11 @@ impl Qwen3_5TextRotaryEmbedding {
 
     pub fn apply(&self, q: &Tensor, k: &Tensor, seqlen_offset: usize) -> Result<(Tensor, Tensor)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
-        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
+        // cos/sin are stored in f32; cast down to the activation dtype here, at use. They are
+        // bounded by 1, so a late f16/bf16 cast costs a small bounded error rather than the
+        // unbounded angle error that building the table itself in f16 would introduce.
+        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?.to_dtype(q.dtype())?;
+        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?.to_dtype(q.dtype())?;
         let apply = |x: &Tensor| -> Result<Tensor> {
             let rotated = candle_nn::rotary_emb::rope(
                 &x.narrow(D::Minus1, 0, self.rotary_dim)?.contiguous()?,
