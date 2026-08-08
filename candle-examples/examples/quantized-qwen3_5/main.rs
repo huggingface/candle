@@ -9,7 +9,7 @@ use std::io::Write;
 use tokenizers::Tokenizer;
 
 use candle::quantized::gguf_file;
-use candle::Tensor;
+use candle::{DType, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -201,7 +201,14 @@ fn main() -> anyhow::Result<()> {
             format_size(total_size_in_bytes),
             start.elapsed().as_secs_f32(),
         );
-        Qwen3_5::from_gguf(model, &mut file, &device)?
+        // Only read by MoE (`qwen35moe`) checkpoints, whose routed-expert matmul is cuda-only
+        // and needs an f16/bf16 working dtype; dense `qwen35`/`qwen3_5` files ignore it.
+        let moe_dtype = if device.is_cuda() {
+            DType::BF16
+        } else {
+            DType::F32
+        };
+        Qwen3_5::from_gguf(model, &mut file, &device, moe_dtype)?
     };
     println!("model built");
 

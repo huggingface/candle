@@ -7,11 +7,12 @@
 //! for reduced memory usage and faster inference.
 //!
 use super::with_tracing::QMatMul;
+use crate::fused_moe::FusedMoeGGUF;
 use crate::models::qwen3_5_linear_attn_scan::{gated_delta_rule_chunked, sequential_step};
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{kv_cache::ConcatKvCache, Activation, Embedding};
+use candle_nn::{kv_cache::ConcatKvCache, Activation, Embedding, Linear};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
@@ -44,6 +45,10 @@ impl<R: Read + Seek> Gguf<R> {
     pub fn tensor(&mut self, name: &str) -> Result<QTensor> {
         self.ct.tensor(&mut self.reader, name, &self.device)
     }
+
+    pub fn has_tensor(&self, name: &str) -> bool {
+        self.ct.tensor_infos.contains_key(name)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -56,9 +61,32 @@ struct MlpWeights {
 
 impl MlpWeights {
     fn new<R: Read + Seek>(gg: &mut Gguf<R>, prefix: &str) -> Result<Self> {
-        let (gate_proj, _) = gg.qmatmul(&format!("{prefix}.ffn_gate.weight"))?;
-        let (up_proj, _) = gg.qmatmul(&format!("{prefix}.ffn_up.weight"))?;
-        let (down_proj, _) = gg.qmatmul(&format!("{prefix}.ffn_down.weight"))?;
+        Self::new_named(gg, prefix, "ffn_gate", "ffn_up", "ffn_down")
+    }
+
+    /// The shared expert of a sparse-MoE layer reuses the dense gate/up/down MLP shape, but
+    /// llama.cpp stores its weights under the `*_shexp` tensor names instead of the plain
+    /// `ffn_*` ones the dense/per-layer MLP uses.
+    fn new_shared_expert<R: Read + Seek>(gg: &mut Gguf<R>, prefix: &str) -> Result<Self> {
+        Self::new_named(
+            gg,
+            prefix,
+            "ffn_gate_shexp",
+            "ffn_up_shexp",
+            "ffn_down_shexp",
+        )
+    }
+
+    fn new_named<R: Read + Seek>(
+        gg: &mut Gguf<R>,
+        prefix: &str,
+        gate_name: &str,
+        up_name: &str,
+        down_name: &str,
+    ) -> Result<Self> {
+        let (gate_proj, _) = gg.qmatmul(&format!("{prefix}.{gate_name}.weight"))?;
+        let (up_proj, _) = gg.qmatmul(&format!("{prefix}.{up_name}.weight"))?;
+        let (down_proj, _) = gg.qmatmul(&format!("{prefix}.{down_name}.weight"))?;
         let act_fn = Activation::Silu;
         Ok(Self {
             gate_proj,
@@ -75,6 +103,93 @@ impl Module for MlpWeights {
         let up = self.up_proj.forward(x)?;
         let gated = (gate * up)?;
         self.down_proj.forward(&gated)
+    }
+}
+
+/// A sparse Qwen 3.5 MoE feed-forward block: a router picks the top-k routed experts (run
+/// through [`FusedMoeGGUF`], CUDA-only), and a dense "shared expert" that always runs, gated by
+/// its own sigmoid router, is added on top -- mirroring `Qwen3_5SparseMoeBlock` in the
+/// non-quantized `qwen3_5` model and llama.cpp's `build_layer_ffn` for `qwen35moe`.
+struct SparseMoeWeights {
+    routed: FusedMoeGGUF,
+    shared_expert: MlpWeights,
+    // (1, hidden_size), f32: llama.cpp stores this as a bare `n_embd`-length vector (the output
+    // dimension of 1 is implicit), so it is reshaped to a row on load.
+    shared_expert_gate: Tensor,
+}
+
+impl SparseMoeWeights {
+    #[allow(clippy::too_many_arguments)]
+    fn new<R: Read + Seek>(
+        gg: &mut Gguf<R>,
+        prefix: &str,
+        hidden_size: usize,
+        num_experts_per_tok: usize,
+        dtype: DType,
+    ) -> Result<Self> {
+        let gate_ws = gg
+            .tensor(&format!("{prefix}.ffn_gate_inp.weight"))?
+            .dequantize(&gg.device)?
+            .to_dtype(DType::F32)?;
+        let gate = Linear::new(gate_ws, None);
+        let gate_experts = Arc::new(gg.tensor(&format!("{prefix}.ffn_gate_exps.weight"))?);
+        let up_experts = Arc::new(gg.tensor(&format!("{prefix}.ffn_up_exps.weight"))?);
+        let down_experts = Arc::new(gg.tensor(&format!("{prefix}.ffn_down_exps.weight"))?);
+        let routed = FusedMoeGGUF {
+            gate,
+            gate_experts,
+            up_experts,
+            down_experts,
+            act: Activation::Silu,
+            norm_topk_prob: true,
+            num_experts_per_tok,
+            dtype,
+        };
+
+        let shared_expert = MlpWeights::new_shared_expert(gg, prefix)?;
+        let shared_expert_gate = gg
+            .tensor(&format!("{prefix}.ffn_gate_inp_shexp.weight"))?
+            .dequantize(&gg.device)?
+            .to_dtype(DType::F32)?
+            .reshape((1, hidden_size))?;
+
+        Ok(Self {
+            routed,
+            shared_expert,
+            shared_expert_gate,
+        })
+    }
+
+    fn forward(&self, x: &Tensor, is_prefill: bool) -> Result<Tensor> {
+        let out_dtype = x.dtype();
+        let routed = self.routed.forward(x, is_prefill)?;
+
+        let (b, l, hidden) = x.dims3()?;
+        let x_flat = x.reshape(((), hidden))?.to_dtype(DType::F32)?;
+        let gate = candle_nn::ops::sigmoid(&x_flat.matmul(&self.shared_expert_gate.t()?)?)?;
+        let shared = self
+            .shared_expert
+            .forward(&x_flat)?
+            .to_dtype(DType::F32)?
+            .broadcast_mul(&gate)?
+            .reshape((b, l, hidden))?
+            .to_dtype(out_dtype)?;
+
+        routed + shared
+    }
+}
+
+enum FeedForward {
+    Dense(MlpWeights),
+    Sparse(SparseMoeWeights),
+}
+
+impl FeedForward {
+    fn forward(&self, x: &Tensor, is_prefill: bool) -> Result<Tensor> {
+        match self {
+            Self::Dense(mlp) => mlp.forward(x),
+            Self::Sparse(moe) => moe.forward(x, is_prefill),
+        }
     }
 }
 
@@ -589,10 +704,9 @@ enum TokenMixer {
     LinearAttention(GatedDeltaNetWeights),
 }
 
-#[derive(Debug, Clone)]
 struct LayerWeights {
     token_mixer: TokenMixer,
-    mlp: MlpWeights,
+    mlp: FeedForward,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
 }
@@ -615,6 +729,10 @@ impl LayerWeights {
         linear_value_head_dim: usize,
         linear_conv_kernel_dim: usize,
         hidden_size: usize,
+        // Sparse-MoE specifics; `num_experts_per_tok` is unused when this layer has no
+        // `ffn_gate_inp` tensor, i.e. is a dense MLP layer.
+        num_experts_per_tok: usize,
+        moe_dtype: DType,
     ) -> Result<Self> {
         let prefix = format!("blk.{layer_idx}");
         let is_full_attention = (layer_idx + 1).is_multiple_of(full_attention_interval);
@@ -643,7 +761,17 @@ impl LayerWeights {
             )?)
         };
 
-        let mlp = MlpWeights::new(gg, &prefix)?;
+        let mlp = if gg.has_tensor(&format!("{prefix}.ffn_gate_inp.weight")) {
+            FeedForward::Sparse(SparseMoeWeights::new(
+                gg,
+                &prefix,
+                hidden_size,
+                num_experts_per_tok,
+                moe_dtype,
+            )?)
+        } else {
+            FeedForward::Dense(MlpWeights::new(gg, &prefix)?)
+        };
         let input_layernorm = gg.rms_norm(&format!("{prefix}.attn_norm.weight"), rms_norm_eps)?;
         let post_attention_layernorm = gg.rms_norm(
             &format!("{prefix}.post_attention_norm.weight"),
@@ -669,7 +797,7 @@ impl LayerWeights {
 
         let residual = &x;
         let x = self.post_attention_layernorm.forward(&x)?;
-        let x = x.apply(&self.mlp)?;
+        let x = self.mlp.forward(&x, mask.is_some())?;
         x + residual
     }
 
@@ -681,7 +809,6 @@ impl LayerWeights {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct ModelWeights {
     embed_tokens: Embedding,
     layers: Vec<LayerWeights>,
@@ -692,10 +819,15 @@ pub struct ModelWeights {
 }
 
 impl ModelWeights {
+    /// `moe_dtype` is the working precision for the sparse-MoE routed-expert matmul
+    /// (`candle_nn::moe::moe_gemm_gguf`, CUDA-only, F16 or BF16). It is ignored by dense
+    /// checkpoints, i.e. every `qwen35`/`qwen3_5` file and any `qwen35moe` layer that turns out
+    /// not to carry an `ffn_gate_inp` tensor.
     pub fn from_gguf<R: Read + Seek>(
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
+        moe_dtype: DType,
     ) -> Result<Self> {
         let mut gg = Gguf::new(ct, reader, device.clone());
         let md_get = |s: &str| match gg.metadata().get(s) {
@@ -704,10 +836,23 @@ impl ModelWeights {
                 let s35 = s.replace("qwen3.", "qwen35.");
                 match gg.metadata().get(&s35) {
                     Some(v) => Ok(v),
-                    None => candle::bail!("cannot find {s} or {s35} in metadata"),
+                    None => {
+                        let s35moe = s.replace("qwen3.", "qwen35moe.");
+                        match gg.metadata().get(&s35moe) {
+                            Some(v) => Ok(v),
+                            None => candle::bail!("cannot find {s}, {s35} or {s35moe} in metadata"),
+                        }
+                    }
                 }
             }
         };
+        // MoE-only keys have no `qwen3.`-namespace sibling to fall back from, so they are read
+        // directly from the `qwen35moe.` namespace and default to "not MoE" when absent.
+        let num_experts_per_tok = gg
+            .metadata()
+            .get("qwen35moe.expert_used_count")
+            .and_then(|v| v.to_u32().ok())
+            .unwrap_or(0) as usize;
 
         let num_attention_heads = md_get("qwen3.attention.head_count")?.to_u32()? as usize;
         let num_kv_heads = md_get("qwen3.attention.head_count_kv")?.to_u32()? as usize;
@@ -772,6 +917,8 @@ impl ModelWeights {
                 linear_value_head_dim,
                 linear_conv_kernel_dim,
                 hidden_size,
+                num_experts_per_tok,
+                moe_dtype,
             )?);
         }
 

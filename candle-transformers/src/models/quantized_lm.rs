@@ -80,6 +80,11 @@ pub enum Architecture {
     Qwen3_5,
     /// [`quantized_qwen3_moe`], `general.architecture = "qwen3moe"`. CUDA only.
     Qwen3Moe,
+    /// [`quantized_qwen3_5`] (same backend as [`Architecture::Qwen3_5`], which loads a dense or
+    /// sparse-MoE feed-forward per layer depending on which tensors the file carries),
+    /// `general.architecture = "qwen35moe"`. The routed-expert matmul is CUDA only, same
+    /// constraint as [`Architecture::Qwen3Moe`].
+    Qwen3_5Moe,
 }
 
 /// Every `general.architecture` value [`from_gguf`] accepts, in dispatch order.
@@ -98,6 +103,7 @@ pub const SUPPORTED_ARCHITECTURES: &[&str] = &[
     "qwen35",
     "qwen3_5",
     "qwen3moe",
+    "qwen35moe",
 ];
 
 impl Architecture {
@@ -119,6 +125,7 @@ impl Architecture {
             // is kept as an alias for other conversion paths that may emit it.
             "qwen35" | "qwen3_5" => Self::Qwen3_5,
             "qwen3moe" => Self::Qwen3Moe,
+            "qwen35moe" => Self::Qwen3_5Moe,
             _ => return None,
         };
         Some(arch)
@@ -129,13 +136,6 @@ impl Architecture {
         let name = architecture_name(ct)?;
         match Self::from_name(name) {
             Some(arch) => Ok(arch),
-            // "qwen35moe" is a real, known architecture value (the MoE sibling of "qwen35"),
-            // just not one this crate implements yet. Say so explicitly instead of lumping it
-            // in with genuinely unrecognized names.
-            None if name == "qwen35moe" => candle::bail!(
-                "qwen35moe (Qwen3.5 MoE) gguf checkpoints are not supported yet; \
-                 only the dense qwen35/qwen3_5 backend is implemented"
-            ),
             None => candle::bail!(
                 "unsupported gguf architecture {name:?}, expected one of {SUPPORTED_ARCHITECTURES:?}"
             ),
@@ -159,6 +159,7 @@ impl Architecture {
             Self::Qwen3 => "qwen3",
             Self::Qwen3_5 => "qwen35",
             Self::Qwen3Moe => "qwen3moe",
+            Self::Qwen3_5Moe => "qwen35moe",
         }
     }
 
@@ -167,19 +168,22 @@ impl Architecture {
     /// [`from_gguf`] calls this before reading any tensor, so an unusable combination fails at
     /// load time rather than in the middle of the first forward pass.
     ///
-    /// `qwen3moe` routes its experts through `candle_nn::moe_gemm_gguf`, which is implemented
-    /// for CUDA only and whose prefill kernel takes an F16 or BF16 working dtype.
+    /// `qwen3moe` and `qwen35moe` route their routed experts through
+    /// `candle_nn::moe_gemm_gguf`, which is implemented for CUDA only and whose prefill kernel
+    /// takes an F16 or BF16 working dtype.
     pub fn check_device_support(&self, device: &Device, dtype: DType) -> Result<()> {
-        if *self == Self::Qwen3Moe {
+        if matches!(self, Self::Qwen3Moe | Self::Qwen3_5Moe) {
             if !device.is_cuda() {
                 candle::bail!(
-                    "the qwen3moe backend requires a cuda device: \
-                     candle_nn::moe_gemm_gguf is only implemented for the cuda backend"
+                    "the {} backend requires a cuda device: \
+                     candle_nn::moe_gemm_gguf is only implemented for the cuda backend",
+                    self.name()
                 )
             }
             if !matches!(dtype, DType::F16 | DType::BF16) {
                 candle::bail!(
-                    "the qwen3moe backend requires a f16 or bf16 working dtype, got {dtype:?}"
+                    "the {} backend requires a f16 or bf16 working dtype, got {dtype:?}",
+                    self.name()
                 )
             }
         }
@@ -229,10 +233,11 @@ pub struct Options {
     /// Setting it for a backend that does read it requires the `flash-attn` feature and a CUDA
     /// device — see [`Architecture::check_flash_attn_support`].
     pub use_flash_attn: bool,
-    /// Working dtype for the backends that take one (`glm4`, `qwen3moe`).
+    /// Working dtype for the backends that take one (`glm4`, `qwen3moe`, `qwen35moe`).
     ///
-    /// `None` resolves to BF16 on CUDA and Metal, F32 elsewhere. Note that `qwen3moe` rejects
-    /// F32, so a CPU load of that family fails on the device check first either way.
+    /// `None` resolves to BF16 on CUDA and Metal, F32 elsewhere. Note that `qwen3moe` and
+    /// `qwen35moe` reject F32, so a CPU load of either family fails on the device check first
+    /// either way.
     pub dtype: Option<DType>,
 }
 
@@ -342,9 +347,9 @@ pub fn from_gguf_with<R: Read + Seek>(
         Architecture::Qwen3 => Box::new(quantized_qwen3::ModelWeights::from_gguf(
             ct, reader, device,
         )?),
-        Architecture::Qwen3_5 => Box::new(quantized_qwen3_5::ModelWeights::from_gguf(
-            ct, reader, device,
-        )?),
+        Architecture::Qwen3_5 | Architecture::Qwen3_5Moe => Box::new(
+            quantized_qwen3_5::ModelWeights::from_gguf(ct, reader, device, dtype)?,
+        ),
         Architecture::Qwen3Moe => Box::new(quantized_qwen3_moe::GGUFQWenMoE::from_gguf(
             ct, reader, device, dtype,
         )?),
@@ -426,6 +431,10 @@ mod tests {
             Architecture::from_name("qwen3moe"),
             Some(Architecture::Qwen3Moe)
         );
+        assert_eq!(
+            Architecture::from_name("qwen35moe"),
+            Some(Architecture::Qwen3_5Moe)
+        );
         // The gemma backend probes several prefixes, they share one entry point.
         for name in ["gemma", "gemma2", "gemma3", "gemma-embedding"] {
             assert_eq!(Architecture::from_name(name), Some(Architecture::Gemma3));
@@ -448,6 +457,7 @@ mod tests {
             Architecture::Qwen3,
             Architecture::Qwen3_5,
             Architecture::Qwen3Moe,
+            Architecture::Qwen3_5Moe,
         ] {
             assert_eq!(Architecture::from_name(arch.name()), Some(arch));
             assert!(SUPPORTED_ARCHITECTURES.contains(&arch.name()));
@@ -472,20 +482,24 @@ mod tests {
     }
 
     #[test]
-    fn qwen35moe_gets_a_distinct_not_yet_supported_error() {
-        // "qwen35moe" is a real architecture value, just not implemented yet: it must not be
-        // reported as an unrecognized name alongside things like "mamba".
+    fn qwen35moe_resolves_and_is_rejected_off_cuda_before_any_read() {
+        // "qwen35moe" resolves to a real backend (quantized_qwen3_5, same as dense qwen35), but
+        // like qwen3moe its routed-expert matmul is cuda-only, so an off-cuda load must fail on
+        // the device check rather than a short read.
         let ct = content(&[(
             "general.architecture",
             Value::String("qwen35moe".to_string()),
         )]);
-        let err = Architecture::from_content(&ct).unwrap_err().to_string();
-        assert!(err.contains("qwen35moe"), "{err}");
-        assert!(err.contains("not supported yet"), "{err}");
-        assert!(
-            !err.contains("expected one of"),
-            "should not be reported as an unrecognized name: {err}"
+        assert_eq!(
+            Architecture::from_content(&ct).unwrap(),
+            Architecture::Qwen3_5Moe
         );
+        let mut reader = Cursor::new(Vec::new());
+        let err = match from_gguf(ct, &mut reader, &Device::Cpu) {
+            Ok(_) => panic!("qwen35moe loaded on the cpu"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("cuda"), "{err}");
     }
 
     #[test]
@@ -557,13 +571,15 @@ mod tests {
     }
 
     #[test]
-    fn only_qwen3moe_constrains_the_device() {
-        // Even the dtype qwen3moe wants is not enough off cuda.
-        let err = Architecture::Qwen3Moe
-            .check_device_support(&Device::Cpu, DType::F16)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("cuda"), "{err}");
+    fn only_the_moe_backends_constrain_the_device() {
+        // Even the dtype qwen3moe/qwen35moe want is not enough off cuda.
+        for arch in [Architecture::Qwen3Moe, Architecture::Qwen3_5Moe] {
+            let err = arch
+                .check_device_support(&Device::Cpu, DType::F16)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("cuda"), "{err}");
+        }
         // Every other family is device and dtype agnostic here.
         for arch in [
             Architecture::Llama,
@@ -606,6 +622,7 @@ mod tests {
             Architecture::Qwen3,
             Architecture::Qwen3_5,
             Architecture::Qwen3Moe,
+            Architecture::Qwen3_5Moe,
         ] {
             assert!(!arch.supports_flash_attn(), "{}", arch.name());
             // The flag is inert for them, so a generic loader can leave it set.
@@ -625,16 +642,16 @@ mod tests {
             return;
         };
         assert_eq!(Options::default().dtype_for(&device), DType::BF16);
-        for dtype in [DType::BF16, DType::F16] {
-            Architecture::Qwen3Moe
-                .check_device_support(&device, dtype)
-                .unwrap();
+        for arch in [Architecture::Qwen3Moe, Architecture::Qwen3_5Moe] {
+            for dtype in [DType::BF16, DType::F16] {
+                arch.check_device_support(&device, dtype).unwrap();
+            }
+            let err = match arch.check_device_support(&device, DType::F32) {
+                Ok(()) => panic!("{} accepted an f32 working dtype", arch.name()),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains("f16"), "{err}");
         }
-        let err = match Architecture::Qwen3Moe.check_device_support(&device, DType::F32) {
-            Ok(()) => panic!("qwen3moe accepted an f32 working dtype"),
-            Err(err) => err.to_string(),
-        };
-        assert!(err.contains("f16"), "{err}");
         // Every family stays loadable on cuda under the resolved default.
         for arch in [
             Architecture::Llama,
