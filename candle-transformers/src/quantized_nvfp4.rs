@@ -241,7 +241,11 @@ pub fn dequantize_nvfp4(
         let scale_row = &scale[row];
         for col in 0..in_dim {
             let byte = packed_row[col / 2];
-            let nibble = if col % 2 == 0 { byte & 0xf } else { byte >> 4 };
+            let nibble = if col.is_multiple_of(2) {
+                byte & 0xf
+            } else {
+                byte >> 4
+            };
             let block_scale = scale_row[col / block_size].to_f32();
             out[row * in_dim + col] = unpack_e2m1(nibble) * block_scale * weight_scale_2;
         }
@@ -391,7 +395,11 @@ impl Module for Nvfp4LinearPacked {
         {
             for (col, val) in row_buf.iter_mut().enumerate() {
                 let byte = packed_row[col / 2];
-                let nibble = if col % 2 == 0 { byte & 0xf } else { byte >> 4 };
+                let nibble = if col.is_multiple_of(2) {
+                    byte & 0xf
+                } else {
+                    byte >> 4
+                };
                 let block_scale = scale_row[col / self.block_size].to_f32();
                 *val = unpack_e2m1(nibble) * block_scale * self.weight_scale_2;
             }
