@@ -2491,3 +2491,92 @@ fn residency_set_batch_insert_remove() {
     set.remove_batch(std::iter::empty());
     assert_eq!(raw.allocationCount(), base);
 }
+
+// ---------------------------------------------------------------------------
+// Reproduction: `kernel_mul_mv_q2_K_f32` stores past `ne01`.
+//
+// `kernel_mul_mv_q2_K_f32_impl` computes
+//     first_row = (r0 * N_SIMDGROUP + sgitg) * N_DST
+// with N_SIMDGROUP == 2 and N_DST == 4, so one threadgroup owns 8 consecutive
+// output rows, and it stores WITHOUT the `first_row + row < ne01` bound check
+// that the legacy-quant kernels in the same file do have (quantized.metal:2374
+// and :2551).
+//
+// `call_quantized_matmul_mv_t` meanwhile dispatches `ceil(ne01 / align)`
+// threadgroups with `align = 4` for Q2K, so it launches twice as many
+// threadgroups as the kernel's row stride calls for. The highest one starts at
+// row `8 * ceil(ne01 / 4) - 4` and writes 4 rows from there — roughly `ne01`
+// f32 values past the end of the output.
+//
+// Q2K is the only entry in the file where the two disagree:
+//
+//   kernel   rows written per threadgroup   `align` in the dispatch table
+//   q2_K     (r0 * 2 + sgitg) * 4  =  8     4     <-- mismatch
+//   q3_K     (r0 * 2 + sgitg) * 2  =  4     4
+//   q4_K      r0 * 4               =  4     4
+//   q5_K     (r0 * 2 + sgitg) * 2  =  4     4
+//   q6_K      2 * r0 + sgitg       =  2     2
+//
+// The test needs no quantizer: an all-zero block_q2_K has d == dmin == 0, so
+// every dequantized weight is 0 and the whole correct output is exactly 0.0.
+// The interesting part is the canary region after it.
+#[test]
+fn q2k_mul_mv_writes_past_ne01() {
+    // block_q2_K = scales[QK_K/16] + qs[QK_K/4] + half d + half dmin
+    const QK_K: usize = 256;
+    const BLOCK_Q2K_BYTES: usize = QK_K / 16 + QK_K / 4 + 2 + 2; // 84
+    const SENTINEL: f32 = -1234.0;
+
+    // ne01 = 12 output rows: not a multiple of the kernel's 8-row stride, and
+    // small enough that the overrun is easy to read off.
+    let (b, m, n, k) = (1usize, 1usize, 12usize, QK_K);
+
+    let device = device();
+    let kernels = Kernels::new();
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+
+    // src0: the quantized weights, all-zero blocks.
+    let weights = new_buffer(&device, &vec![0u8; n * (k / QK_K) * BLOCK_Q2K_BYTES]);
+    // src1: the activation vector.
+    let activations = new_buffer(&device, &vec![1f32; m * k]);
+    // dst: 4x the space actually needed, pre-filled with a sentinel so that any
+    // store outside [0, n) is visible instead of silently corrupting whatever
+    // the buffer pool happens to hand out next.
+    let dst_len = 4 * n;
+    let dst = new_buffer(&device, &vec![SENTINEL; dst_len]);
+
+    call_quantized_matmul_mv_t(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::Q2K,
+        (b, m, n, k),
+        &activations,
+        0,
+        &weights,
+        0,
+        &dst,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let out: Vec<f32> = read_to_vec(&dst, dst_len);
+
+    // The computed rows themselves are fine.
+    assert_eq!(
+        &out[..n],
+        &vec![0f32; n][..],
+        "the in-range output rows are wrong, which is a different bug from the one under test"
+    );
+
+    // Everything past row n must be untouched.
+    let clobbered: Vec<usize> = (n..dst_len).filter(|&i| out[i] != SENTINEL).collect();
+    assert!(
+        clobbered.is_empty(),
+        "kernel_mul_mv_q2_K_f32 wrote {} f32 values past ne01 = {n}: indices {:?}",
+        clobbered.len(),
+        clobbered
+    );
+}
