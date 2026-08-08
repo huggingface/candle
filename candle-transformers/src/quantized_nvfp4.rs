@@ -239,11 +239,17 @@ pub fn dequantize_nvfp4(
     for row in 0..out_dim {
         let packed_row = &packed[row];
         let scale_row = &scale[row];
-        for col in 0..in_dim {
-            let byte = packed_row[col / 2];
-            let nibble = if col % 2 == 0 { byte & 0xf } else { byte >> 4 };
-            let block_scale = scale_row[col / block_size].to_f32();
-            out[row * in_dim + col] = unpack_e2m1(nibble) * block_scale * weight_scale_2;
+        let mut col = 0usize;
+        for &s in scale_row.iter() {
+            // Same one-decode-per-block reasoning as Nvfp4LinearPacked::forward.
+            let block_scale = s.to_f32() * weight_scale_2;
+            let block_end = (col + block_size).min(in_dim);
+            while col < block_end {
+                let byte = packed_row[col / 2];
+                let nibble = if col % 2 == 0 { byte & 0xf } else { byte >> 4 };
+                out[row * in_dim + col] = unpack_e2m1(nibble) * block_scale;
+                col += 1;
+            }
         }
     }
     Tensor::from_vec(out, (out_dim, in_dim), &candle::Device::Cpu)
@@ -389,11 +395,20 @@ impl Module for Nvfp4LinearPacked {
             .zip(self.weight_scale.chunks(n_blocks))
             .enumerate()
         {
-            for (col, val) in row_buf.iter_mut().enumerate() {
-                let byte = packed_row[col / 2];
-                let nibble = if col % 2 == 0 { byte & 0xf } else { byte >> 4 };
-                let block_scale = scale_row[col / self.block_size].to_f32();
-                *val = unpack_e2m1(nibble) * block_scale * self.weight_scale_2;
+            let mut col = 0usize;
+            for &scale in scale_row.iter() {
+                // Decoded once per block, not once per column: `F8E4M3::to_f32`
+                // is the same cost as unpacking a nibble, so redoing it for
+                // every column in the block was `block_size`x more scale
+                // decoding than the format requires.
+                let block_scale = scale.to_f32() * self.weight_scale_2;
+                let block_end = (col + self.block_size).min(self.in_dim);
+                while col < block_end {
+                    let byte = packed_row[col / 2];
+                    let nibble = if col % 2 == 0 { byte & 0xf } else { byte >> 4 };
+                    row_buf[col] = unpack_e2m1(nibble) * block_scale;
+                    col += 1;
+                }
             }
             for (b, x_row) in xs_vec.iter().enumerate() {
                 let acc: f32 = row_buf.iter().zip(x_row.iter()).map(|(w, x)| w * x).sum();
