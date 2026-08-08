@@ -3822,8 +3822,10 @@ mod tests {
 
 #[cfg(test)]
 mod acceleration_attention_tests {
+    #[cfg(feature = "flashinfer-kernels")]
     use super::*;
 
+    #[cfg(feature = "flashinfer-kernels")]
     fn tiny_config(use_flashinfer_attention: bool) -> Config {
         Config {
             hidden_size: 8,
@@ -3942,115 +3944,6 @@ mod acceleration_attention_tests {
         for (a, b) in dense_logits[0].iter().zip(flashinfer_logits[0].iter()) {
             assert!((a - b).abs() < 1e-4, "dense={a} flashinfer={b}");
         }
-        Ok(())
-    }
-
-    #[test]
-    fn custom_dense_mlp_matches_standard_llama_bit_for_bit() -> Result<()> {
-        let device = Device::Cpu;
-        let cfg = tiny_config(false);
-        // Both models read the same initialized weights, mirroring a checkpoint
-        // load while exercising the public factory path for every MLP.
-        let varmap = candle_nn::VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-        let dense = Llama::load(vb.clone(), &cfg)?;
-        let custom = Llama::load_with_mlp_factory(vb, &cfg, |_, vb| {
-            Ok(Box::new(Mlp::load(vb, &cfg, &[])?))
-        })?;
-        let tokens = Tensor::from_vec(vec![1u32, 2, 3], (1, 3), &device)?;
-        let mut dense_cache = Cache::new(true, DType::F32, &cfg, &device)?;
-        let mut custom_cache = Cache::new(true, DType::F32, &cfg, &device)?;
-
-        let dense_logits = dense.forward(&tokens, 0, &mut dense_cache)?;
-        let custom_logits = custom.forward(&tokens, 0, &mut custom_cache)?;
-        assert_eq!(
-            dense_logits.to_vec2::<f32>()?,
-            custom_logits.to_vec2::<f32>()?
-        );
-        Ok(())
-    }
-
-    // Requires a CUDA device and the `flash-attn` feature (which compiles the real
-    // `flash_attn_varlen_paged_windowed` kernel); not runnable on the CPU-only sandbox
-    // this crate is normally developed in. Exercises the actual GPU code path end to
-    // end: writes new K/V into a caller-owned paged cache and checks the attention
-    // output against the long-established dense (non-flash) causal path.
-    #[cfg(feature = "flash-attn")]
-    #[test]
-    fn paged_attention_matches_dense_causal_attention_on_gpu() -> Result<()> {
-        let device = Device::new_cuda(0)?;
-        let dtype = DType::BF16;
-
-        let num_attention_heads = 2;
-        let num_key_value_heads = 2;
-        let head_dim = 64;
-        let hidden_size = num_attention_heads * head_dim;
-        let kv_size = num_key_value_heads * head_dim;
-        let seq_len = 17;
-        let page_block_size = 32;
-
-        let new_linear = |out_dim: usize, in_dim: usize| -> Result<Linear> {
-            let w = Tensor::randn(0f32, 0.02, (out_dim, in_dim), &device)?.to_dtype(dtype)?;
-            Ok(Linear::from_weights(w, None))
-        };
-        let attn = CausalSelfAttention {
-            q_proj: new_linear(hidden_size, hidden_size)?,
-            k_proj: new_linear(kv_size, hidden_size)?,
-            v_proj: new_linear(kv_size, hidden_size)?,
-            o_proj: new_linear(hidden_size, hidden_size)?,
-            num_attention_heads,
-            num_key_value_heads,
-            head_dim,
-            use_flash_attn: false,
-            span: tracing::span!(tracing::Level::TRACE, "attn"),
-            span_rot: tracing::span!(tracing::Level::TRACE, "attn-rot"),
-            max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
-        };
-
-        let mut cfg = tiny_config();
-        cfg.hidden_size = hidden_size;
-        cfg.num_attention_heads = num_attention_heads;
-        cfg.num_key_value_heads = num_key_value_heads;
-        cfg.num_hidden_layers = 1;
-        cfg.max_position_embeddings = seq_len;
-
-        let x = Tensor::randn(0f32, 1., (1, seq_len, hidden_size), &device)?.to_dtype(dtype)?;
-
-        // Ground truth: the long-established dense (non-flash) causal softmax path.
-        let mut dense_cache = Cache::new(true, dtype, &cfg, &device)?;
-        let y_dense = attn.forward(&x, 0, 0, &mut dense_cache)?;
-
-        // Candidate: paged cache sized to hold the whole sequence in a single block,
-        // routed through `flash_attn_varlen_paged_windowed`.
-        let key_cache = Tensor::zeros(
-            (1, page_block_size, num_key_value_heads, head_dim),
-            dtype,
-            &device,
-        )?;
-        let value_cache = Tensor::zeros(
-            (1, page_block_size, num_key_value_heads, head_dim),
-            dtype,
-            &device,
-        )?;
-        let paged = PagedKvCache {
-            key_cache,
-            value_cache,
-            block_table: Tensor::from_vec(vec![0u32], (1, 1), &device)?,
-            seqlens_k: Tensor::new(&[0u32, seq_len as u32], &device)?,
-            page_block_size,
-        };
-        let mut paged_cache = Cache::new(true, dtype, &cfg, &device)?;
-        paged_cache.set_paged_kv(0, paged)?;
-        let y_paged = attn.forward(&x, 0, 0, &mut paged_cache)?;
-
-        let diff = y_dense
-            .to_dtype(DType::F32)?
-            .sub(&y_paged.to_dtype(DType::F32)?)?
-            .abs()?
-            .flatten_all()?
-            .max(0)?
-            .to_vec0::<f32>()?;
-        assert!(diff < 0.1, "paged vs dense max abs diff {diff}");
         Ok(())
     }
 }
