@@ -519,8 +519,14 @@ impl Qwen3_5TextRotaryEmbedding {
         // cos/sin are stored in f32; cast down to the activation dtype here, at use. They are
         // bounded by 1, so a late f16/bf16 cast costs a small bounded error rather than the
         // unbounded angle error that building the table itself in f16 would introduce.
-        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?.to_dtype(q.dtype())?;
-        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?.to_dtype(q.dtype())?;
+        let cos = self
+            .cos
+            .narrow(0, seqlen_offset, seq_len)?
+            .to_dtype(q.dtype())?;
+        let sin = self
+            .sin
+            .narrow(0, seqlen_offset, seq_len)?
+            .to_dtype(q.dtype())?;
         let apply = |x: &Tensor| -> Result<Tensor> {
             let rotated = candle_nn::rotary_emb::rope(
                 &x.narrow(D::Minus1, 0, self.rotary_dim)?.contiguous()?,

@@ -246,7 +246,11 @@ pub fn dequantize_nvfp4(
             let block_end = (col + block_size).min(in_dim);
             while col < block_end {
                 let byte = packed_row[col / 2];
-                let nibble = if col % 2 == 0 { byte & 0xf } else { byte >> 4 };
+                let nibble = if col.is_multiple_of(2) {
+                    byte & 0xf
+                } else {
+                    byte >> 4
+                };
                 out[row * in_dim + col] = unpack_e2m1(nibble) * block_scale;
                 col += 1;
             }
@@ -405,7 +409,11 @@ impl Module for Nvfp4LinearPacked {
                 let block_end = (col + self.block_size).min(self.in_dim);
                 while col < block_end {
                     let byte = packed_row[col / 2];
-                    let nibble = if col % 2 == 0 { byte & 0xf } else { byte >> 4 };
+                    let nibble = if col.is_multiple_of(2) {
+                        byte & 0xf
+                    } else {
+                        byte >> 4
+                    };
                     row_buf[col] = unpack_e2m1(nibble) * block_scale;
                     col += 1;
                 }
