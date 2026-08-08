@@ -2580,3 +2580,61 @@ fn q2k_mul_mv_writes_past_ne01() {
         clobbered
     );
 }
+
+/// Same canary as `q2k_mul_mv_writes_past_ne01`, run across the K-quant family and
+/// several `ne01`, to separate two distinct effects:
+///
+///   a) EVERY K-quant mv kernel stores without the `first_row + row < ne01` guard that
+///      the legacy quants have, so any `ne01` that is not a multiple of the kernel's
+///      row stride overruns by up to `stride - 1` rows;
+///   b) Q2K ADDITIONALLY has a dispatch-table mismatch (kernel stride 8, `align` 4),
+///      so it over-dispatches 2x and overruns by ~ne01 rows even when ne01 IS a
+///      multiple of the stride.
+///
+/// Reports rather than asserts, so one run prints the whole picture.
+#[test]
+fn kquant_mul_mv_store_overrun_survey() {
+    const QK_K: usize = 256;
+    const SENTINEL: f32 = -1234.0;
+
+    // (dtype, block bytes from the static_asserts in quantized.metal)
+    let family = [
+        (GgmlDType::Q2K, 2 * 2 + QK_K / 16 + QK_K / 4),          // 84
+        (GgmlDType::Q3K, 2 + QK_K / 4 + QK_K / 8 + 12),          // 110
+        (GgmlDType::Q4K, 2 * 2 + 12 + QK_K / 2),                 // 144
+        (GgmlDType::Q5K, 2 * 2 + 12 + QK_K / 2 + QK_K / 8),      // 176
+        (GgmlDType::Q6K, 2 + QK_K / 16 + 3 * QK_K / 4),          // 210
+    ];
+
+    let mut report = String::new();
+    for (dtype, block_bytes) in family {
+        for n in [8usize, 10, 12, 16, 17] {
+            let k = QK_K;
+            let device = device();
+            let kernels = Kernels::new();
+            let commands = commands(&device);
+            let encoder = commands.command_encoder().unwrap();
+
+            let weights = new_buffer(&device, &vec![0u8; n * (k / QK_K) * block_bytes]);
+            let activations = new_buffer(&device, &vec![1f32; k]);
+            let dst_len = 4 * n;
+            let dst = new_buffer(&device, &vec![SENTINEL; dst_len]);
+
+            call_quantized_matmul_mv_t(
+                &device, &encoder, &kernels, dtype, (1, 1, n, k),
+                &activations, 0, &weights, 0, &dst,
+            )
+            .unwrap();
+            drop(encoder);
+            commands.wait_until_completed().unwrap();
+
+            let out: Vec<f32> = read_to_vec(&dst, dst_len);
+            let in_range_ok = out[..n].iter().all(|&v| v == 0.0);
+            let over = (n..dst_len).filter(|&i| out[i] != SENTINEL).count();
+            report.push_str(&format!(
+                "{dtype:?}\tne01={n}\toverrun={over}\tin_range_ok={in_range_ok}\n"
+            ));
+        }
+    }
+    println!("\n--- K-quant mul_mv store overrun survey ---\n{report}");
+}
