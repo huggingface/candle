@@ -1600,6 +1600,28 @@ impl BackendStorage for CudaStorage {
                 unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::U32(out)
             }
+            DType::I16 => {
+                let out = unsafe { dev.alloc::<i16>(el)? };
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
+                CudaStorageSlice::I16(out)
+            }
+            DType::I32 => {
+                let out = unsafe { dev.alloc::<i32>(el)? };
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
+                CudaStorageSlice::I32(out)
+            }
             DType::I64 => {
                 let out = unsafe { dev.alloc::<i64>(el)? };
                 let mut builder = func.builder();
@@ -1665,9 +1687,6 @@ impl BackendStorage for CudaStorage {
                 builder.arg(&out);
                 unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::F8E4M3(out)
-            }
-            DType::I16 | DType::I32 => {
-                return Err(CudaError::InternalError("i16,i32 dtypes are not supported").into())
             }
             DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
                 return Err(
