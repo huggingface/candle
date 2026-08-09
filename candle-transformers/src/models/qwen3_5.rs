@@ -1,5 +1,5 @@
 use crate::models::with_tracing::{linear_b, linear_no_bias, Linear};
-use candle::{DType, Device, Module, Result, Tensor, D};
+use candle::{bail, Context, DType, Device, Module, Result, Tensor, D};
 use candle_nn::{conv1d_no_bias, Activation, Conv1d, Conv1dConfig, VarBuilder};
 use std::sync::Arc;
 
@@ -101,6 +101,128 @@ impl Config {
 
     pub fn rope_theta(&self) -> f64 {
         self.text_config.rope_parameters.rope_theta
+    }
+
+    /// Checks the invariants the rest of this module relies on, so that an
+    /// incoherent config is rejected here with a precise message instead of
+    /// failing deep inside layer construction or a tensor op.
+    pub fn validate(&self) -> Result<()> {
+        self.text_config.validate()
+    }
+}
+
+impl TextConfig {
+    pub fn validate(&self) -> Result<()> {
+        let text = self;
+        if text.hidden_size == 0 {
+            bail!("qwen3_5 config: hidden_size must be non-zero");
+        }
+        if text.vocab_size == 0 {
+            bail!("qwen3_5 config: vocab_size must be non-zero");
+        }
+        if text.num_hidden_layers == 0 {
+            bail!("qwen3_5 config: num_hidden_layers must be non-zero");
+        }
+        if text.num_attention_heads == 0 {
+            bail!("qwen3_5 config: num_attention_heads must be non-zero");
+        }
+        if text.num_key_value_heads == 0 {
+            bail!("qwen3_5 config: num_key_value_heads must be non-zero");
+        }
+        if !text
+            .num_attention_heads
+            .is_multiple_of(text.num_key_value_heads)
+        {
+            bail!(
+                "qwen3_5 config: num_attention_heads ({}) must be a multiple of num_key_value_heads ({})",
+                text.num_attention_heads,
+                text.num_key_value_heads
+            );
+        }
+        match text.head_dim {
+            Some(0) => bail!("qwen3_5 config: head_dim must be non-zero when set"),
+            None if !text.hidden_size.is_multiple_of(text.num_attention_heads) => bail!(
+                "qwen3_5 config: hidden_size ({}) must be a multiple of num_attention_heads ({}) when head_dim is unset",
+                text.hidden_size,
+                text.num_attention_heads
+            ),
+            _ => {}
+        }
+        if text.layer_types.len() != text.num_hidden_layers {
+            bail!(
+                "qwen3_5 config: layer_types has {} entries but num_hidden_layers is {}",
+                text.layer_types.len(),
+                text.num_hidden_layers
+            );
+        }
+        for (idx, layer_type) in text.layer_types.iter().enumerate() {
+            if layer_type != "full_attention" && layer_type != "linear_attention" {
+                bail!(
+                    "qwen3_5 config: layer_types[{idx}] is {layer_type:?}, expected \"full_attention\" or \"linear_attention\""
+                );
+            }
+        }
+        if text
+            .layer_types
+            .iter()
+            .any(|layer_type| layer_type == "linear_attention")
+        {
+            if text.linear_num_key_heads == 0 {
+                bail!("qwen3_5 config: linear_num_key_heads must be non-zero when a linear_attention layer is present");
+            }
+            if text.linear_num_value_heads == 0 {
+                bail!("qwen3_5 config: linear_num_value_heads must be non-zero when a linear_attention layer is present");
+            }
+            if !text
+                .linear_num_value_heads
+                .is_multiple_of(text.linear_num_key_heads)
+            {
+                bail!(
+                    "qwen3_5 config: linear_num_value_heads ({}) must be a multiple of linear_num_key_heads ({})",
+                    text.linear_num_value_heads,
+                    text.linear_num_key_heads
+                );
+            }
+            if text.linear_key_head_dim == 0 {
+                bail!("qwen3_5 config: linear_key_head_dim must be non-zero when a linear_attention layer is present");
+            }
+            if text.linear_value_head_dim == 0 {
+                bail!("qwen3_5 config: linear_value_head_dim must be non-zero when a linear_attention layer is present");
+            }
+            if text.linear_conv_kernel_dim == 0 {
+                bail!("qwen3_5 config: linear_conv_kernel_dim must be non-zero when a linear_attention layer is present");
+            }
+        }
+        if text.num_experts > 0 {
+            if text.num_experts_per_tok == 0 {
+                bail!("qwen3_5 config: num_experts_per_tok must be at least 1 when num_experts is non-zero");
+            }
+            if text.num_experts_per_tok > text.num_experts {
+                bail!(
+                    "qwen3_5 config: num_experts_per_tok ({}) must not exceed num_experts ({})",
+                    text.num_experts_per_tok,
+                    text.num_experts
+                );
+            }
+            if text.moe_intermediate_size == 0 {
+                bail!("qwen3_5 config: moe_intermediate_size must be non-zero when num_experts is non-zero");
+            }
+        } else if text.intermediate_size == 0 {
+            bail!("qwen3_5 config: intermediate_size must be non-zero when num_experts is zero");
+        }
+        let head_dim = text
+            .head_dim
+            .unwrap_or(text.hidden_size / text.num_attention_heads);
+        let dim = (head_dim as f64 * text.partial_rotary_factor) as usize;
+        if dim == 0 || dim > head_dim || !dim.is_multiple_of(2) {
+            bail!(
+                "qwen3_5 config: partial_rotary_factor ({}) combined with head_dim ({}) yields an invalid rotary dim ({})",
+                text.partial_rotary_factor,
+                head_dim,
+                dim
+            );
+        }
+        Ok(())
     }
 }
 
@@ -855,6 +977,7 @@ impl Qwen3_5SparseMoeBlock {
         let experts = (0..text.num_experts)
             .map(|idx| {
                 Qwen3_5MLP::new_sized(cfg, text.moe_intermediate_size, vb.pp("experts").pp(idx))
+                    .with_context(|| format!("qwen3_5: failed to build expert {idx}"))
             })
             .collect::<Result<Vec<_>>>()?;
         let shared_expert = Qwen3_5MLP::new_sized(
@@ -894,6 +1017,7 @@ impl Qwen3_5SparseMoeBlock {
                     &format!("experts.{idx}"),
                     projections,
                 )
+                .with_context(|| format!("qwen3_5: failed to build expert {idx}"))
             })
             .collect::<Result<Vec<_>>>()?;
         let shared_expert = Qwen3_5MLP::new_with_projections_sized(
@@ -1136,6 +1260,7 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        cfg.validate()?;
         let vb_m = vb.pp("model").pp("language_model");
         let embed_tokens = candle_nn::embedding(
             cfg.text_config.vocab_size,
@@ -1152,7 +1277,8 @@ impl Model {
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.text_config.num_hidden_layers {
             let layer =
-                Qwen3_5DecoderLayer::new(cfg, layer_idx, rotary_emb.clone(), vb_l.pp(layer_idx))?;
+                Qwen3_5DecoderLayer::new(cfg, layer_idx, rotary_emb.clone(), vb_l.pp(layer_idx))
+                    .with_context(|| format!("qwen3_5: failed to build layer {layer_idx}"))?;
             layers.push(layer);
         }
 
@@ -1180,6 +1306,7 @@ impl Model {
     where
         F: for<'a> Fn(&str, VarBuilder<'a>, usize, usize, bool) -> Result<Box<dyn Projection>>,
     {
+        cfg.validate()?;
         let vb_m = vb.pp("model").pp("language_model");
         let embed_tokens = candle_nn::embedding(
             cfg.text_config.vocab_size,
@@ -1201,6 +1328,7 @@ impl Model {
                     vb_l.pp(layer_idx),
                     &projections,
                 )
+                .with_context(|| format!("qwen3_5: failed to build layer {layer_idx}"))
             })
             .collect::<Result<Vec<_>>>()?;
         let norm = Qwen3_5RmsNorm::new(
@@ -1522,5 +1650,82 @@ mod tests {
         assert_eq!(calls[0].load(Ordering::Relaxed), 3);
         assert_eq!(calls[1].load(Ordering::Relaxed), 0);
         Ok(())
+    }
+
+    #[test]
+    fn validate_accepts_a_coherent_config() -> Result<()> {
+        tiny_config(false).validate()
+    }
+
+    #[test]
+    fn validate_rejects_layer_types_length_mismatch() {
+        let mut cfg = tiny_config(false);
+        cfg.text_config.layer_types.pop();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("layer_types"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_unknown_layer_type() {
+        let mut cfg = tiny_config(false);
+        cfg.text_config.layer_types[0] = "sliding_attention".into();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("layer_types[0]"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_num_attention_heads_not_multiple_of_kv_heads() {
+        let mut cfg = tiny_config(false);
+        cfg.text_config.num_key_value_heads = 3;
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("num_key_value_heads"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_num_experts_per_tok_above_num_experts() {
+        let mut cfg = tiny_config(false);
+        cfg.text_config.num_experts = 2;
+        cfg.text_config.num_experts_per_tok = 3;
+        cfg.text_config.moe_intermediate_size = 3;
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("num_experts_per_tok"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_zero_num_experts_per_tok_with_moe() {
+        let mut cfg = tiny_config(false);
+        cfg.text_config.num_experts = 2;
+        cfg.text_config.num_experts_per_tok = 0;
+        cfg.text_config.moe_intermediate_size = 3;
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("num_experts_per_tok"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_linear_heads_not_multiple() {
+        let mut cfg = tiny_config(false);
+        cfg.text_config.linear_num_key_heads = 2;
+        cfg.text_config.linear_num_value_heads = 3;
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("linear_num_value_heads"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_zero_hidden_size() {
+        let mut cfg = tiny_config(false);
+        cfg.text_config.hidden_size = 0;
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("hidden_size"), "{err}");
+    }
+
+    #[test]
+    fn model_new_reports_incoherent_config_at_load_time() {
+        let device = Device::Cpu;
+        let mut cfg = tiny_config(false);
+        cfg.text_config.layer_types.pop();
+        let varmap = candle_nn::VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let err = Model::new(&cfg, vb).unwrap_err().to_string();
+        assert!(err.contains("layer_types"), "{err}");
     }
 }
