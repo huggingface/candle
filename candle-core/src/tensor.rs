@@ -1513,9 +1513,6 @@ impl Tensor {
         let n = b_dims[dim - 1];
 
         let c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
-        if c_shape.elem_count() == 0 || k == 0 {
-            return Tensor::zeros(c_shape, self.dtype(), self.device());
-        }
         let batching: usize = a_dims[..dim - 2].iter().product();
         let batching_b: usize = b_dims[..dim - 2].iter().product();
         if k != k2 || batching != batching_b {
@@ -1525,6 +1522,18 @@ impl Tensor {
                 op: "matmul",
             }
             .bt())?
+        }
+        if c_shape.elem_count() == 0 || k == 0 {
+            {
+                let lhs_storage = self.storage();
+                let rhs_storage = rhs.storage();
+                lhs_storage.same_device(&rhs_storage, "matmul")?;
+                lhs_storage.same_dtype(&rhs_storage, "matmul")?;
+            }
+
+            let storage = self.device().zeros(&c_shape, self.dtype())?;
+            let op = BackpropOp::new2(self, rhs, Op::Matmul);
+            return Ok(from_storage(storage, c_shape, op, false));
         }
 
         let storage = self.storage().matmul(
