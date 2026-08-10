@@ -328,11 +328,6 @@ impl Commands {
             _ => unreachable!(),
         }
 
-        // The status matched above is the status *before* waiting. A buffer that was still
-        // NotEnqueued/Enqueued/Committed/Scheduled can fail during execution -- the GPU aborts
-        // it, and every buffer queued behind it is nopped -- ending in `Error`. Without this
-        // second check the failure is silently swallowed and the caller goes on to read output
-        // buffers the GPU never wrote, turning a hard error into wrong numbers.
         if cb.status() == MTLCommandBufferStatus::Error {
             return Err(Self::cb_error(cb));
         }
