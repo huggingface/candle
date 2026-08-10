@@ -379,6 +379,73 @@ fn ternary_op(device: &Device) -> Result<()> {
     assert_eq!(dims, [2, 5]);
     let result: Vec<f32> = tensor.flatten_all()?.to_vec1()?;
     assert_eq!(result, [10., 1., 12., 3., 14., 5., 6., 7., 18., 19.]);
+
+    let fill = Tensor::new(7f32, device)?.broadcast_as((2, 5))?; // strides [0, 0]
+    assert_eq!(
+        ids.where_cond(&fill, &b)?.to_vec2::<f32>()?,
+        [[10., 7., 12., 7., 14.], [7., 7., 7., 18., 19.]],
+    );
+
+    let mask = Tensor::new(&[[0u8, 1, 1, 0, 1]], device)?.broadcast_as((2, 5))?; // strides [0, 1]
+    assert_eq!(
+        mask.where_cond(&a, &b)?.to_vec2::<f32>()?,
+        mask.contiguous()?.where_cond(&a, &b)?.to_vec2::<f32>()?,
+    );
+
+    let a_t = Tensor::arange(0f32, 10., device)?.reshape((5, 2))?.t()?;
+    let ids_t = Tensor::new(&[[0u8, 1], [1, 1], [0, 0], [1, 0], [1, 1]], device)?.t()?;
+    assert_eq!(
+        ids_t.where_cond(&a_t, &b)?.to_vec2::<f32>()?,
+        ids_t
+            .contiguous()?
+            .where_cond(&a_t.contiguous()?, &b)?
+            .to_vec2::<f32>()?,
+    );
+
+    let narrowed = Tensor::arange(0f32, 14., device)?
+        .reshape((2, 7))?
+        .narrow(1, 1, 5)?; // strides [7, 1], offset 1
+    assert_eq!(
+        ids.where_cond(&fill, &narrowed)?.to_vec2::<f32>()?,
+        ids.where_cond(&fill.contiguous()?, &narrowed.contiguous()?)?
+            .to_vec2::<f32>()?,
+    );
+
+    let fill2 = Tensor::new(9f32, device)?.broadcast_as((2, 5))?;
+    assert_eq!(
+        ids.where_cond(&a, &fill)?.to_vec2::<f32>()?,
+        ids.where_cond(&a, &fill.contiguous()?)?.to_vec2::<f32>()?,
+    );
+    assert_eq!(
+        ids.where_cond(&fill, &fill2)?.to_vec2::<f32>()?,
+        ids.where_cond(&fill.contiguous()?, &fill2.contiguous()?)?
+            .to_vec2::<f32>()?,
+    );
+
+    let row_mask = Tensor::new(&[[1u8], [0u8]], device)?.broadcast_as((2, 5))?; // strides [1, 0]
+    let row_ref = row_mask.contiguous()?;
+    assert_eq!(
+        row_mask.where_cond(&a, &b)?.to_vec2::<f32>()?,
+        row_ref.where_cond(&a, &b)?.to_vec2::<f32>()?,
+    );
+    assert_eq!(
+        row_mask.where_cond(&a, &fill)?.to_vec2::<f32>()?,
+        row_ref
+            .where_cond(&a, &fill.contiguous()?)?
+            .to_vec2::<f32>()?,
+    );
+    assert_eq!(
+        row_mask.where_cond(&fill, &b)?.to_vec2::<f32>()?,
+        row_ref
+            .where_cond(&fill.contiguous()?, &b)?
+            .to_vec2::<f32>()?,
+    );
+    assert_eq!(
+        row_mask.where_cond(&fill, &fill2)?.to_vec2::<f32>()?,
+        row_ref
+            .where_cond(&fill.contiguous()?, &fill2.contiguous()?)?
+            .to_vec2::<f32>()?,
+    );
     Ok(())
 }
 

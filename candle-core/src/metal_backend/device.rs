@@ -194,6 +194,22 @@ impl MetalDevice {
         &self.device
     }
 
+    /// Registers buffers in the device's residency set, keeping them
+    /// permanently GPU-resident instead of paying per-command-buffer residency
+    /// bookkeeping. Useful for buffers candle did not allocate, e.g.
+    /// `newBufferWithBytesNoCopy` views over an mmap'd weights file. No-op on
+    /// systems without residency-set support.
+    pub fn register_buffers<'a>(&self, bufs: impl IntoIterator<Item = &'a Buffer>) {
+        self.residency_set.insert_batch(bufs);
+    }
+
+    /// Unregisters buffers previously passed to `register_buffers`, releasing
+    /// the set's retain so they can be deallocated. Only unregister buffers
+    /// you registered yourself, after GPU work referencing them has completed.
+    pub fn unregister_buffers<'a>(&self, bufs: impl IntoIterator<Item = &'a Buffer>) {
+        self.residency_set.remove_batch(bufs);
+    }
+
     /// Returns a builder for buffer allocation. See `BufferBuilder`.
     pub fn new_buffer_builder(&self) -> BufferBuilder<'_> {
         BufferBuilder::new(self)
