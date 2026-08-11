@@ -216,6 +216,15 @@ fn asort(device: &Device) -> Result<()> {
         sorted.to_vec2::<f32>()?,
         [[5.0, 4.0, 3.0, 1.1, 1.0], [8.0, 7.0, 2.1, 2.0, 1.0]]
     );
+
+    let offset_view = Tensor::new(&[[1f32, 2., 3.], [30., 10., 20.]], device)?.narrow(0, 1, 1)?;
+    let (sorted, indexes) = offset_view.sort_last_dim(true)?;
+    assert_eq!(indexes.to_vec2::<u32>()?, [[1, 2, 0]]);
+    assert_eq!(sorted.to_vec2::<f32>()?, [[10., 20., 30.]]);
+
+    let (sorted, indexes) = offset_view.sort_last_dim(false)?;
+    assert_eq!(indexes.to_vec2::<u32>()?, [[0, 2, 1]]);
+    assert_eq!(sorted.to_vec2::<f32>()?, [[30., 20., 10.]]);
     Ok(())
 }
 
