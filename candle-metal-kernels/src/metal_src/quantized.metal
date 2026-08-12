@@ -7288,6 +7288,7 @@ kernel void kernel_mul_mm_id(
         threadgroup    uchar * shared_memory [[threadgroup(0)]],
         uint3                  tgpig[[threadgroup_position_in_grid]],
         uint                   tiitg[[thread_index_in_threadgroup]],
+        uint3                  ntg  [[threads_per_threadgroup]],
         uint                   sgitg[[simdgroup_index_in_threadgroup]]) {
 
     const int32_t i02 = tgpig.z;
@@ -7295,24 +7296,89 @@ kernel void kernel_mul_mm_id(
 
     device const uchar * src0 = src0s + i02*nb02;
 
-    // row indices
-    threadgroup ushort2 * rowids = (threadgroup ushort2 *)(shared_memory + 8192);
+    // Row discovery: which (expert-slot, token) pairs route to THIS expert.
+    //
+    // The original loop carried a `// TODO: parallelize this loop` and ran the
+    // full nei1*nei0 scan on *every* thread -- the `if (tiitg == 0)` guard is
+    // commented out upstream, so all 128 threads redundantly computed and wrote
+    // the same table. That made row discovery cost
+    // (threads) * (nei1*nei0) per threadgroup, and it is dispatched once per
+    // (token-tile, row-tile, expert) triple. For one 768-token chunk of a
+    // 256-expert top-8 model that is ~38 billion iterations, ~97% of it for
+    // experts with no rows at all -- which is why prefill collapsed while decode
+    // (nei1 == 1) was untouched.
+    //
+    // What actually cost time was not the duplication but the *serial length*:
+    // all threads ran the same nei1*nei0 scan concurrently, so wall-clock cost
+    // was one full scan. Splitting the scan is the win.
+    //
+    // **Order is preserved exactly.** An earlier revision of this used a
+    // threadgroup atomic to hand out slots, on the reasoning that every rowids
+    // entry carries its own source and destination -- `kernel_mul_mm_id_impl`
+    // derives src1 from `nb12*id[1] + nb11*(id[0] % ne11)` and dst from
+    // `jid[0]*ne0 + jid[1]*ne0ne1` -- so any permutation should be equivalent.
+    // **That reasoning is wrong**: measured against this same kernel, an
+    // arbitrary order made greedy decoding nondeterministic (three identical
+    // requests, three different completions) where the original is bit-stable.
+    // Something downstream is order-sensitive; rather than rely on a model of
+    // why, this reproduces the original nested loop's ordering exactly.
+    //
+    // Each thread takes a *contiguous* range of the flattened pair index
+    // `p = ii1*nei0 + ii0`, counts its matches, and an exclusive prefix sum over
+    // those counts gives its write base. Contiguous ranges in thread order means
+    // the assembled table is sorted by `p` -- identical to what
+    // `for ii1 { for ii0 { ... } }` produced.
+    // MUST match ROWID_COUNT_BYTES in kernels/quantized.rs, which sizes the
+    // threadgroup allocation. Room for nthreads+1 uints (the per-thread counts
+    // turned into prefix offsets, plus the total in the last slot) at the 128
+    // threads this kernel is always dispatched with, padded to 16.
+#define MM_ID_ROWID_COUNT_BYTES 528
+    threadgroup uint    * tcount = (threadgroup uint *)(shared_memory + 8192);
+    threadgroup ushort2 * rowids = (threadgroup ushort2 *)(shared_memory + 8192 + MM_ID_ROWID_COUNT_BYTES);
 
-    // TODO: parallelize this loop
-    int64_t _ne1 = 0;
-    for (ushort ii1 = 0; ii1 < nei1; ii1++) {
-        for (ushort ii0 = 0; ii0 < nei0; ii0++) {
-            int32_t id = ((device int32_t *) (ids + ii1*nbi1))[ii0];
-            if (id == i02) {
-                //if (tiitg == 0) {
-                    rowids[_ne1] = ushort2(ii0, ii1);
-                //}
-                _ne1++;
-            }
+    const uint n_pairs  = (uint)(nei1 * nei0);
+    const uint nthreads = ntg.x * ntg.y * ntg.z;
+    const uint per      = (n_pairs + nthreads - 1) / nthreads;
+    const uint p_begin  = min(tiitg * per, n_pairs);
+    const uint p_end    = min(p_begin + per, n_pairs);
+
+    uint mine = 0;
+    for (uint p = p_begin; p < p_end; p++) {
+        const ushort ii1 = (ushort)(p / (uint)nei0);
+        const ushort ii0 = (ushort)(p % (uint)nei0);
+        if (((device int32_t *) (ids + ii1*nbi1))[ii0] == i02) {
+            mine++;
+        }
+    }
+    tcount[tiitg] = mine;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Exclusive prefix sum over `nthreads` counts, serial on one thread: at 128
+    // threads this is negligible beside the scan it schedules, and keeps the
+    // result exactly reproducible.
+    if (tiitg == 0) {
+        uint acc = 0;
+        for (uint t = 0; t < nthreads; t++) {
+            const uint c = tcount[t];
+            tcount[t] = acc;
+            acc += c;
+        }
+        tcount[nthreads] = acc; // total
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    uint pos = tcount[tiitg];
+    for (uint p = p_begin; p < p_end; p++) {
+        const ushort ii1 = (ushort)(p / (uint)nei0);
+        const ushort ii0 = (ushort)(p % (uint)nei0);
+        if (((device int32_t *) (ids + ii1*nbi1))[ii0] == i02) {
+            rowids[pos++] = ushort2(ii0, ii1);
         }
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const int64_t _ne1 = (int64_t)tcount[nthreads];
 
     kernel_mul_mm_id_impl<block_q, nl, dequantize_func>(
         src0,

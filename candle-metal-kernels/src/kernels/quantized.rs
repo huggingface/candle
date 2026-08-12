@@ -502,8 +502,14 @@ pub fn call_quantized_matmul_mm_id(
     // mm tile scratch, then room for one ushort2 (4 bytes) per (token,
     // expert-slot) pair the `rowids` scan can find for this threadgroup's
     // expert -- worst case every row in the tile, i.e. nei0*nei1 total.
+    //
+    // Plus `ROWID_COUNT_BYTES` between the two: the parallel row-discovery scan
+    // hands out `rowids` slots through a threadgroup `atomic_uint` living at
+    // `shared_memory + 8192`, so the table itself now starts 16 bytes later.
+    // 16 rather than 4 to keep `rowids` 16-byte aligned, matching what the
+    // unpadded layout gave it.
     let rowids_bytes = (nei0 * nei1 * 4) as usize;
-    let smem = (8192 + rowids_bytes).div_ceil(16) * 16;
+    let smem = (8192 + ROWID_COUNT_BYTES + rowids_bytes).div_ceil(16) * 16;
     // ggml's own host code asserts this same bound (dst_rows <=
     // dst_rows_max, derived from maxThreadgroupMemoryLength) before
     // dispatching -- unbounded batch*n_expert_used could otherwise exceed
@@ -521,15 +527,28 @@ pub fn call_quantized_matmul_mm_id(
     Ok(())
 }
 
+/// Bytes reserved at `shared_memory + 8192` for the row-discovery scan's
+/// per-thread counts, before the `rowids` table itself: `nthreads + 1` uints
+/// (each thread's count, rewritten in place as its exclusive-prefix write
+/// base, plus the total in the trailing slot), padded to 16.
+///
+/// `nthreads` is 128 -- this kernel is always dispatched with
+/// `threads_per_threadgroup = {128, 1, 1}` (see `thread_groups_count` below) --
+/// so 129 * 4 = 516, padded to 528. **Must match `MM_ID_ROWID_COUNT_BYTES` in
+/// quantized.metal**, which offsets `rowids` by it. Shared by
+/// `call_quantized_matmul_mm_id`'s `smem` sizing and `mm_id_max_nei1`'s
+/// inverse of it, so those two cannot drift from each other.
+pub(crate) const ROWID_COUNT_BYTES: usize = 528;
+
 /// Largest `nei1` (n_tokens) a single `call_quantized_matmul_mm_id` dispatch
 /// can take on `device` without exceeding its threadgroup-memory budget, for
 /// a routing table with `nei0` experts-used-per-token. Inverts the exact
-/// `ceil16(8192 + nei0*nei1*4)` formula that function sizes its `rowids`
-/// scratch with -- device- and top-k-dependent, not a constant, and has no
-/// dtype term (the formula itself has none, unlike `mv_id_eligible`'s
-/// per-dtype tuning table). Returns 0 if even `nei1 == 1` wouldn't fit
-/// (pathological device/expert-count combination) so a caller can fail
-/// clearly instead of computing a nonsensical chunk size.
+/// `ceil16(8192 + ROWID_COUNT_BYTES + nei0*nei1*4)` formula that function
+/// sizes its `rowids` scratch with -- device- and top-k-dependent, not a
+/// constant, and has no dtype term (the formula itself has none, unlike
+/// `mv_id_eligible`'s per-dtype tuning table). Returns 0 if even `nei1 == 1`
+/// wouldn't fit (pathological device/expert-count combination) so a caller
+/// can fail clearly instead of computing a nonsensical chunk size.
 pub fn mm_id_max_nei1(device: &Device, nei0: i64) -> i64 {
     let max_smem = device.as_ref().maxThreadgroupMemoryLength() as i64;
     // `ceil16(y) <= max_smem` is only equivalent to `y <= max_smem` when
@@ -537,11 +556,11 @@ pub fn mm_id_max_nei1(device: &Device, nei0: i64) -> i64 {
     // measured so far (16384/32768/65536), but not guaranteed by the API.
     // Floor `max_smem` to a multiple of 16 first so this stays an
     // exact inverse of `call_quantized_matmul_mm_id`'s own
-    // `ceil16(8192 + nei0*nei1*4) <= max_smem` check even off that
-    // assumption, rather than silently allowing a chunk that would still
-    // overflow after rounding (review finding, 2026-07-27).
+    // `ceil16(8192 + ROWID_COUNT_BYTES + nei0*nei1*4) <= max_smem` check even
+    // off that assumption, rather than silently allowing a chunk that would
+    // still overflow after rounding (review finding, 2026-07-27).
     let max_smem_floor16 = (max_smem / 16) * 16;
-    let avail = max_smem_floor16 - 8192;
+    let avail = max_smem_floor16 - 8192 - ROWID_COUNT_BYTES as i64;
     if avail <= 0 || nei0 <= 0 {
         return 0;
     }
