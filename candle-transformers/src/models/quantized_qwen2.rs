@@ -314,23 +314,10 @@ impl ModelWeights {
         }
     }
 
-    /// Extracts every layer's current KV cache state, in layer order --
-    /// added for session checkpoint/restore (a caller can persist this and
-    /// later hand it back to `set_kv_cache_state` on a fresh or
-    /// freshly-cleared model to continue a session without reprocessing
-    /// already-seen tokens). `None` per layer means that layer hasn't been
-    /// forwarded through yet (e.g. a session extracted before any tokens
-    /// were processed).
     pub fn kv_cache_state(&self) -> Vec<Option<(Tensor, Tensor)>> {
         self.layers.iter().map(|l| l.kv_cache.clone()).collect()
     }
 
-    /// Restores a previously-extracted KV cache state, one entry per layer
-    /// in the same order `kv_cache_state` returned them. Errors rather than
-    /// silently partial-restoring if the layer count doesn't match --
-    /// mismatched state (e.g. from a different model/architecture) must be
-    /// rejected loudly, not applied to whichever prefix of layers happens
-    /// to line up.
     pub fn set_kv_cache_state(&mut self, state: Vec<Option<(Tensor, Tensor)>>) -> Result<()> {
         if state.len() != self.layers.len() {
             candle::bail!(

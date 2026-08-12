@@ -218,15 +218,10 @@ impl QuantizedAttention {
         self.attention_wo.forward(&reshaped_ctx.to_dtype(in_dtype)?)
     }
 
-    /// Drops this layer's cached KV state -- for reusing one loaded model
-    /// across independent requests without reloading weights.
     pub fn clear_kv_cache(&mut self) {
         self.kv_cache.reset();
     }
 
-    /// Extracts this layer's current KV state (both k and v, cloned) --
-    /// `None` if the cache is empty (nothing forwarded through yet).
-    /// Added for session checkpoint/restore.
     fn kv_cache_state(&self) -> Option<(Tensor, Tensor)> {
         match (self.kv_cache.k(), self.kv_cache.v()) {
             (Some(k), Some(v)) => Some((k.clone(), v.clone())),
@@ -234,10 +229,6 @@ impl QuantizedAttention {
         }
     }
 
-    /// Restores a previously-extracted KV state. `append` on a freshly-reset
-    /// `ConcatKvCache` sets it directly (see `ConcatKvCache::append`'s own
-    /// doc), so reset-then-append-once is the correct full restore, not an
-    /// incremental one.
     fn set_kv_cache_state(&mut self, state: Option<(Tensor, Tensor)>) -> Result<()> {
         self.kv_cache.reset();
         if let Some((k, v)) = state {
@@ -489,27 +480,16 @@ impl GGUFQWenMoE {
         self.output.forward(&xs)?.to_dtype(DType::F32)?.squeeze(1)
     }
 
-    /// Resets every layer's KV cache -- for reusing one loaded model across
-    /// independent requests without reloading weights.
     pub fn clear_kv_cache(&mut self) {
         for layer in self.layers.iter_mut() {
             layer.clear_kv_cache();
         }
     }
 
-    /// Extracts every layer's current KV cache state, in layer order --
-    /// added for session checkpoint/restore, same shape and pairing
-    /// convention as quantized_qwen2::ModelWeights's own
-    /// kv_cache_state/set_kv_cache_state (kept consistent across both
-    /// standard-KV-cache backends so callers don't need per-architecture
-    /// branching to persist/restore this).
     pub fn kv_cache_state(&self) -> Vec<Option<(Tensor, Tensor)>> {
         self.layers.iter().map(|l| l.kv_cache_state()).collect()
     }
 
-    /// Restores a previously-extracted KV cache state, one entry per layer
-    /// in the same order `kv_cache_state` returned them. Errors rather than
-    /// silently partial-restoring if the layer count doesn't match.
     pub fn set_kv_cache_state(&mut self, state: Vec<Option<(Tensor, Tensor)>>) -> Result<()> {
         if state.len() != self.layers.len() {
             candle::bail!(
