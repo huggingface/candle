@@ -7367,6 +7367,27 @@ kernel void kernel_mul_mm_id(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
+    const int64_t _ne1 = (int64_t)tcount[nthreads];
+
+    // Bail before the write pass if this threadgroup's token tile lies past
+    // the end of THIS expert's rows.
+    //
+    // The grid's token-tile extent is `nei1/32`, sized as though an expert
+    // owned every token. It owns about `nei1*nei0/ne02` of them -- 24 of 768
+    // at top-8-of-256 -- so with BLOCK_SIZE_N == 32 only tile 0 has any rows
+    // and tiles 1..23 have none. `kernel_mul_mm_id_impl` already returns
+    // immediately for those (its own `r1 * BLOCK_SIZE_N >= ne1` guard), so the
+    // matmul was never the waste; the row scan feeding it was, and it ran in
+    // full first.
+    //
+    // `r1` is `tgpig.x` (see the impl), and the count is exact by this point,
+    // so the two guards agree by construction. Placed after the count pass and
+    // prefix sum -- which are what produce `_ne1` -- and before the write pass,
+    // so a doomed tile pays the count but not the scatter.
+    if (tgpig.x * 32 >= (uint)_ne1) {
+        return;
+    }
+
     uint pos = tcount[tiitg];
     for (uint p = p_begin; p < p_end; p++) {
         const ushort ii1 = (ushort)(p / (uint)nei0);
@@ -7377,8 +7398,6 @@ kernel void kernel_mul_mm_id(
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    const int64_t _ne1 = (int64_t)tcount[nthreads];
 
     kernel_mul_mm_id_impl<block_q, nl, dequantize_func>(
         src0,
