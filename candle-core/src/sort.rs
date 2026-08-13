@@ -9,6 +9,11 @@ struct ArgSort {
 
 impl ArgSort {
     fn asort<T: crate::WithDType>(&self, vs: &[T], layout: &crate::Layout) -> Vec<u32> {
+        let (o1, o2) = match layout.contiguous_offsets() {
+            Some(offsets) => offsets,
+            None => (0, vs.len()),
+        };
+        let vs = &vs[o1..o2];
         #[allow(clippy::uninit_vec)]
         // Safety: indexes are set later in the parallelized section.
         let mut sort_indexes = unsafe {

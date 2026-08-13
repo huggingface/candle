@@ -219,6 +219,22 @@ fn asort(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn asort_narrow(device: &Device) -> Result<()> {
+    let data = &[[10f32, 20., 30.], [3f32, 1., 4.], [2.1, 1., 7.]];
+    let tensor = Tensor::new(data, device)?;
+    let narrowed = tensor.narrow(0, 1, 2)?;
+    let (sorted, indexes) = narrowed.sort_last_dim(true)?;
+    assert_eq!(
+        sorted.to_vec2::<f32>()?,
+        [[1.0, 3.0, 4.0], [1.0, 2.1, 7.0]]
+    );
+    assert_eq!(
+        indexes.to_vec2::<u32>()?,
+        [[1, 0, 2], [1, 0, 2]]
+    );
+    Ok(())
+}
+
 /// Test sorting a large tensor that exceeds 1024 elements.
 fn asort_big(device: &Device) -> Result<()> {
     // Skip on metal for now
@@ -1828,6 +1844,7 @@ test_device!(
 test_device!(randn, randn_cpu, randn_gpu, randn_metal);
 test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal);
 test_device!(asort, asort_cpu, asort_gpu, asort_metal);
+test_device!(asort_narrow, asort_narrow_cpu, asort_narrow_gpu, asort_narrow_metal);
 test_device!(asort_big, asort_big_cpu, asort_big_gpu, asort_big_metal);
 test_device!(var, var_cpu, var_gpu, var_metal);
 test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal);
