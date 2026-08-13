@@ -2599,14 +2599,15 @@ fn kquant_mul_mv_store_overrun_survey() {
 
     // (dtype, block bytes from the static_asserts in quantized.metal)
     let family = [
-        (GgmlDType::Q2K, 2 * 2 + QK_K / 16 + QK_K / 4),          // 84
-        (GgmlDType::Q3K, 2 + QK_K / 4 + QK_K / 8 + 12),          // 110
-        (GgmlDType::Q4K, 2 * 2 + 12 + QK_K / 2),                 // 144
-        (GgmlDType::Q5K, 2 * 2 + 12 + QK_K / 2 + QK_K / 8),      // 176
-        (GgmlDType::Q6K, 2 + QK_K / 16 + 3 * QK_K / 4),          // 210
+        (GgmlDType::Q2K, 2 * 2 + QK_K / 16 + QK_K / 4), // 84
+        (GgmlDType::Q3K, 2 + QK_K / 4 + QK_K / 8 + 12), // 110
+        (GgmlDType::Q4K, 2 * 2 + 12 + QK_K / 2),        // 144
+        (GgmlDType::Q5K, 2 * 2 + 12 + QK_K / 2 + QK_K / 8), // 176
+        (GgmlDType::Q6K, 2 + QK_K / 16 + 3 * QK_K / 4), // 210
     ];
 
     let mut report = String::new();
+    let mut failures: Vec<String> = Vec::new();
     for (dtype, block_bytes) in family {
         for n in [8usize, 10, 12, 16, 17] {
             let k = QK_K;
@@ -2621,8 +2622,16 @@ fn kquant_mul_mv_store_overrun_survey() {
             let dst = new_buffer(&device, &vec![SENTINEL; dst_len]);
 
             call_quantized_matmul_mv_t(
-                &device, &encoder, &kernels, dtype, (1, 1, n, k),
-                &activations, 0, &weights, 0, &dst,
+                &device,
+                &encoder,
+                &kernels,
+                dtype,
+                (1, 1, n, k),
+                &activations,
+                0,
+                &weights,
+                0,
+                &dst,
             )
             .unwrap();
             drop(encoder);
@@ -2634,7 +2643,162 @@ fn kquant_mul_mv_store_overrun_survey() {
             report.push_str(&format!(
                 "{dtype:?}\tne01={n}\toverrun={over}\tin_range_ok={in_range_ok}\n"
             ));
+            if over != 0 || !in_range_ok {
+                failures.push(format!(
+                    "{dtype:?} ne01={n} overrun={over} in_range_ok={in_range_ok}"
+                ));
+            }
         }
     }
     println!("\n--- K-quant mul_mv store overrun survey ---\n{report}");
+    assert!(
+        failures.is_empty(),
+        "K-quant mul_mv kernels stored outside [0, ne01):\n{}",
+        failures.join("\n")
+    );
+}
+
+/// Bounding the store is not on its own sufficient, because these kernels compute their
+/// `src0` base pointer from the row index *before* anything checks that index against
+/// `ne01`: q2_K at `quantized.metal:4596` (`first_row`) -> `:4597` (`ib_row`) -> `:4604`
+/// (`x`), q6_K at `:5215` -> `:5222`. The already-guarded legacy template does the same at
+/// `:2334` -> `:2339` -> `:2341`, which is exactly why its store guard at `:2374` bounds
+/// the write but leaves the read unbounded. So while Q2K's `align` is smaller than the
+/// kernel's row stride, the surplus threadgroups keep reading weight rows past `ne01`
+/// however well the store is guarded.
+///
+/// The weights buffer is deliberately over-allocated so the overread lands inside our own
+/// allocation and the test stays well-defined, rather than depending on whatever happens to
+/// follow a tightly-sized buffer. Rows `[0, n)` are byte-identical across the two runs and
+/// only the rows past `n` differ, so any difference in the output can only have come from
+/// reading past `ne01`.
+#[test]
+fn q2k_mul_mv_output_does_not_depend_on_rows_past_ne01() {
+    const QK_K: usize = 256;
+    const BLOCK_Q2K_BYTES: usize = QK_K / 16 + QK_K / 4 + 2 + 2; // 84
+    const SENTINEL: f32 = -1234.0;
+
+    let (b, m, n, k) = (1usize, 1usize, 12usize, QK_K);
+    let blocks_per_row = k / QK_K;
+    // Far past the furthest row the over-dispatch can reach (8 * ceil(12/4) = 24).
+    let rows_alloc = 4 * n;
+    let dst_len = 4 * n;
+
+    let run = |poison: u8| -> Vec<f32> {
+        let device = device();
+        let kernels = Kernels::new();
+        let commands = commands(&device);
+        let encoder = commands.command_encoder().unwrap();
+
+        let mut w = vec![0u8; rows_alloc * blocks_per_row * BLOCK_Q2K_BYTES];
+        // Rows [0, n) stay all-zero, so d == dmin == 0 and the correct output is exactly 0.
+        // Only the rows the kernel has no business reading carry the poison.
+        w[n * blocks_per_row * BLOCK_Q2K_BYTES..].fill(poison);
+
+        let weights = new_buffer(&device, &w);
+        let activations = new_buffer(&device, &vec![1f32; m * k]);
+        let dst = new_buffer(&device, &vec![SENTINEL; dst_len]);
+
+        call_quantized_matmul_mv_t(
+            &device,
+            &encoder,
+            &kernels,
+            GgmlDType::Q2K,
+            (b, m, n, k),
+            &activations,
+            0,
+            &weights,
+            0,
+            &dst,
+        )
+        .unwrap();
+        drop(encoder);
+        commands.wait_until_completed().unwrap();
+        read_to_vec(&dst, dst_len)
+    };
+
+    let zeroed = run(0x00);
+    let poisoned = run(0x5a);
+
+    for (label, out) in [("zeroed", &zeroed), ("poisoned", &poisoned)] {
+        assert_eq!(
+            &out[..n],
+            &vec![0f32; n][..],
+            "the in-range output rows are wrong in the {label} run, \
+             which is a different bug from the one under test"
+        );
+    }
+
+    // Compare bit patterns: the poisoned weights can dequantize to NaN, and NaN != NaN
+    // would make a value comparison silently pass.
+    let differing: Vec<usize> = (0..dst_len)
+        .filter(|&i| zeroed[i].to_bits() != poisoned[i].to_bits())
+        .collect();
+    assert!(
+        differing.is_empty(),
+        "kernel_mul_mv_q2_K_f32 output changed when only weight rows >= ne01 = {n} changed, \
+         so it read past ne01: indices {:?} (zeroed {:?} vs poisoned {:?})",
+        differing,
+        differing.iter().map(|&i| zeroed[i]).collect::<Vec<_>>(),
+        differing.iter().map(|&i| poisoned[i]).collect::<Vec<_>>(),
+    );
+}
+
+/// `align` is the number of `dst` rows one threadgroup writes, and the dispatch is
+/// `ceil(ne01 / align)` threadgroups, so `align` must equal the kernel's real row stride.
+///
+/// This has to be asserted directly rather than through the output, because once the
+/// K-quant kernels bound-check their stores an `align` that is too small no longer
+/// corrupts anything observable — the surplus threadgroups compute rows that are then
+/// discarded. `kquant_mul_mv_store_overrun_survey` reports `overrun=0` either way. Without
+/// this test, re-introducing the dispatch mismatch would be undetectable.
+///
+/// The stride is derived from the thread geometry the function itself returns plus the
+/// kernel's rows-per-simdgroup, so changing `nth0`/`nth1` is caught here too.
+/// `N_DST` is 4 and `N_SIMDGROUP` is 2, neither `#undef`d anywhere in `quantized.metal`.
+#[test]
+fn mul_mv_dispatch_align_matches_kernel_row_stride() {
+    const SIMDGROUP_SIZE: usize = 32;
+
+    // (dtype, rows written per simdgroup, the kernel's row expression)
+    let kernels = [
+        (
+            GgmlDType::Q2K,
+            4,
+            "first_row = (r0 * N_SIMDGROUP + sgitg) * N_DST",
+        ),
+        (
+            GgmlDType::Q3K,
+            2,
+            "first_row = (r0 * N_SIMDGROUP + sgitg) * 2",
+        ),
+        (GgmlDType::Q4K, 4, "first_row = r0 * N_DST"),
+        (
+            GgmlDType::Q5K,
+            2,
+            "first_row = (r0 * N_SIMDGROUP + sgitg) * 2",
+        ),
+        (GgmlDType::Q6K, 1, "row = 2 * r0 + sgitg"),
+    ];
+
+    for (dtype, rows_per_simdgroup, row_expr) in kernels {
+        let (nth0, nth1, align) = mul_mv_dispatch_geometry(dtype);
+        let threads = nth0 * nth1;
+        assert_eq!(
+            threads % SIMDGROUP_SIZE,
+            0,
+            "{dtype:?}: {nth0}x{nth1} = {threads} threads is not a whole number of simdgroups"
+        );
+        let stride = (threads / SIMDGROUP_SIZE) * rows_per_simdgroup;
+        assert_eq!(
+            align,
+            stride,
+            "{dtype:?}: align is {align} but the kernel writes {stride} rows per threadgroup \
+             ({row_expr}, {} simdgroups x {rows_per_simdgroup} rows). Dispatching \
+             ceil(ne01/{align}) threadgroups of {stride} rows over-dispatches by {}x and the \
+             surplus threadgroups read src0 past ne01.",
+            threads / SIMDGROUP_SIZE,
+            stride / align.max(1),
+        );
+    }
 }
