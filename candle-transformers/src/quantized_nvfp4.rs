@@ -54,7 +54,9 @@ use candle_nn::{Linear, Module, VarBuilder};
 pub const BLOCK_SIZE: usize = 16;
 
 /// What backs a linear layer's weight in a checkpoint that may mix dense,
-/// block-wise FP8, and packed NVFP4 layers (as ModelOpt exports do).
+/// block-wise FP8, per-tensor FP8, and packed NVFP4 layers (as ModelOpt
+/// mixed-precision exports do -- e.g. a Qwen 3.5 MoE checkpoint with NVFP4
+/// experts and per-tensor-FP8 attention projections).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backing {
     /// A plain dense `weight` tensor.
@@ -62,6 +64,13 @@ pub enum Backing {
     /// A block-wise FP8 weight (`weight` + `weight_scale_inv`), e.g. as used
     /// by DeepSeek-V3-style checkpoints.
     Fp8Block,
+    /// A per-tensor FP8 weight (`weight` in `F8E4M3` + a single scalar
+    /// `weight_scale`, e.g. `amax / 448` as ModelOpt's exporter writes it),
+    /// as used by ModelOpt's attention projections in mixed-precision NVFP4
+    /// checkpoints. An optional `input_scale` may also be present for
+    /// activation quantization; this module never reads it, since
+    /// [`fp8_tensor_linear`] only dequantizes the weight.
+    Fp8Tensor,
     /// A packed NVFP4 weight: `weight_scale` + `weight_scale_2`, plus the
     /// packed weight itself under `.weight` (ModelOpt) or `.weight_packed`
     /// (compressed-tensors) -- see [`nvfp4_weight_tensor_name`].
@@ -125,20 +134,66 @@ fn fp8_block_linear(
     Ok(Linear::new(weight, bias))
 }
 
-/// Inspects the tensor names available at `vb`'s current path to determine
-/// what backs the linear layer, without reading any tensor data.
+/// Dequantizes a per-tensor FP8 weight: a single scalar `weight_scale`
+/// applies to the whole `[out_dim, in_dim]` `F8E4M3` weight, unlike
+/// [`fp8_block_linear`]'s per-block scale grid. The scale multiplication
+/// runs on-device via [`Tensor::affine`] rather than round-tripping through
+/// the host like [`dequantize_fp8_block`] does, since there's no per-element
+/// scale lookup to do.
 ///
-/// `weight_scale_2` alone is the NVFP4 signal: both the ModelOpt and
-/// compressed-tensors export conventions include it, and neither a dense nor
-/// a block-wise-FP8 layer has one. The packed weight's own tensor name
-/// differs between the two conventions -- see [`nvfp4_weight_tensor_name`].
-pub fn detect_backing(vb: &VarBuilder) -> Backing {
-    if vb.contains_tensor("weight_scale_2") {
-        Backing::Nvfp4
-    } else if vb.contains_tensor("weight_scale_inv") {
-        Backing::Fp8Block
+/// An `input_scale` tensor some checkpoints carry alongside `weight` and
+/// `weight_scale` (for activation quantization) is intentionally never read
+/// here: this dequantizes the weight only. A future activation-quantized
+/// path would read it under this same [`Backing::Fp8Tensor`] detection.
+fn fp8_tensor_linear(in_dim: usize, out_dim: usize, bias: bool, vb: VarBuilder) -> Result<Linear> {
+    let weight = vb.get_with_hints_dtype(
+        (out_dim, in_dim),
+        "weight",
+        Default::default(),
+        DType::F8E4M3,
+    )?;
+    let scale = read_scalar_f32(&vb, "weight_scale")?;
+    let weight = weight
+        .to_dtype(vb.dtype())?
+        .affine(scale as f64, 0.)?
+        .to_device(vb.device())?;
+    let bias = if bias {
+        Some(vb.get(out_dim, "bias")?)
     } else {
-        Backing::Dense
+        None
+    };
+    Ok(Linear::new(weight, bias))
+}
+
+/// Inspects the tensor names available at `vb`'s current path to determine
+/// what backs the linear layer, without reading any tensor data. Refuses
+/// (rather than silently degrading to [`Backing::Dense`]) when a layer
+/// carries quantization tensors none of the recognized backings account
+/// for, since a dense read of quantized bytes fails silently: the model
+/// loads, runs, and answers wrong.
+///
+/// `weight_scale_2` must be checked first: an NVFP4 layer also carries a
+/// per-block `weight_scale`, so checking that before `weight_scale_2` would
+/// misclassify NVFP4 as [`Backing::Fp8Tensor`]. Similarly,
+/// `weight_zero_point` (e.g. GPTQ/AWQ-style zero-point quantization, not
+/// handled by any `Backing` here) must be checked before `weight_scale`,
+/// since those layouts carry both.
+pub fn detect_backing(vb: &VarBuilder) -> Result<Backing> {
+    if vb.contains_tensor("weight_scale_2") {
+        Ok(Backing::Nvfp4)
+    } else if vb.contains_tensor("weight_scale_inv") {
+        Ok(Backing::Fp8Block)
+    } else if vb.contains_tensor("weight_zero_point") {
+        candle::bail!(
+            "unrecognized quantized weight layout: found weight_zero_point, \
+             which none of Backing::{{Nvfp4,Fp8Block,Fp8Tensor}} account for \
+             (e.g. GPTQ/AWQ-style zero-point quantization); refusing to fall \
+             back to a dense read that would silently drop it"
+        )
+    } else if vb.contains_tensor("weight_scale") {
+        Ok(Backing::Fp8Tensor)
+    } else {
+        Ok(Backing::Dense)
     }
 }
 
@@ -476,6 +531,8 @@ pub fn nvfp4_linear(
 pub enum AutoLinear {
     Dense(Linear),
     Fp8Block(Linear),
+    /// Per-tensor FP8: see [`Backing::Fp8Tensor`] / [`fp8_tensor_linear`].
+    Fp8Tensor(Linear),
     /// Dense NVFP4 fallback: dequantized once at load time. Only produced
     /// when [`Nvfp4Config::force_dense_fallback`] is set; see
     /// [`Nvfp4Packed`](Self::Nvfp4Packed) for the default off-CUDA path.
@@ -490,7 +547,9 @@ pub enum AutoLinear {
 impl Module for AutoLinear {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
-            Self::Dense(l) | Self::Fp8Block(l) | Self::Nvfp4(l) => l.forward(xs),
+            Self::Dense(l) | Self::Fp8Block(l) | Self::Fp8Tensor(l) | Self::Nvfp4(l) => {
+                l.forward(xs)
+            }
             Self::Nvfp4Packed(l) => l.forward(xs),
             #[cfg(feature = "nvfp4-cuda")]
             Self::Nvfp4Cuda(l) => l.forward(xs),
@@ -499,18 +558,23 @@ impl Module for AutoLinear {
 }
 
 /// A ModelOpt-aware weight source: detects what backs the linear layer at
-/// `vb`'s current path (dense, block-wise FP8, or packed NVFP4) and builds a
-/// compatible projection, so callers stop needing to special-case each
-/// checkpoint's tensor layout themselves.
+/// `vb`'s current path (dense, block-wise FP8, per-tensor FP8, or packed
+/// NVFP4) and builds a compatible projection, so callers stop needing to
+/// special-case each checkpoint's tensor layout themselves -- including a
+/// mixed-precision checkpoint that uses more than one of these per layer
+/// (e.g. NVFP4 experts alongside per-tensor-FP8 attention projections).
 ///
 /// On a CUDA device with the `nvfp4-cuda` feature enabled and the fused
 /// kernel available, NVFP4 layers stay packed and device-resident. Otherwise
 /// they default to [`Nvfp4LinearPacked`], which keeps the weight packed
 /// (~1x footprint) and decodes on the fly; set
 /// `cfg.force_dense_fallback` to dequantize to a dense tensor at load time
-/// instead, bounded by `cfg.max_dense_bytes`. FP8 layers are always
-/// dequantized to a dense tensor at load time. See the module docs for the
-/// full preference order.
+/// instead, bounded by `cfg.max_dense_bytes`. FP8 layers (block-wise or
+/// per-tensor) are always dequantized to a dense tensor at load time. A
+/// layer whose quantization tensors none of these backings recognize fails
+/// to load ([`detect_backing`]) rather than silently falling back to a
+/// dense read of quantized bytes. See the module docs for the full
+/// preference order.
 pub fn auto_linear(
     in_dim: usize,
     out_dim: usize,
@@ -518,7 +582,7 @@ pub fn auto_linear(
     vb: VarBuilder,
     cfg: Nvfp4Config,
 ) -> Result<AutoLinear> {
-    match detect_backing(&vb) {
+    match detect_backing(&vb)? {
         Backing::Nvfp4 => {
             #[cfg(feature = "nvfp4-cuda")]
             if vb.device().is_cuda() && candle_nvfp4_kernels::is_available() {
@@ -541,6 +605,9 @@ pub fn auto_linear(
             bias,
             vb,
             cfg.block_size,
+        )?)),
+        Backing::Fp8Tensor => Ok(AutoLinear::Fp8Tensor(fp8_tensor_linear(
+            in_dim, out_dim, bias, vb,
         )?)),
         Backing::Dense => Ok(AutoLinear::Dense(candle_nn::linear_b(
             in_dim, out_dim, bias, vb,
@@ -717,7 +784,7 @@ mod tests {
         let device = Device::Cpu;
         let varmap = candle_nn::VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-        assert_eq!(detect_backing(&vb.pp("dense")), Backing::Dense);
+        assert_eq!(detect_backing(&vb.pp("dense"))?, Backing::Dense);
 
         // ModelOpt convention: the packed weight is `.weight`, there is no
         // `.weight_packed` (e.g. nvidia/Llama-3.3-70B-Instruct-FP4).
@@ -733,7 +800,7 @@ mod tests {
             Default::default(),
             DType::F32,
         )?;
-        assert_eq!(detect_backing(&vb.pp("modelopt")), Backing::Nvfp4);
+        assert_eq!(detect_backing(&vb.pp("modelopt"))?, Backing::Nvfp4);
         assert_eq!(nvfp4_weight_tensor_name(&vb.pp("modelopt")), "weight");
 
         // compressed-tensors convention (llm-compressor / vLLM): the packed
@@ -750,19 +817,52 @@ mod tests {
             Default::default(),
             DType::F32,
         )?;
-        assert_eq!(detect_backing(&vb.pp("compressed_tensors")), Backing::Nvfp4);
+        assert_eq!(
+            detect_backing(&vb.pp("compressed_tensors"))?,
+            Backing::Nvfp4
+        );
         assert_eq!(
             nvfp4_weight_tensor_name(&vb.pp("compressed_tensors")),
             "weight_packed"
         );
 
-        let _ = vb.pp("fp8").get_with_hints_dtype(
+        let _ = vb.pp("fp8_block").get_with_hints_dtype(
             (2, 2),
             "weight_scale_inv",
             Default::default(),
             DType::F32,
         )?;
-        assert_eq!(detect_backing(&vb.pp("fp8")), Backing::Fp8Block);
+        assert_eq!(detect_backing(&vb.pp("fp8_block"))?, Backing::Fp8Block);
+
+        // Per-tensor FP8 (ModelOpt's attention projections in a
+        // mixed-precision NVFP4 checkpoint): `weight_scale` alone, no
+        // `weight_scale_2` and no `weight_scale_inv`.
+        let _ = vb.pp("fp8_tensor").get_with_hints_dtype(
+            (),
+            "weight_scale",
+            Default::default(),
+            DType::F32,
+        )?;
+        assert_eq!(detect_backing(&vb.pp("fp8_tensor"))?, Backing::Fp8Tensor);
+
+        // weight_zero_point (e.g. GPTQ/AWQ-style) is not any recognized
+        // Backing and must fail loudly, even though it's typically paired
+        // with a weight_scale tensor that would otherwise match Fp8Tensor.
+        let _ = vb.pp("zero_point").get_with_hints_dtype(
+            (),
+            "weight_scale",
+            Default::default(),
+            DType::F32,
+        )?;
+        let _ = vb.pp("zero_point").get_with_hints_dtype(
+            (),
+            "weight_zero_point",
+            Default::default(),
+            DType::F32,
+        )?;
+        let err = detect_backing(&vb.pp("zero_point")).unwrap_err();
+        assert!(err.to_string().contains("weight_zero_point"));
+
         Ok(())
     }
 
@@ -833,7 +933,7 @@ mod tests {
         let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
         let layer = vb.pp("layer");
 
-        assert_eq!(detect_backing(&layer), Backing::Nvfp4);
+        assert_eq!(detect_backing(&layer)?, Backing::Nvfp4);
         assert_eq!(nvfp4_weight_tensor_name(&layer), "weight");
         let linear = nvfp4_linear(in_dim, out_dim, false, layer, Nvfp4Config::default())?;
         let output = linear.forward(&Tensor::zeros((1, in_dim), DType::F32, &device)?)?;
@@ -891,6 +991,20 @@ mod tests {
             Tensor::from_vec(vec![1f32], (), &device)?,
         );
 
+        // Per-tensor FP8 (ModelOpt attention projections): `.weight` +
+        // scalar `.weight_scale`, no `.weight_scale_2` and no
+        // `.weight_scale_inv` -- the third layout mixed into ModelOpt's
+        // mixed-precision checkpoints alongside dense, block-wise FP8, and
+        // NVFP4 (huggingface/candle#3858 review).
+        tensors.insert(
+            "fp8_tensor.weight".to_string(),
+            Tensor::zeros((out_dim, in_dim), DType::F8E4M3, &device)?,
+        );
+        tensors.insert(
+            "fp8_tensor.weight_scale".to_string(),
+            Tensor::from_vec(vec![1f32], (), &device)?,
+        );
+
         let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
         let input = Tensor::zeros((1, in_dim), DType::F32, &device)?;
 
@@ -907,6 +1021,16 @@ mod tests {
         let fp8 = auto_linear(in_dim, out_dim, false, vb.pp("fp8"), Nvfp4Config::default())?;
         assert!(matches!(fp8, AutoLinear::Fp8Block(_)));
         assert_eq!(fp8.forward(&input)?.dims(), &[1, out_dim]);
+
+        let fp8_tensor = auto_linear(
+            in_dim,
+            out_dim,
+            false,
+            vb.pp("fp8_tensor"),
+            Nvfp4Config::default(),
+        )?;
+        assert!(matches!(fp8_tensor, AutoLinear::Fp8Tensor(_)));
+        assert_eq!(fp8_tensor.forward(&input)?.dims(), &[1, out_dim]);
 
         let nvfp4 = auto_linear(
             in_dim,
@@ -931,6 +1055,52 @@ mod tests {
         assert!(matches!(nvfp4_dense, AutoLinear::Nvfp4(_)));
         assert_eq!(nvfp4_dense.forward(&input)?.dims(), &[1, out_dim]);
 
+        Ok(())
+    }
+
+    /// Regression coverage for huggingface/candle#3858: `fp8_tensor_linear`
+    /// must actually multiply by `weight_scale`, not just successfully load
+    /// an `F8E4M3` tensor and drop the scale on the floor. A weight of all
+    /// 1.0s and a non-1.0 scale makes a dropped scale obvious: forgetting it
+    /// gives `sum(x)`, applying it gives `scale * sum(x)`.
+    #[test]
+    fn fp8_tensor_linear_applies_weight_scale() -> Result<()> {
+        let device = Device::Cpu;
+        let out_dim = 1;
+        let in_dim = 4;
+        let scale = 2.5f32;
+
+        let mut tensors = std::collections::HashMap::new();
+        tensors.insert(
+            "layer.weight".to_string(),
+            // 0x38 is F8E4M3's bit pattern for 1.0, exact.
+            Tensor::from_vec(
+                vec![float8::F8E4M3::from_bits(0x38); out_dim * in_dim],
+                (out_dim, in_dim),
+                &device,
+            )?,
+        );
+        tensors.insert(
+            "layer.weight_scale".to_string(),
+            Tensor::from_vec(vec![scale], (), &device)?,
+        );
+        let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
+        let layer = vb.pp("layer");
+
+        assert_eq!(detect_backing(&layer)?, Backing::Fp8Tensor);
+        let linear = fp8_tensor_linear(in_dim, out_dim, false, layer)?;
+
+        let xs = Tensor::ones((1, in_dim), DType::F32, &device)?;
+        let out = linear.forward(&xs)?.to_vec2::<f32>()?;
+        // With the weight all 1.0 and x all 1.0: sum(x) = in_dim. Applying
+        // the scale gives in_dim * scale; dropping it (the #3858 bug) would
+        // give plain in_dim instead.
+        let expected = in_dim as f32 * scale;
+        assert!(
+            (out[0][0] - expected).abs() < 1e-5,
+            "{} vs {expected} (weight_scale dropped?)",
+            out[0][0]
+        );
         Ok(())
     }
 
