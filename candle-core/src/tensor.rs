@@ -696,9 +696,11 @@ impl Tensor {
             self.clone()
         };
         for (idx, &repeat) in repeats.iter().enumerate() {
-            if repeat > 1 {
-                inp = Tensor::cat(&vec![&inp; repeat], idx)?
-            }
+            inp = match repeat {
+                0 => inp.narrow(idx, 0, 0)?,
+                1 => inp,
+                repeat => Tensor::cat(&vec![&inp; repeat], idx)?,
+            };
         }
         Ok(inp)
     }
