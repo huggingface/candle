@@ -162,7 +162,8 @@ impl FlashAttn {
 
         let elem_count = out_shape.elem_count();
         let mut dst = unsafe { dev.alloc::<T>(elem_count) }?;
-        let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
+        // LSE layout is (b, h, seqlen_q); the epilogue predicates its stores on actual_seq_len.
+        let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * num_heads * seqlen_q)?;
         // Must start at zero for every launch: the persistent scheduler hands out tiles from it.
         let mut tile_count_semaphore = dev.alloc_zeros::<i32>(1)?;
 
