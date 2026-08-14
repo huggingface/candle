@@ -17,6 +17,7 @@ extern "C" {
         o_ptr: *const c_void,
         softmax_lse_ptr: *const c_void,
         alibi_slopes_ptr: *const c_void,
+        tile_count_semaphore_ptr: *const i32,
 
         cu_seqlens_q_ptr: *const i32,
         cu_seqlens_k_ptr: *const i32,

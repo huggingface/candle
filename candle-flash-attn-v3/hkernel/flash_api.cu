@@ -206,6 +206,7 @@ extern "C" void run_mha_v3(
     void *o_ptr,
     void *softmax_lse_ptr,
     void *alibi_slopes_ptr,
+    int32_t *tile_count_semaphore_ptr,
 
     int32_t *cu_seqlens_q_ptr,
     int32_t *cu_seqlens_k_ptr,
@@ -261,6 +262,8 @@ extern "C" void run_mha_v3(
 
     params.softmax_lse_ptr = softmax_lse_ptr;
     params.alibi_slopes_ptr = alibi_slopes_ptr;
+    // Causal/local/split select DynamicPersistentTileScheduler, which atomicAdds this counter.
+    params.tile_count_semaphore = tile_count_semaphore_ptr;
 
     // All stride are in elements, not bytes.
     params.q_batch_stride = q_batch_stride;
