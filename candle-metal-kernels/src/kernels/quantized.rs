@@ -27,10 +27,12 @@ pub enum GgmlDType {
 /// Threadgroup geometry for the `kernel_mul_mv_*_f32` family: `(nth0, nth1, align)`.
 ///
 /// `align` must equal the number of `dst` rows a single threadgroup writes, because
-/// the caller dispatches `ceil(ne01 / align)` threadgroups. An `align` smaller than
-/// the kernel's real row stride over-dispatches, and the surplus threadgroups compute
-/// rows past `ne01` — reading `src0` out of bounds on the way, since every one of these
-/// kernels derives its `src0` base pointer from the row index before any bound check.
+/// the caller dispatches `ceil(ne01 / align)` threadgroups. Either direction is a bug:
+/// an `align` smaller than the kernel's real row stride over-dispatches, and the surplus
+/// threadgroups compute rows past `ne01` — reading `src0` out of bounds on the way, since
+/// every one of these kernels derives its `src0` base pointer from the row index before
+/// any bound check. An `align` larger than the stride under-dispatches and leaves rows
+/// never written at all.
 ///
 /// Row stride per kernel, from `metal_src/quantized.metal` (`N_DST` 4, `N_SIMDGROUP` 2):
 ///
@@ -41,6 +43,11 @@ pub enum GgmlDType {
 /// | q4_K   | `r0*4`             | 4              | 1          | 4      |
 /// | q5_K   | `(r0*2+sgitg)*2`   | 2              | 2          | 4      |
 /// | q6_K   | `2*r0+sgitg`       | 1              | 2          | 2      |
+///
+/// The `F32` and `F16`/`BF16`/`Q8K` arms below violate this rule in the under-dispatch
+/// direction: `kernel_mul_mv_impl` takes `r0 = tgpig.x`, one row per threadgroup, so
+/// their stride is 1 while `align` is 8 — at `ne01 = 12` only 2 of 12 rows are written.
+/// That is the subject of #3856 and is left untouched here to avoid duplicating it.
 pub(crate) fn mul_mv_dispatch_geometry(dtype: GgmlDType) -> (usize, usize, usize) {
     match dtype {
         GgmlDType::Q4_0
