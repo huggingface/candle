@@ -356,6 +356,90 @@ pub fn call_quantized_get_rows(
     Ok(())
 }
 
+/// Fills `counts` with the number of routing-table rows each expert owns, so
+/// `call_quantized_matmul_mm_id` can tell in one read whether a token tile has
+/// any work rather than scanning to find out. `counts` must hold at least
+/// `ne02` u32s.
+///
+/// Two dispatches because the histogram needs its accumulator zeroed first and
+/// there is no cross-threadgroup barrier inside a single dispatch. Both are
+/// trivially small next to the matmul they precede.
+///
+/// `counts` is taken `&mut` specifically so both dispatches bind it via
+/// `set_output_buffer` (the `(&mut Buffer, usize)` `EncoderParam` impl, not
+/// `(&Buffer, usize)`'s `set_input_buffer`): `ComputeCommandEncoder`'s
+/// `auto_barrier` only tracks hazards through that read/write distinction
+/// (encoder.rs), and every buffer here is `HazardTrackingModeUntracked`
+/// (lib.rs's `RESOURCE_OPTIONS`), so Metal itself inserts no barrier on its
+/// own. Mislabeling `counts` as input-only (its previous form) silently
+/// dropped both the zero-before-histogram and histogram-before-matmul-read
+/// dependencies -- caught by `kernel_mul_mm_id_chunked_matches_unchunked_topk_shape`
+/// once counts were computed per-chunk (Phase 3) rather than once for a
+/// whole batch dwarfing any single tile's threshold, which is what had
+/// masked it until then.
+#[allow(clippy::too_many_arguments)]
+pub fn call_mm_id_expert_counts<E: EncoderProvider>(
+    device: &Device,
+    ep: E,
+    kernels: &Kernels,
+    ids_shape: &[usize],
+    ids_stride: &[usize],
+    ids: &Buffer,
+    ids_offset: usize,
+    n_expert: i64,
+    counts: &mut Buffer,
+) -> Result<(), MetalKernelError> {
+    let nei0 = ids_shape[ids_shape.len() - 1] as i64;
+    let nei1 = ids_shape[ids_shape.len() - 2] as i64;
+    let nbi1 = ids_stride[ids_stride.len() - 2] as i64;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+
+    let zero = kernels.load_pipeline(device, Source::Quantized, "kernel_mm_id_zero_counts")?;
+    encoder.set_compute_pipeline_state(&zero);
+    set_params!(encoder, ((&mut *counts, 0), n_expert));
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: n_expert.max(1) as usize,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width: 1,
+            height: 1,
+            depth: 1,
+        },
+    );
+
+    let hist = kernels.load_pipeline(device, Source::Quantized, "kernel_mm_id_expert_counts")?;
+    encoder.set_compute_pipeline_state(&hist);
+    set_params!(
+        encoder,
+        (
+            (ids, ids_offset),
+            (&mut *counts, 0),
+            nei0,
+            nei1,
+            nbi1,
+            n_expert
+        )
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: 64,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width: 64,
+            height: 1,
+            depth: 1,
+        },
+    );
+    Ok(())
+}
+
 /// Indexed/routed matmul for MoE expert dispatch (ggml's `mul_mat_id`).
 ///
 /// `src0` holds all experts' weights stacked on their leading dim
@@ -403,6 +487,7 @@ pub fn call_quantized_matmul_mm_id(
     dst_shape: &[usize],
     dst_offset: usize,
     dst: &Buffer,
+    expert_counts: &Buffer,
 ) -> Result<(), MetalKernelError> {
     // Everything is in reverse, same convention as call_quantized_matmul_mm_t.
     let ne00 = src0_shape[src0_shape.len() - 1] as i64; // n_in (contraction dim)
@@ -494,7 +579,8 @@ pub fn call_quantized_matmul_mm_id(
             nb12,
             ne0,
             ne1,
-            nb1
+            nb1,
+            (expert_counts, 0)
         )
     );
 
@@ -600,6 +686,19 @@ pub fn mm_id_max_nei1(device: &Device, nei0: i64) -> i64 {
 /// kernel will interpret these same shapes as. `dst_shape` itself is
 /// passed through unchanged: only `ne0` (its last dim) is ever read from
 /// it, and `ne0` is chunk-invariant.
+///
+/// Expert counts are computed **per chunk**, not once for the whole batch,
+/// and this is why chunking owns that computation rather than taking counts
+/// as a parameter like `call_quantized_matmul_mm_id` does: a batch-global
+/// count paired with `call_quantized_matmul_mm_id`'s chunk-local
+/// `tgpig.x * 32 >= expert_counts[i02]` guard is safe (the guard only gets
+/// *more* permissive, never wrong) but leaves the skip-the-scan win on the
+/// table for every chunk after the first, since a token tile's chunk-local
+/// row count is almost always far smaller than the whole-batch count for
+/// that expert. One small buffer, reused across iterations the same way
+/// `src1_chunk_shape`/`ids_chunk_shape` already are -- `call_mm_id_expert_counts`
+/// zeroes it before each chunk's histogram, so there is nothing to reset
+/// between iterations.
 #[allow(clippy::too_many_arguments)]
 pub fn call_quantized_matmul_mm_id_chunked<E: EncoderProvider + Copy>(
     device: &Device,
@@ -629,6 +728,7 @@ pub fn call_quantized_matmul_mm_id_chunked<E: EncoderProvider + Copy>(
         )));
     }
 
+    let n_expert = src0_shape[src0_shape.len() - 3] as i64;
     let nei0 = ids_shape[ids_shape.len() - 1] as i64;
     let nei1 = ids_shape[ids_shape.len() - 2] as i64;
 
@@ -645,11 +745,29 @@ pub fn call_quantized_matmul_mm_id_chunked<E: EncoderProvider + Copy>(
     let mut ids_chunk_shape = ids_shape.to_vec();
     let ids_token_idx = ids_chunk_shape.len() - 2;
 
+    let mut expert_counts = device.new_buffer(
+        (n_expert as usize) * std::mem::size_of::<u32>(),
+        crate::RESOURCE_OPTIONS,
+    )?;
+
     let mut t0: i64 = 0;
     while t0 < nei1 {
         let chunk_len = (nei1 - t0).min(max_nei1) as usize;
         src1_chunk_shape[src1_token_idx] = chunk_len;
         ids_chunk_shape[ids_token_idx] = chunk_len;
+        let chunk_ids_offset = ids_offset + (t0 as usize) * nbi1;
+
+        call_mm_id_expert_counts(
+            device,
+            ep,
+            kernels,
+            &ids_chunk_shape,
+            ids_stride,
+            ids,
+            chunk_ids_offset,
+            n_expert,
+            &mut expert_counts,
+        )?;
 
         call_quantized_matmul_mm_id(
             device,
@@ -667,10 +785,11 @@ pub fn call_quantized_matmul_mm_id_chunked<E: EncoderProvider + Copy>(
             &ids_chunk_shape,
             ids_stride,
             ids,
-            ids_offset + (t0 as usize) * nbi1,
+            chunk_ids_offset,
             dst_shape,
             dst_offset + (t0 as usize) * dst_token_stride,
             dst,
+            &expert_counts,
         )?;
 
         t0 += chunk_len as i64;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::metal::{Commands, ResidencySet};
+use crate::metal::{Commands, CommandsGuard, ResidencySet};
 use core::ffi::c_void;
 use half::{bf16, f16};
 use rand::prelude::SliceRandom;
@@ -25,6 +25,37 @@ fn new_buffer<T>(device: &Device, data: &[T]) -> Buffer {
     let ptr = data.as_ptr() as *const c_void;
     let size = std::mem::size_of_val(data);
     device.new_buffer_with_data(ptr, size, options).unwrap()
+}
+
+// Real per-expert row counts for a `call_quantized_matmul_mm_id[_chunked]`
+// test call, via the same `call_mm_id_expert_counts` kernel production code
+// uses (candle-core/src/quantized/metal.rs) -- not a CPU-computed stand-in,
+// so these tests exercise the counts kernel itself rather than assuming it.
+fn expert_counts_buffer(
+    device: &Device,
+    encoder: &CommandsGuard<'_>,
+    kernels: &Kernels,
+    ids_shape: &[usize],
+    ids_stride: &[usize],
+    ids_buf: &Buffer,
+    n_expert: usize,
+) -> Buffer {
+    let mut counts = device
+        .new_buffer(n_expert * std::mem::size_of::<u32>(), RESOURCE_OPTIONS)
+        .unwrap();
+    call_mm_id_expert_counts(
+        device,
+        encoder,
+        kernels,
+        ids_shape,
+        ids_stride,
+        ids_buf,
+        0,
+        n_expert as i64,
+        &mut counts,
+    )
+    .unwrap();
+    counts
 }
 
 fn device() -> Device {
@@ -2589,6 +2620,17 @@ fn kernel_mul_mm_id_f32_matches_reference() {
 
     let commands = commands(&device);
     let encoder = commands.command_encoder().unwrap();
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
     // Strides are in bytes (matches call_quantized_matmul_mm_t's convention,
     // see candle-core/src/quantized/metal.rs's caller) -- not element counts.
     call_quantized_matmul_mm_id(
@@ -2604,13 +2646,14 @@ fn kernel_mul_mm_id_f32_matches_reference() {
         &[n_expert_used * n_in * 4, n_in * 4, 4],
         &src1_buf,
         0,
-        &[n_tokens, n_expert_used],
-        &[n_expert_used * 4, 4],
+        &ids_shape,
+        &ids_stride,
         &ids_buf,
         0,
         &[n_tokens, n_expert_used, n_out],
         0,
         &dst_buf,
+        &counts_buf,
     )
     .unwrap();
     drop(encoder);
@@ -2692,6 +2735,17 @@ fn kernel_mul_mm_id_f32_topk_matches_reference() {
 
     let commands = commands(&device);
     let encoder = commands.command_encoder().unwrap();
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
     call_quantized_matmul_mm_id(
         &device,
         &encoder,
@@ -2705,13 +2759,14 @@ fn kernel_mul_mm_id_f32_topk_matches_reference() {
         &[n_expert_used * n_in * 4, n_in * 4, 4],
         &src1_buf,
         0,
-        &[n_tokens, n_expert_used],
-        &[n_expert_used * 4, 4],
+        &ids_shape,
+        &ids_stride,
         &ids_buf,
         0,
         &[n_tokens, n_expert_used, n_out],
         0,
         &dst_buf,
+        &counts_buf,
     )
     .unwrap();
     drop(encoder);
@@ -2789,6 +2844,17 @@ fn kernel_mul_mm_id_f32_single_token_matches_reference() {
 
     let commands = commands(&device);
     let encoder = commands.command_encoder().unwrap();
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
     call_quantized_matmul_mm_id(
         &device,
         &encoder,
@@ -2802,13 +2868,14 @@ fn kernel_mul_mm_id_f32_single_token_matches_reference() {
         &[n_expert_used * n_in * 4, n_in * 4, 4],
         &src1_buf,
         0,
-        &[n_tokens, n_expert_used],
-        &[n_expert_used * 4, 4],
+        &ids_shape,
+        &ids_stride,
         &ids_buf,
         0,
         &[n_tokens, n_expert_used, n_out],
         0,
         &dst_buf,
+        &counts_buf,
     )
     .unwrap();
     drop(encoder);
@@ -2904,6 +2971,17 @@ fn kernel_mul_mm_id_f32_broadcast_matches_reference() {
 
     let commands = commands(&device);
     let encoder = commands.command_encoder().unwrap();
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
     call_quantized_matmul_mm_id(
         &device,
         &encoder,
@@ -2917,13 +2995,14 @@ fn kernel_mul_mm_id_f32_broadcast_matches_reference() {
         &[n_in * 4, n_in * 4, 4],
         &src1_buf,
         0,
-        &[n_tokens, n_expert_used],
-        &[n_expert_used * 4, 4],
+        &ids_shape,
+        &ids_stride,
         &ids_buf,
         0,
         &[n_tokens, n_expert_used, n_out],
         0,
         &dst_buf,
+        &counts_buf,
     )
     .unwrap();
     drop(encoder);
@@ -2972,6 +3051,13 @@ fn kernel_mul_mm_id_rejects_oversized_threadgroup_memory() {
         )
         .unwrap();
 
+    // Counts content is irrelevant here -- the threadgroup-memory bound is
+    // checked before dispatch, so this call must fail before `expert_counts`
+    // is ever read. A zeroed buffer just needs to satisfy the signature.
+    let counts_buf = device
+        .new_buffer(n_expert * std::mem::size_of::<u32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
     let commands = commands(&device);
     let encoder = commands.command_encoder().unwrap();
     let result = call_quantized_matmul_mm_id(
@@ -2994,6 +3080,7 @@ fn kernel_mul_mm_id_rejects_oversized_threadgroup_memory() {
         &[nei1, nei0, n_out],
         0,
         &dst_buf,
+        &counts_buf,
     );
 
     assert!(
@@ -3057,6 +3144,17 @@ fn kernel_mul_mv_id_f32_matches_mm_id() {
 
     let commands = commands(&device);
     let encoder = commands.command_encoder().unwrap();
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
     call_quantized_matmul_mm_id(
         &device,
         &encoder,
@@ -3070,13 +3168,14 @@ fn kernel_mul_mv_id_f32_matches_mm_id() {
         &[n_expert_used * n_in * 4, n_in * 4, 4],
         &src1_buf,
         0,
-        &[n_tokens, n_expert_used],
-        &[n_expert_used * 4, 4],
+        &ids_shape,
+        &ids_stride,
         &ids_buf,
         0,
         &[n_tokens, n_expert_used, n_out],
         0,
         &mm_dst_buf,
+        &counts_buf,
     )
     .unwrap();
     call_quantized_matmul_mv_id(
@@ -3190,6 +3289,17 @@ fn kernel_mul_mv_id_f32_broadcast_matches_mm_id() {
 
     let commands = commands(&device);
     let encoder = commands.command_encoder().unwrap();
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
     // src1 is [n_tokens, 1, n_in] -- nb11 == nb12 (stride collapses since
     // dim1 has size 1), matching how QMetalStorage::indexed_moe_forward's
     // caller (FusedMoeGGUF::forward) actually broadcasts.
@@ -3206,13 +3316,14 @@ fn kernel_mul_mv_id_f32_broadcast_matches_mm_id() {
         &[n_in * 4, n_in * 4, 4],
         &src1_buf,
         0,
-        &[n_tokens, n_expert_used],
-        &[n_expert_used * 4, 4],
+        &ids_shape,
+        &ids_stride,
         &ids_buf,
         0,
         &[n_tokens, n_expert_used, n_out],
         0,
         &mm_dst_buf,
+        &counts_buf,
     )
     .unwrap();
     call_quantized_matmul_mv_id(
@@ -3228,8 +3339,8 @@ fn kernel_mul_mv_id_f32_broadcast_matches_mm_id() {
         &[n_in * 4, n_in * 4, 4],
         &src1_buf,
         0,
-        &[n_tokens, n_expert_used],
-        &[n_expert_used * 4, 4],
+        &ids_shape,
+        &ids_stride,
         &ids_buf,
         0,
         &[n_tokens, n_expert_used, n_out],
@@ -3325,6 +3436,15 @@ fn run_mm_id_chunked_case(
 
     let commands = commands(&device);
     let encoder = commands.command_encoder().unwrap();
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
     call_quantized_matmul_mm_id(
         &device,
         &encoder,
@@ -3345,6 +3465,7 @@ fn run_mm_id_chunked_case(
         &dst_shape,
         0,
         &unchunked_dst,
+        &counts_buf,
     )
     .unwrap();
     call_quantized_matmul_mm_id_chunked(
@@ -3473,6 +3594,15 @@ fn kernel_mul_mm_id_chunked_succeeds_above_the_real_device_ceiling() {
 
     let commands = commands(&device);
     let encoder = commands.command_encoder().unwrap();
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
 
     let unchunked_result = call_quantized_matmul_mm_id(
         &device,
@@ -3494,6 +3624,7 @@ fn kernel_mul_mm_id_chunked_succeeds_above_the_real_device_ceiling() {
         &dst_shape,
         0,
         &dst_buf,
+        &counts_buf,
     );
     assert!(
         unchunked_result.is_err(),

@@ -7263,6 +7263,57 @@ void kernel_mul_mm_id_impl(
     }
 }
 
+// Per-expert row counts for `kernel_mul_mm_id`, computed once per call instead
+// of rediscovered inside every threadgroup.
+//
+// `kernel_mul_mm_id`'s grid is (token-tiles x row-tiles x experts), and each
+// threadgroup used to scan the whole routing table to find its own expert's
+// rows. The result depends only on the expert, so the row-tile dimension was
+// pure duplication, and the token-tile extent is sized as though an expert
+// owned every token when it owns nei1*nei0/ne02 of them. At top-8-of-256 with
+// 768 tokens that is 49,152 threadgroups each reading 6,144 ids entries --
+// ~302M global reads to recover 6,144 entries' worth of information.
+//
+// With counts available up front, a threadgroup can tell in one read whether
+// its token tile holds any of its expert's rows, and skip the scan entirely
+// rather than discovering it was doomed only after paying for it.
+//
+// Counts only -- deliberately not the ordered row lists. Producing those in
+// the order the scan produces them needs a stable counting sort (per-chunk
+// per-expert offsets), and ordering is load-bearing here: an arbitrary
+// permutation made greedy decoding nondeterministic. Counts are
+// order-independent, so this is safe with a plain atomic histogram.
+kernel void kernel_mm_id_zero_counts(
+        device atomic_uint * counts,
+        constant   int64_t & ne02,
+        uint                 tpig[[thread_position_in_grid]])
+{
+    if ((int64_t)tpig < ne02) {
+        atomic_store_explicit(&counts[tpig], 0u, memory_order_relaxed);
+    }
+}
+
+kernel void kernel_mm_id_expert_counts(
+        device const uchar * ids,
+        device atomic_uint * counts,
+        constant   int64_t & nei0,
+        constant   int64_t & nei1,
+        constant  uint64_t & nbi1,
+        constant   int64_t & ne02,
+        uint                 tpig[[thread_position_in_grid]],
+        uint                 tpg [[threads_per_grid]])
+{
+    const uint n_pairs = (uint)(nei0 * nei1);
+    for (uint p = tpig; p < n_pairs; p += tpg) {
+        const uint ii1 = p / (uint)nei0;
+        const uint ii0 = p % (uint)nei0;
+        const int32_t id = ((device const int32_t *) (ids + ii1*nbi1))[ii0];
+        if (id >= 0 && (int64_t)id < ne02) {
+            atomic_fetch_add_explicit(&counts[id], 1u, memory_order_relaxed);
+        }
+    }
+}
+
 template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread half4x4 &)>
 kernel void kernel_mul_mm_id(
         device const   uchar * src0s,
@@ -7285,6 +7336,7 @@ kernel void kernel_mul_mm_id(
         constant     int64_t & ne0,
         constant     int64_t & ne1,
         constant    uint64_t & nb1,
+        device const    uint * expert_counts,
         threadgroup    uchar * shared_memory [[threadgroup(0)]],
         uint3                  tgpig[[threadgroup_position_in_grid]],
         uint                   tiitg[[thread_index_in_threadgroup]],
@@ -7295,6 +7347,16 @@ kernel void kernel_mul_mm_id(
     tgpig.z = 0;
 
     device const uchar * src0 = src0s + i02*nb02;
+
+    // Skip the scan entirely when this token tile holds none of this expert's
+    // rows. `expert_counts` is computed once per call by
+    // kernel_mm_id_expert_counts, so this costs one global read instead of the
+    // 6,144 the scan needed to reach the same conclusion. The previous
+    // revision could only bail *after* the count pass, which is where the
+    // remaining time was: 49,152 threadgroups x 6,144 reads.
+    if (tgpig.x * 32 >= expert_counts[i02]) {
+        return;
+    }
 
     // Row discovery: which (expert-slot, token) pairs route to THIS expert.
     //

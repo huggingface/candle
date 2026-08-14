@@ -586,6 +586,13 @@ impl QMetalStorage {
             // the device's fixed budget regardless of tuning -- found live
             // via a real ~2594-token prompt.
             let max_nei1 = candle_metal_kernels::mm_id_max_nei1(device.device(), topk as i64);
+            // Per-expert row counts let the kernel skip the routing-table
+            // scan for a token tile that holds none of its expert's rows,
+            // rather than paying the full scan to discover that -- measured
+            // 3.61s of a 9.42s prefill. `call_quantized_matmul_mm_id_chunked`
+            // computes these itself, per chunk rather than once for the
+            // whole batch, since a chunk-local count is what its chunk-local
+            // guard actually needs (see that function's own doc comment).
             dispatch_indexed_moe!(
                 candle_metal_kernels::call_quantized_matmul_mm_id_chunked,
                 max_nei1
