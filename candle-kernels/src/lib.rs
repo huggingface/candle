@@ -9,8 +9,10 @@ pub enum Id {
     Binary,
     Cast,
     Conv,
+    DeltaRule,
     Fill,
     Indexing,
+    Moe,
     Quantized,
     Reduce,
     Sort,
@@ -18,13 +20,15 @@ pub enum Id {
     Unary,
 }
 
-pub const ALL_IDS: [Id; 11] = [
+pub const ALL_IDS: [Id; 13] = [
     Id::Affine,
     Id::Binary,
     Id::Cast,
     Id::Conv,
+    Id::DeltaRule,
     Id::Fill,
     Id::Indexing,
+    Id::Moe,
     Id::Quantized,
     Id::Reduce,
     Id::Sort,
@@ -71,8 +75,10 @@ mdl!(AFFINE, Affine);
 mdl!(BINARY, Binary);
 mdl!(CAST, Cast);
 mdl!(CONV, Conv);
+mdl!(DELTA_RULE, DeltaRule);
 mdl!(FILL, Fill);
 mdl!(INDEXING, Indexing);
+mdl!(MOE, Moe);
 mdl!(QUANTIZED, Quantized);
 mdl!(REDUCE, Reduce);
 mdl!(SORT, Sort);
