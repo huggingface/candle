@@ -248,7 +248,9 @@ extern "C" void run_mha_v3(
     int window_size_right,
 
     uint32_t total_q,
-    uint32_t total_k
+    uint32_t total_k,
+
+    void *stream_ptr
 ) {
     Flash_fwd_params params;
     // Reset the parameters
@@ -327,6 +329,7 @@ extern "C" void run_mha_v3(
 
     // print_params(params);
     
-    cudaStream_t stream = 0; // Use the default stream.
+    // candle's streams are cudaStreamNonBlocking, so they do not sync with the legacy default stream.
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
     run_mha_fwd_v3(params, stream);
 }

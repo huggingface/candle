@@ -60,6 +60,8 @@ extern "C" {
 
         total_q: u32,
         total_k: u32,
+
+        stream_ptr: *mut c_void,
     );
 
 }

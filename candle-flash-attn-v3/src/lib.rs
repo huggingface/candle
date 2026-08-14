@@ -230,6 +230,7 @@ impl FlashAttn {
                 /* window_size_right */ window_size_right,
                 /* total_q, dummy */ 0u32,
                 /* total_k, dummy */ 0u32,
+                /* stream_ptr */ stream.cu_stream() as *mut core::ffi::c_void,
             )
         }
 
@@ -680,6 +681,7 @@ impl FlashAttnVarLen {
                 /* window_size_right */ window_size_right,
                 /* total_q */ total_q as u32,
                 /* total_k */ total_k as u32,
+                /* stream_ptr */ stream.cu_stream() as *mut core::ffi::c_void,
             )
         }
 
