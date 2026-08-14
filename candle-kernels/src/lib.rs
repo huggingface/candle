@@ -35,6 +35,7 @@ pub const ALL_IDS: [Id; 11] = [
 pub struct Module {
     index: usize,
     ptx: &'static str,
+    name: &'static str,
 }
 
 impl Module {
@@ -44,6 +45,10 @@ impl Module {
 
     pub fn ptx(&self) -> &'static str {
         self.ptx
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.name
     }
 }
 
@@ -59,24 +64,25 @@ const fn module_index(id: Id) -> usize {
 }
 
 macro_rules! mdl {
-    ($cst:ident, $id:ident) => {
+    ($cst:ident, $id:ident, $name:literal) => {
         pub const $cst: Module = Module {
             index: module_index(Id::$id),
             ptx: ptx::$cst,
+            name: $name,
         };
     };
 }
 
-mdl!(AFFINE, Affine);
-mdl!(BINARY, Binary);
-mdl!(CAST, Cast);
-mdl!(CONV, Conv);
-mdl!(FILL, Fill);
-mdl!(INDEXING, Indexing);
-mdl!(QUANTIZED, Quantized);
-mdl!(REDUCE, Reduce);
-mdl!(SORT, Sort);
-mdl!(TERNARY, Ternary);
-mdl!(UNARY, Unary);
+mdl!(AFFINE, Affine, "affine");
+mdl!(BINARY, Binary, "binary");
+mdl!(CAST, Cast, "cast");
+mdl!(CONV, Conv, "conv");
+mdl!(FILL, Fill, "fill");
+mdl!(INDEXING, Indexing, "indexing");
+mdl!(QUANTIZED, Quantized, "quantized");
+mdl!(REDUCE, Reduce, "reduce");
+mdl!(SORT, Sort, "sort");
+mdl!(TERNARY, Ternary, "ternary");
+mdl!(UNARY, Unary, "unary");
 
 pub mod ffi;
