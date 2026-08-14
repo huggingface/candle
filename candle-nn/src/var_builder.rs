@@ -9,6 +9,24 @@ use safetensors::{slice::IndexOp, tensor::SafeTensors};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+fn load_safetensor(
+    view: safetensors::tensor::TensorView<'_>,
+    dtype: DType,
+    dev: &Device,
+) -> Result<Tensor> {
+    // WGPU cannot represent BF16 tensors. Cast checkpoint weights on the CPU before
+    // moving them to WGPU rather than trying to upload BF16 and cast afterwards.
+    if dev.is_wgpu()
+        && view.dtype() == safetensors::tensor::Dtype::BF16
+        && dtype != DType::BF16
+    {
+        view.load(&Device::Cpu)?.to_dtype(dtype)?.to_device(dev)
+    } else {
+        view.load(dev)?.to_dtype(dtype)
+    }
+}
+
+
 /// A structure used to retrieve variables, these variables can either come from storage or be
 /// generated via some form of initialization.
 ///
@@ -538,7 +556,7 @@ impl SimpleBackend for candle::safetensors::MmapedSafetensors {
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor> {
-        let tensor = self.load(name, dev)?.to_dtype(dtype)?;
+        let tensor = load_safetensor(self.get(name)?, dtype, dev)?;
         if tensor.shape() != &s {
             Err(candle::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {name}"),
@@ -551,7 +569,7 @@ impl SimpleBackend for candle::safetensors::MmapedSafetensors {
     }
 
     fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
-        self.load(name, dev)?.to_dtype(dtype)
+        load_safetensor(self.get(name)?, dtype, dev)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {

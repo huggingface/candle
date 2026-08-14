@@ -1424,7 +1424,16 @@ pub mod shader_loader {
                 while let Some(token) = tokens.next() {
                     match token {
                         Token::Word(w) => {
-                            if w == "const" || w == "var" || w == "override" {
+                            if w == "enable" {
+                                // `enable` is a module directive rather than a declaration. It
+                                // must never be removed, and has to remain before all declarations.
+                                current_item.push_str(w);
+                                result.push_str(&current_item);
+                                match_until_char(&mut tokens, ';', &mut result);
+                                tokens.next();
+                                result.push(';');
+                                current_item.clear();
+                            } else if w == "const" || w == "var" || w == "override" {
                                 //we are a global variable
                                 current_item.push_str(w);
                                 let var_name = match_variable(&mut tokens, &mut current_item);
