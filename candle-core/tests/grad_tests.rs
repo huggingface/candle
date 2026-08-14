@@ -38,6 +38,24 @@ fn sum_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn expand_grad(device: &Device) -> Result<()> {
+    // Computing the gradient sums over a middle dim of a 5D tensor, which
+    // takes the strided-index fallback path in the Metal reduce kernels,
+    // see issue #3847.
+    let data: Vec<f32> = (0..24).map(|v| v as f32).collect();
+    let x = Var::from_vec(data, (1, 1, 4, 6), device)?;
+    let e = x.as_tensor().unsqueeze(2)?.expand((1, 1, 3, 4, 6))?;
+    let loss = (e.sqr()?.sum_all()? * 0.5)?;
+    let grads = loss.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    // loss = 0.5 * sum over the 3 broadcast copies of x^2, so dloss/dx = 3.x
+    assert_eq!(
+        grad_x.flatten_all()?.to_vec1::<f32>()?,
+        (0..24).map(|v| 3. * v as f32).collect::<Vec<f32>>()
+    );
+    Ok(())
+}
+
 fn matmul_grad(device: &Device) -> Result<()> {
     let data: Vec<_> = (0..12).map(|i| i as f32).collect();
     let x = Var::from_slice(&data, (2, 2, 3), device)?;
@@ -587,6 +605,12 @@ test_device!(
     simple_grad_metal
 );
 test_device!(sum_grad, sum_grad_cpu, sum_grad_gpu, sum_grad_metal);
+test_device!(
+    expand_grad,
+    expand_grad_cpu,
+    expand_grad_gpu,
+    expand_grad_metal
+);
 test_device!(
     matmul_grad,
     matmul_grad_cpu,

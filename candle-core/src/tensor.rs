@@ -696,9 +696,11 @@ impl Tensor {
             self.clone()
         };
         for (idx, &repeat) in repeats.iter().enumerate() {
-            if repeat > 1 {
-                inp = Tensor::cat(&vec![&inp; repeat], idx)?
-            }
+            inp = match repeat {
+                0 => inp.narrow(idx, 0, 0)?,
+                1 => inp,
+                repeat => Tensor::cat(&vec![&inp; repeat], idx)?,
+            };
         }
         Ok(inp)
     }
@@ -1562,6 +1564,21 @@ impl Tensor {
                 .broadcast_as(&l_shape)?
                 .contiguous()?
                 .matmul(&rhs.broadcast_as(&r_shape)?.contiguous()?),
+            // A rank-2 rhs is only broadcast over the batch dimensions, so the whole product is
+            // a single 2D matmul once the leading dims of lhs are folded into its row dimension.
+            // Broadcasting the rhs instead would copy it `batch` times -- for an lm_head that is
+            // the entire vocabulary matrix, per call. Same trick, and same contiguity guard, as
+            // `candle_nn::Linear::forward`.
+            (false, true) if rhs.rank() == 2 && lhs.is_contiguous() => {
+                let (lhs_dims, rhs_dims) = (lhs.dims(), rhs.dims());
+                let (m, k) = (lhs_dims[lhs.rank() - 2], lhs_dims[lhs.rank() - 1]);
+                let n = rhs_dims[1];
+                let batch: usize = lhs_dims[..lhs.rank() - 2].iter().product();
+                let mut out_dims = lhs_dims.to_vec();
+                out_dims.pop();
+                out_dims.push(n);
+                lhs.reshape((batch * m, k))?.matmul(rhs)?.reshape(out_dims)
+            }
             (false, true) => lhs.matmul(&rhs.broadcast_as(&r_shape)?.contiguous()?),
             (true, false) => lhs.broadcast_as(&l_shape)?.contiguous()?.matmul(rhs),
             (false, false) => lhs.matmul(rhs),
