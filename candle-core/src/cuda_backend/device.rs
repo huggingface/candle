@@ -389,7 +389,7 @@ impl CudaDevice {
     ) -> Result<CudaFunc> {
         let ms = self.custom_modules.read().unwrap();
         if let Some(mdl) = ms.get(module_name).as_ref() {
-            let func = mdl.load_function(fn_name).w()?;
+            let func = load_function(mdl, fn_name, module_name)?;
             return Ok(CudaFunc {
                 func,
                 stream: self.stream.clone(),
@@ -399,7 +399,7 @@ impl CudaDevice {
         let mut ms = self.custom_modules.write().unwrap();
         let cuda_module = self.context.load_module(ptx.into()).w()?;
         ms.insert(module_name.to_string(), cuda_module.clone());
-        let func = cuda_module.load_function(fn_name).w()?;
+        let func = load_function(&cuda_module, fn_name, module_name)?;
         Ok(CudaFunc {
             func,
             stream: self.stream.clone(),
@@ -408,8 +408,8 @@ impl CudaDevice {
 
     pub fn get_or_load_func(&self, fn_name: &str, mdl: &kernels::Module) -> Result<CudaFunc> {
         let ms = self.modules.read().unwrap();
-        if let Some(mdl) = ms.mdls[mdl.index()].as_ref() {
-            let func = mdl.load_function(fn_name).w()?;
+        if let Some(cuda_module) = ms.mdls[mdl.index()].as_ref() {
+            let func = load_function(cuda_module, fn_name, mdl.name())?;
             return Ok(CudaFunc {
                 func,
                 stream: self.stream.clone(),
@@ -419,7 +419,7 @@ impl CudaDevice {
         let mut ms = self.modules.write().unwrap();
         let cuda_module = self.context.load_module(mdl.ptx().into()).w()?;
         ms.mdls[mdl.index()] = Some(cuda_module.clone());
-        let func = cuda_module.load_function(fn_name).w()?;
+        let func = load_function(&cuda_module, fn_name, mdl.name())?;
         Ok(CudaFunc {
             func,
             stream: self.stream.clone(),
@@ -429,6 +429,21 @@ impl CudaDevice {
     pub fn cublas_handle(&self) -> Arc<cudarc::cublas::CudaBlas> {
         self.blas.clone()
     }
+}
+
+fn load_function(
+    module: &Arc<cudarc::driver::CudaModule>,
+    fn_name: &str,
+    module_name: &str,
+) -> Result<CudaFunction> {
+    module.load_function(fn_name).map_err(|source| {
+        CudaError::MissingKernel {
+            kernel_name: fn_name.to_string(),
+            module_name: module_name.to_string(),
+            source,
+        }
+        .into()
+    })
 }
 
 impl CudaDevice {
