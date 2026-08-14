@@ -14,7 +14,6 @@ pub struct MoeCfg {
     pub decoder_sparse_step: Option<usize>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct FusedMoe {
     gate: Linear,
@@ -24,7 +23,6 @@ pub struct FusedMoe {
     act: Activation,
     norm_topk_prob: bool,
     num_experts_per_tok: usize,
-    // world_size: usize,
     dtype: DType,
 }
 
@@ -38,12 +36,11 @@ impl FusedMoe {
         let mut gate_up_experts = Vec::with_capacity(num_experts);
         let mut down_experts = Vec::with_capacity(num_experts);
 
-        //pack experts
+        // Pack experts
         for i in 0..num_experts {
             let experts_vb = experts_vb.pp(format!("{i}").as_str());
 
             let (gate_up_expert, down_expert) = {
-                // n x k format
                 let init_ws = candle_nn::init::DEFAULT_KAIMING_NORMAL;
                 let gate_expert = experts_vb.pp("gate_proj").get_with_hints(
                     (cfg.moe_intermediate_size, cfg.hidden_size),
@@ -60,7 +57,6 @@ impl FusedMoe {
                     "weight",
                     init_ws,
                 )?;
-                //pack gate_proj and up_proj
                 let gate_up_expert = Tensor::cat(&[&gate_expert, &up_expert], 0)?;
 
                 (gate_up_expert, down_expert)
@@ -72,7 +68,6 @@ impl FusedMoe {
 
         let gate_up_w = Tensor::stack(&gate_up_experts, 0)?;
         let down_w = Tensor::stack(&down_experts, 0)?;
-        // let world_size = comm.world_size();
         let w_size_n = gate_up_w.dim(1)? / 2;
 
         Ok(Self {
@@ -83,7 +78,6 @@ impl FusedMoe {
             act: cfg.act,
             norm_topk_prob: cfg.norm_topk_prob,
             num_experts_per_tok: cfg.num_experts_per_tok,
-            // world_size,
             dtype,
         })
     }
@@ -109,20 +103,8 @@ impl FusedMoe {
             topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
         }
 
-        let (expert_ids, sorted_token_ids) = if is_prefill {
-            // For long-context (32K+), need to use custom sort kernel
-            // #[cfg(feature = "cuda")]
-            // {
-            //     use attention_rs::sort::ArgSortOp;
-            //     topk_ids.flatten_all()?.sort(true)?
-            // }
-            // #[cfg(not(feature = "cuda"))]
-            topk_ids.flatten_all()?.sort_last_dim(true)?
-        } else {
-            topk_ids.flatten_all()?.sort_last_dim(true)?
-        };
+        let (expert_ids, sorted_token_ids) = topk_ids.flatten_all()?.sort_last_dim(true)?;
 
-        //out (M, top_k, N)
         let gate_up = moe::moe_gemm(
             &xs,
             &self.gate_up_w,
@@ -140,10 +122,8 @@ impl FusedMoe {
             .narrow(candle::D::Minus1, self.w_size_n, self.w_size_n)?
             .contiguous()?;
 
-        //(M * top_k, N // 2)
         let down_inputs = (up * gate.apply(&self.act)?)?.reshape(((), self.w_size_n))?;
 
-        //view(M, top_k, K) -> sum -> (M, K)
         let ys = moe::moe_gemm(
             &down_inputs,
             &self.down_w,
@@ -168,8 +148,6 @@ pub struct FusedMoeGGUF {
     pub act: Activation,
     pub norm_topk_prob: bool,
     pub num_experts_per_tok: usize,
-    // all_reduce: AllReduce,
-    // world_size: usize,
     pub dtype: DType,
 }
 
@@ -213,8 +191,6 @@ impl FusedMoeGGUF {
             act: cfg.act,
             norm_topk_prob: cfg.norm_topk_prob,
             num_experts_per_tok: cfg.num_experts_per_tok,
-            // all_reduce: AllReduce::new(comm),
-            // world_size: 1,
             dtype,
         })
     }
@@ -246,54 +222,75 @@ impl FusedMoeGGUF {
             topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
         }
 
-        let (expert_ids, sorted_token_ids) = if is_prefill {
-            // For long-context (32K+), need to use custom sort kernel
-            // #[cfg(feature = "cuda")]
-            // {
-            //     use attention_rs::sort::ArgSortOp;
-            //     topk_ids.flatten_all()?.sort(true)?
-            // }
-            // #[cfg(not(feature = "cuda"))]
-            topk_ids.flatten_all()?.sort_last_dim(true)?
-        } else {
-            topk_ids.flatten_all()?.sort_last_dim(true)?
-        };
+        let ys = if is_prefill && xs.device().is_cuda() {
+            // High-throughput WMMA grouped prefill path on CUDA
+            let prefill_res: Result<Tensor> = (|| {
+                let (expert_ids, sorted_token_ids) = topk_ids.flatten_all()?.sort_last_dim(true)?;
 
-        let ys = {
-            let gate = moe::moe_gemm_gguf(
-                &xs,
-                &self.gate_experts,
-                &None,
-                &sorted_token_ids,
-                &expert_ids,
-                self.num_experts_per_tok,
-                is_prefill,
-                self.dtype,
-            )?;
-            let up = moe::moe_gemm_gguf(
-                &xs,
-                &self.up_experts,
-                &None,
-                &sorted_token_ids,
-                &expert_ids,
-                self.num_experts_per_tok,
-                is_prefill,
-                self.dtype,
-            )?;
+                let gate = moe::moe_gemm_gguf(
+                    &xs,
+                    &self.gate_experts,
+                    &None,
+                    &sorted_token_ids,
+                    &expert_ids,
+                    self.num_experts_per_tok,
+                    true,
+                    self.dtype,
+                )?;
+                let up = moe::moe_gemm_gguf(
+                    &xs,
+                    &self.up_experts,
+                    &None,
+                    &sorted_token_ids,
+                    &expert_ids,
+                    self.num_experts_per_tok,
+                    true,
+                    self.dtype,
+                )?;
+
+                let down_inputs = (up * gate.apply(&self.act)?)?;
+                let down = moe::moe_gemm_gguf(
+                    &down_inputs,
+                    &self.down_experts,
+                    &Some(topk_weights.clone()),
+                    &sorted_token_ids,
+                    &expert_ids,
+                    self.num_experts_per_tok,
+                    true,
+                    self.dtype,
+                )?;
+                down.reshape((num_tokens, (), hidden_dim))?.sum(D::Minus2)
+            })();
+
+            match prefill_res {
+                Ok(out) => out,
+                Err(_) => {
+                    // Fallback to direct indexed_moe_forward path
+                    let xs_3d = xs.reshape((num_tokens, 1, hidden_dim))?;
+                    let gate = self.gate_experts.indexed_moe_forward(&xs_3d, &topk_ids)?;
+                    let up = self.up_experts.indexed_moe_forward(&xs_3d, &topk_ids)?;
+
+                    let down_inputs = (up * gate.apply(&self.act)?)?;
+                    let down = self.down_experts.indexed_moe_forward(&down_inputs, &topk_ids)?;
+
+                    let topk_w = topk_weights.unsqueeze(D::Minus1)?;
+                    down.broadcast_mul(&topk_w)?.sum(D::Minus2)?
+                }
+            }
+        } else {
+            // Direct indexed_moe_forward path (single-pass, zero sort overhead)
+            let xs_3d = xs.reshape((num_tokens, 1, hidden_dim))?;
+            let gate = self.gate_experts.indexed_moe_forward(&xs_3d, &topk_ids)?;
+            let up = self.up_experts.indexed_moe_forward(&xs_3d, &topk_ids)?;
 
             let down_inputs = (up * gate.apply(&self.act)?)?;
-            moe::moe_gemm_gguf(
-                &down_inputs,
-                &self.down_experts,
-                &Some(topk_weights),
-                &sorted_token_ids,
-                &expert_ids,
-                self.num_experts_per_tok,
-                is_prefill,
-                self.dtype,
-            )?
+            let down = self.down_experts.indexed_moe_forward(&down_inputs, &topk_ids)?;
+
+            let topk_w = topk_weights.unsqueeze(D::Minus1)?;
+            down.broadcast_mul(&topk_w)?.sum(D::Minus2)?
         };
-        let mut ys = ys.reshape((num_tokens, (), hidden_dim))?.sum(D::Minus2)?;
+
+        let mut ys = ys;
         if ys.dtype() != original_dtype {
             ys = ys.to_dtype(original_dtype)?;
         }
