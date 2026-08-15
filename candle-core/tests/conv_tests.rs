@@ -993,7 +993,10 @@ fn conv1d_grad_noncontiguous_kernel(dev: &Device) -> Result<()> {
     let input_ref = Var::from_slice(&input_data, (1, 2, 16), dev)?;
     let weight_ref = Var::from_slice(&weight_data, (3, 4, 1), dev)?;
     let kernel_ref = weight_ref.i((.., 1..3, ..))?.contiguous()?;
-    let loss_ref = input_ref.conv1d(&kernel_ref, 0, 1, 1, 1)?.sqr()?.sum_all()?;
+    let loss_ref = input_ref
+        .conv1d(&kernel_ref, 0, 1, 1, 1)?
+        .sqr()?
+        .sum_all()?;
     let grads_ref = loss_ref.backward()?;
     let grad_input_ref = grads_ref.get(&input_ref).unwrap();
     let grad_weight_ref = grads_ref.get(&weight_ref).unwrap();
