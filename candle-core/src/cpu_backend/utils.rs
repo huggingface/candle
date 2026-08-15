@@ -361,3 +361,91 @@ pub fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U
         }
     }
 }
+
+// Below this many contiguous elements the barrier-pool split costs more than it saves.
+const PAR_ELEMWISE_MIN: usize = 64 * 1024;
+// Per-unit span: big enough to amortize dispatch, small enough to balance.
+const PAR_ELEMWISE_CHUNK: usize = 16 * 1024;
+
+pub fn unary_map_vec_par<
+    T: Copy + Send + Sync,
+    U: Copy + Send + Sync,
+    F: Fn(T) -> U + Sync,
+    FV: Fn(&[T], &mut [U]) + Sync,
+>(
+    vs: &[T],
+    layout: &Layout,
+    f: F,
+    f_vec: FV,
+) -> Vec<U> {
+    if let crate::StridedBlocks::SingleBlock { start_offset, len } = layout.strided_blocks() {
+        if len >= PAR_ELEMWISE_MIN {
+            let src = &vs[start_offset..start_offset + len];
+            let mut ys: Vec<U> = Vec::with_capacity(len);
+            let ys_ptr = ys.as_mut_ptr() as usize;
+            let n_units = len.div_ceil(PAR_ELEMWISE_CHUNK);
+            crate::utils::barrier_pool().execute_chunked(n_units, |range| {
+                let ys_ptr = ys_ptr as *mut U;
+                for unit in range {
+                    let lo = unit * PAR_ELEMWISE_CHUNK;
+                    let hi = len.min(lo + PAR_ELEMWISE_CHUNK);
+                    let dst = unsafe { std::slice::from_raw_parts_mut(ys_ptr.add(lo), hi - lo) };
+                    f_vec(&src[lo..hi], dst);
+                }
+            });
+            // SAFETY: every element is written by exactly one unit.
+            unsafe { ys.set_len(len) };
+            return ys;
+        }
+    }
+    unary_map_vec(vs, layout, f, f_vec)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn binary_map_vec_par<
+    T: Copy + Send + Sync,
+    F: Fn(T, T) -> T + Sync,
+    FV: Fn(&[T], &[T], &mut [T]) + Sync,
+    FSV: FnMut(T, &[T], &mut [T]),
+>(
+    lhs_l: &Layout,
+    rhs_l: &Layout,
+    lhs: &[T],
+    rhs: &[T],
+    f: F,
+    f_vec: FV,
+    f_scalar_vec: FSV,
+) -> Vec<T> {
+    if let (
+        crate::StridedBlocks::SingleBlock {
+            start_offset: lo_l,
+            len: len_l,
+        },
+        crate::StridedBlocks::SingleBlock {
+            start_offset: lo_r,
+            len: len_r,
+        },
+    ) = (lhs_l.strided_blocks(), rhs_l.strided_blocks())
+    {
+        if len_l == len_r && len_l >= PAR_ELEMWISE_MIN {
+            let a = &lhs[lo_l..lo_l + len_l];
+            let b = &rhs[lo_r..lo_r + len_r];
+            let mut ys: Vec<T> = Vec::with_capacity(len_l);
+            let ys_ptr = ys.as_mut_ptr() as usize;
+            let n_units = len_l.div_ceil(PAR_ELEMWISE_CHUNK);
+            crate::utils::barrier_pool().execute_chunked(n_units, |range| {
+                let ys_ptr = ys_ptr as *mut T;
+                for unit in range {
+                    let lo = unit * PAR_ELEMWISE_CHUNK;
+                    let hi = len_l.min(lo + PAR_ELEMWISE_CHUNK);
+                    let dst = unsafe { std::slice::from_raw_parts_mut(ys_ptr.add(lo), hi - lo) };
+                    f_vec(&a[lo..hi], &b[lo..hi], dst);
+                }
+            });
+            // SAFETY: every element is written by exactly one unit.
+            unsafe { ys.set_len(len_l) };
+            return ys;
+        }
+    }
+    binary_map_vec(lhs_l, rhs_l, lhs, rhs, f, f_vec, f_scalar_vec)
+}
