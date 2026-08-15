@@ -43,6 +43,14 @@ pub struct VisionConfig {
     pub deepstack_visual_indexes: Vec<usize>,
 }
 
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct RopeScaling {
+    #[serde(default)]
+    pub mrope_section: Vec<usize>,
+    #[serde(default)]
+    pub rope_type: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct TextConfig {
     pub head_dim: usize,
@@ -58,6 +66,8 @@ pub struct TextConfig {
     pub tie_word_embeddings: bool,
     pub rope_theta: f64,
     pub sliding_window: Option<usize>,
+    #[serde(default)]
+    pub rope_scaling: Option<RopeScaling>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
