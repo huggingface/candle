@@ -3363,6 +3363,503 @@ fn kernel_mul_mv_id_f32_broadcast_matches_mm_id() {
     }
 }
 
+// Phase 1 de-risk spike for extending `call_quantized_matmul_mv_id` beyond
+// `n_tokens == 1` (Metal MoE speculative-decoding verify-step investigation, see
+// the crate's own MoE dispatch documentation): every existing mv_id test above
+// only ever exercises `n_tokens == 1`, and the Rust-side wrapper
+// (`QMetalStorage::indexed_moe_forward`) has only ever been called that way
+// in production -- but the kernel's own dispatch-grid math
+// (`depth: nei0 * nei1`, each threadgroup independently decoding one
+// (token, expert-slot) pair from `tgpig.z`) is batch-general by
+// construction, not hardcoded to `nei1 == 1`. This proves that generality
+// holds for the untested stride/offset plumbing (src1's per-token stride,
+// ids' per-token row stride, dst's per-token write offset), at the real
+// production expert/top-k ratio (256 experts, top-8) so the ids pattern
+// below is realistic, not just a toy shape. `n_tokens` in `2..=8` matches
+// the entire speculative-decode verify-window range this investigation cares about.
+// Deliberately compares against N independent `n_tokens == 1` calls (each
+// already fully validated by the tests above), not against `mm_id` --
+// every (token, slot) threadgroup does byte-identical work with identical
+// float accumulation order whether it's dispatched as part of a batch-N
+// call or a standalone batch-1 call, so this must be bit-exact, not
+// tolerance-based; a tolerance-based comparison here would hide exactly the
+// stride/offset bug class this test exists to catch.
+#[test]
+fn kernel_mul_mv_id_at_batch_n_matches_sequential_single_token_calls_bit_exact() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 256usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_expert_used = 8usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.0001
+        })
+        .collect();
+    let src0_buf = new_buffer(&device, &src0);
+
+    for n_tokens in [2usize, 3, 5, 8] {
+        // Deterministic pseudo-routing: distinct enough per (token, slot) to
+        // exercise real spread across 256 experts, but with deliberate
+        // repeats across tokens (e.g. token 0 slot 0 and token 3 slot 2 can
+        // land on the same expert) -- the "multiple tokens share an expert"
+        // case batch-1-only tests structurally can never produce.
+        let ids: Vec<i32> = (0..n_tokens * n_expert_used)
+            .map(|idx| {
+                let t = idx / n_expert_used;
+                let s = idx % n_expert_used;
+                ((t * 37 + s * 13 + s * s) % n_expert) as i32
+            })
+            .collect();
+        let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+            .map(|idx| {
+                let t = idx / (n_expert_used * n_in);
+                let s = (idx / n_in) % n_expert_used;
+                let k = idx % n_in;
+                (t as f32 * 100.0 + s as f32 * 10.0 + k as f32) * 0.0001
+            })
+            .collect();
+        let src1_buf = new_buffer(&device, &src1);
+        let ids_buf = new_buffer(&device, &ids);
+
+        let out_elems = n_tokens * n_expert_used * n_out;
+        let batched_dst_buf = device
+            .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+            .unwrap();
+
+        let batched_commands = commands(&device);
+        let encoder = batched_commands.command_encoder().unwrap();
+        call_quantized_matmul_mv_id(
+            &device,
+            &encoder,
+            &kernels,
+            GgmlDType::F32,
+            &[n_expert, n_out, n_in],
+            &[n_out * n_in * 4, n_in * 4, 4],
+            &src0_buf,
+            0,
+            &[n_tokens, n_expert_used, n_in],
+            &[n_expert_used * n_in * 4, n_in * 4, 4],
+            &src1_buf,
+            0,
+            &[n_tokens, n_expert_used],
+            &[n_expert_used * 4, 4],
+            &ids_buf,
+            0,
+            &[n_tokens, n_expert_used, n_out],
+            0,
+            &batched_dst_buf,
+        )
+        .unwrap();
+        drop(encoder);
+        batched_commands.wait_until_completed().unwrap();
+        let batched_got: Vec<f32> = read_to_vec(&batched_dst_buf, out_elems);
+
+        // N independent n_tokens == 1 calls, one per token, each reading
+        // that token's own slice of src1/ids via a nonzero byte offset --
+        // exercising exactly the offset plumbing a batch-1-only caller
+        // never needed to get right.
+        for t in 0..n_tokens {
+            let single_dst_buf = device
+                .new_buffer(
+                    n_expert_used * n_out * std::mem::size_of::<f32>(),
+                    RESOURCE_OPTIONS,
+                )
+                .unwrap();
+            let single_commands = commands(&device);
+            let encoder = single_commands.command_encoder().unwrap();
+            call_quantized_matmul_mv_id(
+                &device,
+                &encoder,
+                &kernels,
+                GgmlDType::F32,
+                &[n_expert, n_out, n_in],
+                &[n_out * n_in * 4, n_in * 4, 4],
+                &src0_buf,
+                0,
+                &[1, n_expert_used, n_in],
+                &[n_expert_used * n_in * 4, n_in * 4, 4],
+                &src1_buf,
+                t * n_expert_used * n_in * 4,
+                &[1, n_expert_used],
+                &[n_expert_used * 4, 4],
+                &ids_buf,
+                t * n_expert_used * 4,
+                &[1, n_expert_used, n_out],
+                0,
+                &single_dst_buf,
+            )
+            .unwrap();
+            drop(encoder);
+            single_commands.wait_until_completed().unwrap();
+            let single_got: Vec<f32> = read_to_vec(&single_dst_buf, n_expert_used * n_out);
+
+            let batched_slice =
+                &batched_got[t * n_expert_used * n_out..(t + 1) * n_expert_used * n_out];
+            assert_eq!(
+                batched_slice,
+                single_got.as_slice(),
+                "n_tokens={n_tokens}, token={t}: batched mv_id call diverges from an \
+                 independent single-token mv_id call on the same data -- must be bit-exact \
+                 (identical per-threadgroup work either way), so any difference is a real \
+                 stride/offset bug in the batch-N plumbing"
+            );
+        }
+    }
+}
+
+// Phase 1 companion to the bit-exact spike above: mv_id(batch=N) against
+// mm_id(batch=N) at the same production expert/top-k ratio, for two
+// representative points in the speculative-decode verify-window range (2, the
+// minimum useful window; 8, the maximum this investigation targets).
+// Different accumulation order between the two kernels (matrix-vector vs.
+// matrix-matrix), so tolerance-based like the existing batch-1 mv-vs-mm
+// spikes above, not bit-exact.
+#[test]
+fn kernel_mul_mv_id_at_batch_n_matches_mm_id_within_tolerance() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 256usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_expert_used = 8usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.0001
+        })
+        .collect();
+    let src0_buf = new_buffer(&device, &src0);
+
+    for n_tokens in [2usize, 8] {
+        let ids: Vec<i32> = (0..n_tokens * n_expert_used)
+            .map(|idx| {
+                let t = idx / n_expert_used;
+                let s = idx % n_expert_used;
+                ((t * 41 + s * 17 + s * s) % n_expert) as i32
+            })
+            .collect();
+        let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+            .map(|idx| {
+                let t = idx / (n_expert_used * n_in);
+                let s = (idx / n_in) % n_expert_used;
+                let k = idx % n_in;
+                (t as f32 * 100.0 + s as f32 * 10.0 + k as f32) * 0.0001
+            })
+            .collect();
+        let src1_buf = new_buffer(&device, &src1);
+        let ids_buf = new_buffer(&device, &ids);
+
+        let out_elems = n_tokens * n_expert_used * n_out;
+        let mm_dst_buf = device
+            .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+            .unwrap();
+        let mv_dst_buf = device
+            .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+            .unwrap();
+
+        let commands = commands(&device);
+        let encoder = commands.command_encoder().unwrap();
+        let ids_shape = [n_tokens, n_expert_used];
+        let ids_stride = [n_expert_used * 4, 4];
+        let counts_buf = expert_counts_buffer(
+            &device,
+            &encoder,
+            &kernels,
+            &ids_shape,
+            &ids_stride,
+            &ids_buf,
+            n_expert,
+        );
+        call_quantized_matmul_mm_id(
+            &device,
+            &encoder,
+            &kernels,
+            GgmlDType::F32,
+            &[n_expert, n_out, n_in],
+            &[n_out * n_in * 4, n_in * 4, 4],
+            &src0_buf,
+            0,
+            &[n_tokens, n_expert_used, n_in],
+            &[n_expert_used * n_in * 4, n_in * 4, 4],
+            &src1_buf,
+            0,
+            &ids_shape,
+            &ids_stride,
+            &ids_buf,
+            0,
+            &[n_tokens, n_expert_used, n_out],
+            0,
+            &mm_dst_buf,
+            &counts_buf,
+        )
+        .unwrap();
+        call_quantized_matmul_mv_id(
+            &device,
+            &encoder,
+            &kernels,
+            GgmlDType::F32,
+            &[n_expert, n_out, n_in],
+            &[n_out * n_in * 4, n_in * 4, 4],
+            &src0_buf,
+            0,
+            &[n_tokens, n_expert_used, n_in],
+            &[n_expert_used * n_in * 4, n_in * 4, 4],
+            &src1_buf,
+            0,
+            &ids_shape,
+            &ids_stride,
+            &ids_buf,
+            0,
+            &[n_tokens, n_expert_used, n_out],
+            0,
+            &mv_dst_buf,
+        )
+        .unwrap();
+        drop(encoder);
+        commands.wait_until_completed().unwrap();
+
+        let mm_got: Vec<f32> = read_to_vec(&mm_dst_buf, out_elems);
+        let mv_got: Vec<f32> = read_to_vec(&mv_dst_buf, out_elems);
+
+        for (i, (mm, mv)) in mm_got.iter().zip(mv_got.iter()).enumerate() {
+            let diff = (mm - mv).abs();
+            assert!(
+                diff <= 1e-3 + 1e-3 * mm.abs(),
+                "n_tokens={n_tokens}: mv_id diverges from mm_id at index {i}: mm_id={mm}, \
+                 mv_id={mv} (diff {diff})"
+            );
+        }
+    }
+}
+
+// Phase 1 timing table (Metal MoE speculative-decoding verify-step investigation, see
+// the crate's own MoE dispatch documentation): mv_id vs. mm_id wall-clock at
+// batch sizes spanning decode (1) through the speculative-decode verify window
+// (2-8) and out past it (16-64), at production expert/top-k/hidden shape
+// (256 experts, top-8, gate/up's real 2048-in/512-out). F32, not real
+// quantized weights (this crate has no block-quantization encoder of its
+// own to hand-build real Q4_K bytes with, and correctness doesn't depend on
+// dtype here) -- this almost certainly *understates* mv_id's real
+// production advantage, not overstates it: quantized weights mean less
+// real per-row compute/bandwidth than F32, so mm_id's ~fixed `ne02`-
+// threadgroup dispatch tax would dominate an even larger share of a real
+// quantized call's time than it does here. `#[ignore]`d -- a manual timing
+// tool (`cargo test ... -- --ignored --nocapture`), not a correctness
+// check, and not something that should slow down every default test run.
+#[test]
+#[ignore]
+fn mv_id_vs_mm_id_timing_at_batch_sizes() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 256usize;
+    let n_out = 512usize; // moe_intermediate_size, gate/up production shape
+    let n_in = 2048usize; // hidden_size
+    let n_expert_used = 8usize;
+    const REPS: usize = 50;
+    // A fresh `commands(&device)` allocates a brand-new MTLCommandQueue +
+    // ResidencySet -- real, heavyweight Metal driver objects a real forward
+    // pass creates once and reuses for the process lifetime, never per
+    // dispatch. Creating it inside the timed loop (an earlier version of
+    // this test did) makes queue-allocation cost dominate everything else
+    // being measured, drowning out the actual mv_id-vs-mm_id dispatch-cost
+    // difference this test exists to find. One shared queue for the whole
+    // test, matching real usage.
+    let mv_commands = commands(&device);
+    let mm_commands = commands(&device);
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            ((e * 1000 + j * 10 + k) % 997) as f32 * 0.0001
+        })
+        .collect();
+    let src0_buf = new_buffer(&device, &src0);
+
+    println!("mv_id_vs_mm_id_timing_at_batch_sizes ({REPS} reps each, n_expert={n_expert}, n_expert_used={n_expert_used}, n_out={n_out}, n_in={n_in}):");
+
+    for n_tokens in [1usize, 2, 4, 8, 16, 32, 64] {
+        let ids: Vec<i32> = (0..n_tokens * n_expert_used)
+            .map(|idx| {
+                let t = idx / n_expert_used;
+                let s = idx % n_expert_used;
+                ((t * 37 + s * 13 + s * s) % n_expert) as i32
+            })
+            .collect();
+        let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+            .map(|idx| ((idx * 7 + 3) % 991) as f32 * 0.0001)
+            .collect();
+        let src1_buf = new_buffer(&device, &src1);
+        let ids_buf = new_buffer(&device, &ids);
+        let out_elems = n_tokens * n_expert_used * n_out;
+        let ids_shape = [n_tokens, n_expert_used];
+        let ids_stride = [n_expert_used * 4, 4];
+
+        let mv_dst_buf = device
+            .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+            .unwrap();
+        // Warmup: first dispatch on a freshly touched buffer set pays a
+        // real, one-time pipeline-state/paging cost; excluded from the
+        // timed measurement below.
+        {
+            let encoder = mv_commands.command_encoder().unwrap();
+            call_quantized_matmul_mv_id(
+                &device,
+                &encoder,
+                &kernels,
+                GgmlDType::F32,
+                &[n_expert, n_out, n_in],
+                &[n_out * n_in * 4, n_in * 4, 4],
+                &src0_buf,
+                0,
+                &[n_tokens, n_expert_used, n_in],
+                &[n_expert_used * n_in * 4, n_in * 4, 4],
+                &src1_buf,
+                0,
+                &ids_shape,
+                &ids_stride,
+                &ids_buf,
+                0,
+                &[n_tokens, n_expert_used, n_out],
+                0,
+                &mv_dst_buf,
+            )
+            .unwrap();
+            drop(encoder);
+            mv_commands.wait_until_completed().unwrap();
+        }
+        let mv_start = std::time::Instant::now();
+        for _ in 0..REPS {
+            let encoder = mv_commands.command_encoder().unwrap();
+            call_quantized_matmul_mv_id(
+                &device,
+                &encoder,
+                &kernels,
+                GgmlDType::F32,
+                &[n_expert, n_out, n_in],
+                &[n_out * n_in * 4, n_in * 4, 4],
+                &src0_buf,
+                0,
+                &[n_tokens, n_expert_used, n_in],
+                &[n_expert_used * n_in * 4, n_in * 4, 4],
+                &src1_buf,
+                0,
+                &ids_shape,
+                &ids_stride,
+                &ids_buf,
+                0,
+                &[n_tokens, n_expert_used, n_out],
+                0,
+                &mv_dst_buf,
+            )
+            .unwrap();
+            drop(encoder);
+            mv_commands.wait_until_completed().unwrap();
+        }
+        let mv_elapsed = mv_start.elapsed();
+
+        let mm_dst_buf = device
+            .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+            .unwrap();
+        {
+            let encoder = mm_commands.command_encoder().unwrap();
+            let counts_buf = expert_counts_buffer(
+                &device,
+                &encoder,
+                &kernels,
+                &ids_shape,
+                &ids_stride,
+                &ids_buf,
+                n_expert,
+            );
+            call_quantized_matmul_mm_id(
+                &device,
+                &encoder,
+                &kernels,
+                GgmlDType::F32,
+                &[n_expert, n_out, n_in],
+                &[n_out * n_in * 4, n_in * 4, 4],
+                &src0_buf,
+                0,
+                &[n_tokens, n_expert_used, n_in],
+                &[n_expert_used * n_in * 4, n_in * 4, 4],
+                &src1_buf,
+                0,
+                &ids_shape,
+                &ids_stride,
+                &ids_buf,
+                0,
+                &[n_tokens, n_expert_used, n_out],
+                0,
+                &mm_dst_buf,
+                &counts_buf,
+            )
+            .unwrap();
+            drop(encoder);
+            mm_commands.wait_until_completed().unwrap();
+        }
+        let mm_start = std::time::Instant::now();
+        for _ in 0..REPS {
+            let encoder = mm_commands.command_encoder().unwrap();
+            let counts_buf = expert_counts_buffer(
+                &device,
+                &encoder,
+                &kernels,
+                &ids_shape,
+                &ids_stride,
+                &ids_buf,
+                n_expert,
+            );
+            call_quantized_matmul_mm_id(
+                &device,
+                &encoder,
+                &kernels,
+                GgmlDType::F32,
+                &[n_expert, n_out, n_in],
+                &[n_out * n_in * 4, n_in * 4, 4],
+                &src0_buf,
+                0,
+                &[n_tokens, n_expert_used, n_in],
+                &[n_expert_used * n_in * 4, n_in * 4, 4],
+                &src1_buf,
+                0,
+                &ids_shape,
+                &ids_stride,
+                &ids_buf,
+                0,
+                &[n_tokens, n_expert_used, n_out],
+                0,
+                &mm_dst_buf,
+                &counts_buf,
+            )
+            .unwrap();
+            drop(encoder);
+            mm_commands.wait_until_completed().unwrap();
+        }
+        let mm_elapsed = mm_start.elapsed();
+
+        println!(
+            "  n_tokens={n_tokens:3}: mv_id {:>9.1}us/call  mm_id {:>9.1}us/call  mv/mm ratio {:.3}",
+            mv_elapsed.as_secs_f64() * 1e6 / REPS as f64,
+            mm_elapsed.as_secs_f64() * 1e6 / REPS as f64,
+            mv_elapsed.as_secs_f64() / mm_elapsed.as_secs_f64(),
+        );
+    }
+}
+
 // De-risk spike for `call_quantized_matmul_mm_id_chunked`: unlike the
 // mv_id spike above, this compares the chunked wrapper against the *same*
 // kernel

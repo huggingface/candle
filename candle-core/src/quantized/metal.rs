@@ -526,17 +526,32 @@ impl QMetalStorage {
             .map(|x| x * ids.dtype().size_in_bytes())
             .collect::<Vec<_>>();
 
-        // Decode (batch == 1) routes to the matrix-*vector* kernel where
-        // the differential de-risk spike has validated it. `mv_id_eligible`
+        // Decode (batch == 1) and small multi-token batches (batch <= 8,
+        // e.g. a speculative-decode verify step) route to the matrix-
+        // *vector* kernel. `mv_id`'s Metal dispatch grid depth is
+        // `nei0 * nei1` (top-k * n_tokens) -- proportional to real work --
+        // while `mm_id`'s is `ne02` (total expert count), effectively
+        // fixed regardless of batch size; at these small batch sizes
+        // `mm_id` pays that near-fixed dispatch tax against very little
+        // real work, `mv_id` doesn't. Measured (production 256-expert/
+        // top-8/2048-in/512-out shape): `mv_id` beats `mm_id` by 10-20%
+        // throughout batch 1-16, roughly ties at 16, and loses clearly by
+        // 32+ -- `8` is chosen with a safety margin below the measured
+        // crossover, matching the real speculative-decode verify-window
+        // range this targets, not the full range `mv_id` still wins.
+        // Batch-general correctness (not just batch == 1) confirmed via a
+        // bit-exact self-differential (`mv_id` at batch N vs. N
+        // independent batch-1 calls) plus a tolerance-based `mm_id`
+        // cross-check, both at this same production shape (see this
+        // crate's test suite). `mv_id_eligible`
         // (candle-metal-kernels/src/kernels/quantized.rs) is the single
         // source of truth for which dtypes qualify and the minimum
         // contraction-dim (k) each needs -- not duplicated here, so it
         // can't drift from the wrapper's own per-dtype tuning table. Every
-        // other dtype, every too-small-k shape, and every batch > 1
-        // (prefill) call keeps using the matrix-*matrix* kernel -- always
-        // correct, just not the kernel this targets for the decode
-        // throughput gap.
-        let use_mv = batch == 1 && candle_metal_kernels::mv_id_eligible(self.dtype.into(), k);
+        // other dtype, every too-small-k shape, and every batch > 8 call
+        // keeps using the matrix-*matrix* kernel -- always correct, just
+        // not what this extension targets.
+        let use_mv = batch <= 8 && candle_metal_kernels::mv_id_eligible(self.dtype.into(), k);
 
         // call_quantized_matmul_mv_id, call_quantized_matmul_mm_id, and
         // call_quantized_matmul_mm_id_chunked all take the same leading
