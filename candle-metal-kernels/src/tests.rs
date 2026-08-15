@@ -2825,3 +2825,666 @@ fn kernel_gdn_decode_step_respects_nonzero_buffer_offsets() {
         "nonzero-offset state mismatch, max diff = {max_state_diff}"
     );
 }
+// Fused causal depthwise conv1d + silu: same de-risk-spike-before-wiring
+// precedent as the decode-step kernel above.
+#[test]
+fn kernel_gdn_causal_conv1d_pipelines_load() {
+    let device = device();
+    let kernels = Kernels::new();
+    for name in [
+        "kernel_gdn_causal_conv1d_output_f32",
+        "kernel_gdn_causal_conv1d_state_f32",
+    ] {
+        kernels
+            .load_pipeline(&device, Source::Gdn, name)
+            .unwrap_or_else(|e| panic!("{name} should load as a Metal compute pipeline: {e}"));
+    }
+}
+
+/// Scalar Rust reference for the fused conv1d kernels' math (see
+/// gdn.metal's own doc comment for the derivation): both kernels operate
+/// conceptually on `padded = history ++ x` (concat along time, length
+/// `hist_len + seq_len`) without ever materializing it.
+///   out[t][c]       = silu( sum_k padded[t+k][c] * weight[c][k] ),   0 <= t < seq_len
+///   new_state[s][c] = padded[seq_len + s][c],                       0 <= s < hist_len
+/// Operates on one batch row at a time (caller loops over `b`).
+fn gdn_causal_conv1d_reference(
+    x: &[f32],
+    history: &[f32],
+    weight: &[f32],
+    seq_len: usize,
+    hist_len: usize,
+    channels: usize,
+    kernel_size: usize,
+) -> (Vec<f32>, Vec<f32>) {
+    let padded_at = |idx: usize, c: usize| -> f32 {
+        if idx < hist_len {
+            history[idx * channels + c]
+        } else {
+            x[(idx - hist_len) * channels + c]
+        }
+    };
+    let mut out = vec![0f32; seq_len * channels];
+    for t in 0..seq_len {
+        for c in 0..channels {
+            let mut acc = 0f32;
+            for k in 0..kernel_size {
+                acc += padded_at(t + k, c) * weight[c * kernel_size + k];
+            }
+            out[t * channels + c] = acc / (1.0 + (-acc).exp()); // silu(x) = x * sigmoid(x)
+        }
+    }
+    let mut new_state = vec![0f32; hist_len * channels];
+    for s in 0..hist_len {
+        for c in 0..channels {
+            new_state[s * channels + c] = padded_at(seq_len + s, c);
+        }
+    }
+    (out, new_state)
+}
+
+/// Runs both real kernels on random inputs at the given shape and compares
+/// against the scalar reference above, per batch row. `channels`
+/// deliberately not always a multiple of the threadgroup width
+/// (min(channels, 64)) to exercise the kernels' own bounds checks.
+fn run_gdn_causal_conv1d_and_check(
+    b: usize,
+    seq_len: usize,
+    hist_len: usize,
+    channels: usize,
+    kernel_size: usize,
+) {
+    let device = device();
+    let kernels = Kernels::new();
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+
+    let mut rng = rng();
+    fn randf(rng: &mut impl Rng, n: usize, scale: f32) -> Vec<f32> {
+        (0..n)
+            .map(|_| (rng.random::<f32>() - 0.5) * scale)
+            .collect()
+    }
+    let x = randf(&mut rng, b * seq_len * channels, 1.0);
+    let history = randf(&mut rng, b * hist_len * channels, 1.0);
+    let weight = randf(&mut rng, channels * kernel_size, 0.5);
+
+    let x_buf = new_buffer(&device, &x);
+    // `new_buffer_with_data` can't allocate a genuinely zero-size buffer
+    // (hist_len == 0 is a real, tested case below) -- pad with one unread
+    // dummy element; the kernel's own `idx < hist_len` check never reads
+    // `history` at all when `hist_len == 0`, so its content is irrelevant.
+    let history_buf = new_buffer(
+        &device,
+        if history.is_empty() {
+            &[0f32]
+        } else {
+            &history
+        },
+    );
+    let weight_buf = new_buffer(&device, &weight);
+    let out_buf = device
+        .new_buffer(
+            b * seq_len * channels * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
+        .unwrap();
+    let new_state_buf = device
+        .new_buffer(
+            (b * hist_len * channels).max(1) * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
+        .unwrap();
+
+    call_gdn_causal_conv1d_output_f32(
+        &device,
+        &encoder,
+        &kernels,
+        b,
+        seq_len,
+        hist_len,
+        channels,
+        kernel_size,
+        &BufferOffset::zero_offset(&x_buf),
+        &BufferOffset::zero_offset(&history_buf),
+        &BufferOffset::zero_offset(&weight_buf),
+        &out_buf,
+    )
+    .unwrap();
+    if hist_len > 0 {
+        call_gdn_causal_conv1d_state_f32(
+            &device,
+            &encoder,
+            &kernels,
+            b,
+            seq_len,
+            hist_len,
+            channels,
+            &BufferOffset::zero_offset(&x_buf),
+            &BufferOffset::zero_offset(&history_buf),
+            &new_state_buf,
+        )
+        .unwrap();
+    }
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got_out: Vec<f32> = read_to_vec(&out_buf, b * seq_len * channels);
+    let got_state: Vec<f32> = if hist_len > 0 {
+        read_to_vec(&new_state_buf, b * hist_len * channels)
+    } else {
+        vec![]
+    };
+
+    let mut max_out_diff = 0f32;
+    let mut max_state_diff = 0f32;
+    for row in 0..b {
+        let (expected_out, expected_state) = gdn_causal_conv1d_reference(
+            &x[row * seq_len * channels..(row + 1) * seq_len * channels],
+            &history[row * hist_len * channels..(row + 1) * hist_len * channels],
+            &weight,
+            seq_len,
+            hist_len,
+            channels,
+            kernel_size,
+        );
+        for i in 0..seq_len * channels {
+            max_out_diff =
+                max_out_diff.max((got_out[row * seq_len * channels + i] - expected_out[i]).abs());
+        }
+        for i in 0..hist_len * channels {
+            max_state_diff = max_state_diff
+                .max((got_state[row * hist_len * channels + i] - expected_state[i]).abs());
+        }
+    }
+    println!(
+        "gdn_causal_conv1d b={b} seq_len={seq_len} hist_len={hist_len} channels={channels} \
+         kernel_size={kernel_size}: out_diff={max_out_diff:.8} state_diff={max_state_diff:.8}"
+    );
+    assert!(
+        max_out_diff < 5e-5,
+        "b={b} seq_len={seq_len} hist_len={hist_len}: output mismatch, max diff = {max_out_diff}"
+    );
+    assert!(
+        max_state_diff < 5e-5,
+        "b={b} seq_len={seq_len} hist_len={hist_len}: state mismatch, max diff = {max_state_diff}"
+    );
+}
+
+#[test]
+fn kernel_gdn_causal_conv1d_matches_scalar_reference_every_short_length() {
+    // Covers the whole native-MTP verify-window range (1-8) at a realistic
+    // kernel_size=4 (hist_len=3) -- including the seq_len < hist_len case
+    // (seq_len 1, 2), which is the COMMON case at real decode/short-verify
+    // shapes, not a rare edge case (found during design: hist_len=3 means
+    // seq_len=1 and seq_len=2 both hit the "mixed history+input" branch of
+    // the new-state computation).
+    for seq_len in 1..=8 {
+        run_gdn_causal_conv1d_and_check(2, seq_len, 3, 6, 4);
+    }
+}
+
+#[test]
+fn kernel_gdn_causal_conv1d_matches_scalar_reference_production_shape() {
+    // b=1, channels=1536 (confirmed against the cached qwen36-35b-a3b
+    // GGUF's real mixed-qkv width: group_count*state_size*2 + inner_size),
+    // kernel_size=4 (hist_len=3), at both a decode (seq_len=1) and a
+    // verify-window (seq_len=2) shape.
+    run_gdn_causal_conv1d_and_check(1, 1, 3, 1536, 4);
+    run_gdn_causal_conv1d_and_check(1, 2, 3, 1536, 4);
+}
+
+#[test]
+fn kernel_gdn_causal_conv1d_handles_zero_history_length() {
+    // kernel_size=1 (hist_len=0) is a degenerate but real edge case: no
+    // causal history needed at all, output kernel must never read `history`
+    // out of bounds, and the state kernel must be skippable (a zero-size
+    // grid dimension) without dispatching at all.
+    run_gdn_causal_conv1d_and_check(1, 3, 0, 8, 1);
+}
+
+// Regression-shaped test for the same offset bug class the decode-step
+// kernel found live (kernel_gdn_decode_step_respects_nonzero_buffer_offsets
+// above): packs x/history/weight back-to-back into ONE buffer with a decoy
+// region ahead of each, at real production-realistic offsets, so a wrong or
+// ignored offset reads cross-contaminated data and fails hard.
+#[test]
+fn kernel_gdn_causal_conv1d_respects_nonzero_buffer_offsets() {
+    let device = device();
+    let kernels = Kernels::new();
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+
+    let (b, seq_len, hist_len, channels, kernel_size) = (1usize, 2usize, 3usize, 8usize, 4usize);
+    let mut rng = rng();
+    fn randf(rng: &mut impl Rng, n: usize, scale: f32) -> Vec<f32> {
+        (0..n)
+            .map(|_| (rng.random::<f32>() - 0.5) * scale)
+            .collect()
+    }
+
+    let x = randf(&mut rng, b * seq_len * channels, 1.0);
+    let history = randf(&mut rng, b * hist_len * channels, 1.0);
+    let weight = randf(&mut rng, channels * kernel_size, 0.5);
+    let decoy = randf(&mut rng, b * seq_len * channels, 999.0);
+
+    let f32_size = std::mem::size_of::<f32>();
+    let packed: Vec<f32> = [&decoy[..], &x[..], &history[..], &weight[..]].concat();
+    let packed_buf = new_buffer(&device, &packed);
+
+    let mut offset_elems = decoy.len();
+    let x_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+    offset_elems += x.len();
+    let history_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+    offset_elems += history.len();
+    let weight_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+
+    let out_buf = device
+        .new_buffer(b * seq_len * channels * f32_size, RESOURCE_OPTIONS)
+        .unwrap();
+    let new_state_buf = device
+        .new_buffer(b * hist_len * channels * f32_size, RESOURCE_OPTIONS)
+        .unwrap();
+
+    call_gdn_causal_conv1d_output_f32(
+        &device,
+        &encoder,
+        &kernels,
+        b,
+        seq_len,
+        hist_len,
+        channels,
+        kernel_size,
+        &x_off,
+        &history_off,
+        &weight_off,
+        &out_buf,
+    )
+    .unwrap();
+    call_gdn_causal_conv1d_state_f32(
+        &device,
+        &encoder,
+        &kernels,
+        b,
+        seq_len,
+        hist_len,
+        channels,
+        &x_off,
+        &history_off,
+        &new_state_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got_out: Vec<f32> = read_to_vec(&out_buf, b * seq_len * channels);
+    let got_state: Vec<f32> = read_to_vec(&new_state_buf, b * hist_len * channels);
+    let (expected_out, expected_state) = gdn_causal_conv1d_reference(
+        &x,
+        &history,
+        &weight,
+        seq_len,
+        hist_len,
+        channels,
+        kernel_size,
+    );
+
+    let mut max_out_diff = 0f32;
+    let mut max_state_diff = 0f32;
+    for i in 0..seq_len * channels {
+        max_out_diff = max_out_diff.max((got_out[i] - expected_out[i]).abs());
+    }
+    for i in 0..hist_len * channels {
+        max_state_diff = max_state_diff.max((got_state[i] - expected_state[i]).abs());
+    }
+    println!("gdn_causal_conv1d_nonzero_offsets: out_diff={max_out_diff:.8} state_diff={max_state_diff:.8}");
+    assert!(
+        max_out_diff < 5e-5,
+        "nonzero-offset output mismatch, max diff = {max_out_diff}"
+    );
+    assert!(
+        max_state_diff < 5e-5,
+        "nonzero-offset state mismatch, max diff = {max_state_diff}"
+    );
+}
+
+// Fused elementwise gating-tail kernels: same de-risk-spike-before-wiring
+// precedent as the kernels above.
+#[test]
+fn kernel_gdn_preprocessing_gating_pipelines_load() {
+    let device = device();
+    let kernels = Kernels::new();
+    for name in [
+        "kernel_gdn_l2_normalize_scale_f32",
+        "kernel_gdn_decay_beta_gate_f32",
+    ] {
+        kernels
+            .load_pipeline(&device, Source::Gdn, name)
+            .unwrap_or_else(|e| panic!("{name} should load as a Metal compute pipeline: {e}"));
+    }
+}
+
+/// Scalar Rust reference for `kernel_gdn_l2_normalize_scale_f32`, matching
+/// `SSMWeights::l2_normalize` exactly (eps added to the sum of squares).
+fn gdn_l2_normalize_scale_reference(
+    x: &[f32],
+    b: usize,
+    seq_len: usize,
+    heads: usize,
+    dim: usize,
+    scale: f32,
+    eps: f32,
+) -> Vec<f32> {
+    let mut out = vec![0f32; b * seq_len * heads * dim];
+    for row in 0..b * seq_len * heads {
+        let xr = &x[row * dim..(row + 1) * dim];
+        let sum_sq: f32 = xr.iter().map(|v| v * v).sum();
+        let inv_norm = scale / (sum_sq + eps).sqrt();
+        for d in 0..dim {
+            out[row * dim + d] = xr[d] * inv_norm;
+        }
+    }
+    out
+}
+
+#[test]
+fn kernel_gdn_l2_normalize_scale_matches_scalar_reference() {
+    let device = device();
+    let kernels = Kernels::new();
+    let mut rng = rng();
+    fn randf(rng: &mut impl Rng, n: usize, scale: f32) -> Vec<f32> {
+        (0..n)
+            .map(|_| (rng.random::<f32>() - 0.5) * scale)
+            .collect()
+    }
+
+    // (b, seq_len, heads, dim, scale) -- heads=5 (not a multiple of the
+    // threadgroup width min(heads,64)) at one shape to exercise the bounds
+    // check; dim=128 matches the real production state_size.
+    for (b, seq_len, heads, dim, scale) in [
+        (1usize, 1usize, 32usize, 128usize, 1f32 / (128f32).sqrt()),
+        (2usize, 8usize, 5usize, 128usize, 1.0f32),
+        (1usize, 2usize, 32usize, 128usize, 1.0f32),
+    ] {
+        let eps = 1e-6f32;
+        let x = randf(&mut rng, b * seq_len * heads * dim, 1.0);
+        let x_buf = new_buffer(&device, &x);
+        let out_buf = device
+            .new_buffer(
+                b * seq_len * heads * dim * std::mem::size_of::<f32>(),
+                RESOURCE_OPTIONS,
+            )
+            .unwrap();
+
+        let commands = commands(&device);
+        let encoder = commands.command_encoder().unwrap();
+        call_gdn_l2_normalize_scale_f32(
+            &device,
+            &encoder,
+            &kernels,
+            b,
+            seq_len,
+            heads,
+            dim,
+            scale,
+            eps,
+            &BufferOffset::zero_offset(&x_buf),
+            &out_buf,
+        )
+        .unwrap();
+        drop(encoder);
+        commands.wait_until_completed().unwrap();
+
+        let got: Vec<f32> = read_to_vec(&out_buf, b * seq_len * heads * dim);
+        let expected = gdn_l2_normalize_scale_reference(&x, b, seq_len, heads, dim, scale, eps);
+        let max_diff = got
+            .iter()
+            .zip(expected.iter())
+            .fold(0f32, |m, (a, e)| m.max((a - e).abs()));
+        println!("gdn_l2_normalize_scale b={b} seq_len={seq_len} heads={heads} dim={dim} scale={scale}: diff={max_diff:.8}");
+        assert!(
+            max_diff < 5e-5,
+            "b={b} seq_len={seq_len} heads={heads}: mismatch, max diff = {max_diff}"
+        );
+    }
+}
+
+/// Scalar Rust reference for `kernel_gdn_decay_beta_gate_f32`, matching
+/// `SSMWeights::forward`'s own `g`/`beta` computation exactly.
+fn gdn_decay_beta_gate_reference(
+    alpha_logits: &[f32],
+    dt_bias: &[f32],
+    ssm_a: &[f32],
+    beta_logits: &[f32],
+    b: usize,
+    seq_len: usize,
+    heads: usize,
+) -> (Vec<f32>, Vec<f32>) {
+    let mut g = vec![0f32; b * seq_len * heads];
+    let mut beta = vec![0f32; b * seq_len * heads];
+    for row in 0..b * seq_len {
+        for h in 0..heads {
+            let idx = row * heads + h;
+            // Naive log(exp(x)+1), deliberately not the more numerically
+            // stable ln_1p(exp(x)) -- matches this kernel's own (and the
+            // original candle code's own) naive formula exactly, so this
+            // reference isn't "more correct" in a way that could show a
+            // spurious diff from different rounding at the same inputs.
+            let softplus = ((alpha_logits[idx] + dt_bias[h]).exp() + 1.0).ln();
+            g[idx] = ssm_a[h] * softplus;
+            beta[idx] = 1.0 / (1.0 + (-beta_logits[idx]).exp());
+        }
+    }
+    (g, beta)
+}
+
+#[test]
+fn kernel_gdn_decay_beta_gate_matches_scalar_reference() {
+    let device = device();
+    let kernels = Kernels::new();
+    let mut rng = rng();
+    fn randf(rng: &mut impl Rng, n: usize, scale: f32) -> Vec<f32> {
+        (0..n)
+            .map(|_| (rng.random::<f32>() - 0.5) * scale)
+            .collect()
+    }
+
+    for (b, seq_len, heads) in [
+        (1usize, 1usize, 32usize),
+        (2usize, 8usize, 5usize),
+        (1usize, 2usize, 32usize),
+    ] {
+        let alpha_logits = randf(&mut rng, b * seq_len * heads, 2.0);
+        let dt_bias = randf(&mut rng, heads, 1.0);
+        let ssm_a = randf(&mut rng, heads, 1.0);
+        let beta_logits = randf(&mut rng, b * seq_len * heads, 2.0);
+
+        let alpha_buf = new_buffer(&device, &alpha_logits);
+        let dt_bias_buf = new_buffer(&device, &dt_bias);
+        let ssm_a_buf = new_buffer(&device, &ssm_a);
+        let beta_logits_buf = new_buffer(&device, &beta_logits);
+        let g_out_buf = device
+            .new_buffer(
+                b * seq_len * heads * std::mem::size_of::<f32>(),
+                RESOURCE_OPTIONS,
+            )
+            .unwrap();
+        let beta_out_buf = device
+            .new_buffer(
+                b * seq_len * heads * std::mem::size_of::<f32>(),
+                RESOURCE_OPTIONS,
+            )
+            .unwrap();
+
+        let commands = commands(&device);
+        let encoder = commands.command_encoder().unwrap();
+        call_gdn_decay_beta_gate_f32(
+            &device,
+            &encoder,
+            &kernels,
+            b,
+            seq_len,
+            heads,
+            &BufferOffset::zero_offset(&alpha_buf),
+            &BufferOffset::zero_offset(&dt_bias_buf),
+            &BufferOffset::zero_offset(&ssm_a_buf),
+            &BufferOffset::zero_offset(&beta_logits_buf),
+            &g_out_buf,
+            &beta_out_buf,
+        )
+        .unwrap();
+        drop(encoder);
+        commands.wait_until_completed().unwrap();
+
+        let got_g: Vec<f32> = read_to_vec(&g_out_buf, b * seq_len * heads);
+        let got_beta: Vec<f32> = read_to_vec(&beta_out_buf, b * seq_len * heads);
+        let (expected_g, expected_beta) = gdn_decay_beta_gate_reference(
+            &alpha_logits,
+            &dt_bias,
+            &ssm_a,
+            &beta_logits,
+            b,
+            seq_len,
+            heads,
+        );
+
+        let g_diff = got_g
+            .iter()
+            .zip(expected_g.iter())
+            .fold(0f32, |m, (a, e)| m.max((a - e).abs()));
+        let beta_diff = got_beta
+            .iter()
+            .zip(expected_beta.iter())
+            .fold(0f32, |m, (a, e)| m.max((a - e).abs()));
+        println!("gdn_decay_beta_gate b={b} seq_len={seq_len} heads={heads}: g_diff={g_diff:.8} beta_diff={beta_diff:.8}");
+        assert!(
+            g_diff < 5e-5,
+            "b={b} seq_len={seq_len} heads={heads}: g mismatch, max diff = {g_diff}"
+        );
+        assert!(
+            beta_diff < 5e-5,
+            "b={b} seq_len={seq_len} heads={heads}: beta mismatch, max diff = {beta_diff}"
+        );
+    }
+}
+
+// Regression-shaped test for the same offset bug class the earlier fused
+// kernels found live: packs alpha_logits/dt_bias/ssm_a/beta_logits into
+// ONE buffer with a decoy region ahead of each, at real nonzero offsets.
+#[test]
+fn kernel_gdn_decay_beta_gate_respects_nonzero_buffer_offsets() {
+    let device = device();
+    let kernels = Kernels::new();
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+
+    let (b, seq_len, heads) = (1usize, 2usize, 8usize);
+    let mut rng = rng();
+    fn randf(rng: &mut impl Rng, n: usize, scale: f32) -> Vec<f32> {
+        (0..n)
+            .map(|_| (rng.random::<f32>() - 0.5) * scale)
+            .collect()
+    }
+
+    let alpha_logits = randf(&mut rng, b * seq_len * heads, 2.0);
+    let dt_bias = randf(&mut rng, heads, 1.0);
+    let ssm_a = randf(&mut rng, heads, 1.0);
+    let beta_logits = randf(&mut rng, b * seq_len * heads, 2.0);
+    let decoy = randf(&mut rng, b * seq_len * heads, 999.0);
+
+    let f32_size = std::mem::size_of::<f32>();
+    let packed: Vec<f32> = [
+        &decoy[..],
+        &alpha_logits[..],
+        &dt_bias[..],
+        &ssm_a[..],
+        &beta_logits[..],
+    ]
+    .concat();
+    let packed_buf = new_buffer(&device, &packed);
+
+    let mut offset_elems = decoy.len();
+    let alpha_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+    offset_elems += alpha_logits.len();
+    let dt_bias_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+    offset_elems += dt_bias.len();
+    let ssm_a_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+    offset_elems += ssm_a.len();
+    let beta_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+
+    let g_out_buf = device
+        .new_buffer(b * seq_len * heads * f32_size, RESOURCE_OPTIONS)
+        .unwrap();
+    let beta_out_buf = device
+        .new_buffer(b * seq_len * heads * f32_size, RESOURCE_OPTIONS)
+        .unwrap();
+
+    call_gdn_decay_beta_gate_f32(
+        &device,
+        &encoder,
+        &kernels,
+        b,
+        seq_len,
+        heads,
+        &alpha_off,
+        &dt_bias_off,
+        &ssm_a_off,
+        &beta_off,
+        &g_out_buf,
+        &beta_out_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got_g: Vec<f32> = read_to_vec(&g_out_buf, b * seq_len * heads);
+    let got_beta: Vec<f32> = read_to_vec(&beta_out_buf, b * seq_len * heads);
+    let (expected_g, expected_beta) = gdn_decay_beta_gate_reference(
+        &alpha_logits,
+        &dt_bias,
+        &ssm_a,
+        &beta_logits,
+        b,
+        seq_len,
+        heads,
+    );
+
+    let g_diff = got_g
+        .iter()
+        .zip(expected_g.iter())
+        .fold(0f32, |m, (a, e)| m.max((a - e).abs()));
+    let beta_diff = got_beta
+        .iter()
+        .zip(expected_beta.iter())
+        .fold(0f32, |m, (a, e)| m.max((a - e).abs()));
+    println!("gdn_decay_beta_gate_nonzero_offsets: g_diff={g_diff:.8} beta_diff={beta_diff:.8}");
+    assert!(
+        g_diff < 5e-5,
+        "nonzero-offset g mismatch, max diff = {g_diff}"
+    );
+    assert!(
+        beta_diff < 5e-5,
+        "nonzero-offset beta mismatch, max diff = {beta_diff}"
+    );
+}

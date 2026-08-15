@@ -103,3 +103,286 @@ pub fn call_gdn_decode_step_f32(
     encoder.dispatch_threads(grid_dims, group_dims);
     Ok(())
 }
+
+#[repr(C)]
+struct GdnConv1dArgs {
+    seq_len: u32,
+    hist_len: u32,
+    channels: u32,
+    kernel_size: u32,
+}
+
+impl EncoderParam for GdnConv1dArgs {
+    fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+        encoder.set_bytes(position, &data);
+    }
+}
+
+/// Fused causal depthwise conv1d + silu -- the output half. See
+/// `metal_src/gdn.metal`'s own doc comment for the exact math (operates
+/// conceptually on `history ++ x` without ever materializing the
+/// concatenation) and the dispatch-count arithmetic this replaces.
+///
+/// Shapes (all contiguous F32): `x`: `[b, seq_len, channels]`; `history`:
+/// `[b, hist_len, channels]`; `weight`: `[channels, kernel_size]` --
+/// **caller must canonicalize to this exact layout** (a raw checkpoint
+/// tensor can arrive as `[channels, kernel]` or `[kernel, channels]`; do the
+/// transpose once at load time, not per call, and never pass the
+/// non-canonical layout here). `out`: `[b, seq_len, channels]`.
+///
+/// Every read input takes a `BufferOffset`, not a bare `Buffer` -- same
+/// discipline as `call_gdn_decode_step_f32` above, after the real
+/// nonzero-offset bug that kernel found live: `history` in particular is
+/// exactly the kind of tensor (a restored/cloned cache view, or a
+/// `narrow()`'d slice) most likely to carry a real nonzero byte offset in
+/// production, not just in a synthetic test.
+#[allow(clippy::too_many_arguments)]
+pub fn call_gdn_causal_conv1d_output_f32(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    b: usize,
+    seq_len: usize,
+    hist_len: usize,
+    channels: usize,
+    kernel_size: usize,
+    x: &BufferOffset,
+    history: &BufferOffset,
+    weight: &BufferOffset,
+    out: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline =
+        kernels.load_pipeline(device, Source::Gdn, "kernel_gdn_causal_conv1d_output_f32")?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "gdn_causal_conv1d_output b={b} seq_len={seq_len} hist_len={hist_len} channels={channels} kernel_size={kernel_size}");
+
+    let args = GdnConv1dArgs {
+        seq_len: seq_len as u32,
+        hist_len: hist_len as u32,
+        channels: channels as u32,
+        kernel_size: kernel_size as u32,
+    };
+    set_params!(encoder, (x, history, weight, Output::new(out), args));
+
+    let grid_dims = MTLSize {
+        width: channels,
+        height: seq_len,
+        depth: b,
+    };
+    let group_dims = MTLSize {
+        width: channels.min(64),
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_threads(grid_dims, group_dims);
+    Ok(())
+}
+
+/// Fused causal depthwise conv1d -- the next-conv-state half, companion to
+/// `call_gdn_causal_conv1d_output_f32` above (same inputs, no `weight`,
+/// different output). `new_state` is written functionally (a fresh buffer,
+/// `history` read-only and untouched) -- same correctness discipline as
+/// `state_out` in `call_gdn_decode_step_f32`: a prior session-checkpoint
+/// clone of `history` must survive this call unchanged, and the caller must
+/// bind `new_state` via the write path (this function already does) so the
+/// *next* call's read of it gets a barrier under this fork's
+/// `HazardTrackingModeUntracked` convention.
+///
+/// Shapes: `x`: `[b, seq_len, channels]`; `history`: `[b, hist_len,
+/// channels]`; `new_state`: `[b, hist_len, channels]`. Correct (a no-op
+/// grid) when `hist_len == 0`.
+#[allow(clippy::too_many_arguments)]
+pub fn call_gdn_causal_conv1d_state_f32(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    b: usize,
+    seq_len: usize,
+    hist_len: usize,
+    channels: usize,
+    x: &BufferOffset,
+    history: &BufferOffset,
+    new_state: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline =
+        kernels.load_pipeline(device, Source::Gdn, "kernel_gdn_causal_conv1d_state_f32")?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "gdn_causal_conv1d_state b={b} seq_len={seq_len} hist_len={hist_len} channels={channels}"
+    );
+
+    let args = GdnConv1dArgs {
+        seq_len: seq_len as u32,
+        hist_len: hist_len as u32,
+        channels: channels as u32,
+        kernel_size: 0,
+    };
+    set_params!(encoder, (x, history, Output::new(new_state), args));
+
+    let grid_dims = MTLSize {
+        width: channels,
+        height: hist_len,
+        depth: b,
+    };
+    let group_dims = MTLSize {
+        width: channels.min(64),
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_threads(grid_dims, group_dims);
+    Ok(())
+}
+
+#[repr(C)]
+struct GdnL2NormArgs {
+    seq_len: u32,
+    heads: u32,
+    dim: u32,
+    scale: f32,
+    eps: f32,
+}
+
+impl EncoderParam for GdnL2NormArgs {
+    fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+        encoder.set_bytes(position, &data);
+    }
+}
+
+/// Fused L2-normalize + scale -- the q/k half of gated-DeltaNet's
+/// preprocessing gating tail. See `metal_src/gdn.metal`'s own doc comment
+/// for the exact math (eps is added to the sum of squares, not the mean --
+/// do not substitute a generic RMS-norm kernel here, the epsilon placement
+/// differs). Called once for q (with a query-side scale factor) and once
+/// for k (`scale = 1.0`).
+///
+/// Shapes (contiguous F32): `x`/`out`: `[b, seq_len, heads, dim]`.
+#[allow(clippy::too_many_arguments)]
+pub fn call_gdn_l2_normalize_scale_f32(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    b: usize,
+    seq_len: usize,
+    heads: usize,
+    dim: usize,
+    scale: f32,
+    eps: f32,
+    x: &BufferOffset,
+    out: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline =
+        kernels.load_pipeline(device, Source::Gdn, "kernel_gdn_l2_normalize_scale_f32")?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "gdn_l2_normalize_scale b={b} seq_len={seq_len} heads={heads} dim={dim} scale={scale}"
+    );
+
+    let args = GdnL2NormArgs {
+        seq_len: seq_len as u32,
+        heads: heads as u32,
+        dim: dim as u32,
+        scale,
+        eps,
+    };
+    set_params!(encoder, (x, Output::new(out), args));
+
+    let grid_dims = MTLSize {
+        width: heads,
+        height: seq_len,
+        depth: b,
+    };
+    let group_dims = MTLSize {
+        width: heads.min(64),
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_threads(grid_dims, group_dims);
+    Ok(())
+}
+
+#[repr(C)]
+struct GdnDecayBetaArgs {
+    seq_len: u32,
+    heads: u32,
+}
+
+impl EncoderParam for GdnDecayBetaArgs {
+    fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+        encoder.set_bytes(position, &data);
+    }
+}
+
+/// Fused decay-gate softplus + beta sigmoid -- the gating half of
+/// gated-DeltaNet's preprocessing gating tail. See `metal_src/gdn.metal`'s
+/// own doc comment for the exact math. `dt_bias`/`a` are indexed directly
+/// by head (`[heads]`), not pre-broadcast -- this eliminates the caller's
+/// own broadcast step entirely, not just the elementwise math around it.
+///
+/// Shapes (contiguous F32): `alpha_logits`/`beta_logits`/`g_out`/`beta_out`:
+/// `[b, seq_len, heads]`; `dt_bias`/`a`: `[heads]`.
+#[allow(clippy::too_many_arguments)]
+pub fn call_gdn_decay_beta_gate_f32(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    b: usize,
+    seq_len: usize,
+    heads: usize,
+    alpha_logits: &BufferOffset,
+    dt_bias: &BufferOffset,
+    a: &BufferOffset,
+    beta_logits: &BufferOffset,
+    g_out: &Buffer,
+    beta_out: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Gdn, "kernel_gdn_decay_beta_gate_f32")?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "gdn_decay_beta_gate b={b} seq_len={seq_len} heads={heads}"
+    );
+
+    let args = GdnDecayBetaArgs {
+        seq_len: seq_len as u32,
+        heads: heads as u32,
+    };
+    set_params!(
+        encoder,
+        (
+            alpha_logits,
+            dt_bias,
+            a,
+            beta_logits,
+            Output::new(g_out),
+            Output::new(beta_out),
+            args
+        )
+    );
+
+    let grid_dims = MTLSize {
+        width: heads,
+        height: seq_len,
+        depth: b,
+    };
+    let group_dims = MTLSize {
+        width: heads.min(64),
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_threads(grid_dims, group_dims);
+    Ok(())
+}

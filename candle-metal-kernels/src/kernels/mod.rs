@@ -20,7 +20,10 @@ pub use binary::{call_binary_contiguous, call_binary_strided};
 pub use cast::{call_cast_contiguous, call_cast_strided};
 pub use convolution::*;
 pub use fill::*;
-pub use gdn::call_gdn_decode_step_f32;
+pub use gdn::{
+    call_gdn_causal_conv1d_output_f32, call_gdn_causal_conv1d_state_f32,
+    call_gdn_decay_beta_gate_f32, call_gdn_decode_step_f32, call_gdn_l2_normalize_scale_f32,
+};
 pub use indexing::*;
 pub use mlx_gemm::{call_mlx_gemm, call_mlx_gemv, GemmDType};
 pub use quantized::{
