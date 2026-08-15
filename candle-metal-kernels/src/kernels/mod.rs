@@ -3,6 +3,7 @@ pub mod binary;
 pub mod cast;
 pub mod convolution;
 pub mod fill;
+pub mod gdn;
 pub mod indexing;
 mod macros;
 pub mod mlx_gemm;
@@ -19,6 +20,7 @@ pub use binary::{call_binary_contiguous, call_binary_strided};
 pub use cast::{call_cast_contiguous, call_cast_strided};
 pub use convolution::*;
 pub use fill::*;
+pub use gdn::call_gdn_decode_step_f32;
 pub use indexing::*;
 pub use mlx_gemm::{call_mlx_gemm, call_mlx_gemv, GemmDType};
 pub use quantized::{

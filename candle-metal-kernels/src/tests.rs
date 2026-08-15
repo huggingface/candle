@@ -2491,3 +2491,331 @@ fn residency_set_batch_insert_remove() {
     set.remove_batch(std::iter::empty());
     assert_eq!(raw.allocationCount(), base);
 }
+
+// Fused gated-DeltaNet decode step: confirms the kernel compiles and
+// loads as a real Metal pipeline before any numeric-correctness work is
+// asked to rely on it -- same de-risk-spike-before-wiring precedent as
+// kernel_mul_mv_id_pipelines_load.
+#[test]
+fn kernel_gdn_decode_step_pipeline_loads() {
+    let device = device();
+    let kernels = Kernels::new();
+    kernels
+        .load_pipeline(&device, Source::Gdn, "kernel_gdn_decode_step_f32")
+        .unwrap_or_else(|e| {
+            panic!("kernel_gdn_decode_step_f32 should load as a Metal compute pipeline: {e}")
+        });
+}
+
+// Scalar Rust reference for the fused kernel's math (see gdn.metal's own
+// doc comment for the derivation):
+//   s_dec[i][j] = g * s_in[i][j]
+//   kv_mem[j]   = sum_i s_dec[i][j] * k[i]
+//   delta[j]    = (v[j] - kv_mem[j]) * beta
+//   s_out[i][j] = s_dec[i][j] + k[i] * delta[j]
+//   out[j]      = sum_i s_out[i][j] * q[i]
+// Per (batch, head) -- q/k: [hk], v: [hv], g/beta: scalar, state: [hk, hv].
+#[allow(clippy::too_many_arguments)]
+fn gdn_decode_step_reference(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    g: f32,
+    beta: f32,
+    state_in: &[f32],
+    hk: usize,
+    hv: usize,
+) -> (Vec<f32>, Vec<f32>) {
+    let mut state_out = vec![0f32; hk * hv];
+    let mut out = vec![0f32; hv];
+    for j in 0..hv {
+        let mut kv_mem = 0f32;
+        for i in 0..hk {
+            kv_mem += (g * state_in[i * hv + j]) * k[i];
+        }
+        let delta = (v[j] - kv_mem) * beta;
+        let mut acc = 0f32;
+        for i in 0..hk {
+            let s_new = g * state_in[i * hv + j] + k[i] * delta;
+            state_out[i * hv + j] = s_new;
+            acc += s_new * q[i];
+        }
+        out[j] = acc;
+    }
+    (out, state_out)
+}
+
+// Runs the real kernel on random inputs at the given shape and compares
+// against the scalar reference above, per (batch, head). `hv` deliberately
+// not always a multiple of the threadgroup width (min(hv, 64) in
+// call_gdn_decode_step_f32) to exercise the kernel's own `j >= args.hv`
+// bounds check, not just the common case.
+fn run_gdn_decode_step_and_check(b: usize, h: usize, hk: usize, hv: usize) {
+    let device = device();
+    let kernels = Kernels::new();
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+
+    let mut rng = rng();
+    fn randf(rng: &mut impl Rng, n: usize, scale: f32) -> Vec<f32> {
+        (0..n)
+            .map(|_| (rng.random::<f32>() - 0.5) * scale)
+            .collect()
+    }
+    let q = randf(&mut rng, b * h * hk, 0.2);
+    let k = randf(&mut rng, b * h * hk, 0.2);
+    let v = randf(&mut rng, b * h * hv, 2.0);
+    // g in (0,1) (post-exp decay gate, matching sequential_step's own
+    // convention -- the kernel takes g already exp'd, not log_g); beta in
+    // (0,1) too. Include the large_decay-style strong-decay regime
+    // (g close to 0) at least once via the caller's own shape choices --
+    // this helper takes whatever the caller passes.
+    let g_vals: Vec<f32> = (0..b * h)
+        .map(|_| rng.random::<f32>() * 0.9 + 0.05)
+        .collect();
+    let beta_vals: Vec<f32> = (0..b * h)
+        .map(|_| rng.random::<f32>() * 0.9 + 0.05)
+        .collect();
+    let state_in = randf(&mut rng, b * h * hk * hv, 1.0);
+
+    let q_buf = new_buffer(&device, &q);
+    let k_buf = new_buffer(&device, &k);
+    let v_buf = new_buffer(&device, &v);
+    let g_buf = new_buffer(&device, &g_vals);
+    let beta_buf = new_buffer(&device, &beta_vals);
+    let state_in_buf = new_buffer(&device, &state_in);
+    let state_out_buf = device
+        .new_buffer(
+            b * h * hk * hv * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
+        .unwrap();
+    let out_buf = device
+        .new_buffer(b * h * hv * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    call_gdn_decode_step_f32(
+        &device,
+        &encoder,
+        &kernels,
+        b,
+        h,
+        hk,
+        hv,
+        &BufferOffset::zero_offset(&q_buf),
+        &BufferOffset::zero_offset(&k_buf),
+        &BufferOffset::zero_offset(&v_buf),
+        &BufferOffset::zero_offset(&g_buf),
+        &BufferOffset::zero_offset(&beta_buf),
+        &BufferOffset::zero_offset(&state_in_buf),
+        &state_out_buf,
+        &out_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got_out: Vec<f32> = read_to_vec(&out_buf, b * h * hv);
+    let got_state: Vec<f32> = read_to_vec(&state_out_buf, b * h * hk * hv);
+
+    let mut max_out_diff = 0f32;
+    let mut max_state_diff = 0f32;
+    for bh in 0..b * h {
+        let (expected_out, expected_state) = gdn_decode_step_reference(
+            &q[bh * hk..(bh + 1) * hk],
+            &k[bh * hk..(bh + 1) * hk],
+            &v[bh * hv..(bh + 1) * hv],
+            g_vals[bh],
+            beta_vals[bh],
+            &state_in[bh * hk * hv..(bh + 1) * hk * hv],
+            hk,
+            hv,
+        );
+        for j in 0..hv {
+            let diff = (got_out[bh * hv + j] - expected_out[j]).abs();
+            max_out_diff = max_out_diff.max(diff);
+        }
+        for e in 0..hk * hv {
+            let diff = (got_state[bh * hk * hv + e] - expected_state[e]).abs();
+            max_state_diff = max_state_diff.max(diff);
+        }
+    }
+    println!(
+        "gdn_decode_step b={b} h={h} hk={hk} hv={hv}: out_diff={max_out_diff:.8} state_diff={max_state_diff:.8}"
+    );
+    assert!(
+        max_out_diff < 5e-5,
+        "b={b} h={h} hk={hk} hv={hv}: output mismatch, max diff = {max_out_diff}"
+    );
+    assert!(
+        max_state_diff < 5e-5,
+        "b={b} h={h} hk={hk} hv={hv}: state mismatch, max diff = {max_state_diff}"
+    );
+}
+
+#[test]
+fn kernel_gdn_decode_step_matches_scalar_reference_tiny() {
+    // Small, odd shapes -- hv=5 is not a multiple of min(hv,64)'s
+    // threadgroup width, exercising the bounds check on every thread group
+    // boundary, not just the last one.
+    run_gdn_decode_step_and_check(1, 2, 4, 4);
+    run_gdn_decode_step_and_check(1, 3, 7, 5);
+    run_gdn_decode_step_and_check(2, 2, 6, 6);
+}
+
+#[test]
+fn kernel_gdn_decode_step_matches_scalar_reference_production_shape() {
+    // b=1, h=32, hk=128, hv=128 -- a real production shape from a
+    // Qwen3.5-family hybrid gated-DeltaNet model.
+    run_gdn_decode_step_and_check(1, 32, 128, 128);
+}
+
+// Regression test for a real bug found while integrating this kernel: a
+// caller's `v` was a `narrow()`'d slice of a shared QKV-split buffer with
+// a genuine nonzero byte offset, which an earlier version of
+// call_gdn_decode_step_f32 (bare &Buffer params, no offset) silently
+// ignored -- reading the wrong region of the buffer. This test reproduces
+// that shape directly: q/k/v/g/beta/state_in are all slices into ONE
+// larger packed buffer at different offsets (not six independent
+// zero-offset allocations, which is what every other test here uses and
+// exactly why this bug slipped past them), so a wrong or ignored offset
+// reads cross-contaminated data and fails the numeric check hard, not
+// subtly.
+#[test]
+fn kernel_gdn_decode_step_respects_nonzero_buffer_offsets() {
+    let device = device();
+    let kernels = Kernels::new();
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+
+    let (b, h, hk, hv) = (1usize, 4usize, 8usize, 8usize);
+    let mut rng = rng();
+    fn randf(rng: &mut impl Rng, n: usize, scale: f32) -> Vec<f32> {
+        (0..n)
+            .map(|_| (rng.random::<f32>() - 0.5) * scale)
+            .collect()
+    }
+
+    // Pack q, k, v, g, beta, state_in back-to-back into one buffer, each
+    // preceded by a "decoy" region of the *next* tensor's own values --
+    // i.e. deliberately construct it so that reading from byte offset 0
+    // instead of the real offset would read a DIFFERENT tensor's data,
+    // not just garbage. Layout: [decoy_q_sized][q][k][v][g][beta][state_in].
+    let q = randf(&mut rng, b * h * hk, 0.2);
+    let k = randf(&mut rng, b * h * hk, 0.2);
+    let v = randf(&mut rng, b * h * hv, 2.0);
+    let g_vals: Vec<f32> = (0..b * h)
+        .map(|_| rng.random::<f32>() * 0.9 + 0.05)
+        .collect();
+    let beta_vals: Vec<f32> = (0..b * h)
+        .map(|_| rng.random::<f32>() * 0.9 + 0.05)
+        .collect();
+    let state_in = randf(&mut rng, b * h * hk * hv, 1.0);
+    let decoy = randf(&mut rng, b * h * hk, 999.0); // same size as q, deliberately huge-magnitude so a wrong-offset read is obviously wrong
+
+    let f32_size = std::mem::size_of::<f32>();
+    let packed: Vec<f32> = [
+        &decoy[..],
+        &q[..],
+        &k[..],
+        &v[..],
+        &g_vals[..],
+        &beta_vals[..],
+        &state_in[..],
+    ]
+    .concat();
+    let packed_buf = new_buffer(&device, &packed);
+
+    let mut offset_elems = decoy.len();
+    let q_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+    offset_elems += q.len();
+    let k_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+    offset_elems += k.len();
+    let v_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+    offset_elems += v.len();
+    let g_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+    offset_elems += g_vals.len();
+    let beta_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+    offset_elems += beta_vals.len();
+    let state_in_off = BufferOffset {
+        buffer: &packed_buf,
+        offset_in_bytes: offset_elems * f32_size,
+    };
+
+    let state_out_buf = device
+        .new_buffer(b * h * hk * hv * f32_size, RESOURCE_OPTIONS)
+        .unwrap();
+    let out_buf = device
+        .new_buffer(b * h * hv * f32_size, RESOURCE_OPTIONS)
+        .unwrap();
+
+    call_gdn_decode_step_f32(
+        &device,
+        &encoder,
+        &kernels,
+        b,
+        h,
+        hk,
+        hv,
+        &q_off,
+        &k_off,
+        &v_off,
+        &g_off,
+        &beta_off,
+        &state_in_off,
+        &state_out_buf,
+        &out_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got_out: Vec<f32> = read_to_vec(&out_buf, b * h * hv);
+    let got_state: Vec<f32> = read_to_vec(&state_out_buf, b * h * hk * hv);
+
+    let mut max_out_diff = 0f32;
+    let mut max_state_diff = 0f32;
+    for bh in 0..b * h {
+        let (expected_out, expected_state) = gdn_decode_step_reference(
+            &q[bh * hk..(bh + 1) * hk],
+            &k[bh * hk..(bh + 1) * hk],
+            &v[bh * hv..(bh + 1) * hv],
+            g_vals[bh],
+            beta_vals[bh],
+            &state_in[bh * hk * hv..(bh + 1) * hk * hv],
+            hk,
+            hv,
+        );
+        for j in 0..hv {
+            max_out_diff = max_out_diff.max((got_out[bh * hv + j] - expected_out[j]).abs());
+        }
+        for e in 0..hk * hv {
+            max_state_diff =
+                max_state_diff.max((got_state[bh * hk * hv + e] - expected_state[e]).abs());
+        }
+    }
+    println!("gdn_decode_step_nonzero_offsets: out_diff={max_out_diff:.8} state_diff={max_state_diff:.8}");
+    assert!(
+        max_out_diff < 5e-5,
+        "nonzero-offset output mismatch, max diff = {max_out_diff}"
+    );
+    assert!(
+        max_state_diff < 5e-5,
+        "nonzero-offset state mismatch, max diff = {max_state_diff}"
+    );
+}
