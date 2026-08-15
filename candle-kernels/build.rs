@@ -21,33 +21,50 @@ fn main() -> Result<()> {
 
     bindings.write(&ptx_path)?;
 
+    // Detect compute capability up front so we can conditionally select
+    // kernel sources. The pre-Volta swap below depends on it; the bf16
+    // gate further down also reuses this value.
+    let compute_cap = cudaforge::detect_compute_cap()
+        .map(|arch| arch.base())
+        .unwrap_or(80);
+
+    // moe_wmma.cu and moe_wmma_gguf.cu both rely on `nvcuda::wmma`, which
+    // requires Volta+ tensor cores (sm >= 70). On Pascal (sm 60) and older
+    // they fail to compile with "namespace wmma not found". Substitute an
+    // aborting stub so the static link still resolves; dense models don't
+    // exercise these paths and MoE models can't run on Pascal regardless.
+    let wmma_sources: &[&str] = if compute_cap < 70 {
+        &["src/moe/moe_wmma_stub.cu"]
+    } else {
+        &["src/moe/moe_wmma.cu", "src/moe/moe_wmma_gguf.cu"]
+    };
+
     let mut moe_builder = KernelBuilder::default()
-        .source_files(vec![
-            "src/moe/moe_gguf.cu",
-            "src/moe/moe_wmma.cu",
-            "src/moe/moe_wmma_gguf.cu",
-            "src/mmvq_gguf.cu",
-            "src/mmq_gguf/mmq_quantize.cu",
-            "src/mmq_gguf/mmq_instance_q4_0.cu",
-            "src/mmq_gguf/mmq_instance_q4_1.cu",
-            "src/mmq_gguf/mmq_instance_q5_0.cu",
-            "src/mmq_gguf/mmq_instance_q5_1.cu",
-            "src/mmq_gguf/mmq_instance_q8_0.cu",
-            "src/mmq_gguf/mmq_instance_q2_k.cu",
-            "src/mmq_gguf/mmq_instance_q3_k.cu",
-            "src/mmq_gguf/mmq_instance_q4_k.cu",
-            "src/mmq_gguf/mmq_instance_q5_k.cu",
-            "src/mmq_gguf/mmq_instance_q6_k.cu",
-        ])
+        .source_files({
+            let mut files = vec!["src/moe/moe_gguf.cu"];
+            files.extend_from_slice(wmma_sources);
+            files.extend_from_slice(&[
+                "src/mmvq_gguf.cu",
+                "src/mmq_gguf/mmq_quantize.cu",
+                "src/mmq_gguf/mmq_instance_q4_0.cu",
+                "src/mmq_gguf/mmq_instance_q4_1.cu",
+                "src/mmq_gguf/mmq_instance_q5_0.cu",
+                "src/mmq_gguf/mmq_instance_q5_1.cu",
+                "src/mmq_gguf/mmq_instance_q8_0.cu",
+                "src/mmq_gguf/mmq_instance_q2_k.cu",
+                "src/mmq_gguf/mmq_instance_q3_k.cu",
+                "src/mmq_gguf/mmq_instance_q4_k.cu",
+                "src/mmq_gguf/mmq_instance_q5_k.cu",
+                "src/mmq_gguf/mmq_instance_q6_k.cu",
+            ]);
+            files
+        })
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
         .arg("-O3");
 
     // Disable bf16 WMMA kernels on GPUs older than sm_80 (Ampere).
     // bf16 WMMA fragments require compute capability >= 8.0.
-    let compute_cap = cudaforge::detect_compute_cap()
-        .map(|arch| arch.base())
-        .unwrap_or(80);
     if compute_cap < 80 {
         moe_builder = moe_builder.arg("-DNO_BF16_KERNEL");
     }
