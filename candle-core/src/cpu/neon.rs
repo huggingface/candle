@@ -157,7 +157,7 @@ mod fp16 {
         pub struct CurrentCpuF16 {}
 
         impl CurrentCpuF16 {
-            fn reduce_one(x: float16x8_t) -> f32 {
+            fn reduce_one(x: uint16x8_t) -> f32 {
                 let result: f32;
                 unsafe {
                     asm!(
@@ -185,8 +185,10 @@ mod fp16 {
         }
 
         impl CpuF16 for CurrentCpuF16 {
-            type Unit = float16x8_t;
-            type Array = [float16x8_t; Self::ARR];
+            // Keep the f16 lane bits in the stable integer vector type. The
+            // inline assembly assigns the floating-point interpretation.
+            type Unit = uint16x8_t;
+            type Array = [uint16x8_t; Self::ARR];
 
             const STEP: usize = 32;
             const EPR: usize = 8;
