@@ -325,7 +325,8 @@ extern "C" void run_mha_v3(
     params.total_k = total_k;
 
     params.unpadded_lse = unpadded_lse;
-    params.use_gqa_packing = use_gqa_packing;
+    // The GQA-packed launchers hardcode FixedSeqLenTraits, so they read straight past cu_seqlens.
+    params.use_gqa_packing = cu_seqlens_q_ptr != nullptr ? 0 : use_gqa_packing;
 
     // print_params(params);
     
