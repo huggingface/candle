@@ -213,8 +213,7 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
         transformed_content.replace("test_device!", "candle_wasm_tests::test_device!");
 
     transformed_content = transformed_content.replace("fn $fn_name", "async fn $fn_name");
-    transformed_content =
-        transformed_content.replace("println!", "wasm_bindgen_test::console_log!");
+    transformed_content = transformed_content.replace("println!", "candle_wasm_tests::console_log!");
     transformed_content = make_fn_async(&transformed_content, "synchronize").to_string();
 
     transformed_content = transformed_content.replace(". await", ".await");
@@ -308,7 +307,15 @@ fn convert_to_async_if_await(mut file: syn::File, code: &str) -> (String, Vec<St
                     let mut visitor = AwaitMarker::new(code, func);
                     visitor.visit_block_mut(&mut func.block);
 
-                    if func.sig.asyncness.is_none() && visitor.should_make_fn_async() {
+                    // `.await` can appear inside macro arguments (e.g. `assert_eq!`) where
+                    // the syn visitor cannot observe `Expr::Await` directly.
+                    let body_text = quote!(#func.block).to_string();
+                    let has_await_in_macro_tokens =
+                        body_text.contains(". await") || body_text.contains(".await");
+
+                    if func.sig.asyncness.is_none()
+                        && (visitor.should_make_fn_async() || has_await_in_macro_tokens)
+                    {
                         func.sig.asyncness = Some(syn::token::Async::default());
                         converted_functions.push(func.sig.ident.to_string());
                     }

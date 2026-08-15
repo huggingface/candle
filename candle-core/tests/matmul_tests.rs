@@ -123,20 +123,25 @@ fn zero_matmul_validation(device: &Device) -> Result<()> {
     use DType::{F16, F32};
 
     let shape_error = "shape mismatch in matmul";
-    assert_matmul_error(device, (&[0, 2], F32), (&[3, 4], F16), shape_error)?;
+    if device.is_dtype_available(DType::F16){
+        assert_matmul_error(device, (&[0, 2], F32), (&[3, 4], F16), shape_error)?;
+    }
+   
     assert_matmul_error(device, (&[2, 3], F32), (&[4, 0], F32), shape_error)?;
     assert_matmul_error(device, (&[0, 2, 3], F32), (&[1, 3, 4], F32), shape_error)?;
-    assert_matmul_error(
-        device,
-        (&[0, 2], F32),
-        (&[2, 3], F16),
-        "dtype mismatch in matmul",
-    )?;
+    if device.is_dtype_available(DType::F16){
+        assert_matmul_error(
+            device,
+            (&[0, 2], F32),
+            (&[2, 3], F16),
+            "dtype mismatch in matmul",
+        )?;
+    }
     Ok(())
 }
 
 fn zero_matmul_device_validation(device: &Device) -> Result<()> {
-    if device.is_cpu() {
+    if device.is_cpu() || !device.is_dtype_available(DType::F16) {
         return Ok(());
     }
     let lhs = Tensor::zeros((0, 2), DType::F32, &Device::Cpu)?;

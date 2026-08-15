@@ -4,6 +4,22 @@ use candle::{Result, Tensor, quantized::{self, GgmlDType, QTensor}};
 pub static INIT_LOGGER: std::sync::Once = std::sync::Once::new();
 
 #[macro_export]
+macro_rules! console_log {
+    ($($arg:tt)*) => {
+        {
+            #[cfg(target_arch = "wasm32")]
+            {
+                wasm_bindgen_test::console_log!($($arg)*);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                println!($($arg)*);
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! test_device {
     // TODO: Switch to generating the two last arguments automatically once concat_idents is
     // stable. https://github.com/rust-lang/rust/issues/29599
@@ -14,7 +30,7 @@ macro_rules! test_device {
         }
 
         #[cfg(feature = "cuda")]
-        #[tewasm_bindgen_testst]
+        #[test]
         async fn $test_cuda() -> Result<()> {
             $fn_name(&Device::new_cuda(0)?).await
         }
@@ -28,10 +44,14 @@ macro_rules! test_device {
         #[cfg(feature = "wgpu")]
         #[test]
         async fn $test_wgpu() -> Result<()> {
+            #[cfg(target_arch = "wasm32")]
             candle_wasm_tests::INIT_LOGGER.call_once(|| {
                 console_log::init_with_level(log::Level::Warn).ok();
             });
+            #[cfg(target_arch = "wasm32")]
             let device = Device::new_wgpu_async(0).await?;
+            #[cfg(not(target_arch = "wasm32"))]
+            let device = Device::new_wgpu(0)?;
             $fn_name(&device).await
         }
     };

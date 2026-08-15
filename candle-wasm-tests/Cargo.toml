@@ -36,3 +36,5 @@ prettyplease = "0.2"
 
 [features]
 wgpu = ["candle-nn/wgpu", "candle/wgpu", "candle-transformers/wgpu"]
+metal = []
+cuda = []

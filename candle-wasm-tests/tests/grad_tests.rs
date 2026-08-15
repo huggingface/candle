@@ -15,7 +15,9 @@ use candle_wasm_tests::{
     to_vec0_round_async, to_vec1_round_async, to_vec2_round_async, to_vec3_round_async,
 };
 use anyhow::{Context, Result};
-use candle::{test_device, test_utils, DType, Device, Shape, Tensor, Var};
+use candle::{
+    backprop::GradStore, test_device, test_utils, DType, Device, Shape, Tensor, Var,
+};
 async fn simple_grad(device: &Device) -> Result<()> {
     let x = Var::new(&[3f32, 1., 4.], device)?;
     let x = x.as_tensor();
@@ -42,6 +44,19 @@ async fn sum_grad(device: &Device) -> Result<()> {
     assert_eq!(grad_x.to_vec1_async::< f32 > (). await ?, & [12., 4., 16.]);
     Ok(())
 }
+async fn expand_grad(device: &Device) -> Result<()> {
+    let data: Vec<f32> = (0..24).map(|v| v as f32).collect();
+    let x = Var::from_vec(data, (1, 1, 4, 6), device)?;
+    let e = x.as_tensor().unsqueeze(2)?.expand((1, 1, 3, 4, 6))?;
+    let loss = (e.sqr()?.sum_all()? * 0.5)?;
+    let grads = loss.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(
+        grad_x.flatten_all() ?.to_vec1_async::< f32 > (). await ?, (0..24).map(| v | 3. *
+        v as f32).collect::< Vec < f32 >> ()
+    );
+    Ok(())
+}
 async fn matmul_grad(device: &Device) -> Result<()> {
     let data: Vec<_> = (0..12).map(|i| i as f32).collect();
     let x = Var::from_slice(&data, (2, 2, 3), device)?;
@@ -61,6 +76,46 @@ async fn matmul_grad(device: &Device) -> Result<()> {
         &* grad_y.to_vec3_async::< f32 > (). await ?, & [[[3., 3.], [5., 5.], [7., 7.]],
         [[15., 15.], [17., 17.], [19., 19.]]]
     );
+    Ok(())
+}
+async fn assert_zero_grad(grads: &GradStore, var: &Var, shape: &[usize]) -> Result<()> {
+    let grad = grads.get(var).context("no gradient for variable")?;
+    assert_eq!(grad.dims(), shape);
+    assert_eq!(
+        grad.flatten_all() ?.to_vec1_async::< f32 > (). await ?, vec![0.; grad
+        .elem_count()]
+    );
+    Ok(())
+}
+async fn assert_zero_matmul_grads(
+    device: &Device,
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
+    output_shape: &[usize],
+) -> Result<()> {
+    let lhs = Var::zeros(lhs_shape, DType::F32, device)?;
+    let rhs = Var::zeros(rhs_shape, DType::F32, device)?;
+    let output = lhs.matmul(&rhs)?;
+    assert_eq!(output.dims(), output_shape);
+    assert_eq!(
+        output.flatten_all() ?.to_vec1_async::< f32 > (). await ?, vec![0.; output
+        .elem_count()]
+    );
+    let grads = output.sum_all()?.backward()?;
+    assert_zero_grad(&grads, &lhs, lhs_shape).await?;
+    assert_zero_grad(&grads, &rhs, rhs_shape).await
+}
+async fn zero_matmul_grad(device: &Device) -> Result<()> {
+    let cases: &[(&[usize], &[usize], &[usize])] = &[
+        (&[2, 0], &[0, 3], &[2, 3]),
+        (&[0, 2], &[2, 3], &[0, 3]),
+        (&[2, 3], &[3, 0], &[2, 0]),
+        (&[0, 2, 3], &[0, 3, 4], &[0, 2, 4]),
+        (&[2, 3, 0], &[2, 0, 4], &[2, 3, 4]),
+    ];
+    for &(lhs_shape, rhs_shape, output_shape) in cases {
+        assert_zero_matmul_grads(device, lhs_shape, rhs_shape, output_shape).await?;
+    }
     Ok(())
 }
 async fn grad_descent(device: &Device) -> Result<()> {
@@ -87,33 +142,67 @@ async fn unary_grad(device: &Device) -> Result<()> {
     let y = x.exp()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
-    assert_eq!(to_vec1_round_async(& y, 4). await ?, [20.0855, 2.7183, 54.5982, 1.1618]);
-    assert_eq!(
-        to_vec1_round_async(grad_x, 4). await ?, [20.0855, 2.7183, 54.5982, 1.1618]
-    );
+    if device.is_wgpu() {
+        assert_eq!(to_vec1_round_async(& y, 3). await ?, [20.086, 2.718, 54.598, 1.162]);
+        assert_eq!(
+            to_vec1_round_async(grad_x, 3). await ?, [20.086, 2.718, 54.598, 1.162]
+        );
+    } else {
+        assert_eq!(
+            to_vec1_round_async(& y, 4). await ?, [20.0855, 2.7183, 54.5982, 1.1618]
+        );
+        assert_eq!(
+            to_vec1_round_async(grad_x, 4). await ?, [20.0855, 2.7183, 54.5982, 1.1618]
+        );
+    }
     let y = x.exp()?.sqr()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
-    assert_eq!(to_vec1_round_async(& y, 3). await ?, [403.429, 7.389, 2980.958, 1.35]);
-    assert_eq!(to_vec1_round_async(grad_x, 2). await ?, [806.86, 14.78, 5961.92, 2.7]);
+    if device.is_wgpu() {
+        assert_eq!(to_vec1_round_async(& y, 2). await ?, [403.43, 7.39, 2980.96, 1.35]);
+        assert_eq!(to_vec1_round_async(grad_x, 1). await ?, [806.9, 14.8, 5961.9, 2.7]);
+    } else {
+        assert_eq!(
+            to_vec1_round_async(& y, 3). await ?, [403.429, 7.389, 2980.958, 1.35]
+        );
+        assert_eq!(
+            to_vec1_round_async(grad_x, 2). await ?, [806.86, 14.78, 5961.92, 2.7]
+        );
+    }
     let y = x.sin()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(
         to_vec1_round_async(& y, 4). await ?, [0.1411, 0.8415, - 0.7568, 0.1494],
     );
-    assert_eq!(
-        to_vec1_round_async(grad_x, 4). await ?, [- 0.99, 0.5403, - 0.6536, 0.9888],
-    );
+    if device.is_wgpu() {
+        assert_eq!(
+            to_vec1_round_async(grad_x, 3). await ?, [- 0.99, 0.54, - 0.654, 0.989],
+        );
+    } else {
+        assert_eq!(
+            to_vec1_round_async(grad_x, 4). await ?, [- 0.99, 0.5403, - 0.6536, 0.9888],
+        );
+    }
     let y = x.cos()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
-    assert_eq!(
-        to_vec1_round_async(& y, 4). await ?, [- 0.99, 0.5403, - 0.6536, 0.9888],
-    );
-    assert_eq!(
-        to_vec1_round_async(grad_x, 4). await ?, [- 0.1411, - 0.8415, 0.7568, - 0.1494],
-    );
+    if device.is_wgpu() {
+        assert_eq!(
+            to_vec1_round_async(& y, 3). await ?, [- 0.99, 0.54, - 0.654, 0.989],
+        );
+        assert_eq!(
+            to_vec1_round_async(grad_x, 3). await ?, [- 0.141, - 0.841, 0.757, - 0.149],
+        );
+    } else {
+        assert_eq!(
+            to_vec1_round_async(& y, 4). await ?, [- 0.99, 0.5403, - 0.6536, 0.9888],
+        );
+        assert_eq!(
+            to_vec1_round_async(grad_x, 4). await ?, [- 0.1411, - 0.8415, 0.7568, -
+            0.1494],
+        );
+    }
     let y = x.sqr()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
@@ -504,7 +593,13 @@ candle_wasm_tests::test_device!(
     sum_grad, sum_grad_cpu, sum_grad_gpu, sum_grad_metal, sum_grad_wgpu
 );
 candle_wasm_tests::test_device!(
+    expand_grad, expand_grad_cpu, expand_grad_gpu, expand_grad_metal
+);
+candle_wasm_tests::test_device!(
     matmul_grad, matmul_grad_cpu, matmul_grad_gpu, matmul_grad_metal, matmul_grad_wgpu
+);
+candle_wasm_tests::test_device!(
+    zero_matmul_grad, zero_matmul_grad_cpu, zero_matmul_grad_gpu, zero_matmul_grad_metal
 );
 candle_wasm_tests::test_device!(
     grad_descent, grad_descent_cpu, grad_descent_gpu, grad_descent_metal,

@@ -195,6 +195,14 @@ async fn asort(device: &Device) -> Result<()> {
         sorted.to_vec2_async::< f32 > (). await ?, [[5.0, 4.0, 3.0, 1.1, 1.0], [8.0, 7.0,
         2.1, 2.0, 1.0]]
     );
+    let offset_view = Tensor::new(&[[1f32, 2., 3.], [30., 10., 20.]], device)?
+        .narrow(0, 1, 1)?;
+    let (sorted, indexes) = offset_view.sort_last_dim(true)?;
+    assert_eq!(indexes.to_vec2_async::< u32 > (). await ?, [[1, 2, 0]]);
+    assert_eq!(sorted.to_vec2_async::< f32 > (). await ?, [[10., 20., 30.]]);
+    let (sorted, indexes) = offset_view.sort_last_dim(false)?;
+    assert_eq!(indexes.to_vec2_async::< u32 > (). await ?, [[0, 2, 1]]);
+    assert_eq!(sorted.to_vec2_async::< f32 > (). await ?, [[30., 20., 10.]]);
     Ok(())
 }
 /// Test sorting a large tensor that exceeds 1024 elements.
@@ -223,7 +231,7 @@ async fn unary_op(device: &Device) -> Result<()> {
     if device.is_dtype_available(DType::F16) {
         let t_f16 = tensor.to_dtype(DType::F16)?.gelu()?.to_dtype(DType::F32)?;
         let max_diff = (tensor.gelu()? - t_f16)?.flatten_all()?.max(0)?;
-        wasm_bindgen_test::console_log!(
+        candle_wasm_tests::console_log!(
             "max_diff: {:?}", max_diff.to_vec0_async::< f32 > (). await ?
         );
         assert!(max_diff.to_vec0_async::< f32 > (). await ? < 5e-3);
@@ -336,6 +344,90 @@ async fn ternary_op(device: &Device) -> Result<()> {
     assert_eq!(dims, [2, 5]);
     let result: Vec<f32> = tensor.flatten_all()?.to_vec1_async().await?;
     assert_eq!(result, [10., 1., 12., 3., 14., 5., 6., 7., 18., 19.]);
+    let fill = Tensor::new(7f32, device)?.broadcast_as((2, 5))?;
+    assert_eq!(
+        ids.where_cond(& fill, & b) ?.to_vec2_async::< f32 > (). await ?, [[10., 7., 12.,
+        7., 14.], [7., 7., 7., 18., 19.]],
+    );
+    let mask = Tensor::new(&[[0u8, 1, 1, 0, 1]], device)?.broadcast_as((2, 5))?;
+    let mask_expected = [[10., 1., 2., 13., 4.], [15., 6., 7., 18., 9.]];
+    assert_eq!(
+        mask.where_cond(& a, & b) ?.to_vec2_async::< f32 > (). await ?, mask_expected
+    );
+    if device.is_dtype_available(DType::U8) {
+        assert_eq!(
+            mask.where_cond(& a, & b) ?.to_vec2_async::< f32 > (). await ?, mask
+            .contiguous() ?.where_cond(& a, & b) ?.to_vec2_async::< f32 > (). await ?,
+        );
+    }
+    let a_t = Tensor::arange(0f32, 10., device)?.reshape((5, 2))?.t()?;
+    let ids_t = Tensor::new(&[[0u8, 1], [1, 1], [0, 0], [1, 0], [1, 1]], device)?.t()?;
+    let ids_t_expected = [[10., 2., 12., 6., 8.], [1., 3., 17., 18., 9.]];
+    assert_eq!(
+        ids_t.where_cond(& a_t, & b) ?.to_vec2_async::< f32 > (). await ?, ids_t_expected
+    );
+    if device.is_dtype_available(DType::U8) {
+        assert_eq!(
+            ids_t.where_cond(& a_t, & b) ?.to_vec2_async::< f32 > (). await ?, ids_t
+            .contiguous() ? .where_cond(& a_t.contiguous() ?, & b) ? .to_vec2_async::<
+            f32 > (). await ?,
+        );
+    }
+    let narrowed = Tensor::arange(0f32, 14., device)?.reshape((2, 7))?.narrow(1, 1, 5)?;
+    assert_eq!(
+        ids.where_cond(& fill, & narrowed) ?.to_vec2_async::< f32 > (). await ?, ids
+        .where_cond(& fill.contiguous() ?, & narrowed.contiguous() ?) ? .to_vec2_async::<
+        f32 > (). await ?,
+    );
+    let fill2 = Tensor::new(9f32, device)?.broadcast_as((2, 5))?;
+    assert_eq!(
+        ids.where_cond(& a, & fill) ?.to_vec2_async::< f32 > (). await ?, ids
+        .where_cond(& a, & fill.contiguous() ?) ?.to_vec2_async::< f32 > (). await ?,
+    );
+    assert_eq!(
+        ids.where_cond(& fill, & fill2) ?.to_vec2_async::< f32 > (). await ?, ids
+        .where_cond(& fill.contiguous() ?, & fill2.contiguous() ?) ? .to_vec2_async::<
+        f32 > (). await ?,
+    );
+    let row_mask = Tensor::new(&[[1u8], [0u8]], device)?.broadcast_as((2, 5))?;
+    assert_eq!(
+        row_mask.where_cond(& a, & b) ?.to_vec2_async::< f32 > (). await ?, [[0., 1., 2.,
+        3., 4.], [15., 16., 17., 18., 19.]],
+    );
+    assert_eq!(
+        row_mask.where_cond(& a, & fill) ?.to_vec2_async::< f32 > (). await ?, [[0., 1.,
+        2., 3., 4.], [7., 7., 7., 7., 7.]],
+    );
+    assert_eq!(
+        row_mask.where_cond(& fill, & b) ?.to_vec2_async::< f32 > (). await ?, [[7., 7.,
+        7., 7., 7.], [15., 16., 17., 18., 19.]],
+    );
+    assert_eq!(
+        row_mask.where_cond(& fill, & fill2) ?.to_vec2_async::< f32 > (). await ?, [[7.,
+        7., 7., 7., 7.], [9., 9., 9., 9., 9.]],
+    );
+    if device.is_dtype_available(DType::U8) {
+        let row_ref = row_mask.contiguous()?;
+        assert_eq!(
+            row_mask.where_cond(& a, & b) ?.to_vec2_async::< f32 > (). await ?, row_ref
+            .where_cond(& a, & b) ?.to_vec2_async::< f32 > (). await ?,
+        );
+        assert_eq!(
+            row_mask.where_cond(& a, & fill) ?.to_vec2_async::< f32 > (). await ?,
+            row_ref.where_cond(& a, & fill.contiguous() ?) ? .to_vec2_async::< f32 > ().
+            await ?,
+        );
+        assert_eq!(
+            row_mask.where_cond(& fill, & b) ?.to_vec2_async::< f32 > (). await ?,
+            row_ref.where_cond(& fill.contiguous() ?, & b) ? .to_vec2_async::< f32 > ().
+            await ?,
+        );
+        assert_eq!(
+            row_mask.where_cond(& fill, & fill2) ?.to_vec2_async::< f32 > (). await ?,
+            row_ref.where_cond(& fill.contiguous() ?, & fill2.contiguous() ?) ?
+            .to_vec2_async::< f32 > (). await ?,
+        );
+    }
     Ok(())
 }
 async fn transpose(device: &Device) -> Result<()> {
@@ -1353,6 +1445,27 @@ async fn randn(device: &Device) -> Result<()> {
     );
     Ok(())
 }
+async fn repeat_with_zero_factor(device: &Device) -> Result<()> {
+    let tensor = Tensor::new(&[[1u32, 2], [3, 4]], device)?;
+    let repeated_rows = tensor.repeat((0, 2))?;
+    assert_eq!(repeated_rows.dims(), & [0, 4]);
+    assert_eq!(repeated_rows.elem_count(), 0);
+    let repeated_columns = tensor.repeat((2, 0))?;
+    assert_eq!(repeated_columns.dims(), & [4, 0]);
+    assert_eq!(repeated_columns.elem_count(), 0);
+    Ok(())
+}
+async fn meshgrid_with_empty_axis(device: &Device) -> Result<()> {
+    let empty_axis = Tensor::from_vec(Vec::<f32>::new(), 0, device)?;
+    let coordinates = Tensor::new(&[10f32, 20., 30.], device)?;
+    let grids = Tensor::meshgrid(&[&empty_axis, &coordinates], false)?;
+    assert_eq!(grids.len(), 2);
+    for grid in grids {
+        assert_eq!(grid.dims(), & [0, 3]);
+        assert_eq!(grid.elem_count(), 0);
+    }
+    Ok(())
+}
 async fn where_cond(device: &Device) -> Result<()> {
     let cond = Tensor::new(&[0u32, 2u32, 1u32, 0, 0, 0, 35, 255, 53, 0, 29, 0], device)?
         .reshape((4, 3))?;
@@ -1475,6 +1588,14 @@ candle_wasm_tests::test_device!(
     asort_big, asort_big_cpu, asort_big_gpu, asort_big_metal
 );
 candle_wasm_tests::test_device!(var, var_cpu, var_gpu, var_metal, var_wgpu);
+candle_wasm_tests::test_device!(
+    repeat_with_zero_factor, repeat_with_zero_factor_cpu, repeat_with_zero_factor_gpu,
+    repeat_with_zero_factor_metal, repeat_with_zero_factor_wgpu
+);
+candle_wasm_tests::test_device!(
+    meshgrid_with_empty_axis, meshgrid_with_empty_axis_cpu, meshgrid_with_empty_axis_gpu,
+    meshgrid_with_empty_axis_metal, meshgrid_with_empty_axis_wgpu
+);
 candle_wasm_tests::test_device!(
     zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal, zero_dim_wgpu
 );
@@ -1668,6 +1789,23 @@ async fn test_flip_3d_channels() -> Result<()> {
         &Device::Cpu,
     )?;
     candle::test_utils::assert_tensor_eq(&flipped, &expected)?;
+    Ok(())
+}
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+async fn tensor_from_data_validates_concrete_shape() -> Result<()> {
+    let values = [1f32, 2., 3., 4.];
+    assert!(Tensor::from_slice(& values, (2, 2, 2), & Device::Cpu).is_err());
+    assert!(Tensor::from_slice(& values, (2, 1), & Device::Cpu).is_err());
+    assert!(Tensor::from_vec(values.to_vec(), (2, 2, 2), & Device::Cpu).is_err());
+    assert!(Tensor::from_vec(values.to_vec(), (2, 1), & Device::Cpu).is_err());
+    let tensor = Tensor::from_slice(&values, (2, 2), &Device::Cpu)?;
+    assert_eq!(tensor.dims(), & [2, 2]);
+    let tensor = Tensor::from_vec(values.to_vec(), ((), 2), &Device::Cpu)?;
+    assert_eq!(tensor.dims(), & [2, 2]);
+    let empty: &[f32] = &[];
+    let tensor = Tensor::from_slice(empty, (0, 3), &Device::Cpu)?;
+    assert_eq!(tensor.dims(), & [0, 3]);
     Ok(())
 }
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]

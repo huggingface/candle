@@ -20,7 +20,7 @@ mod metal_sdpa_tests {
     use rand::SeedableRng;
     use rand_distr::Distribution;
     use std::ops::{Div, Mul};
-    fn randn<S: Into<Shape>>(
+    async fn randn<S: Into<Shape>>(
         rng: &mut rand::rngs::StdRng,
         shape: S,
         dev: &Device,
@@ -44,9 +44,9 @@ mod metal_sdpa_tests {
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
         let device = Device::new_metal(0)?;
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let q = randn(&mut rng, (BS, H, R, DK), &device)?;
-        let k = randn(&mut rng, (BS, H, L, DK), &device)?;
-        let v = randn(&mut rng, (BS, H, L, DK), &device)?;
+        let q = randn(&mut rng, (BS, H, R, DK), &device).await?;
+        let k = randn(&mut rng, (BS, H, L, DK), &device).await?;
+        let v = randn(&mut rng, (BS, H, L, DK), &device).await?;
         let ground_truth = {
             let att = (q.clone() * scale)?.matmul(&k.clone().t()?)?;
             let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
@@ -81,9 +81,9 @@ mod metal_sdpa_tests {
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
         let device = Device::new_metal(0)?;
         let mut rng = rand::rngs::StdRng::seed_from_u64(4242);
-        let q = randn(&mut rng, (BS, H, R, DK), &device)?;
-        let k = randn(&mut rng, (BS, H, L, DK), &device)?;
-        let v = randn(&mut rng, (BS, H, L, DK), &device)?;
+        let q = randn(&mut rng, (BS, H, R, DK), &device).await?;
+        let k = randn(&mut rng, (BS, H, L, DK), &device).await?;
+        let v = randn(&mut rng, (BS, H, L, DK), &device).await?;
         let ground_truth = {
             let att = (q.clone() * scale)?.matmul(&k.clone().t()?)?;
             let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
@@ -119,9 +119,9 @@ mod metal_sdpa_tests {
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
         let device = Device::new_metal(0)?;
         let mut rng = rand::rngs::StdRng::seed_from_u64(424242);
-        let q = randn(&mut rng, (BS, H, R, DK), &device)?;
-        let k = randn(&mut rng, (BS, H, L, DK), &device)?;
-        let v = randn(&mut rng, (BS, H, L, DK), &device)?;
+        let q = randn(&mut rng, (BS, H, R, DK), &device).await?;
+        let k = randn(&mut rng, (BS, H, L, DK), &device).await?;
+        let v = randn(&mut rng, (BS, H, L, DK), &device).await?;
         let ground_truth = {
             let att = (q.clone() * scale)?.matmul(&k.clone().t()?)?;
             let att = candle_nn::ops::softmax_last_dim(
@@ -159,9 +159,9 @@ mod metal_sdpa_tests {
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
         let device = Device::new_metal(0)?;
         let mut rng = rand::rngs::StdRng::seed_from_u64(42424242);
-        let q = randn(&mut rng, (BS, H, R, DK), &device)?;
-        let k = randn(&mut rng, (BS, H, L, DK), &device)?;
-        let v = randn(&mut rng, (BS, H, L, DK), &device)?;
+        let q = randn(&mut rng, (BS, H, R, DK), &device).await?;
+        let k = randn(&mut rng, (BS, H, L, DK), &device).await?;
+        let v = randn(&mut rng, (BS, H, L, DK), &device).await?;
         let ground_truth = {
             let att = (q.clone() * scale)?.matmul(&k.clone().t()?)?;
             let att = candle_nn::ops::softmax_last_dim(
@@ -198,9 +198,9 @@ mod metal_sdpa_tests {
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
         let device = Device::new_metal(0)?;
         let mut rng = rand::rngs::StdRng::seed_from_u64(4242424242);
-        let q = randn(&mut rng, (BS, H, R, DK), &device)?;
-        let k = randn(&mut rng, (BS, H, L, DK), &device)?;
-        let v = randn(&mut rng, (BS, H, L, DK), &device)?;
+        let q = randn(&mut rng, (BS, H, R, DK), &device).await?;
+        let k = randn(&mut rng, (BS, H, L, DK), &device).await?;
+        let v = randn(&mut rng, (BS, H, L, DK), &device).await?;
         let ground_truth = {
             let att = (q.clone() * scale)?.matmul(&k.clone().t()?)?;
             let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?

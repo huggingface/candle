@@ -82,6 +82,94 @@ async fn broadcast_matmul(device: &Device) -> Result<()> {
     }
     Ok(())
 }
+async fn zero_matmul(device: &Device) -> Result<()> {
+    let lhs = Tensor::zeros((2, 0), DType::F32, device)?;
+    let rhs = Tensor::zeros((0, 3), DType::F32, device)?;
+    let output = lhs.matmul(&rhs)?;
+    assert_eq!(output.dims(), & [2, 3]);
+    assert_eq!(
+        output.to_vec2_async::< f32 > (). await ?, & [[0., 0., 0.], [0., 0., 0.]]
+    );
+    let lhs = Tensor::zeros((2, 3, 4), DType::F32, device)?
+        .transpose(1, 2)?
+        .narrow(1, 0, 0)?;
+    let rhs = Tensor::zeros((2, 4, 3), DType::F32, device)?
+        .transpose(1, 2)?
+        .narrow(2, 0, 0)?;
+    assert!(! lhs.is_contiguous());
+    assert!(! rhs.is_contiguous());
+    assert_eq!(lhs.dims(), & [2, 0, 3]);
+    assert_eq!(rhs.dims(), & [2, 3, 0]);
+    assert_eq!(lhs.matmul(& rhs) ?.dims(), & [2, 0, 0]);
+    Ok(())
+}
+fn assert_matmul_error(
+    device: &Device,
+    lhs: (&[usize], DType),
+    rhs: (&[usize], DType),
+    expected: &str,
+) -> Result<()> {
+    let lhs = Tensor::zeros(lhs.0, lhs.1, device)?;
+    let rhs = Tensor::zeros(rhs.0, rhs.1, device)?;
+    let err = lhs.matmul(&rhs).unwrap_err();
+    assert!(err.to_string().starts_with(expected), "unexpected error: {err}");
+    Ok(())
+}
+async fn zero_matmul_validation(device: &Device) -> Result<()> {
+    use DType::{F16, F32};
+    let shape_error = "shape mismatch in matmul";
+    if device.is_dtype_available(DType::F16) {
+        assert_matmul_error(device, (&[0, 2], F32), (&[3, 4], F16), shape_error)?;
+    }
+    assert_matmul_error(device, (&[2, 3], F32), (&[4, 0], F32), shape_error)?;
+    assert_matmul_error(device, (&[0, 2, 3], F32), (&[1, 3, 4], F32), shape_error)?;
+    if device.is_dtype_available(DType::F16) {
+        assert_matmul_error(
+            device,
+            (&[0, 2], F32),
+            (&[2, 3], F16),
+            "dtype mismatch in matmul",
+        )?;
+    }
+    Ok(())
+}
+async fn zero_matmul_device_validation(device: &Device) -> Result<()> {
+    if device.is_cpu() || !device.is_dtype_available(DType::F16) {
+        return Ok(());
+    }
+    let lhs = Tensor::zeros((0, 2), DType::F32, &Device::Cpu)?;
+    let rhs = Tensor::zeros((2, 3), DType::F16, device)?;
+    let err = lhs.matmul(&rhs).unwrap_err();
+    assert!(
+        err.to_string().starts_with("device mismatch in matmul"),
+        "unexpected error: {err}"
+    );
+    Ok(())
+}
+async fn broadcast_matmul_rank2_rhs(device: &Device) -> Result<()> {
+    let rhs = Tensor::randn(0f32, 1f32, (5, 2), device)?;
+    for lhs in [
+        Tensor::randn(0f32, 1f32, (3, 4, 5), device)?,
+        Tensor::randn(0f32, 1f32, (3, 6, 4, 5), device)?,
+        Tensor::randn(0f32, 1f32, (1, 1, 5), device)?,
+        Tensor::randn(0f32, 1f32, (3, 5, 4), device)?.transpose(1, 2)?,
+    ] {
+        let out = lhs.broadcast_matmul(&rhs)?;
+        let mut dims = lhs.dims().to_vec();
+        let n = dims.len();
+        dims[n - 1] = 2;
+        assert_eq!(out.dims(), dims.as_slice());
+        let batch: usize = lhs.dims()[..n - 2].iter().product();
+        let (m, k) = (lhs.dims()[n - 2], lhs.dims()[n - 1]);
+        let flat = lhs.reshape((batch, m, k))?;
+        let out = out.reshape((batch, m, 2))?;
+        for b in 0..batch {
+            let diff = (out.i(b)? - flat.i(b)?.matmul(&rhs)?)?.sqr()?.sum_all()?;
+            assert!(diff.to_vec0_async::< f32 > (). await ? < 1e-6);
+        }
+    }
+    Ok(())
+}
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
 async fn tensor_dot() -> Result<()> {
@@ -130,6 +218,23 @@ candle_wasm_tests::test_device!(
 candle_wasm_tests::test_device!(
     broadcast_matmul, broadcast_matmul_cpu, broadcast_matmul_gpu, broadcast_matmul_metal,
     broadcast_matmul_wgpu
+);
+candle_wasm_tests::test_device!(
+    zero_matmul, zero_matmul_cpu, zero_matmul_gpu, zero_matmul_metal, zero_matmul_wgpu
+);
+candle_wasm_tests::test_device!(
+    zero_matmul_validation, zero_matmul_validation_cpu, zero_matmul_validation_gpu,
+    zero_matmul_validation_metal, zero_matmul_validation_wgpu
+);
+candle_wasm_tests::test_device!(
+    zero_matmul_device_validation, zero_matmul_device_validation_cpu,
+    zero_matmul_device_validation_gpu, zero_matmul_device_validation_metal,
+    zero_matmul_device_validation_wgpu
+);
+candle_wasm_tests::test_device!(
+    broadcast_matmul_rank2_rhs, broadcast_matmul_rank2_rhs_cpu,
+    broadcast_matmul_rank2_rhs_gpu, broadcast_matmul_rank2_rhs_metal,
+    broadcast_matmul_rank2_rhs_wgpu
 );
 candle_wasm_tests::test_device!(
     squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal, squeeze_mm_wgpu
