@@ -324,17 +324,23 @@ impl Commands {
                 cb.wait_until_completed();
             }
             MTLCommandBufferStatus::Completed => {}
-            MTLCommandBufferStatus::Error => {
-                let msg = cb
-                    .error()
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "unknown error".to_string());
-                return Err(MetalKernelError::CommandBufferError(msg));
-            }
+            MTLCommandBufferStatus::Error => return Err(Self::cb_error(cb)),
             _ => unreachable!(),
         }
 
+        if cb.status() == MTLCommandBufferStatus::Error {
+            return Err(Self::cb_error(cb));
+        }
+
         Ok(())
+    }
+
+    fn cb_error(cb: &CommandBuffer) -> MetalKernelError {
+        let msg = cb
+            .error()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string());
+        MetalKernelError::CommandBufferError(msg)
     }
 
     fn end_encoding(&self, encoder: ComputeCommandEncoder) {
