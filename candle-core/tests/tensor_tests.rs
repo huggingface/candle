@@ -2183,3 +2183,101 @@ fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
     assert_ne!(id1, id2);
     Ok(())
 }
+
+/// Resolves every F8E4M3 CUDA kernel declared in candle-kernels by the name the Rust side
+/// generates for it, so a naming drift between `DType::as_str()` and the `.cu` symbols (as
+/// happened for #3886, where the kernels were declared `..._f8_e4m3` while `as_str()` yields
+/// `"f8e4m3"`) fails here in CI instead of at the first user's symbol-not-found error.
+///
+/// Not every name checked here is necessarily reachable from a public `Tensor` op today (a few,
+/// like `fill_f8e4m3`/`copy2d_f8e4m3`, are declared but currently unused, superseded by other
+/// codepaths) - the point is that every symbol the `.cu` files declare under the `f8e4m3` naming
+/// convention must actually be loadable under that name.
+///
+/// F8E4M3 kernels aren't all under the same architecture guard: casts/binary/fill are gated on
+/// `__CUDA_ARCH__ >= 800`, while affine/indexing/unary's `ucopy` are gated on `>= 890`. A kernel
+/// below its guard simply isn't compiled into this device's PTX, so kernels whose requirement
+/// exceeds the device's actual compute capability are skipped rather than asserted, to avoid
+/// spurious failures on architectures like Ampere (8.6) that legitimately lack the >=890 tier.
+#[cfg(feature = "cuda")]
+#[test]
+fn f8e4m3_cuda_kernels_resolve_by_generated_name() -> Result<()> {
+    use candle_core::cuda::{kernel_name, kernels};
+
+    let device = Device::new_cuda(0)?;
+    let cuda_device = device.as_cuda_device()?;
+    let (major, minor) = cuda_device
+        .cuda_stream()
+        .context()
+        .compute_capability()
+        .map_err(candle_core::cuda::CudaError::from)?;
+    let device_arch = major * 100 + minor * 10;
+
+    let f8e4m3 = DType::F8E4M3.as_str();
+    let f32_ = DType::F32.as_str();
+    let f16_ = DType::F16.as_str();
+    let f64_ = DType::F64.as_str();
+    let bf16_ = DType::BF16.as_str();
+    let u8_ = DType::U8.as_str();
+    let i32_ = DType::I32.as_str();
+
+    // (kernel name, module, minimum __CUDA_ARCH__ this kernel is compiled under)
+    let mut checks: Vec<(String, &kernels::Module, i32)> = vec![
+        (kernel_name::<F8E4M3>("affine"), &kernels::AFFINE, 890),
+        (kernel_name::<F8E4M3>("ucopy"), &kernels::UNARY, 890),
+        (format!("fill_{f8e4m3}"), &kernels::FILL, 800),
+        (format!("copy2d_{f8e4m3}"), &kernels::FILL, 800),
+        (format!("const_set_{f8e4m3}"), &kernels::FILL, 800),
+        (format!("cast_{f8e4m3}_{f8e4m3}"), &kernels::CAST, 800),
+        (format!("cast_{f8e4m3}_{f32_}"), &kernels::CAST, 800),
+        (format!("cast_{f32_}_{f8e4m3}"), &kernels::CAST, 800),
+        (format!("cast_{f8e4m3}_{u8_}"), &kernels::CAST, 800),
+        (format!("cast_{f8e4m3}_{f16_}"), &kernels::CAST, 800),
+        (format!("cast_{f8e4m3}_{f64_}"), &kernels::CAST, 800),
+        (format!("cast_{f16_}_{f8e4m3}"), &kernels::CAST, 800),
+        (format!("cast_{f64_}_{f8e4m3}"), &kernels::CAST, 800),
+        (format!("cast_{u8_}_{f8e4m3}"), &kernels::CAST, 800),
+        (format!("cast_{i32_}_{f8e4m3}"), &kernels::CAST, 800),
+        (format!("cast_{f8e4m3}_{i32_}"), &kernels::CAST, 800),
+        (format!("cast_{f8e4m3}_{bf16_}"), &kernels::CAST, 800),
+        (format!("cast_{bf16_}_{f8e4m3}"), &kernels::CAST, 800),
+    ];
+    for root in ["badd", "bdiv", "bmul", "bsub", "bmaximum", "bminimum"] {
+        checks.push((kernel_name::<F8E4M3>(root), &kernels::BINARY, 800));
+    }
+    for root in ["eq", "ne", "lt", "le", "gt", "ge"] {
+        checks.push((kernel_name::<F8E4M3>(root), &kernels::BINARY, 800));
+    }
+    for op in ["is", "gather", "ia", "sa"] {
+        for id_ty in ["i16", "i32", "i64", "u32", "u8"] {
+            checks.push((
+                kernel_name::<F8E4M3>(&format!("{op}_{id_ty}")),
+                &kernels::INDEXING,
+                890,
+            ));
+        }
+    }
+
+    let mut resolved = 0;
+    let mut skipped = 0;
+    for (name, module, min_arch) in &checks {
+        if device_arch < *min_arch {
+            skipped += 1;
+            continue;
+        }
+        cuda_device.get_or_load_func(name, module).map_err(|err| {
+            candle_core::Error::Msg(format!(
+                "F8E4M3 kernel `{name}` failed to resolve (device arch {device_arch}, \
+                 kernel requires >= {min_arch}): {err}"
+            ))
+        })?;
+        resolved += 1;
+    }
+    assert!(
+        resolved > 0,
+        "no F8E4M3 kernels were checked - device arch {device_arch} is below every guard \
+         ({} candidates skipped); this test needs an sm_80+ GPU to be meaningful",
+        skipped
+    );
+    Ok(())
+}
