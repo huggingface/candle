@@ -13,6 +13,7 @@ using namespace metal;
 //
 // Per output column j (over the value-head-dim axis), for a fixed
 // (batch, head), and summing over i (the state-size axis):
+//   g           = exp(g_log)
 //   s_dec[i][j] = g * s_in[i][j]
 //   kv_mem[j]   = sum_i s_dec[i][j] * k[i]
 //   delta[j]    = (v[j] - kv_mem[j]) * beta
@@ -42,7 +43,7 @@ kernel void kernel_gdn_decode_step_f32(
         device const float * q      [[buffer(0)]],  // [b, h, hk]
         device const float * k      [[buffer(1)]],  // [b, h, hk]
         device const float * v      [[buffer(2)]],  // [b, h, hv]
-        device const float * g      [[buffer(3)]],  // [b, h], already exp'ed (actual decay gate, not log_g)
+        device const float * g_log  [[buffer(3)]],  // [b, h], NOT exp'ed -- the raw decay-gate log; this kernel exponentiates it internally
         device const float * beta   [[buffer(4)]],  // [b, h]
         device const float * s_in   [[buffer(5)]],  // [b, h, hk, hv]
         device float       * s_out  [[buffer(6)]],  // [b, h, hk, hv], functional -- fresh buffer, s_in untouched
@@ -62,7 +63,7 @@ kernel void kernel_gdn_decode_step_f32(
     device const float * si = s_in  + bh * hk * hv;
     device float       * so = s_out + bh * hk * hv;
 
-    const float gv = g[bh];
+    const float gv = exp(g_log[bh]); // one exp() per (batch, head), not a separate caller-side dispatch
     const float bv = beta[bh];
 
     float kv_mem = 0.0f;

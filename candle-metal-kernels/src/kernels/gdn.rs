@@ -13,9 +13,10 @@ use objc2_metal::MTLSize;
 /// is read-only and untouched).
 ///
 /// Shapes (all contiguous F32): `q`/`k`: `[b, h, hk]`; `v`: `[b, h, hv]`;
-/// `g`/`beta`: `[b, h]` (`g` already exponentiated -- the actual decay
-/// gate in `(0, 1)`, not its log); `state_in`/`state_out`: `[b, h, hk,
-/// hv]`; `out`: `[b, h, hv]`.
+/// `g`/`beta`: `[b, h]` (`g` is the raw decay-gate log, **not**
+/// exponentiated -- the kernel exponentiates it internally, one dispatch
+/// fewer than passing the already-`exp`'d gate); `state_in`/`state_out`:
+/// `[b, h, hk, hv]`; `out`: `[b, h, hv]`.
 ///
 /// Every read input takes a `BufferOffset`, not a bare `Buffer`: callers
 /// commonly derive `q`/`k`/`v` from slices of a shared QKV-projection
