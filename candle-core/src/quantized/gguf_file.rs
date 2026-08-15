@@ -91,14 +91,19 @@ impl TensorInfo {
         tensor_data_offset: u64,
         device: &Device,
     ) -> Result<QTensor> {
-        let tensor_elems = self.shape.elem_count();
+        let tensor_elems = self.shape.elem_count_checked()?;
         let block_size = self.ggml_dtype.block_size();
         if !tensor_elems.is_multiple_of(block_size) {
             crate::bail!(
             "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
         )
         }
-        let size_in_bytes = tensor_elems / block_size * self.ggml_dtype.type_size();
+        let size_in_bytes = (tensor_elems / block_size)
+            .checked_mul(self.ggml_dtype.type_size())
+            .ok_or_else(|| crate::Error::TensorSizeOverflow {
+                shape: self.shape.clone(),
+                dtype: format!("{:?}", self.ggml_dtype),
+            })?;
         let tensor_start = tensor_data_offset.saturating_add(self.offset);
         let file_size = reader.seek(std::io::SeekFrom::End(0))?;
         let remaining = file_size.saturating_sub(tensor_start);
@@ -523,14 +528,25 @@ impl Content {
 
             let mut dimensions: Vec<usize> = match magic {
                 VersionedMagic::GgufV1 => {
-                    let mut dimensions = vec![0; n_dimensions as usize];
+                    let mut dimensions = vec![0u32; n_dimensions as usize];
                     reader.read_u32_into::<LittleEndian>(&mut dimensions)?;
+                    // u32 always fits in usize (usize is >= 32 bits).
                     dimensions.into_iter().map(|c| c as usize).collect()
                 }
                 VersionedMagic::GgufV2 | VersionedMagic::GgufV3 => {
-                    let mut dimensions = vec![0; n_dimensions as usize];
+                    let mut dimensions = vec![0u64; n_dimensions as usize];
                     reader.read_u64_into::<LittleEndian>(&mut dimensions)?;
-                    dimensions.into_iter().map(|c| c as usize).collect()
+                    dimensions
+                        .into_iter()
+                        .map(|c| {
+                            usize::try_from(c).map_err(|_| {
+                                crate::Error::Msg(format!(
+                                    "gguf: tensor '{tensor_name}' dimension {c} \
+                                     exceeds the address space"
+                                ))
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?
                 }
             };
 
@@ -635,4 +651,67 @@ pub fn write<W: std::io::Seek + std::io::Write>(
         w.write_all(&vec![0u8; padding])?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// Regression test for the silent `elem_count` overflow reported in #3816.
+    ///
+    /// A tensor info declaring attacker-controlled dimensions whose product
+    /// exceeds `usize` (here `usize::MAX x usize::MAX`) used to wrap to 0 in
+    /// release builds, making the loader accept a zero-byte buffer and hand
+    /// back a `Tensor` claiming an impossible shape. After the fix the loader
+    /// rejects the shape up front instead of corrupting the tensor.
+    #[test]
+    fn gguf_rejects_overflowing_shape() {
+        let info = TensorInfo {
+            // Any dtype works; the overflow check runs before block math.
+            ggml_dtype: GgmlDType::F32,
+            shape: crate::Shape::from(vec![usize::MAX, usize::MAX]),
+            offset: 0,
+        };
+        let mut reader = Cursor::new(Vec::<u8>::new());
+        let device = Device::Cpu;
+        let err = info
+            .read(&mut reader, 0, &device)
+            .expect_err("loader must reject a shape whose element count overflows usize");
+        // Assert the specific overflow variant, not just any error.
+        assert!(
+            matches!(err, crate::Error::ShapeElementCountOverflow { .. }),
+            "expected ShapeElementCountOverflow, got {err}"
+        );
+    }
+
+    /// The element count itself fits in `usize`, but multiplying it by the
+    /// dtype's byte size would wrap. F32 has a 4-byte type size and a 1-byte
+    /// block size; a single dimension of `usize::MAX / 4 + 1` gives a valid
+    /// element count whose unchecked `* 4` wraps to 0. The loader must reject
+    /// this at the byte-size step rather than allocating 0 bytes for a tensor
+    /// that claims a large element count.
+    ///
+    /// The dimension is chosen so the unchecked product wraps all the way to 0
+    /// (not merely to a non-zero remainder); this makes the regression test
+    /// faithful to the reported defect and to release builds, where the
+    /// subsequent file-length check would otherwise still catch the empty
+    /// reader and mask a missing overflow guard.
+    #[test]
+    fn gguf_rejects_overflowing_byte_size() {
+        let info = TensorInfo {
+            ggml_dtype: GgmlDType::F32,
+            shape: crate::Shape::from(vec![usize::MAX / 4 + 1]),
+            offset: 0,
+        };
+        let mut reader = Cursor::new(Vec::<u8>::new());
+        let result = info.read(&mut reader, 0, &Device::Cpu);
+        let err = result.expect_err("loader must reject a tensor whose byte size overflows usize");
+        // Assert the specific overflow variant, not just any error — a plain
+        // file-length failure would also make `is_err()` pass.
+        assert!(
+            matches!(err, crate::Error::TensorSizeOverflow { .. }),
+            "expected TensorSizeOverflow, got {err}"
+        );
+    }
 }
