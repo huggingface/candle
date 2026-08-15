@@ -427,30 +427,6 @@ impl ModelWeights {
         })
     }
 
-    fn causal_mask(&self, tgt: usize, offset: usize, sw: Option<usize>) -> Result<Tensor> {
-        let minf = f32::NEG_INFINITY;
-        let mask: Vec<_> = (0..tgt)
-            .flat_map(|i| {
-                (0..(tgt + offset)).map(move |j| {
-                    let past_ok = j <= i + offset;
-                    let sw_ok = match sw {
-                        Some(w) => (i + offset) as i64 - j as i64 <= w as i64,
-                        None => true,
-                    };
-                    if past_ok && sw_ok {
-                        0.
-                    } else {
-                        minf
-                    }
-                })
-            })
-            .collect();
-        // Batch-independent mask: built with a batch dim of 1 and broadcast. A
-        // batch dim > 1 would claim `b` copies while the slice holds one,
-        // under-sizing storage (from_slice skips a concrete shape's length check).
-        Tensor::from_slice(&mask, (1, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
-    }
-
     /// Clear the KV cache across all layers.
     ///
     /// Call this between independent conversations to free cached attention
@@ -463,13 +439,19 @@ impl ModelWeights {
 
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let (_, l) = input.dims2()?;
+        let (_b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
 
         let causal_mask = if l == 1 {
             None
         } else {
-            Some(self.causal_mask(l, offset, None)?)
+            Some(crate::utils::build_additive_causal_mask(
+                l,
+                offset,
+                None,
+                &self.device,
+                self.dtype,
+            )?)
         };
 
         for layer in &mut self.layers {

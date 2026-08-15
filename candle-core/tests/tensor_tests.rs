@@ -216,6 +216,15 @@ fn asort(device: &Device) -> Result<()> {
         sorted.to_vec2::<f32>()?,
         [[5.0, 4.0, 3.0, 1.1, 1.0], [8.0, 7.0, 2.1, 2.0, 1.0]]
     );
+
+    let offset_view = Tensor::new(&[[1f32, 2., 3.], [30., 10., 20.]], device)?.narrow(0, 1, 1)?;
+    let (sorted, indexes) = offset_view.sort_last_dim(true)?;
+    assert_eq!(indexes.to_vec2::<u32>()?, [[1, 2, 0]]);
+    assert_eq!(sorted.to_vec2::<f32>()?, [[10., 20., 30.]]);
+
+    let (sorted, indexes) = offset_view.sort_last_dim(false)?;
+    assert_eq!(indexes.to_vec2::<u32>()?, [[0, 2, 1]]);
+    assert_eq!(sorted.to_vec2::<f32>()?, [[30., 20., 10.]]);
     Ok(())
 }
 
@@ -1761,6 +1770,34 @@ fn randn(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn repeat_with_zero_factor(device: &Device) -> Result<()> {
+    let tensor = Tensor::new(&[[1u32, 2], [3, 4]], device)?;
+
+    let repeated_rows = tensor.repeat((0, 2))?;
+    assert_eq!(repeated_rows.dims(), &[0, 4]);
+    assert_eq!(repeated_rows.elem_count(), 0);
+
+    let repeated_columns = tensor.repeat((2, 0))?;
+    assert_eq!(repeated_columns.dims(), &[4, 0]);
+    assert_eq!(repeated_columns.elem_count(), 0);
+
+    Ok(())
+}
+
+fn meshgrid_with_empty_axis(device: &Device) -> Result<()> {
+    let empty_axis = Tensor::from_vec(Vec::<f32>::new(), 0, device)?;
+    let coordinates = Tensor::new(&[10f32, 20., 30.], device)?;
+
+    let grids = Tensor::meshgrid(&[&empty_axis, &coordinates], false)?;
+    assert_eq!(grids.len(), 2);
+    for grid in grids {
+        assert_eq!(grid.dims(), &[0, 3]);
+        assert_eq!(grid.elem_count(), 0);
+    }
+
+    Ok(())
+}
+
 fn zero_dim(device: &Device) -> Result<()> {
     let t = Tensor::zeros((4, 0, 1), DType::F32, device)?;
     assert_eq!(t.dims3()?, (4, 0, 1));
@@ -1830,6 +1867,18 @@ test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal);
 test_device!(asort, asort_cpu, asort_gpu, asort_metal);
 test_device!(asort_big, asort_big_cpu, asort_big_gpu, asort_big_metal);
 test_device!(var, var_cpu, var_gpu, var_metal);
+test_device!(
+    repeat_with_zero_factor,
+    repeat_with_zero_factor_cpu,
+    repeat_with_zero_factor_gpu,
+    repeat_with_zero_factor_metal
+);
+test_device!(
+    meshgrid_with_empty_axis,
+    meshgrid_with_empty_axis_cpu,
+    meshgrid_with_empty_axis_gpu,
+    meshgrid_with_empty_axis_metal
+);
 test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal);
 
 fn tensor_send_sync(device: &Device) -> Result<()> {

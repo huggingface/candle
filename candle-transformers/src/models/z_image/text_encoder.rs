@@ -399,20 +399,6 @@ impl ZImageTextEncoder {
         })
     }
 
-    /// Create causal attention mask
-    fn causal_mask(&self, tgt: usize, offset: usize) -> Result<Tensor> {
-        let minf = f32::NEG_INFINITY;
-        let mask: Vec<_> = (0..tgt)
-            .flat_map(|i| {
-                (0..(tgt + offset)).map(move |j| if j <= i + offset { 0.0 } else { minf })
-            })
-            .collect();
-        // Batch-independent mask: built with a batch dim of 1 and broadcast. A
-        // batch dim > 1 would claim `b` copies while the slice holds one,
-        // under-sizing storage (from_slice skips a concrete shape's length check).
-        Tensor::from_slice(&mask, (1, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
-    }
-
     /// Encode text, returning second-to-last layer hidden states
     ///
     /// # Arguments
@@ -423,13 +409,19 @@ impl ZImageTextEncoder {
     ///
     /// **Important**: Returns raw output from layer[-2] WITHOUT final RMSNorm
     pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
-        let (_, l) = input_ids.dims2()?;
+        let (_b, l) = input_ids.dims2()?;
         let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
         let causal = if l == 1 {
             None
         } else {
-            Some(self.causal_mask(l, 0)?)
+            Some(crate::utils::build_additive_causal_mask(
+                l,
+                0,
+                None,
+                &self.device,
+                self.dtype,
+            )?)
         };
 
         // num_hidden_layers = 36, second-to-last layer index = 34
