@@ -30,15 +30,31 @@ const fn create_causal_arr<const S: usize, const N: usize>() -> [u8; N] {
     arr
 }
 
+const fn create_cond_arr_u32<const N: usize>() -> [u32; N] {
+    let mut arr = [0u32; N];
+    let mut i = 0;
+    while i < N {
+        arr[i] = (i % 2) as u32;
+        i += 1;
+    }
+    arr
+}
+
 const B: usize = 1;
 const M: usize = 1024;
 const K: usize = 1024;
 const SIZE: usize = B * M * K;
 
 static DATA: [u8; SIZE] = create_cond_arr::<SIZE>();
+static DATA_U32: [u32; SIZE] = create_cond_arr_u32::<SIZE>();
 
 fn run_where_cond_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
-    let tensor = Tensor::from_slice(DATA.as_slice(), (B, M, K), device).unwrap();
+    let tensor: Tensor = if device.is_wgpu() {
+        Tensor::from_slice(DATA_U32.as_slice(), (B, M, K), device).unwrap()
+    } else {
+        Tensor::from_slice(DATA.as_slice(), (B, M, K), device).unwrap()
+    };
+
     let on_true = Tensor::ones((B, M, K), dtype, device).unwrap();
     let on_false = Tensor::zeros((B, M, K), dtype, device).unwrap();
 
@@ -72,6 +88,9 @@ const AS: usize = 512;
 static CAUSAL: [u8; AB * AH * AS * AS] = create_causal_arr::<AS, { AB * AH * AS * AS }>();
 
 fn run_masked_fill_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
+    if !device.is_dtype_available(dtype){
+        return;
+    }
     let shape = (AB, AH, AS, AS);
     let tensor = Tensor::from_slice(CAUSAL.as_slice(), shape, device).unwrap();
     let on_true = Tensor::new(1.0, device)
@@ -105,6 +124,9 @@ fn run_masked_fill_benchmark(c: &mut Criterion, device: &Device, dtype: DType, n
 }
 
 fn run_masked_fill_bcast_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
+    if !device.is_dtype_available(dtype){
+        return;
+    }
     let shape = (AB, AH, AS, AS);
     let tensor = Tensor::from_slice(&CAUSAL[..AS * AS], (1, 1, AS, AS), device)
         .unwrap()
@@ -141,6 +163,9 @@ fn run_masked_fill_bcast_benchmark(c: &mut Criterion, device: &Device, dtype: DT
 }
 
 fn run_transposed_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
+    if !device.is_dtype_available(dtype){
+        return;
+    }
     let tensor = Tensor::from_slice(DATA.as_slice(), (M, K), device).unwrap();
     let on_true = Tensor::ones((M, K), dtype, device).unwrap();
     let on_false = Tensor::zeros((K, M), dtype, device)
@@ -176,6 +201,9 @@ const ND_PAD: usize = 8;
 const ND: usize = 3;
 
 fn run_narrow_inner_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
+    if !device.is_dtype_available(dtype){
+        return;
+    }
     let padded = (NB, NS, ND_PAD);
     let tensor = Tensor::from_slice(DATA.as_slice(), padded, device)
         .unwrap()
@@ -218,8 +246,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let device = BenchDeviceHandler::new().unwrap();
     for d in device.devices {
         run_where_cond_benchmark(c, &d, DType::F32, "where_cond_f32");
-        run_where_cond_benchmark(c, &d, DType::BF16, "where_cond_bf16");
-        run_where_cond_benchmark(c, &d, DType::F16, "where_cond_f16");
+        if d.is_dtype_available(DType::BF16) {
+            run_where_cond_benchmark(c, &d, DType::BF16, "where_cond_bf16");
+        }
+        if d.is_dtype_available(DType::F16) {
+            run_where_cond_benchmark(c, &d, DType::F16, "where_cond_f16");
+        }
 
         run_masked_fill_benchmark(c, &d, DType::F32, "where_cond_masked_fill_f32");
         run_masked_fill_benchmark(c, &d, DType::BF16, "where_cond_masked_fill_bf16");

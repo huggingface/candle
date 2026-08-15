@@ -159,26 +159,49 @@ fn unary_grad(device: &Device) -> Result<()> {
     let y = x.exp()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
-    assert_eq!(
-        test_utils::to_vec1_round(&y, 4)?,
-        [20.0855, 2.7183, 54.5982, 1.1618]
-    );
-    assert_eq!(
-        test_utils::to_vec1_round(grad_x, 4)?,
-        [20.0855, 2.7183, 54.5982, 1.1618]
-    );
+    if device.is_wgpu() {
+        assert_eq!(
+            test_utils::to_vec1_round(&y, 3)?,
+            [20.086, 2.718, 54.598, 1.162]
+        );
+        assert_eq!(
+            test_utils::to_vec1_round(grad_x, 3)?,
+            [20.086, 2.718, 54.598, 1.162]
+        );
+    } else {
+        assert_eq!(
+            test_utils::to_vec1_round(&y, 4)?,
+            [20.0855, 2.7183, 54.5982, 1.1618]
+        );
+        assert_eq!(
+            test_utils::to_vec1_round(grad_x, 4)?,
+            [20.0855, 2.7183, 54.5982, 1.1618]
+        );
+    }
     let y = x.exp()?.sqr()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
-    assert_eq!(
-        test_utils::to_vec1_round(&y, 3)?,
-        [403.429, 7.389, 2980.958, 1.35]
-    );
-    // exp(x)^2 = exp(2*x)
-    assert_eq!(
-        test_utils::to_vec1_round(grad_x, 2)?,
-        [806.86, 14.78, 5961.92, 2.7]
-    );
+    if device.is_wgpu() {
+        assert_eq!(
+            test_utils::to_vec1_round(&y, 2)?,
+            [403.43, 7.39, 2980.96, 1.35]
+        );
+        // exp(x)^2 = exp(2*x)
+        assert_eq!(
+            test_utils::to_vec1_round(grad_x, 1)?,
+            [806.9, 14.8, 5961.9, 2.7]
+        );
+    } else {
+        assert_eq!(
+            test_utils::to_vec1_round(&y, 3)?,
+            [403.429, 7.389, 2980.958, 1.35]
+        );
+        // exp(x)^2 = exp(2*x)
+        assert_eq!(
+            test_utils::to_vec1_round(grad_x, 2)?,
+            [806.86, 14.78, 5961.92, 2.7]
+        );
+    }
     let y = x.sin()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
@@ -186,21 +209,39 @@ fn unary_grad(device: &Device) -> Result<()> {
         test_utils::to_vec1_round(&y, 4)?,
         [0.1411, 0.8415, -0.7568, 0.1494],
     );
-    assert_eq!(
-        test_utils::to_vec1_round(grad_x, 4)?,
-        [-0.99, 0.5403, -0.6536, 0.9888],
-    );
+    if device.is_wgpu() {
+        assert_eq!(
+            test_utils::to_vec1_round(grad_x, 3)?,
+            [-0.99, 0.54, -0.654, 0.989],
+        );
+    } else {
+        assert_eq!(
+            test_utils::to_vec1_round(grad_x, 4)?,
+            [-0.99, 0.5403, -0.6536, 0.9888],
+        );
+    }
     let y = x.cos()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
-    assert_eq!(
-        test_utils::to_vec1_round(&y, 4)?,
-        [-0.99, 0.5403, -0.6536, 0.9888],
-    );
-    assert_eq!(
-        test_utils::to_vec1_round(grad_x, 4)?,
-        [-0.1411, -0.8415, 0.7568, -0.1494],
-    );
+    if device.is_wgpu() {
+        assert_eq!(
+            test_utils::to_vec1_round(&y, 3)?,
+            [-0.99, 0.54, -0.654, 0.989],
+        );
+        assert_eq!(
+            test_utils::to_vec1_round(grad_x, 3)?,
+            [-0.141, -0.841, 0.757, -0.149],
+        );
+    } else {
+        assert_eq!(
+            test_utils::to_vec1_round(&y, 4)?,
+            [-0.99, 0.5403, -0.6536, 0.9888],
+        );
+        assert_eq!(
+            test_utils::to_vec1_round(grad_x, 4)?,
+            [-0.1411, -0.8415, 0.7568, -0.1494],
+        );
+    }
     let y = x.sqr()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
@@ -602,9 +643,16 @@ test_device!(
     simple_grad,
     simple_grad_cpu,
     simple_grad_gpu,
-    simple_grad_metal
+    simple_grad_metal,
+    simple_grad_wgpu
 );
-test_device!(sum_grad, sum_grad_cpu, sum_grad_gpu, sum_grad_metal);
+test_device!(
+    sum_grad,
+    sum_grad_cpu,
+    sum_grad_gpu,
+    sum_grad_metal,
+    sum_grad_wgpu
+);
 test_device!(
     expand_grad,
     expand_grad_cpu,
@@ -615,7 +663,8 @@ test_device!(
     matmul_grad,
     matmul_grad_cpu,
     matmul_grad_gpu,
-    matmul_grad_metal
+    matmul_grad_metal,
+    matmul_grad_wgpu
 );
 test_device!(
     zero_matmul_grad,
@@ -627,12 +676,20 @@ test_device!(
     grad_descent,
     grad_descent_cpu,
     grad_descent_gpu,
-    grad_descent_metal
+    grad_descent_metal,
+    grad_descent_wgpu
 );
-test_device!(unary_grad, unary_grad_cpu, unary_grad_gpu, unary_grad_metal);
+test_device!(
+    unary_grad,
+    unary_grad_cpu,
+    unary_grad_gpu,
+    unary_grad_metal,
+    unary_grad_wgpu
+);
 test_device!(
     binary_grad,
     binary_grad_cpu,
     binary_grad_gpu,
-    binary_grad_metal
+    binary_grad_metal,
+    binary_grad_wgpu
 );

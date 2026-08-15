@@ -38,6 +38,7 @@ cudnn = ["candle/cudnn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
 metal = ["candle/metal", "dep:candle-metal-kernels", "dep:objc2-metal"]
 metal-debug-labels = ["metal", "candle/metal-debug-labels"]
+wgpu = ["candle/wgpu"]
 
 [[bench]]
 name = "bench_main"

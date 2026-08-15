@@ -1,0 +1,236 @@
+#include "util.pwgsl"
+
+LOAD_INFO_UNKNOWN_SIZE(op_gather, 1)
+#define op_gather_dim    op_gather[0]
+#define op_index_input_layout1     1u
+
+@compute
+@workgroup_size(64,1,1)
+fn gather(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x;
+
+    let input_offset1 = op_index_input_layout1;
+    let input_offset2 = op_index_input_layout1 + get_size1();
+    let dim = op_gather_dim;
+
+    let start_offset1 = CONST_SELECT(op_gather[input_offset1], 0u,DEFINE_IS_STARTOFFSET_ZERO1 == 1);
+    let start_offset2 = CONST_SELECT(op_gather[input_offset2], 0u,DEFINE_IS_STARTOFFSET_ZERO2 == 1);
+
+    let start_shape_offset1 = input_offset1 + CONST_SELECT(1u, 0u,DEFINE_IS_STARTOFFSET_ZERO1 == 1);
+    let start_shape_offset2 = input_offset2 + CONST_SELECT(1u, 0u,DEFINE_IS_STARTOFFSET_ZERO2 == 1);
+
+    var shapes_i = 1u;
+    var new_index1 = start_offset1;
+    var new_index2 = start_offset2;
+    var new_index_out = 0u;
+
+    // unused kept for compatibility
+    //let unused = CONST_IS_CONTIGUOUS2;
+    
+    for (var i2 : i32 = i32(DEFINE_DIMS2) - 1; i2 >= 0; i2--) {
+        let i = u32(i2);
+        let prev_shapes_i = shapes_i;
+        shapes_i *= op_gather[start_shape_offset2 + i];
+
+        let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);
+        new_index2 += si * op_gather[start_shape_offset2 + DEFINE_DIMS2 + i]; // index-tensor stride
+
+        // map index-tensor coordinates into input1 axes except for gather dim
+        if (i != dim) {
+            new_index1 += si * op_gather[start_shape_offset1 + DEFINE_DIMS1 + i]; // input1 stride
+        }
+
+        new_index_out += si * prev_shapes_i;
+    }
+
+    if (index < shapes_i) { // shapes_i is total number of index elements
+        let gather_idx = v_input2_u32[new_index2];
+        // treat u32::MAX as sentinel -> write zero to output
+        if (gather_idx == 0xffffffffu) {
+            v_dest[new_index_out] = ZERO;
+        } else {
+            new_index1 += gather_idx * op_gather[start_shape_offset1 + DEFINE_DIMS1 + dim]; // s_dim * stride_dim
+            v_dest[new_index_out] = v_input1[new_index1];
+        }
+    }
+}
+
+
+
+@compute
+@workgroup_size(64,1,1)
+fn scatter_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x;
+
+    let input_offset1 = op_index_input_layout1;                                    //self
+    let input_offset2 = op_index_input_layout1 + get_size1(); //index
+    let input_offset3 = input_offset2 + get_size2(); //src
+    let dim = op_gather_dim;
+
+
+    let start_offset1 = CONST_SELECT(op_gather[input_offset1], 0u, DEFINE_IS_STARTOFFSET_ZERO1 == 1);
+    let start_offset2 = CONST_SELECT(op_gather[input_offset2], 0u, DEFINE_IS_STARTOFFSET_ZERO2 == 1);
+    let start_offset3 = CONST_SELECT(op_gather[input_offset3], 0u, DEFINE_IS_STARTOFFSET_ZERO3 == 1);
+
+    let start_shape_offset1 = input_offset1 + CONST_SELECT(1u, 0u, DEFINE_IS_STARTOFFSET_ZERO1 == 1);
+    let start_shape_offset2 = input_offset2 + CONST_SELECT(1u, 0u, DEFINE_IS_STARTOFFSET_ZERO2 == 1);
+    let start_shape_offset3 = input_offset3 + CONST_SELECT(1u, 0u, DEFINE_IS_STARTOFFSET_ZERO3 == 1);
+
+    let unused = DEFINE_IS_CONTIGUOUS3;
+   
+    //var new_index_out = 0u; 
+
+    let selected_index_length = op_gather[start_shape_offset2 + dim];
+
+    for (var dim_index = 0u; dim_index < selected_index_length; dim_index++){
+        var shapes_i = 1u;
+        var new_index1 = start_offset1;   
+        var new_index2 = start_offset2;   
+        var new_index3 = start_offset3;   
+        for (var i2 : i32 = i32(DEFINE_DIMS1) - 1; i2 >= 0; i2--){
+            let i = u32(i2);
+           
+            if(i != dim){
+                let prev_shapes_i = shapes_i;
+                shapes_i *= op_gather[start_shape_offset2 + i]; 
+
+                let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
+                new_index2 += si * op_gather[start_shape_offset2 + DEFINE_DIMS2 + i]; //index
+
+                new_index3 += si * op_gather[start_shape_offset3 + DEFINE_DIMS3 + i]; //sr
+
+                new_index1 += si * op_gather[start_shape_offset1 + DEFINE_DIMS1 + i]; //self
+            }
+            else{
+                let si = dim_index;
+
+                new_index2 += si * op_gather[start_shape_offset2 + DEFINE_DIMS2 + i]; //index
+
+                new_index3 += si * op_gather[start_shape_offset3 + DEFINE_DIMS3 + i]; //src
+            }
+        }
+
+        if index < shapes_i{ //in shapes_i is the length after the for loop
+            new_index1 += v_input1_u32[new_index2] * op_gather[start_shape_offset1 + DEFINE_DIMS1 + dim]; //s_i * stride_i
+            v_dest[new_index1] += v_input2[new_index3];
+        }
+    }
+}
+
+
+@compute
+@workgroup_size(64,1,1)
+fn scatter_set_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x;
+
+    let input_offset1 = op_index_input_layout1;                                    //self
+    let input_offset2 = op_index_input_layout1 + get_size1(); //index
+    let input_offset3 = input_offset2 + get_size2(); //src
+    let dim = op_gather_dim;
+
+
+    let start_offset1 = CONST_SELECT(op_gather[input_offset1], 0u, DEFINE_IS_STARTOFFSET_ZERO1 == 1);
+    let start_offset2 = CONST_SELECT(op_gather[input_offset2], 0u, DEFINE_IS_STARTOFFSET_ZERO2 == 1);
+    let start_offset3 = CONST_SELECT(op_gather[input_offset3], 0u, DEFINE_IS_STARTOFFSET_ZERO3 == 1);
+
+    let start_shape_offset1 = input_offset1 + CONST_SELECT(1u, 0u, DEFINE_IS_STARTOFFSET_ZERO1 == 1);
+    let start_shape_offset2 = input_offset2 + CONST_SELECT(1u, 0u, DEFINE_IS_STARTOFFSET_ZERO2 == 1);
+    let start_shape_offset3 = input_offset3 + CONST_SELECT(1u, 0u, DEFINE_IS_STARTOFFSET_ZERO3 == 1);
+
+    let unused = DEFINE_IS_CONTIGUOUS3;
+   
+    //var new_index_out = 0u; 
+
+    let selected_index_length = op_gather[start_shape_offset2 + dim];
+
+    for (var dim_index = 0u; dim_index < selected_index_length; dim_index++){
+        var shapes_i = 1u;
+        var new_index1 = start_offset1;   
+        var new_index2 = start_offset2;   
+        var new_index3 = start_offset3;   
+        for (var i2 : i32 = i32(DEFINE_DIMS1) - 1; i2 >= 0; i2--){
+            let i = u32(i2);
+           
+            if(i != dim){
+                let prev_shapes_i = shapes_i;
+                shapes_i *= op_gather[start_shape_offset2 + i]; 
+
+                let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
+                new_index2 += si * op_gather[start_shape_offset2 + DEFINE_DIMS2 + i]; //index
+
+                new_index3 += si * op_gather[start_shape_offset3 + DEFINE_DIMS3 + i]; //src
+
+                new_index1 += si * op_gather[start_shape_offset1 + DEFINE_DIMS1 + i]; //self
+            }
+            else{
+                let si = dim_index;
+
+                new_index2 += si * op_gather[start_shape_offset2 + DEFINE_DIMS2 + i]; //index
+
+                new_index3 += si * op_gather[start_shape_offset3 + DEFINE_DIMS3 + i]; //src
+            }
+        }
+
+        if index < shapes_i{ //in shapes_i is the length after the for loop
+            let idx_val = v_input1_u32[new_index2];
+            if (idx_val != 0xffffffffu) {
+                new_index1 += idx_val * op_gather[start_shape_offset1 + DEFINE_DIMS1 + dim];
+                v_dest[new_index1] = v_input2[new_index3];
+            }
+        }
+    }
+}
+
+
+@compute
+@workgroup_size(64,1,1)
+fn index_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x;
+
+    let input_offset1 = op_index_input_layout1;                                    //self
+    let input_offset2 = op_index_input_layout1 + get_size1(); //index
+    let input_offset3 = input_offset2 + get_size2(); //src
+    let dim = op_gather_dim;
+    let unused = DEFINE_IS_CONTIGUOUS3;
+    
+    let start_offset1 = CONST_SELECT(op_gather[input_offset1], 0u, DEFINE_IS_STARTOFFSET_ZERO1 == 1);
+    let start_offset2 = CONST_SELECT(op_gather[input_offset2], 0u, DEFINE_IS_STARTOFFSET_ZERO2 == 1);
+    let start_offset3 = CONST_SELECT(op_gather[input_offset3], 0u, DEFINE_IS_STARTOFFSET_ZERO3 == 1);
+
+    let start_shape_offset1 = input_offset1 + CONST_SELECT(1u, 0u, DEFINE_IS_STARTOFFSET_ZERO1 == 1);
+    let start_shape_offset2 = input_offset2 + CONST_SELECT(1u, 0u, DEFINE_IS_STARTOFFSET_ZERO2 == 1);
+    let start_shape_offset3 = input_offset3 + CONST_SELECT(1u, 0u, DEFINE_IS_STARTOFFSET_ZERO3 == 1);
+   
+    let selected_index_length = op_gather[start_shape_offset2];
+
+    for (var dim_index = 0u; dim_index < selected_index_length; dim_index++){
+        var shapes_i = 1u;
+        var new_index1 = start_offset1;     
+        var new_index3 = start_offset3;   
+        for (var i2 : i32 = i32(DEFINE_DIMS1) - 1; i2 >= 0; i2--){
+            let i = u32(i2);
+           
+            if(i != dim){
+                let prev_shapes_i = shapes_i;
+                shapes_i *= op_gather[start_shape_offset1 + i]; 
+
+                let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
+
+                new_index3 += si * op_gather[start_shape_offset3 + DEFINE_DIMS3 + i]; //src
+
+                new_index1 += si * op_gather[start_shape_offset1 + DEFINE_DIMS1 + i]; //self
+            }
+            else{
+                let si = dim_index;
+                
+                new_index1 += v_input1_u32[dim_index + start_offset2] * op_gather[start_shape_offset1 + DEFINE_DIMS1 + i]; //s_i * stride_i
+
+                new_index3 += si * op_gather[start_shape_offset3 + DEFINE_DIMS3 + i]; //src
+            }
+        }
+
+        if index < shapes_i{ //in shapes_i is the length after the for loop
+            v_dest[new_index1] += v_input2[new_index3];
+        }
+    }
+}

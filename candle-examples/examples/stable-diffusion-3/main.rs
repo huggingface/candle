@@ -267,7 +267,7 @@ fn main() -> Result<()> {
         // https://github.com/comfyanonymous/ComfyUI/blob/3c60ecd7a83da43d694e26a77ca6b93106891251/nodes.py#L721-L723
         autoencoder.decode(&((x / 1.5305)? + 0.0609)?)?
     };
-    let img = ((img.clamp(-1f32, 1f32)? + 1.0)? * 127.5)?.to_dtype(candle::DType::U8)?;
+    let img = ((img.clamp(-1f32, 1f32)? + 1.0)? * 127.5)?.to_device(&candle::Device::Cpu)?.to_dtype(candle::DType::U8)?;
     candle_examples::save_image(&img.i(0)?, "out.jpg")?;
     Ok(())
 }

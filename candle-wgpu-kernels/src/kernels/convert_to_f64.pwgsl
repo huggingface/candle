@@ -1,0 +1,17 @@
+#include "util.pwgsl"
+
+#ifndef f64
+LOAD_INFO_UNKNOWN_SIZE(op_convert, 0)
+
+@compute
+@workgroup_size(64,1,1)
+fn convert_to_f64(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+
+    GET_INDEX1(op_convert,0, id, pos1_is_valid, pos1_id)
+
+    if(pos1_is_valid){
+        v_dest_f64[id] = f64(v_input1[pos1_id]);
+    }
+}
+#endif

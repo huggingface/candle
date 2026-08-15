@@ -50,7 +50,7 @@ impl Cache {
             Ok(mask.clone())
         } else {
             let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+                .flat_map(|i| (0..t).map(move |j| u32::from(j > i)))
                 .collect();
             let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
             masks.insert(t, mask.clone());
@@ -59,6 +59,7 @@ impl Cache {
     }
 }
 
+#[derive(Clone)]
 struct CausalSelfAttention {
     q_proj: Linear,
     k_proj: Linear,
@@ -170,6 +171,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
     Ok(m)
 }
 
+#[derive(Clone)]
 struct Mlp {
     c_fc1: Linear,
     c_fc2: Linear,
@@ -200,6 +202,7 @@ impl Mlp {
     }
 }
 
+#[derive(Clone)]
 struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
@@ -241,6 +244,7 @@ impl Block {
     }
 }
 
+#[derive(Clone)]
 pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
@@ -258,7 +262,7 @@ impl Llama {
         }
     }
 
-    pub fn forward(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+    pub async fn forward(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {

@@ -226,6 +226,8 @@ impl Encoder {
 
 /// A text transformer as used in CLIP variants.
 #[derive(Clone, Debug)]
+#[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="This sync function will not work for webgpu, use an async imp."))]
+#[cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))]
 pub struct OpenClipTextTransformer {
     embeddings: TextEmbeddings,
     encoder: Encoder,

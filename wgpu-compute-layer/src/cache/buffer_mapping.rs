@@ -1,0 +1,180 @@
+use super::{CachedBufferId, PipelineReference};
+use crate::util::FixedSizeQueue;
+
+pub(crate) struct BufferMappingEntry {
+    pub(crate) current_buffer_mapping: Option<CachedBufferMappings>,
+    pub(crate) current_index: u32,
+}
+
+impl BufferMappingEntry {
+    pub(crate) fn get_current_mapping_count(&self) -> u32 {
+        if let Some(mapping) = &self.current_buffer_mapping {
+            return mapping.count;
+        }
+        0
+    }
+
+    pub(crate) fn get_current_mapping(&mut self) -> &mut CachedBufferMappings {
+        self.current_buffer_mapping.as_mut().unwrap()
+    }
+
+    /// Stores that the provided buffer was used.
+    pub(crate) fn add_new_buffer(
+        &mut self,
+        buffer: CachedBufferId,
+        pipeline: PipelineReference,
+        last_size: u64,
+    ) {
+        if let Some(mapping) = &mut self.current_buffer_mapping {
+            mapping.add_new(buffer, pipeline, last_size, self.current_index);
+        } else {
+            panic!("expected current buffer to be set");
+        }
+
+        self.current_index += 1;
+    }
+
+    pub(crate) fn reuse_buffer(&mut self, last_size: u64) {
+        if let Some(mapping) = &mut self.current_buffer_mapping {
+            mapping.reuse_buffer(last_size, self.current_index);
+        } else {
+            panic!("expected current buffer to be set");
+        }
+        self.current_index += 1;
+    }
+}
+
+/// Cache that stores previously flushed GPU commands so we can reuse buffers
+/// similar to the last run.
+#[derive(Debug)]
+pub(crate) struct BufferMappingCache {
+    pub(crate) last_buffer_mappings: FixedSizeQueue<CachedBufferMappings>,
+    pub(crate) last_command_indexes: FixedSizeQueue<u32>,
+}
+
+impl BufferMappingCache {
+    pub(crate) fn new(size: u32) -> Self {
+        Self {
+            last_buffer_mappings: FixedSizeQueue::new(size as usize),
+            last_command_indexes: FixedSizeQueue::new(10),
+        }
+    }
+
+    pub(crate) fn set_current_buffer_mapping(&mut self, hash: u64) -> BufferMappingEntry {
+        let index = self
+            .last_buffer_mappings
+            .iter()
+            .position(|b| b.hash == hash);
+        if let Some(index) = index {
+            log::debug!(
+                "reuse mapping: {index}, hash: {hash}, mappings: {}",
+                self.last_buffer_mappings.deque.len()
+            );
+            let mut buffer_mapping = self.last_buffer_mappings.deque.remove(index).unwrap();
+            buffer_mapping.count += 1;
+
+            BufferMappingEntry {
+                current_buffer_mapping: Some(buffer_mapping),
+                current_index: 0,
+            }
+        } else {
+            log::debug!(
+                "create new mapping: hash: {hash}, mappings: {}",
+                self.last_buffer_mappings.deque.len()
+            );
+            BufferMappingEntry {
+                current_buffer_mapping: Some(CachedBufferMappings::new(hash)),
+                current_index: 0,
+            }
+        }
+    }
+
+    pub(crate) fn finish(&mut self, entry: BufferMappingEntry) {
+        self.last_buffer_mappings
+            .push(entry.current_buffer_mapping.unwrap());
+    }
+
+    pub(crate) fn set_global_command_index(&mut self, index: u32) {
+        self.last_command_indexes.push(index);
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct CachedBufferMapping {
+    pub(crate) pipeline: PipelineReference,
+    pub(crate) used_buffer: CachedBufferId, // index in cached buffer mappings
+    pub(crate) last_size: u64, // size of the buffer at the last run (used to determine if this buffer is growing)
+}
+
+impl CachedBufferMapping {
+    fn new(pipeline: PipelineReference, used_buffer: CachedBufferId, last_size: u64) -> Self {
+        Self {
+            pipeline,
+            used_buffer,
+            last_size,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct CachedBufferMappings {
+    pub(crate) data: Vec<CachedBufferMapping>, // all shader calls and their used buffer cache
+    pub(crate) hash: u64,
+    pub(crate) count: u32, // how many times this mapping has been used (used to determine the size of growing buffers,
+                           // e.g. if this mapping has been used 100 times, we can allocate enough memory for 200 runs)
+}
+
+impl CachedBufferMappings {
+    fn new(hash: u64) -> Self {
+        Self {
+            data: vec![],
+            hash,
+            count: 0,
+        }
+    }
+
+    fn add_new(
+        &mut self,
+        buffer: CachedBufferId,
+        pipeline: PipelineReference,
+        last_size: u64,
+        index: u32,
+    ) {
+        let data = CachedBufferMapping::new(pipeline, buffer, last_size);
+        if (index as usize) < self.data.len() {
+            self.data[index as usize] = data;
+        } else {
+            self.data.push(data);
+        }
+    }
+
+    fn reuse_buffer(&mut self, last_size: u64, index: u32) {
+        if (index as usize) < self.data.len() {
+            let mapping = &mut self.data[index as usize];
+            mapping.last_size = last_size;
+        }
+    }
+
+    pub(crate) fn get_buffer_mapping(
+        &self,
+        pipeline: &PipelineReference,
+        index: u32,
+    ) -> Option<&CachedBufferMapping> {
+        if let Some(mapping) = &self.data.get(index as usize) {
+            if &mapping.pipeline == pipeline {
+                return Some(mapping);
+            } else {
+                // if this pipeline is in-place capable the pipeline might be different based on whether the buffer was in-placed or not.
+                if !pipeline.inplaceable.input1_inplaceable
+                    && !pipeline.inplaceable.input2_inplaceable
+                {
+                    panic!(
+                        "expected: {pipeline:?} at index {index}, but got {:?}",
+                        mapping.pipeline
+                    );
+                }
+            }
+        }
+        None
+    }
+}
