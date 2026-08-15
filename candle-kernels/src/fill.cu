@@ -35,6 +35,8 @@ COPY2D_OP(float, copy2d_f32)
 COPY2D_OP(double, copy2d_f64)
 COPY2D_OP(uint8_t, copy2d_u8)
 COPY2D_OP(uint32_t, copy2d_u32)
+COPY2D_OP(int16_t, copy2d_i16)
+COPY2D_OP(int32_t, copy2d_i32)
 COPY2D_OP(int64_t, copy2d_i64)
 
 #define CONST_SET_OP(TYPENAME, FN_NAME) \
@@ -64,6 +66,8 @@ CONST_SET_OP(float, const_set_f32)
 CONST_SET_OP(double, const_set_f64)
 CONST_SET_OP(uint8_t, const_set_u8)
 CONST_SET_OP(uint32_t, const_set_u32)
+CONST_SET_OP(int16_t, const_set_i16)
+CONST_SET_OP(int32_t, const_set_i32)
 CONST_SET_OP(int64_t, const_set_i64)
 
 
