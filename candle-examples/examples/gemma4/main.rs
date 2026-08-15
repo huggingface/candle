@@ -91,9 +91,13 @@ impl TextGeneration {
         std::io::stdout().flush()?;
 
         let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_token("</s>") {
+        let eos_token = match self.tokenizer.get_token("<eos>") {
             Some(token) => token,
-            None => anyhow::bail!("cannot find the </s> token"),
+            None => anyhow::bail!("cannot find the <eos> token"),
+        };
+        let end_of_turn_token = match self.tokenizer.get_token("<turn|>") {
+            Some(token) => token,
+            None => anyhow::bail!("cannot find the <turn|> token"),
         };
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
@@ -120,7 +124,7 @@ impl TextGeneration {
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             generated_tokens += 1;
-            if next_token == eos_token {
+            if [eos_token, end_of_turn_token].contains(&next_token) {
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
@@ -303,7 +307,7 @@ fn main() -> Result<()> {
             }
         };
         config.use_flash_attn = args.use_flash_attn;
-        let model = TextModel::new(&config, vb)?;
+        let model = TextModel::new(&config, vb.pp("model").pp("language_model"))?;
         ModelKind::TextOnly(model)
     };
 
