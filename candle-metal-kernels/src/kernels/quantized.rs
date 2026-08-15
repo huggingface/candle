@@ -3,7 +3,7 @@ use crate::{
     debug_group, set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError,
     Output, Source,
 };
-use objc2_metal::MTLSize;
+use objc2_metal::{MTLDevice, MTLSize};
 
 #[derive(Debug, Clone, Copy)]
 pub enum GgmlDType {
@@ -354,6 +354,683 @@ pub fn call_quantized_get_rows(
 
     encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
     Ok(())
+}
+
+/// Fills `counts` with the number of routing-table rows each expert owns, so
+/// `call_quantized_matmul_mm_id` can tell in one read whether a token tile has
+/// any work rather than scanning to find out. `counts` must hold at least
+/// `ne02` u32s.
+///
+/// Two dispatches because the histogram needs its accumulator zeroed first and
+/// there is no cross-threadgroup barrier inside a single dispatch. Both are
+/// trivially small next to the matmul they precede.
+///
+/// `counts` is taken `&mut` specifically so both dispatches bind it via
+/// `set_output_buffer` (the `(&mut Buffer, usize)` `EncoderParam` impl, not
+/// `(&Buffer, usize)`'s `set_input_buffer`): `ComputeCommandEncoder`'s
+/// `auto_barrier` only tracks hazards through that read/write distinction
+/// (encoder.rs), and every buffer here is `HazardTrackingModeUntracked`
+/// (lib.rs's `RESOURCE_OPTIONS`), so Metal itself inserts no barrier on its
+/// own. Mislabeling `counts` as input-only (its previous form) silently
+/// dropped both the zero-before-histogram and histogram-before-matmul-read
+/// dependencies -- caught by `kernel_mul_mm_id_chunked_matches_unchunked_topk_shape`
+/// once counts were computed per-chunk (Phase 3) rather than once for a
+/// whole batch dwarfing any single tile's threshold, which is what had
+/// masked it until then.
+#[allow(clippy::too_many_arguments)]
+pub fn call_mm_id_expert_counts<E: EncoderProvider>(
+    device: &Device,
+    ep: E,
+    kernels: &Kernels,
+    ids_shape: &[usize],
+    ids_stride: &[usize],
+    ids: &Buffer,
+    ids_offset: usize,
+    n_expert: i64,
+    counts: &mut Buffer,
+) -> Result<(), MetalKernelError> {
+    let nei0 = ids_shape[ids_shape.len() - 1] as i64;
+    let nei1 = ids_shape[ids_shape.len() - 2] as i64;
+    let nbi1 = ids_stride[ids_stride.len() - 2] as i64;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+
+    let zero = kernels.load_pipeline(device, Source::Quantized, "kernel_mm_id_zero_counts")?;
+    encoder.set_compute_pipeline_state(&zero);
+    set_params!(encoder, ((&mut *counts, 0), n_expert));
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: n_expert.max(1) as usize,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width: 1,
+            height: 1,
+            depth: 1,
+        },
+    );
+
+    let hist = kernels.load_pipeline(device, Source::Quantized, "kernel_mm_id_expert_counts")?;
+    encoder.set_compute_pipeline_state(&hist);
+    set_params!(
+        encoder,
+        (
+            (ids, ids_offset),
+            (&mut *counts, 0),
+            nei0,
+            nei1,
+            nbi1,
+            n_expert
+        )
+    );
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: 64,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width: 64,
+            height: 1,
+            depth: 1,
+        },
+    );
+    Ok(())
+}
+
+/// Indexed/routed matmul for MoE expert dispatch (ggml's `mul_mat_id`).
+///
+/// `src0` holds all experts' weights stacked on their leading dim
+/// (`[n_expert, n_out, n_in]`); `ids` is the routing table
+/// (`[n_tokens, n_expert_used]`, dtype i32) mapping each token's selected
+/// experts to rows of `src0`; `dst` is `[n_expert_used * n_tokens, n_out]`,
+/// one row per (token, selected-expert) pair, in `ids` row-major order. This
+/// does *not* apply top-k routing weights or sum across experts -- callers
+/// must do that in a second pass over `dst`.
+///
+/// Dispatch shape and threadgroup memory sizing are load-bearing constants
+/// mirrored from ggml's Metal backend (`ggml_metal_encode_node`, the
+/// `GGML_OP_MUL_MAT_ID` mm case circa llama.cpp commit b86f6007, the last
+/// revision before the kernel was refactored to a 3-pass map0/mm/map1
+/// pipeline) rather than derived from the kernel body: the kernel's own
+/// `shared_memory + 8192` offset only makes sense if the host allocates at
+/// least that many bytes plus room for the `rowids` scratch array, and the
+/// per-expert dispatch depth isn't recoverable from the kernel signature at
+/// all.
+///
+/// Has a hard per-dispatch `nei1` (n_tokens) ceiling from that same
+/// threadgroup-memory sizing -- device- and top-k-dependent, not tunable.
+/// `call_quantized_matmul_mm_id_chunked`/`mm_id_max_nei1` below split a
+/// batch that might exceed it into dispatches that don't; call those instead
+/// of this function directly for any caller whose batch size isn't already
+/// known-bounded.
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantized_matmul_mm_id(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    src0_shape: &[usize],
+    src0_stride: &[usize],
+    src0: &Buffer,
+    src0_offset: usize,
+    src1_shape: &[usize],
+    src1_stride: &[usize],
+    src1: &Buffer,
+    src1_offset: usize,
+    ids_shape: &[usize],
+    ids_stride: &[usize],
+    ids: &Buffer,
+    ids_offset: usize,
+    dst_shape: &[usize],
+    dst_offset: usize,
+    dst: &Buffer,
+    expert_counts: &Buffer,
+) -> Result<(), MetalKernelError> {
+    // Everything is in reverse, same convention as call_quantized_matmul_mm_t.
+    let ne00 = src0_shape[src0_shape.len() - 1] as i64; // n_in (contraction dim)
+    let ne01 = src0_shape[src0_shape.len() - 2] as i64; // n_out
+    let ne02 = src0_shape[src0_shape.len() - 3] as i64; // n_expert
+
+    let nb01 = src0_stride[src0_stride.len() - 2] as i64;
+    let nb02 = src0_stride[src0_stride.len() - 3] as i64;
+
+    let nb10 = src1_stride[src1_stride.len() - 1] as i64;
+    let ne11 = src1_shape[src1_shape.len() - 2] as i64; // n_expert_used (bcast) or 1
+    let nb11 = src1_stride[src1_stride.len() - 2] as i64;
+    let ne12 = src1_shape[src1_shape.len() - 3] as i64; // n_tokens
+    let nb12 = src1_stride[src1_stride.len() - 3] as i64;
+    let ne13 = 1i64;
+
+    let nei0 = ids_shape[ids_shape.len() - 1] as i64; // n_expert_used
+    let nei1 = ids_shape[ids_shape.len() - 2] as i64; // n_tokens
+    let nbi1 = ids_stride[ids_stride.len() - 2] as i64;
+
+    let ne0 = dst_shape[dst_shape.len() - 1] as i64; // n_out
+                                                     // dst is [n_tokens, n_expert_used, n_out] row-major; the kernel only ever
+                                                     // uses ne1 to derive the per-token stride ne0*ne1, so it must equal
+                                                     // n_expert_used (nei0) by construction, not the row count nei0*nei1 --
+                                                     // reading it back out of dst_shape would silently corrupt the token
+                                                     // stride if a caller ever passed a differently-shaped dst.
+    let ne1 = nei0;
+    let nb1 = ne0 * 4; // unused by the kernel; kept for ABI parity
+
+    let thread_groups_count = MTLSize {
+        width: divide(nei1 as usize, 32),
+        height: divide(ne01 as usize, 64),
+        depth: ne02 as usize,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: 128,
+        height: 1,
+        depth: 1,
+    };
+    let name = match dtype {
+        GgmlDType::Q4_0 => "kernel_mul_mm_id_q4_0_f32",
+        GgmlDType::Q4_1 => "kernel_mul_mm_id_q4_1_f32",
+        GgmlDType::Q5_0 => "kernel_mul_mm_id_q5_0_f32",
+        GgmlDType::Q5_1 => "kernel_mul_mm_id_q5_1_f32",
+        GgmlDType::Q8_0 => "kernel_mul_mm_id_q8_0_f32",
+        GgmlDType::Q2K => "kernel_mul_mm_id_q2_K_f32",
+        GgmlDType::Q3K => "kernel_mul_mm_id_q3_K_f32",
+        GgmlDType::Q4K => "kernel_mul_mm_id_q4_K_f32",
+        GgmlDType::Q5K => "kernel_mul_mm_id_q5_K_f32",
+        GgmlDType::Q6K => "kernel_mul_mm_id_q6_K_f32",
+        GgmlDType::F16 => "kernel_mul_mm_id_f16_f32",
+        GgmlDType::BF16 => "kernel_mul_mm_id_bf16_f32",
+        GgmlDType::F32 => "kernel_mul_mm_id_f32_f32",
+        GgmlDType::Q8_1 => Err(MetalKernelError::UnsupportedDTypeForOp(
+            "Q8_1",
+            "qmatmul_id",
+        ))?,
+        GgmlDType::Q8K => Err(MetalKernelError::UnsupportedDTypeForOp("Q8K", "qmatmul_id"))?,
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "qmm_mm_id {name} n_tokens={nei1} K={ne00} N={ne01} n_expert={ne02}"
+    );
+
+    set_params!(
+        encoder,
+        (
+            (src0, src0_offset),
+            (src1, src1_offset),
+            Output::with_offset(dst, dst_offset),
+            (ids, ids_offset),
+            nei0,
+            nei1,
+            nbi1,
+            ne00,
+            ne02,
+            nb01,
+            nb02,
+            ne11,
+            ne12,
+            ne13,
+            nb10,
+            nb11,
+            nb12,
+            ne0,
+            ne1,
+            nb1,
+            (expert_counts, 0)
+        )
+    );
+
+    // ggml's GGML_PAD(8192 + dst_rows*sizeof(ushort2), 16): 8192 bytes for the
+    // mm tile scratch, then room for one ushort2 (4 bytes) per (token,
+    // expert-slot) pair the `rowids` scan can find for this threadgroup's
+    // expert -- worst case every row in the tile, i.e. nei0*nei1 total.
+    //
+    // Plus `ROWID_COUNT_BYTES` between the two: the parallel row-discovery scan
+    // hands out `rowids` slots through a threadgroup `atomic_uint` living at
+    // `shared_memory + 8192`, so the table itself now starts 16 bytes later.
+    // 16 rather than 4 to keep `rowids` 16-byte aligned, matching what the
+    // unpadded layout gave it.
+    let rowids_bytes = (nei0 * nei1 * 4) as usize;
+    let smem = (8192 + ROWID_COUNT_BYTES + rowids_bytes).div_ceil(16) * 16;
+    // ggml's own host code asserts this same bound (dst_rows <=
+    // dst_rows_max, derived from maxThreadgroupMemoryLength) before
+    // dispatching -- unbounded batch*n_expert_used could otherwise exceed
+    // the device's threadgroup memory budget and fail or misbehave on-device
+    // rather than surfacing a clear error here.
+    let max_smem = device.as_ref().maxThreadgroupMemoryLength() as usize;
+    if smem > max_smem {
+        return Err(MetalKernelError::InvalidInput(format!(
+            "qmm_mm_id: required threadgroup memory ({smem} bytes, from nei0={nei0} * nei1={nei1}) exceeds this device's max ({max_smem} bytes)"
+        )));
+    }
+    encoder.set_threadgroup_memory_length(0, smem);
+
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
+    Ok(())
+}
+
+/// Bytes reserved at `shared_memory + 8192` for the row-discovery scan's
+/// per-thread counts, before the `rowids` table itself: `nthreads + 1` uints
+/// (each thread's count, rewritten in place as its exclusive-prefix write
+/// base, plus the total in the trailing slot), padded to 16.
+///
+/// `nthreads` is 128 -- this kernel is always dispatched with
+/// `threads_per_threadgroup = {128, 1, 1}` (see `thread_groups_count` below) --
+/// so 129 * 4 = 516, padded to 528. **Must match `MM_ID_ROWID_COUNT_BYTES` in
+/// quantized.metal**, which offsets `rowids` by it. Shared by
+/// `call_quantized_matmul_mm_id`'s `smem` sizing and `mm_id_max_nei1`'s
+/// inverse of it, so those two cannot drift from each other.
+pub(crate) const ROWID_COUNT_BYTES: usize = 528;
+
+/// Largest `nei1` (n_tokens) a single `call_quantized_matmul_mm_id` dispatch
+/// can take on `device` without exceeding its threadgroup-memory budget, for
+/// a routing table with `nei0` experts-used-per-token. Inverts the exact
+/// `ceil16(8192 + ROWID_COUNT_BYTES + nei0*nei1*4)` formula that function
+/// sizes its `rowids` scratch with -- device- and top-k-dependent, not a
+/// constant, and has no dtype term (the formula itself has none, unlike
+/// `mv_id_eligible`'s per-dtype tuning table). Returns 0 if even `nei1 == 1`
+/// wouldn't fit (pathological device/expert-count combination) so a caller
+/// can fail clearly instead of computing a nonsensical chunk size.
+pub fn mm_id_max_nei1(device: &Device, nei0: i64) -> i64 {
+    let max_smem = device.as_ref().maxThreadgroupMemoryLength() as i64;
+    // `ceil16(y) <= max_smem` is only equivalent to `y <= max_smem` when
+    // `max_smem` is itself a multiple of 16 -- true for every real device
+    // measured so far (16384/32768/65536), but not guaranteed by the API.
+    // Floor `max_smem` to a multiple of 16 first so this stays an
+    // exact inverse of `call_quantized_matmul_mm_id`'s own
+    // `ceil16(8192 + ROWID_COUNT_BYTES + nei0*nei1*4) <= max_smem` check even
+    // off that assumption, rather than silently allowing a chunk that would
+    // still overflow after rounding (review finding, 2026-07-27).
+    let max_smem_floor16 = (max_smem / 16) * 16;
+    let avail = max_smem_floor16 - 8192 - ROWID_COUNT_BYTES as i64;
+    if avail <= 0 || nei0 <= 0 {
+        return 0;
+    }
+    avail / (nei0 * 4)
+}
+
+/// Chunked wrapper over `call_quantized_matmul_mm_id`: splits a batch whose
+/// `nei1` (n_tokens) exceeds `max_nei1` into sequential dispatches of at
+/// most `max_nei1`
+/// tokens each, on the same command encoder, with no barrier between them.
+/// Safe with neither a barrier nor a concatenation step because `mm_id`'s
+/// output rows are token-independent: each chunk reads a disjoint,
+/// contiguous slice of `src1`/`ids` (the expert weights in `src0` are
+/// shared, read-only, and identical across chunks) and writes a disjoint,
+/// contiguous slice of `dst` -- the *same* trusted, unmodified kernel just
+/// runs once per chunk instead of once for the whole batch.
+///
+/// `max_nei1` is caller-supplied rather than derived internally so a test
+/// can force a tiny threshold and exercise real multi-chunk dispatch on a
+/// device whose actual budget would never trip it; production callers pass
+/// `mm_id_max_nei1(device, nei0)`. No `nei1 <= max_nei1` fast path back to
+/// `call_quantized_matmul_mm_id` directly -- the loop below already dispatches
+/// exactly once, at the original (unsliced) offsets, for that case (review
+/// finding, 2026-07-27: an earlier version had a separate, independently
+/// hand-written early-return branch here purely to avoid two `to_vec()`
+/// allocations on the common no-chunking-needed path, which was itself a
+/// second call site that could silently drift from the loop's own offset
+/// arithmetic -- not worth it for that saving).
+///
+/// Per-chunk offsets are computed from the same fields
+/// `call_quantized_matmul_mm_id` itself reads for a chunk-invariant
+/// value -- `src1`'s per-token stride from `src1_stride[len-3]`, `ids`'s
+/// from `ids_stride[len-2]`, and `dst`'s from `ne0 * nei0 * 4` (matching
+/// that function's own documented `ne1 = nei0`, not `nei0*nei1`,
+/// derivation -- there is no passed `dst` stride to read) -- not
+/// re-derived, so a chunk's offset can't silently drift from what the
+/// kernel will interpret these same shapes as. `dst_shape` itself is
+/// passed through unchanged: only `ne0` (its last dim) is ever read from
+/// it, and `ne0` is chunk-invariant.
+///
+/// Expert counts are computed **per chunk**, not once for the whole batch,
+/// and this is why chunking owns that computation rather than taking counts
+/// as a parameter like `call_quantized_matmul_mm_id` does: a batch-global
+/// count paired with `call_quantized_matmul_mm_id`'s chunk-local
+/// `tgpig.x * 32 >= expert_counts[i02]` guard is safe (the guard only gets
+/// *more* permissive, never wrong) but leaves the skip-the-scan win on the
+/// table for every chunk after the first, since a token tile's chunk-local
+/// row count is almost always far smaller than the whole-batch count for
+/// that expert. One small buffer, reused across iterations the same way
+/// `src1_chunk_shape`/`ids_chunk_shape` already are -- `call_mm_id_expert_counts`
+/// zeroes it before each chunk's histogram, so there is nothing to reset
+/// between iterations.
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantized_matmul_mm_id_chunked<E: EncoderProvider + Copy>(
+    device: &Device,
+    ep: E,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    src0_shape: &[usize],
+    src0_stride: &[usize],
+    src0: &Buffer,
+    src0_offset: usize,
+    src1_shape: &[usize],
+    src1_stride: &[usize],
+    src1: &Buffer,
+    src1_offset: usize,
+    ids_shape: &[usize],
+    ids_stride: &[usize],
+    ids: &Buffer,
+    ids_offset: usize,
+    dst_shape: &[usize],
+    dst_offset: usize,
+    dst: &Buffer,
+    max_nei1: i64,
+) -> Result<(), MetalKernelError> {
+    if max_nei1 <= 0 {
+        return Err(MetalKernelError::InvalidInput(format!(
+            "call_quantized_matmul_mm_id_chunked: max_nei1 ({max_nei1}) must be positive"
+        )));
+    }
+
+    let n_expert = src0_shape[src0_shape.len() - 3] as i64;
+    let nei0 = ids_shape[ids_shape.len() - 1] as i64;
+    let nei1 = ids_shape[ids_shape.len() - 2] as i64;
+
+    let nb12 = src1_stride[src1_stride.len() - 3]; // src1's per-token byte stride
+    let nbi1 = ids_stride[ids_stride.len() - 2]; // ids' per-token byte stride
+    let ne0 = dst_shape[dst_shape.len() - 1]; // n_out
+    let dst_token_stride = ne0 * (nei0 as usize) * std::mem::size_of::<f32>();
+
+    // Allocated once, outside the loop, and just overwritten per iteration --
+    // only the token-count slot changes chunk to chunk, so there is nothing
+    // to gain from a fresh `to_vec()` every pass (review finding, 2026-07-27).
+    let mut src1_chunk_shape = src1_shape.to_vec();
+    let src1_token_idx = src1_chunk_shape.len() - 3;
+    let mut ids_chunk_shape = ids_shape.to_vec();
+    let ids_token_idx = ids_chunk_shape.len() - 2;
+
+    let mut expert_counts = device.new_buffer(
+        (n_expert as usize) * std::mem::size_of::<u32>(),
+        crate::RESOURCE_OPTIONS,
+    )?;
+
+    let mut t0: i64 = 0;
+    while t0 < nei1 {
+        let chunk_len = (nei1 - t0).min(max_nei1) as usize;
+        src1_chunk_shape[src1_token_idx] = chunk_len;
+        ids_chunk_shape[ids_token_idx] = chunk_len;
+        let chunk_ids_offset = ids_offset + (t0 as usize) * nbi1;
+
+        call_mm_id_expert_counts(
+            device,
+            ep,
+            kernels,
+            &ids_chunk_shape,
+            ids_stride,
+            ids,
+            chunk_ids_offset,
+            n_expert,
+            &mut expert_counts,
+        )?;
+
+        call_quantized_matmul_mm_id(
+            device,
+            ep,
+            kernels,
+            dtype,
+            src0_shape,
+            src0_stride,
+            src0,
+            src0_offset,
+            &src1_chunk_shape,
+            src1_stride,
+            src1,
+            src1_offset + (t0 as usize) * nb12,
+            &ids_chunk_shape,
+            ids_stride,
+            ids,
+            chunk_ids_offset,
+            dst_shape,
+            dst_offset + (t0 as usize) * dst_token_stride,
+            dst,
+            &expert_counts,
+        )?;
+
+        t0 += chunk_len as i64;
+    }
+
+    Ok(())
+}
+
+/// Indexed/routed matmul for MoE expert dispatch, matrix-*vector* variant
+/// (ggml's `mul_mat_id`, batch-1 case) -- companion to
+/// `call_quantized_matmul_mm_id`, same input-shape contract (`src0`/`ids`/
+/// `dst` layouts), so callers can dispatch either interchangeably based on
+/// how many tokens a call covers. Intended for decode (`n_tokens == 1`),
+/// where `mm_id`'s matrix-matrix kernel degenerates into many tiny tile
+/// dispatches per expert.
+///
+/// Ground truth (dispatch grid, per-dtype `nth0`/`nth1`/width-divisor
+/// tuning, buffer/scalar binding order, and the absence of any threadgroup
+/// memory requirement) is reverse-derived from ggml's Metal encode path at
+/// `llama.cpp` commit `f3f65429` -- independently confirmed to be the exact
+/// commit this crate's vendored `kernel_mul_mv_id` was copied from (its
+/// body, template shape, and `tgpig.z`-decode logic are byte-identical to
+/// that commit's `ggml-metal.metal`), not assumed from the kernel body
+/// alone or copied from `call_quantized_matmul_mv_t`'s own per-dtype table
+/// (a *different*, non-`_id` kernel body that happens to share some but not
+/// all tuning values -- see the `Q2K` case below).
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantized_matmul_mv_id(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    src0_shape: &[usize],
+    src0_stride: &[usize],
+    src0: &Buffer,
+    src0_offset: usize,
+    src1_shape: &[usize],
+    src1_stride: &[usize],
+    src1: &Buffer,
+    src1_offset: usize,
+    ids_shape: &[usize],
+    ids_stride: &[usize],
+    ids: &Buffer,
+    ids_offset: usize,
+    dst_shape: &[usize],
+    dst_offset: usize,
+    dst: &Buffer,
+) -> Result<(), MetalKernelError> {
+    // Same shape convention as call_quantized_matmul_mm_id.
+    let ne00 = src0_shape[src0_shape.len() - 1] as i64; // n_in (contraction dim)
+    let ne01 = src0_shape[src0_shape.len() - 2] as i64; // n_out
+    let ne02 = src0_shape[src0_shape.len() - 3] as i64; // n_expert
+                                                        // Quantized src0's innermost stride is always 0 in ggml's own
+                                                        // convention -- sub-block indexing happens inside the kernel from
+                                                        // ne00/dtype, not from a passed byte stride. Matches
+                                                        // call_quantized_matmul_mv_t's own `nb00 = 0i64` for the same reason.
+    let nb00 = 0i64;
+    let nb01 = src0_stride[src0_stride.len() - 2] as i64;
+    let nb02 = src0_stride[src0_stride.len() - 3] as i64;
+
+    let ne10 = src1_shape[src1_shape.len() - 1] as i64; // == ne00 (k), read from src1's own shape
+    let nb10 = src1_stride[src1_stride.len() - 1] as i64;
+    let ne11 = src1_shape[src1_shape.len() - 2] as i64; // n_expert_used (bcast) or 1
+    let nb11 = src1_stride[src1_stride.len() - 2] as i64;
+    let ne12 = src1_shape[src1_shape.len() - 3] as i64; // n_tokens
+    let nb12 = src1_stride[src1_stride.len() - 3] as i64;
+    let ne13 = 1i64;
+
+    let nei0 = ids_shape[ids_shape.len() - 1] as i64; // n_expert_used
+    let nei1 = ids_shape[ids_shape.len() - 2] as i64; // n_tokens
+    let nbi1 = ids_stride[ids_stride.len() - 2] as i64;
+
+    let ne0 = dst_shape[dst_shape.len() - 1] as i64; // n_out
+                                                     // Same load-bearing note as call_quantized_matmul_mm_id: this is the
+                                                     // per-token row stride the kernel derives dst's write offset from
+                                                     // (`dst + i1*ne0 + i2*ne1*ne0`), and must equal n_expert_used (nei0),
+                                                     // not the total row count (nei0*nei1).
+    let ne1 = nei0;
+    let nb1 = ne0 * 4; // unused by the kernel; kept for ABI parity
+
+    // Per-dtype (nth0, nth1, width_divisor, kernel name), reverse-derived
+    // from ggml's `f3f65429`-era GGML_OP_MUL_MAT_ID mat-vec branch -- not
+    // from call_quantized_matmul_mv_t's table, which diverges on Q2K (align
+    // 4 there, for an unrelated plain-mv Metal bug fix) and F16/F32 (align 8
+    // there vs. this kernel's own width=ne01 fallback). One match, not two
+    // (tuning table + kernel name previously lived in separate match
+    // statements over the same dtype, hand-synchronized on which variants
+    // are unsupported -- re-enabling one of BF16/Q8_1/Q8K in only one of
+    // the two would compile clean and panic the `unreachable!` in the
+    // other the first time it was hit).
+    let (nth0, nth1, divisor, name) = mv_id_dispatch_params(dtype)?;
+
+    // Matches ggml's own host-side `GGML_ASSERT(ne00 >= nth0*nth1)` for
+    // quantized src0 -- F16/F32 aren't gated by it upstream either.
+    if !matches!(dtype, GgmlDType::F16 | GgmlDType::F32) && ne00 < (nth0 * nth1) as i64 {
+        return Err(MetalKernelError::InvalidInput(format!(
+            "qmm_mv_id: ne00 ({ne00}) must be >= nth0*nth1 ({})",
+            nth0 * nth1
+        )));
+    }
+
+    let thread_groups_count = MTLSize {
+        width: divide(ne01 as usize, divisor),
+        height: 1, // ggml's `_ne1` is always 1 for this op
+        depth: (nei0 * nei1) as usize,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: nth0,
+        height: nth1,
+        depth: 1,
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "qmm_mv_id {name} n_tokens={nei1} K={ne00} N={ne01} n_expert={ne02}"
+    );
+
+    // Buffer/scalar binding order follows the kernel's own declared
+    // parameter list exactly (src0, src1, dst, ids, then every scalar in
+    // declaration order) -- this is what candle's set_params! macro must
+    // match, independent of how ggml's own host code happened to bind them
+    // (one combined kargs struct vs. individual setBytes calls is an
+    // Obj-C-side implementation detail of ggml's binding, not part of the
+    // kernel's own ABI).
+    set_params!(
+        encoder,
+        (
+            (src0, src0_offset),
+            (src1, src1_offset),
+            Output::with_offset(dst, dst_offset),
+            (ids, ids_offset),
+            nei0,
+            nei1,
+            nbi1,
+            ne00,
+            ne01,
+            ne02,
+            nb00,
+            nb01,
+            nb02,
+            ne10,
+            ne11,
+            ne12,
+            ne13,
+            nb10,
+            nb11,
+            nb12,
+            ne0,
+            ne1,
+            nb1
+        )
+    );
+
+    // No threadgroup memory is set for any dtype this function supports --
+    // confirmed against ggml's f3f65429 host code: only its IQ-family
+    // kernels (none reachable here) call setThreadgroupMemoryLength for
+    // this op. Do not copy call_quantized_matmul_mm_id's rowid-scan scratch
+    // sizing formula; it belongs to a different kernel with a different
+    // in-kernel scan this one doesn't do.
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
+    Ok(())
+}
+
+/// Single source of truth for `call_quantized_matmul_mv_id`'s per-dtype
+/// `(nth0, nth1, width_divisor, kernel_name)` -- shared by the dispatch
+/// logic above and `mv_id_eligible` below so the two can't drift apart the
+/// way two hand-synchronized `match dtype` statements over the same
+/// variants otherwise could.
+fn mv_id_dispatch_params(
+    dtype: GgmlDType,
+) -> Result<(usize, usize, usize, &'static str), MetalKernelError> {
+    Ok(match dtype {
+        GgmlDType::Q4_0 => (8, 8, 8, "kernel_mul_mv_id_q4_0_f32"),
+        GgmlDType::Q4_1 => (8, 8, 8, "kernel_mul_mv_id_q4_1_f32"),
+        GgmlDType::Q5_0 => (8, 8, 8, "kernel_mul_mv_id_q5_0_f32"),
+        GgmlDType::Q5_1 => (8, 8, 8, "kernel_mul_mv_id_q5_1_f32"),
+        GgmlDType::Q8_0 => (8, 8, 8, "kernel_mul_mv_id_q8_0_f32"),
+        GgmlDType::Q2K => (2, 32, 8, "kernel_mul_mv_id_q2_K_f32"),
+        GgmlDType::Q3K => (2, 32, 4, "kernel_mul_mv_id_q3_K_f32"),
+        GgmlDType::Q4K => (4, 8, 4, "kernel_mul_mv_id_q4_K_f32"),
+        GgmlDType::Q5K => (2, 32, 4, "kernel_mul_mv_id_q5_K_f32"),
+        GgmlDType::Q6K => (2, 32, 2, "kernel_mul_mv_id_q6_K_f32"),
+        GgmlDType::F16 => (32, 1, 1, "kernel_mul_mv_id_f16_f32"),
+        GgmlDType::F32 => (32, 1, 1, "kernel_mul_mv_id_f32_f32"),
+        GgmlDType::BF16 => {
+            return Err(MetalKernelError::UnsupportedDTypeForOp(
+                "BF16",
+                "qmatmul_mv_id",
+            ))
+        }
+        GgmlDType::Q8_1 => {
+            return Err(MetalKernelError::UnsupportedDTypeForOp(
+                "Q8_1",
+                "qmatmul_mv_id",
+            ))
+        }
+        GgmlDType::Q8K => {
+            return Err(MetalKernelError::UnsupportedDTypeForOp(
+                "Q8K",
+                "qmatmul_mv_id",
+            ))
+        }
+    })
+}
+
+/// Whether `call_quantized_matmul_mv_id` is production-eligible for
+/// `dtype` at contraction-dimension `k` -- the single source of truth a
+/// caller like `QMetalStorage::indexed_moe_forward` should use to decide
+/// mv_id vs. mm_id, rather than duplicating a dtype allowlist or a k
+/// threshold at the call site.
+///
+/// Narrower than "every dtype `call_quantized_matmul_mv_id` can technically
+/// dispatch": Q4_1/Q5_0/Q5_1/Q8_0/Q3K/Q5K/F16/F32 all have real,
+/// ground-truth-derived tuning entries in `mv_id_dispatch_params` (ggml
+/// supports them, so the wrapper does too) but no differential test
+/// coverage against `call_quantized_matmul_mm_id` yet -- they stay off
+/// this list until they get one, even though calling the wrapper directly
+/// with one of them would work correctly today.
+///
+/// Also enforces ggml's own `ne00 >= nth0*nth1` minimum contraction-dim
+/// requirement (a real constraint of the mat-vec kernel, not an oversight):
+/// below that threshold this returns `false` even for a covered dtype, so a
+/// small-k caller falls back to `call_quantized_matmul_mm_id` (which has no
+/// such minimum) instead of the wrapper's own hard `InvalidInput` error --
+/// `call_quantized_matmul_mm_id` used to be called unconditionally for
+/// every shape before this file existed, and callers relying on that
+/// should see no new failure mode just because a `batch == 1` shape now
+/// prefers mv_id.
+pub fn mv_id_eligible(dtype: GgmlDType, k: usize) -> bool {
+    let min_k = match dtype {
+        GgmlDType::Q4K => 4 * 8,
+        GgmlDType::Q6K => 2 * 32,
+        GgmlDType::Q4_0 => 8 * 8,
+        GgmlDType::Q2K => 2 * 32,
+        _ => return false,
+    };
+    k >= min_k
 }
 
 fn divide(m: usize, b: usize) -> usize {
