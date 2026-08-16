@@ -18,6 +18,7 @@ pub const QK5_0: usize = 32;
 pub const QK5_1: usize = 32;
 pub const QK8_0: usize = 32;
 pub const QK8_1: usize = 32;
+pub const QK_MXFP4: usize = 32;
 
 pub trait GgmlType: Sized + Clone + Send + Sync {
     const DTYPE: GgmlDType;
@@ -631,11 +632,146 @@ impl GgmlType for BlockQ5_1 {
     }
 }
 
+// MXFP4 (microscaling FP4, OCP MX spec): a block of 32 elements stored as one
+// E8M0 exponent byte plus 16 bytes of packed 4-bit E2M1 codes.
+// See https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+// and ggml's block_mxfp4 (ggml-common.h).
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockMxfp4 {
+    pub(crate) e: u8,
+    pub(crate) qs: [u8; QK_MXFP4 / 2],
+}
+const _: () = assert!(std::mem::size_of::<BlockMxfp4>() == 17);
+
+// E2M1 values doubled, shared by MXFP4 and NVFP4 (ggml-common.h kvalues_fp4).
+const KVALUES_MXFP4: [i8; 16] = [0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12];
+
+// ggml_e8m0_to_fp32_half: 0.5 * 2^(e - 127) = 2^(e - 128), used with the doubled
+// kvalues above so that kvalues[d] * d gives the exact E2M1 * E8M0 product.
+fn e8m0_to_f32_half(e: u8) -> f32 {
+    let bits = if e < 2 {
+        0x0020_0000u32 << e
+    } else {
+        ((e - 1) as u32) << 23
+    };
+    f32::from_bits(bits)
+}
+
+// best_index_mxfp4 from ggml-quants.c: nearest kvalues[i] * e to x.
+fn best_index_mxfp4(x: f32, e: f32) -> u8 {
+    let mut best_index = 0u8;
+    let mut best_err = (KVALUES_MXFP4[0] as f32 * e - x).abs();
+    for (i, &k) in KVALUES_MXFP4.iter().enumerate().skip(1) {
+        let err = (k as f32 * e - x).abs();
+        if err < best_err {
+            best_index = i as u8;
+            best_err = err;
+        }
+    }
+    best_index
+}
+
+impl GgmlType for BlockMxfp4 {
+    const DTYPE: GgmlDType = GgmlDType::Mxfp4;
+    const BLCK_SIZE: usize = QK_MXFP4;
+    // llama.cpp pairs MXFP4 weights with Q8_0-quantized activations
+    // (ggml_vec_dot_mxfp4_q8_0).
+    type VecDotType = BlockQ8_0;
+
+    // dequantize_row_mxfp4 from ggml-quants.c
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        let k = ys.len();
+        debug_assert!(
+            k.is_multiple_of(QK_MXFP4),
+            "dequantize_row_mxfp4: {k} is not divisible by {QK_MXFP4}"
+        );
+
+        let nb = k / QK_MXFP4;
+
+        for i in 0..nb {
+            let d = e8m0_to_f32_half(xs[i].e);
+
+            for j in 0..QK_MXFP4 / 2 {
+                ys[i * QK_MXFP4 + j] = KVALUES_MXFP4[(xs[i].qs[j] & 0x0F) as usize] as f32 * d;
+                ys[i * QK_MXFP4 + j + QK_MXFP4 / 2] =
+                    KVALUES_MXFP4[(xs[i].qs[j] >> 4) as usize] as f32 * d;
+            }
+        }
+    }
+
+    // quantize_row_mxfp4_ref from ggml-quants.c
+    fn from_float(xs: &[f32], ys: &mut [Self]) {
+        let k = xs.len();
+        debug_assert!(
+            k.is_multiple_of(Self::BLCK_SIZE),
+            "{k} is not divisible by {}",
+            Self::BLCK_SIZE
+        );
+        debug_assert_eq!(
+            ys.len(),
+            k / Self::BLCK_SIZE,
+            "size mismatch {} {} {}",
+            xs.len(),
+            ys.len(),
+            Self::BLCK_SIZE
+        );
+        for (i, y) in ys.iter_mut().enumerate() {
+            let xs = &xs[i * Self::BLCK_SIZE..(i + 1) * Self::BLCK_SIZE];
+
+            let mut amax = 0f32;
+            for &x in xs.iter() {
+                amax = amax.max(x.abs());
+            }
+
+            let e = if amax > 0.0 {
+                (amax.log2().floor() - 2.0 + 127.0) as u8
+            } else {
+                0
+            };
+            y.e = e;
+
+            let d = e8m0_to_f32_half(e);
+            for j in 0..Self::BLCK_SIZE / 2 {
+                let x0 = best_index_mxfp4(xs[j], d);
+                let x1 = best_index_mxfp4(xs[j + Self::BLCK_SIZE / 2], d);
+                y.qs[j] = x0 | (x1 << 4);
+            }
+        }
+    }
+
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    // ggml_vec_dot_mxfp4_q8_0_generic from ggml-cpu/quants.c
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        debug_assert!(
+            n.is_multiple_of(QK_MXFP4),
+            "vec_dot_mxfp4_q8_0: {n} is not divisible by {QK_MXFP4}"
+        );
+
+        let mut sumf = 0f32;
+        for (xs, ys) in xs.iter().zip(ys.iter()) {
+            let d = f16::to_f32(ys.d) * e8m0_to_f32_half(xs.e);
+
+            let mut sumi1 = 0i32;
+            let mut sumi2 = 0i32;
+            for j in 0..QK_MXFP4 / 2 {
+                sumi1 += ys.qs[j] as i32 * KVALUES_MXFP4[(xs.qs[j] & 0x0F) as usize] as i32;
+                sumi2 +=
+                    ys.qs[j + QK_MXFP4 / 2] as i32 * KVALUES_MXFP4[(xs.qs[j] >> 4) as usize] as i32;
+            }
+            sumf += d * (sumi1 + sumi2) as f32;
+        }
+        sumf
+    }
+}
+
 impl GgmlType for BlockQ8_0 {
     const DTYPE: GgmlDType = GgmlDType::Q8_0;
     const BLCK_SIZE: usize = QK8_0;
     type VecDotType = BlockQ8_0;
-
     // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1619
     fn to_float(xs: &[Self], ys: &mut [f32]) {
         let k = ys.len();

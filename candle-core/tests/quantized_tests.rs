@@ -22,7 +22,7 @@ fn test_matmul(
     dtype: GgmlDType,
 ) -> Result<()> {
     if (device.is_cuda() || device.is_metal())
-        && (dtype == GgmlDType::Q8_1 || dtype == GgmlDType::Q8K)
+        && (dtype == GgmlDType::Q8_1 || dtype == GgmlDType::Q8K || dtype == GgmlDType::Mxfp4)
     {
         return Ok(());
     }
@@ -45,8 +45,17 @@ fn test_matmul(
         .sum_all()?
         .to_scalar()?;
     let error = error / (b * m * n) as f32;
+    // MXFP4's E2M1 mantissa is coarser than every other format here (2-bit
+    // mantissa, shared per-block exponent), so its quantization error is
+    // substantially larger. The bound is still tight enough to catch
+    // implementation bugs (wrong kvalues, nibble order, or exponent math).
+    let max_error = if dtype == GgmlDType::Mxfp4 {
+        0.15
+    } else {
+        0.02
+    };
     assert!(
-        error <= 0.02,
+        error <= max_error,
         "Error {error} is too big. \nExpected:\n {mm} \nFound:\n {res}\n for {dtype:?}"
     );
 
@@ -315,6 +324,7 @@ fn quantized_embedding_cpu() -> Result<()> {
         GgmlDType::Q5K,
         GgmlDType::Q6K,
         GgmlDType::Q8K,
+        GgmlDType::Mxfp4,
     ] {
         run_quantized_embedding(&device, dtype, 1e-6)?;
     }
@@ -1117,6 +1127,10 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
 
         // Not from the ggml repo.
         GgmlDType::Q8K => 0.00065,
+        // Not from the ggml repo (MXFP4 is absent from llama.cpp
+        // test-quantize-fns at the time of writing). Value measured with the
+        // ggml_matmul_error_test harness on x86_64.
+        GgmlDType::Mxfp4 => 0.032,
     };
     Ok(err)
 }
@@ -1325,6 +1339,15 @@ quantized_matmul!(
     quantized_matmul_q8k_cuda,
     quantized_matmul_q8k_metal,
     GgmlDType::Q8K
+);
+
+// Not implemented on cuda/metal.
+quantized_matmul!(
+    quantized_matmul_mxfp4_bis,
+    quantized_matmul_mxfp4_cpu,
+    quantized_matmul_mxfp4_cuda,
+    quantized_matmul_mxfp4_metal,
+    GgmlDType::Mxfp4
 );
 
 #[test]
