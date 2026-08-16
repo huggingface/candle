@@ -47,6 +47,15 @@
 //! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implementation of many published transformer models.
 //!
 
+// The optimized fp16 NEON kernels use `float16x8_t`, which is nightly-only
+// until stdarch_neon_f16 is stabilized. `candle_nightly` is set by build.rs
+// when compiling with a nightly toolchain; stable builds use the widening
+// fallback kernels instead (see cpu/neon.rs).
+#![cfg_attr(
+    all(target_arch = "aarch64", target_feature = "fp16", candle_nightly),
+    feature(stdarch_neon_f16)
+)]
+
 #[cfg(feature = "accelerate")]
 mod accelerate;
 pub mod backend;

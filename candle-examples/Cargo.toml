@@ -38,7 +38,8 @@ rubato = { version = "2", optional = true }
 safetensors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-symphonia = { version = "0.6.0", features = ["all"], optional = true }
+# 0.6 reworked the whole API surface; the examples still use the 0.5 API.
+symphonia = { version = "0.5.4", features = ["all"], optional = true }
 tokenizers = { workspace = true, features = ["onig"] }
 cpal = { version = "0.17.3", optional = true }
 pdf2image = { version = "0.1.2", optional = true }
@@ -116,6 +117,10 @@ required-features = ["onnx"]
 [[example]]
 name = "onnx_basics"
 required-features = ["onnx"]
+
+[[example]]
+name = "muscriptor"
+required-features = ["symphonia"]
 
 [[example]]
 name = "whisper"
