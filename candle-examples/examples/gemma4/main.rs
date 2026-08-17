@@ -20,10 +20,34 @@ use candle_transformers::generation::{LogitsProcessor, Sampling};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-#[allow(clippy::large_enum_variant)]
 enum ModelKind {
     TextOnly(TextModel),
     Multimodal(Model),
+}
+
+fn is_gemma4_instruct_model(model_id: &str) -> bool {
+    model_id.to_ascii_lowercase().ends_with("-it")
+}
+
+fn format_prompt(
+    prompt: &str,
+    model_id: &str,
+    multimodal: bool,
+    disable_chat_template: bool,
+    system_prompt: Option<&str>,
+) -> String {
+    if multimodal || disable_chat_template || !is_gemma4_instruct_model(model_id) {
+        return prompt.to_string();
+    }
+
+    let user_turn = format!("<|turn>user\n{}<turn|>\n<|turn>model\n", prompt.trim());
+    match system_prompt
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+    {
+        Some(system_prompt) => format!("<|turn>system\n{system_prompt}<turn|>\n{user_turn}"),
+        None => user_turn,
+    }
 }
 
 struct TextGeneration {
@@ -91,10 +115,17 @@ impl TextGeneration {
         std::io::stdout().flush()?;
 
         let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_token("</s>") {
-            Some(token) => token,
-            None => anyhow::bail!("cannot find the </s> token"),
-        };
+        let mut stop_tokens = Vec::new();
+        for token in ["<eos>", "<turn|>", "</s>"] {
+            if let Some(token_id) = self.tokenizer.get_token(token) {
+                if !stop_tokens.contains(&token_id) {
+                    stop_tokens.push(token_id);
+                }
+            }
+        }
+        if stop_tokens.is_empty() {
+            anyhow::bail!("cannot find any Gemma4 stop token (<eos>, <turn|>, </s>)");
+        }
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
@@ -120,7 +151,7 @@ impl TextGeneration {
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             generated_tokens += 1;
-            if next_token == eos_token {
+            if stop_tokens.contains(&next_token) {
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
@@ -158,6 +189,10 @@ struct Args {
     #[arg(long)]
     prompt: String,
 
+    /// Optional system message when using Gemma4 instruction-tuned models.
+    #[arg(long)]
+    system_prompt: Option<String>,
+
     /// The temperature used to generate samples.
     #[arg(long)]
     temperature: Option<f64>,
@@ -173,6 +208,10 @@ struct Args {
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
+
+    /// Disable the built-in Gemma4 chat formatting for `-it` models.
+    #[arg(long)]
+    raw_prompt: bool,
 
     /// The length of the sample to generate (in tokens).
     #[arg(long, short = 'n', default_value_t = 10000)]
@@ -245,8 +284,9 @@ fn main() -> Result<()> {
         .model_id
         .clone()
         .unwrap_or_else(|| "google/gemma-4-E4B-it".to_string());
+    let is_instruct_model = is_gemma4_instruct_model(&model_id);
     let repo = api.repo(Repo::with_revision(
-        model_id,
+        model_id.clone(),
         RepoType::Model,
         args.revision,
     ));
@@ -309,17 +349,40 @@ fn main() -> Result<()> {
 
     println!("loaded the model in {:?}", start.elapsed());
 
+    let prompt = format_prompt(
+        &args.prompt,
+        &model_id,
+        args.multimodal,
+        args.raw_prompt,
+        args.system_prompt.as_deref(),
+    );
+    if prompt != args.prompt {
+        eprintln!("using Gemma4 chat prompt formatting for instruct model `{model_id}`");
+    }
+
+    let (temperature, top_p, top_k) = if is_instruct_model
+        && !args.raw_prompt
+        && args.temperature.is_none()
+        && args.top_p.is_none()
+        && args.top_k.is_none()
+    {
+        eprintln!("using Gemma4 instruct sampling defaults: temperature=1.0 top_p=0.95 top_k=64");
+        (Some(1.0), Some(0.95), Some(64))
+    } else {
+        (args.temperature, args.top_p, args.top_k)
+    };
+
     let mut pipeline = TextGeneration::new(
         model,
         tokenizer,
         args.seed,
-        args.temperature,
-        args.top_p,
-        args.top_k,
+        temperature,
+        top_p,
+        top_k,
         args.repeat_penalty,
         args.repeat_last_n,
         &device,
     );
-    pipeline.run(&args.prompt, args.sample_len)?;
+    pipeline.run(&prompt, args.sample_len)?;
     Ok(())
 }
