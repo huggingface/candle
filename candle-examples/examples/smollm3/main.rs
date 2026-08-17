@@ -27,7 +27,7 @@ const DEFAULT_PROMPT: &str = "Write a Rust function to calculate the factorial o
 
 enum SmolLM3Model {
     Quantized(QuantizedModelForCausalLM),
-    Full(ModelForCausalLM, Config), // Store config alongside model
+    Full(ModelForCausalLM, Box<Config>), // Store config alongside model
 }
 
 impl SmolLM3Model {
@@ -310,7 +310,7 @@ fn load_full_model(args: &Args, device: &Device) -> Result<SmolLM3Model> {
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
     let model = ModelForCausalLM::new(&config, vb)?;
 
-    Ok(SmolLM3Model::Full(model, config))
+    Ok(SmolLM3Model::Full(model, Box::new(config)))
 }
 
 // ==================== Text Generation ====================
