@@ -296,6 +296,18 @@ impl TokenizerFromGguf for Tokenizer {
             }
         }
 
+        // Load added tokens from GGUF metadata (e.g., <think>, </think> for Qwen models)
+        if let Ok(val) = metadata_value(ct, "tokenizer.ggml.added_tokens") {
+            let added_tokens = value_to_string_array(val, "tokenizer.ggml.added_tokens")?;
+            if !added_tokens.is_empty() {
+                let added: Vec<_> = added_tokens
+                    .into_iter()
+                    .map(|tok| AddedToken::from(tok, true))
+                    .collect();
+                tokenizer.add_special_tokens(&added);
+            }
+        }
+
         let mut explicit_specials = HashSet::new();
         for key in [
             "tokenizer.ggml.bos_token_id",
