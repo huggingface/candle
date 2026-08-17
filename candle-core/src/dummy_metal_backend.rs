@@ -222,6 +222,10 @@ impl crate::backend::BackendStorage for MetalStorage {
     ) -> Result<Self> {
         Err(Error::NotCompiledWithMetalSupport)
     }
+
+    fn upsample_bilinear2d_antialias(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
 }
 
 impl crate::backend::BackendDevice for MetalDevice {
