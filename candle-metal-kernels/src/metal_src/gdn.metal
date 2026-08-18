@@ -345,3 +345,141 @@ kernel void kernel_gdn_chunked_scan_solve_f32(
         out[i * GDN_SCAN_CHUNK + j] = acc;
     }
 }
+
+// Phase 3.1b: folds a_mat's construction (mask/kk/triangle) into the
+// solve kernel above -- this fork's first kernel using threadgroup
+// memory and a barrier at all. See yggdrasil/ratatoskr/DESIGN.md's
+// "Phase 3 design" section for the design consult this implements
+// (2026-08-17, verified against qwen3_5_linear_attn_scan.rs's steps
+// 3a-3c before being recorded).
+//
+// Per (batch, head, chunk) problem, for j < i (strictly lower
+// triangular, matching a_mat's own definition):
+//   g_cumsum[i] - g_cumsum[j] = sum_{m=j+1..i} log_g[m]   (running
+//     suffix sum, computed directly -- not two independent prefix
+//     sums subtracted, which is what the tensor path does; this is
+//     the *more* numerically accurate grouping, not a shortcut)
+//   kk[i][j]    = beta[i] * dot(k_c[i,:], k_c[j,:])
+//   a_mat[i][j] = -kk[i][j] * exp(g_cumsum[i] - g_cumsum[j])
+// log_g is always <= 0 (ssm_a * softplus(...), confirmed against this
+// crate's own consumer -- quantized_qwen35.rs's own comment states
+// this explicitly), so the running suffix sum is always <= 0 and
+// exp(...) <= 1 always -- no overflow is possible by construction, for
+// any j < i. This is why no separate mask-before-exp step exists here:
+// the tensor path's own guard (this file's own doc, and DESIGN.md's
+// correctness risk (1)) exists because ITS gc_i/gc_j broadcast-and-
+// subtract materializes the *upper* triangle too before masking it
+// away; this kernel's loop bound (i from j+1 upward) means the
+// upper triangle and diagonal are never evaluated at all, structurally,
+// not masked after the fact.
+//
+// **One thread per column j, same as the solve half** -- deliberately,
+// not a separate assignment for build vs. solve. Thread j builds its
+// own column's strictly-lower entries (i = j+1..CHUNK-1) using a
+// single scalar running accumulator (`acc_g`) and a scalar dot-product
+// accumulator -- **no per-thread array anywhere in this kernel**. This
+// is a hard constraint, not a preference: 3.1a's first implementation
+// held a 64-entry `float x[64]` per thread and was found to silently
+// miscompile (produce zeros for most rows) at that exact size on this
+// Metal toolchain -- confirmed size-dependent, not a logic bug, by
+// shrinking to 4 in isolation, where identical logic was correct. See
+// yggdrasil/ratatoskr/DESIGN.md's "standing risk for future kernel
+// work in this fork" paragraph for the full writeup -- any kernel in
+// this crate wanting a per-thread array above roughly 32-64 entries
+// should differential-test at the real target size specifically, the
+// same way this one did, not assume register-residency holds.
+//
+// a_mat lands in a single 16KB threadgroup tile (the only shared state
+// this kernel needs -- k_c/log_g_c/beta_c stay device-resident and are
+// read via uniform/cache-friendly access patterns, not staged).
+// Exactly **one** threadgroup_barrier, after every thread's build loop
+// completes and before any solve read -- dispatch is deliberately
+// sized to exactly (CHUNK, bhnc) threads (grid_dims == group_dims-
+// multiple, see the Rust wrapper), so **no thread ever needs a
+// bounds-check return before the barrier** (an early return before a
+// barrier is undefined behavior -- not every thread would reach it --
+// so this kernel has none, unlike every other kernel in this file,
+// deliberately).
+//
+// **This is a real landmine for anyone extending this kernel, not
+// just an absence to note in passing.** Every OTHER kernel in this
+// file uses `if (idx >= bound) { return; }`, including the literally
+// adjacent kernel_gdn_chunked_scan_solve_f32 just above this one --
+// copying that idiom into a barrier-containing kernel out of habit is
+// undefined behavior, not merely redundant. The two halves of a
+// combined check are not equally dangerous here: with this kernel's
+// own `group_dims.height == 1`, `p` (the problem index) is
+// threadgroup-uniform (every thread in a group has the same `p`), so a
+// `p`-only early return would be legal; `j` (the column) varies within
+// a group, so a `j`-only (or combined) early return before the barrier
+// is the real hazard. If a future variant of this kernel ever needs
+// non-exact dispatch dimensions, do not add the combined check back
+// in -- restructure so any skipped work still falls through to the
+// barrier (skip the work, never `return`).
+//
+// Numerics note for verification: this kernel's a_mat differs from
+// the tensor path's own a_mat by ordinary f32 summation-order drift
+// (running suffix sum vs. two-prefix-sum subtraction) -- expected to
+// be tolerance-close, not bit-identical, in the Phase-1b sense (benign
+// reassociation), not the Phase-1a sense (repeated-squaring blowup).
+// The production-scale differential is the arbiter, same as every
+// other phase in this design.
+struct gdn_scan_build_solve_args {
+    uint hk; // head_k_dim (k_c's last dimension) -- bhnc is NOT a field
+             // here: the kernel never reads it (dispatch is sized to
+             // exactly (CHUNK, bhnc) threads, so there is nothing for a
+             // bhnc bounds check to do -- see the "no bounds-check
+             // return" note above). Keeping an unused field would be
+             // dead GPU-side state with no compiler warning to catch it.
+};
+
+kernel void kernel_gdn_chunked_scan_build_and_solve_f32(
+        device const float * k_c     [[buffer(0)]],  // [bhnc, CHUNK, hk]
+        device const float * log_g_c [[buffer(1)]],  // [bhnc, CHUNK]
+        device const float * beta_c  [[buffer(2)]],  // [bhnc, CHUNK]
+        device float       * attn    [[buffer(3)]],  // [bhnc, CHUNK, CHUNK], functional
+        constant gdn_scan_build_solve_args & args [[buffer(4)]],
+        uint2 gid [[thread_position_in_grid]]) {
+    const uint j = gid.x; // this thread's column, 0..CHUNK -- exact dispatch sizing, no bounds check
+    const uint p = gid.y; // which (batch, head, chunk) problem -- exact dispatch sizing, no bounds check
+
+    // Fixed-size static threadgroup allocation (16KB) -- compile-time
+    // constant, so no host-side setThreadgroupMemoryLength plumbing is
+    // needed; every threadgroup gets its own private copy.
+    threadgroup float a_tile[GDN_SCAN_CHUNK * GDN_SCAN_CHUNK];
+
+    device const float * k_p     = k_c     + p * GDN_SCAN_CHUNK * args.hk;
+    device const float * log_g_p = log_g_c + p * GDN_SCAN_CHUNK;
+    device const float * beta_p  = beta_c  + p * GDN_SCAN_CHUNK;
+
+    // Build: column j, strictly-lower entries only (i > j).
+    float acc_g = 0.0f;
+    for (uint i = j + 1; i < GDN_SCAN_CHUNK; ++i) {
+        acc_g += log_g_p[i]; // always <= 0 -- see doc comment above
+        float dot = 0.0f;
+        for (uint d = 0; d < args.hk; ++d) {
+            dot += k_p[i * args.hk + d] * k_p[j * args.hk + d];
+        }
+        a_tile[i * GDN_SCAN_CHUNK + j] = -beta_p[i] * dot * exp(acc_g);
+    }
+
+    // The one barrier: every thread falls through to here regardless
+    // of its own build-loop trip count (thread CHUNK-1 does zero
+    // build iterations but still reaches this point) -- required
+    // before any thread reads another thread's tile writes.
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Solve: identical math/shape to kernel_gdn_chunked_scan_solve_f32
+    // above, reading a_mat from the threadgroup tile instead of device
+    // memory. attn is still read back from the OUTPUT device buffer
+    // for prior rows (no per-thread array here either, same reasoning
+    // as the solve-only kernel).
+    device float * out = attn + p * GDN_SCAN_CHUNK * GDN_SCAN_CHUNK;
+    for (uint i = 0; i < GDN_SCAN_CHUNK; ++i) {
+        float acc = (i == j) ? 1.0f : 0.0f;
+        for (uint k = 0; k < i; ++k) {
+            acc += a_tile[i * GDN_SCAN_CHUNK + k] * out[k * GDN_SCAN_CHUNK + j];
+        }
+        out[i * GDN_SCAN_CHUNK + j] = acc;
+    }
+}

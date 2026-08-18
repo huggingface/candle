@@ -442,7 +442,8 @@ pub fn call_gdn_chunked_scan_solve_f32(
     a_mat: &BufferOffset,
     attn: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Gdn, "kernel_gdn_chunked_scan_solve_f32")?;
+    let pipeline =
+        kernels.load_pipeline(device, Source::Gdn, "kernel_gdn_chunked_scan_solve_f32")?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
@@ -459,6 +460,80 @@ pub fn call_gdn_chunked_scan_solve_f32(
     };
     let group_dims = MTLSize {
         width: GDN_SCAN_CHUNK.min(64),
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_threads(grid_dims, group_dims);
+    Ok(())
+}
+
+#[repr(C)]
+struct GdnScanBuildSolveArgs {
+    hk: u32, // bhnc is deliberately not a field -- the kernel never reads it, see gdn.metal
+}
+
+impl EncoderParam for GdnScanBuildSolveArgs {
+    fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+        encoder.set_bytes(position, &data);
+    }
+}
+
+/// Phase 3.1b: folds `a_mat`'s construction (mask/`kk`/triangle) into
+/// the solve, this fork's first kernel using threadgroup memory and a
+/// barrier. See `metal_src/gdn.metal`'s own doc comment for the full
+/// derivation, the numerics note (this kernel's own running-suffix-sum
+/// `a_mat` differs from the tensor path's two-prefix-sum-subtraction
+/// form by ordinary summation-order drift -- tolerance-close, not
+/// bit-identical, same as every other reassociation in this design),
+/// and why no thread ever needs a bounds-check `return` (dispatch is
+/// sized to exactly `(GDN_SCAN_CHUNK, bhnc)` threads, so every thread
+/// is always in range -- an early return before this kernel's barrier
+/// would be undefined behavior).
+///
+/// Shapes (contiguous F32): `k_c`: `[bhnc, GDN_SCAN_CHUNK, hk]`;
+/// `log_g_c`/`beta_c`: `[bhnc, GDN_SCAN_CHUNK]`; `attn` (output,
+/// functional): `[bhnc, GDN_SCAN_CHUNK, GDN_SCAN_CHUNK]`. `q_c` is not
+/// an input -- `a_mat`'s construction never reads it (verified against
+/// `gated_delta_rule_chunked`'s own steps 3a-3c).
+///
+/// Every read input takes a `BufferOffset`, not a bare `Buffer` --
+/// same discipline as every other kernel in this file.
+#[allow(clippy::too_many_arguments)]
+pub fn call_gdn_chunked_scan_build_and_solve_f32(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    bhnc: usize,
+    hk: usize,
+    k_c: &BufferOffset,
+    log_g_c: &BufferOffset,
+    beta_c: &BufferOffset,
+    attn: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(
+        device,
+        Source::Gdn,
+        "kernel_gdn_chunked_scan_build_and_solve_f32",
+    )?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "gdn_chunked_scan_build_and_solve bhnc={bhnc} hk={hk}"
+    );
+
+    let args = GdnScanBuildSolveArgs { hk: hk as u32 };
+    set_params!(encoder, (k_c, log_g_c, beta_c, Output::new(attn), args));
+
+    let grid_dims = MTLSize {
+        width: GDN_SCAN_CHUNK,
+        height: bhnc,
+        depth: 1,
+    };
+    let group_dims = MTLSize {
+        width: GDN_SCAN_CHUNK,
         height: 1,
         depth: 1,
     };
