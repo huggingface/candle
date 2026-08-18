@@ -829,6 +829,9 @@ impl Tensor {
     /// specified.
     pub fn chunk<D: Dim>(&self, chunks: usize, dim: D) -> Result<Vec<Self>> {
         let dim = dim.to_index(self.shape(), "chunk")?;
+        if chunks == 0 {
+            bail!("chunks cannot be zero")
+        }
         let size = self.dim(dim)?;
         if size < chunks {
             (0..size).map(|i| self.narrow(dim, i, 1)).collect()
