@@ -386,3 +386,82 @@ pub fn call_gdn_decay_beta_gate_f32(
     encoder.dispatch_threads(grid_dims, group_dims);
     Ok(())
 }
+
+/// Chunk size for `call_gdn_chunked_scan_solve_f32` -- must match
+/// `metal_src/gdn.metal`'s `GDN_SCAN_CHUNK` and ratatoskr's own
+/// `CHUNK_SIZE` (`qwen3_5_linear_attn_scan.rs`) exactly. The kernel
+/// hardcodes this as a compile-time constant for the dispatch-grid/
+/// buffer-stride arithmetic, not for register-array unrolling -- an
+/// earlier version of this kernel *did* hold a compile-time-sized
+/// per-thread array for exactly that reason, and was found to
+/// miscompile at this size (see the kernel's own doc comment for the
+/// real bug and the fix, which deliberately avoids a per-thread array
+/// of this size entirely).
+pub const GDN_SCAN_CHUNK: usize = 64;
+
+#[repr(C)]
+struct GdnScanSolveArgs {
+    bhnc: u32,
+}
+
+impl EncoderParam for GdnScanSolveArgs {
+    fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+        encoder.set_bytes(position, &data);
+    }
+}
+
+/// Column-parallel forward-substitution solve for gated-DeltaNet's chunked
+/// prefill scan (Phase 3.1a). See `metal_src/gdn.metal`'s own doc comment
+/// for the derivation (`(I - A)X = I` decomposed by columns) and why this
+/// layout -- one thread per column, zero threadgroup memory, zero barriers
+/// -- was chosen over an in-place threadgroup-tile solve.
+///
+/// Shapes (contiguous F32): `a_mat`/`attn`: `[bhnc, GDN_SCAN_CHUNK,
+/// GDN_SCAN_CHUNK]`, where `bhnc` is the caller's own flattened `batch *
+/// n_heads * num_chunks` (matching the tensor path's own `bhnc` reshape in
+/// `gated_delta_rule_chunked`). `a_mat` must be strictly lower-triangular
+/// (zero diagonal and above) -- the kernel does not verify this.
+///
+/// `a_mat` takes a `BufferOffset`, not a bare `Buffer` -- same discipline
+/// as every other kernel in this file, after the real nonzero-offset bug
+/// `call_gdn_decode_step_f32` found live: `a_mat` is exactly the kind of
+/// tensor (built via `narrow`/`contiguous` chains in the tensor path) that
+/// could carry a real nonzero byte offset in a future caller.
+///
+/// Caller must bind `attn` via the write path (this function already does,
+/// via `Output::new`) -- binding it read-only would leave any dependent
+/// dispatch (a future 3.1b/c fold, or the tensor-side comparison this
+/// stage is verified against) without a barrier under this fork's
+/// `HazardTrackingModeUntracked` convention, the same bug class as the
+/// mm_id-counts incident.
+pub fn call_gdn_chunked_scan_solve_f32(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    bhnc: usize,
+    a_mat: &BufferOffset,
+    attn: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Gdn, "kernel_gdn_chunked_scan_solve_f32")?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "gdn_chunked_scan_solve bhnc={bhnc}");
+
+    let args = GdnScanSolveArgs { bhnc: bhnc as u32 };
+    set_params!(encoder, (a_mat, Output::new(attn), args));
+
+    let grid_dims = MTLSize {
+        width: GDN_SCAN_CHUNK,
+        height: bhnc,
+        depth: 1,
+    };
+    let group_dims = MTLSize {
+        width: GDN_SCAN_CHUNK.min(64),
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_threads(grid_dims, group_dims);
+    Ok(())
+}

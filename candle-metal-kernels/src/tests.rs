@@ -3488,3 +3488,198 @@ fn kernel_gdn_decay_beta_gate_respects_nonzero_buffer_offsets() {
         "nonzero-offset beta mismatch, max diff = {beta_diff}"
     );
 }
+
+// Column-parallel chunked-scan forward-substitution solve (Phase 3.1a,
+// yggdrasil/ratatoskr/DESIGN.md's "Phase 3 design, revised 2026-08-17"
+// section): same de-risk-spike-before-wiring precedent as
+// kernel_mul_mv_id_pipelines_load / kernel_gdn_decode_step_pipeline_loads.
+#[test]
+fn kernel_gdn_chunked_scan_solve_pipeline_loads() {
+    let device = device();
+    let kernels = Kernels::new();
+    kernels
+        .load_pipeline(&device, Source::Gdn, "kernel_gdn_chunked_scan_solve_f32")
+        .unwrap_or_else(|e| panic!("kernel_gdn_chunked_scan_solve_f32 should load as a Metal compute pipeline: {e}"));
+}
+
+// Scalar Rust reference: row-by-row forward substitution, matching
+// ratatoskr::qwen3_5_linear_attn_scan::gated_delta_rule_chunked's own
+// tensor-path loop line-by-line (`attn[i,:] = e_i + sum_{k<i} a_mat[i,k] *
+// attn[k,:]`) -- deliberately the row-serial form, not the kernel's own
+// column-parallel one, so this reference doesn't just re-derive the same
+// algorithm the kernel uses and risk sharing a bug with it.
+fn gdn_scan_solve_reference(a_mat: &[f32], chunk: usize) -> Vec<f32> {
+    let mut attn = vec![0f32; chunk * chunk];
+    // Row 0 is already e_0 (a_mat's row 0 is all zero, strictly lower triangular).
+    attn[0] = 1.0;
+    for i in 1..chunk {
+        for j in 0..chunk {
+            let mut acc = if i == j { 1.0f32 } else { 0.0f32 };
+            for k in 0..i {
+                acc += a_mat[i * chunk + k] * attn[k * chunk + j];
+            }
+            attn[i * chunk + j] = acc;
+        }
+    }
+    attn
+}
+
+// Builds a random strictly-lower-triangular a_mat (entries scaled small, matching
+// the tensor path's own real magnitude: k_beta @ k^T-derived, decay-masked,
+// bounded by L2-normalized-key inner products times beta<=1 times decay<=1).
+fn random_strict_lower_triangular(rng: &mut impl Rng, bhnc: usize, chunk: usize) -> Vec<f32> {
+    let mut a = vec![0f32; bhnc * chunk * chunk];
+    for p in 0..bhnc {
+        for i in 0..chunk {
+            for k in 0..i {
+                a[p * chunk * chunk + i * chunk + k] = (rng.random::<f32>() - 0.5) * 0.6;
+            }
+        }
+    }
+    a
+}
+
+fn run_gdn_scan_solve_and_check(bhnc: usize) {
+    let device = device();
+    let kernels = Kernels::new();
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let mut rng = rng();
+
+    let chunk = GDN_SCAN_CHUNK;
+    let a_mat = random_strict_lower_triangular(&mut rng, bhnc, chunk);
+    let a_mat_buf = new_buffer(&device, &a_mat);
+    let attn_buf = device
+        .new_buffer(bhnc * chunk * chunk * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    call_gdn_chunked_scan_solve_f32(&device, &encoder, &kernels, bhnc, &BufferOffset::zero_offset(&a_mat_buf), &attn_buf)
+        .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got: Vec<f32> = read_to_vec(&attn_buf, bhnc * chunk * chunk);
+
+    let mut max_diff = 0f32;
+    let mut worst = (0usize, 0usize, 0usize);
+    for p in 0..bhnc {
+        let expected = gdn_scan_solve_reference(&a_mat[p * chunk * chunk..(p + 1) * chunk * chunk], chunk);
+        for i in 0..chunk {
+            for j in 0..chunk {
+                let d = (got[p * chunk * chunk + i * chunk + j] - expected[i * chunk + j]).abs();
+                if d > max_diff {
+                    max_diff = d;
+                    worst = (p, i, j);
+                }
+            }
+        }
+    }
+    println!("gdn_chunked_scan_solve bhnc={bhnc} chunk={chunk}: max_diff={max_diff:.8} worst(p,i,j)={worst:?}");
+    assert!(max_diff < 1e-3, "bhnc={bhnc}: solve mismatch, max diff = {max_diff}");
+}
+
+#[test]
+fn kernel_gdn_chunked_scan_solve_matches_scalar_reference_tiny() {
+    run_gdn_scan_solve_and_check(1);
+    run_gdn_scan_solve_and_check(3);
+}
+
+#[test]
+fn kernel_gdn_chunked_scan_solve_matches_scalar_reference_production_shape() {
+    // bhnc=96 (35B-A3B MoE: n_h=32, num_chunks=3) and bhnc=144 (27B dense:
+    // n_h=48, num_chunks=3) -- both real per-checkpoint shapes confirmed in
+    // ratatoskr/DESIGN.md's Phase 3.0 calibration writeup.
+    run_gdn_scan_solve_and_check(96);
+    run_gdn_scan_solve_and_check(144);
+}
+
+// Regression test for the exact bug class kernel_gdn_decode_step_respects_
+// nonzero_buffer_offsets was written for: a_mat is exactly the kind of
+// tensor (built via narrow/contiguous chains in the tensor path) that could
+// carry a real nonzero byte offset in a future caller. Packs a_mat behind a
+// large-magnitude decoy region so a wrong or ignored offset reads
+// cross-contaminated data and fails the numeric check hard, not subtly.
+#[test]
+fn kernel_gdn_chunked_scan_solve_respects_nonzero_buffer_offset() {
+    let device = device();
+    let kernels = Kernels::new();
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let mut rng = rng();
+
+    let chunk = GDN_SCAN_CHUNK;
+    let bhnc = 2usize;
+    let a_mat = random_strict_lower_triangular(&mut rng, bhnc, chunk);
+    let decoy = (0..a_mat.len()).map(|_| (rng.random::<f32>() - 0.5) * 999.0).collect::<Vec<f32>>();
+
+    let f32_size = std::mem::size_of::<f32>();
+    let packed: Vec<f32> = [&decoy[..], &a_mat[..]].concat();
+    let packed_buf = new_buffer(&device, &packed);
+    let a_mat_off = BufferOffset { buffer: &packed_buf, offset_in_bytes: decoy.len() * f32_size };
+
+    let attn_buf = device
+        .new_buffer(bhnc * chunk * chunk * f32_size, RESOURCE_OPTIONS)
+        .unwrap();
+
+    call_gdn_chunked_scan_solve_f32(&device, &encoder, &kernels, bhnc, &a_mat_off, &attn_buf).unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got: Vec<f32> = read_to_vec(&attn_buf, bhnc * chunk * chunk);
+    let mut max_diff = 0f32;
+    for p in 0..bhnc {
+        let expected = gdn_scan_solve_reference(&a_mat[p * chunk * chunk..(p + 1) * chunk * chunk], chunk);
+        for e in 0..chunk * chunk {
+            max_diff = max_diff.max((got[p * chunk * chunk + e] - expected[e]).abs());
+        }
+    }
+    println!("gdn_chunked_scan_solve_nonzero_offset: max_diff={max_diff:.8}");
+    assert!(max_diff < 1e-3, "nonzero-offset solve mismatch, max diff = {max_diff}");
+}
+
+// Adversarial case matching the design's own correctness-risk (2): beta near
+// 1, strong (near-1-magnitude) decay entries -- the diagonal/near-diagonal
+// terms are load-bearing here, unlike the small random-scale a_mat used
+// above, which could pass this kernel even with a subtly wrong solve order
+// (the mm_id "any permutation is equivalent" trap this design explicitly
+// calls out). Uses larger-magnitude entries (up to ~0.95) than the other
+// tests' 0.6 cap.
+#[test]
+fn kernel_gdn_chunked_scan_solve_matches_scalar_reference_strong_decay() {
+    let device = device();
+    let kernels = Kernels::new();
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let mut rng = rng();
+
+    let chunk = GDN_SCAN_CHUNK;
+    let bhnc = 2usize;
+    let mut a_mat = vec![0f32; bhnc * chunk * chunk];
+    for p in 0..bhnc {
+        for i in 0..chunk {
+            for k in 0..i {
+                a_mat[p * chunk * chunk + i * chunk + k] = (rng.random::<f32>() - 0.5) * 1.9; // up to ~0.95 magnitude
+            }
+        }
+    }
+    let a_mat_buf = new_buffer(&device, &a_mat);
+    let attn_buf = device
+        .new_buffer(bhnc * chunk * chunk * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    call_gdn_chunked_scan_solve_f32(&device, &encoder, &kernels, bhnc, &BufferOffset::zero_offset(&a_mat_buf), &attn_buf)
+        .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got: Vec<f32> = read_to_vec(&attn_buf, bhnc * chunk * chunk);
+    let mut max_diff = 0f32;
+    for p in 0..bhnc {
+        let expected = gdn_scan_solve_reference(&a_mat[p * chunk * chunk..(p + 1) * chunk * chunk], chunk);
+        for e in 0..chunk * chunk {
+            max_diff = max_diff.max((got[p * chunk * chunk + e] - expected[e]).abs());
+        }
+    }
+    println!("gdn_chunked_scan_solve_strong_decay: max_diff={max_diff:.8}");
+    assert!(max_diff < 1e-2, "strong-decay solve mismatch, max diff = {max_diff}");
+}

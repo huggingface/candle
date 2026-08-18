@@ -266,3 +266,82 @@ kernel void kernel_gdn_decay_beta_gate_f32(
     g_out[idx] = a[h] * softplus;
     beta_out[idx] = 1.0f / (1.0f + exp(-beta_logits[idx]));
 }
+
+// Column-parallel forward-substitution solve for gated-DeltaNet's chunked
+// prefill scan (ratatoskr's `gated_delta_rule_chunked`, Phase 3.1a -- see
+// yggdrasil/ratatoskr/DESIGN.md's "Phase 3 design, revised 2026-08-17"
+// section for the full derivation and why this layout, not an in-place
+// threadgroup tile, was chosen).
+//
+// Solves `(I - a_mat) * attn = I`, i.e. `attn = (I - a_mat)^-1`, for a
+// strictly lower-triangular `a_mat` (`a_mat[i][k] == 0` for `k >= i`),
+// per independent `(batch, head, chunk)` problem. `(I - A)X = I` decomposes
+// by columns: column j of X satisfies
+//   x_i = e_j[i] + sum_{k<i} a_mat[i][k] * x_k        (e_j[i] = 1 iff i==j)
+// and every dependency for column j stays inside column j -- a_mat is
+// read-only throughout, no thread ever reads another thread's output. So:
+// **one thread per column**, zero threadgroup memory, zero barriers --
+// matching every other kernel in this file. The `i == j` select (not a
+// branch) keeps every thread running the identical loop regardless of
+// column, so there is no thread divergence; for `i < j` it correctly
+// yields `x_i = 0` by the same induction the design's own numerical-
+// stability argument relies on (each `x_i` is a final entry of the answer,
+// computed once from already-final `x_k`, `k < i` -- never a
+// repeated-squaring-style intermediate that could blow up, unlike Phase
+// 1a's reverted doubling attempt).
+//
+// **Deliberately does NOT hold `x[CHUNK]` in a local/register array.**
+// The design's own implementation note assumed a 64-entry per-thread
+// array would either stay register-resident or spill to thread-local
+// memory as a benign, perf-only fallback -- verified false during 3.1a's
+// own bring-up (differential against the scalar reference below): at
+// `CHUNK=64` this compiler mis-lowers a dynamically-indexed 64-entry
+// `float` array, silently producing zeros for most rows (confirmed by
+// shrinking `CHUNK` to 4 in isolation, where the identical logic is
+// bit-exact -- a real, size-dependent miscompilation, not a logic bug).
+// Fixed by writing each row directly to `attn` as it's computed and
+// reading prior rows back from `attn` itself (`out[k * CHUNK + j]`)
+// instead of a local array -- safe with zero synchronization because a
+// thread's own prior writes to device memory are always visible to its
+// own later reads with no barrier required (ordering within one thread's
+// instruction stream, not cross-thread visibility, which is the only
+// thing `HazardTrackingModeUntracked` and barriers govern). This costs
+// device-memory read/write traffic instead of register accesses --
+// acceptable here, matching this stage's own documented scaffolding
+// status (column-major writes are already mildly uncoalesced; 3.1b/c are
+// expected to restructure this further, not preserve this exact form).
+//
+// One dispatch per `(batch, head, chunk)` grid of problems (`bhnc` =
+// `b * n_heads * num_chunks`, already flattened by the caller, same
+// convention as the tensor path's own `bhnc` reshape) -- `attn` is written
+// functionally (a fresh buffer): the caller must bind it via the write
+// path (Output) so this fork's HazardTrackingModeUntracked convention
+// gives any dependent dispatch (3.1b/c's later folds) a real barrier.
+#define GDN_SCAN_CHUNK 64u
+
+struct gdn_scan_solve_args {
+    uint bhnc; // number of independent (batch, head, chunk) problems
+};
+
+kernel void kernel_gdn_chunked_scan_solve_f32(
+        device const float * a_mat [[buffer(0)]],  // [bhnc, CHUNK, CHUNK], strictly lower-triangular
+        device float       * attn  [[buffer(1)]],  // [bhnc, CHUNK, CHUNK], functional -- (I - a_mat)^-1
+        constant gdn_scan_solve_args & args [[buffer(2)]],
+        uint2 gid [[thread_position_in_grid]]) {
+    const uint j = gid.x; // column index, 0..CHUNK
+    const uint p = gid.y; // which (batch, head, chunk) problem
+    if (j >= GDN_SCAN_CHUNK || p >= args.bhnc) {
+        return;
+    }
+
+    device const float * a   = a_mat + p * GDN_SCAN_CHUNK * GDN_SCAN_CHUNK;
+    device float       * out = attn  + p * GDN_SCAN_CHUNK * GDN_SCAN_CHUNK;
+
+    for (uint i = 0; i < GDN_SCAN_CHUNK; ++i) {
+        float acc = (i == j) ? 1.0f : 0.0f;
+        for (uint k = 0; k < i; ++k) {
+            acc += a[i * GDN_SCAN_CHUNK + k] * out[k * GDN_SCAN_CHUNK + j];
+        }
+        out[i * GDN_SCAN_CHUNK + j] = acc;
+    }
+}
