@@ -2023,7 +2023,21 @@ impl BackendDevice for MetalDevice {
     type Storage = MetalStorage;
 
     fn new(ordinal: usize) -> Result<Self> {
-        let device = Device::all().swap_remove(ordinal);
+        // `Device::all()` (MTLCopyAllDevices) returns no devices on Apple Silicon.
+        // Use `system_default()` (MTLCreateSystemDefaultDevice) for the default
+        // device and fall back to `all()` for explicit additional GPUs.
+        let device = if ordinal == 0 {
+            Device::system_default()
+                .ok_or_else(|| MetalError::from("no Metal device found".to_string()))?
+        } else {
+            let mut devices = Device::all();
+            if ordinal >= devices.len() {
+                return Err(
+                    MetalError::Message(format!("Metal device {ordinal} not found")).into(),
+                );
+            }
+            devices.swap_remove(ordinal)
+        };
         let command_queue = device.new_command_queue().map_err(MetalError::from)?;
         #[cfg(feature = "metal-debug-labels")]
         command_queue.setLabel(Some(&NSString::from_str("candle-metal")));
@@ -2047,6 +2061,7 @@ impl BackendDevice for MetalDevice {
             commands: Arc::new(commands),
             buffers: Arc::new(RwLock::new(HashMap::new())),
             private_buffers: Arc::new(RwLock::new(HashMap::new())),
+            alloc_since_sweep: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             kernels,
             seed,
             seed_value: Arc::new(RwLock::new(299792458)),
