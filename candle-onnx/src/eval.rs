@@ -231,6 +231,119 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
     }
 }
 
+fn div_ceil(a: i64, b: i64) -> i64 {
+    -((-a).div_euclid(b))
+}
+
+fn max_pool_output_dim(
+    input: usize,
+    kernel: usize,
+    stride: usize,
+    pad_before: usize,
+    pad_after: usize,
+    ceil_mode: bool,
+) -> Result<usize> {
+    let numerator = input as i64 + pad_before as i64 + pad_after as i64 - kernel as i64;
+    let stride = stride as i64;
+    let mut output = if ceil_mode {
+        div_ceil(numerator, stride) + 1
+    } else {
+        numerator.div_euclid(stride) + 1
+    };
+
+    // ONNX ignores windows that would start in the right padded region.
+    while output > 0 && (output - 1) * stride >= input as i64 + pad_before as i64 {
+        output -= 1;
+    }
+    if output <= 0 {
+        bail!("MaxPool output dimension is non-positive")
+    }
+    Ok(output as usize)
+}
+
+fn max_pool_same_padding(
+    input: usize,
+    kernel: usize,
+    stride: usize,
+    same_upper: bool,
+) -> (usize, usize, usize) {
+    let output = div_ceil(input as i64, stride as i64) as usize;
+    let pad = ((output - 1) * stride + kernel).saturating_sub(input);
+    if same_upper {
+        let before = pad / 2;
+        (output, before, pad - before)
+    } else {
+        let after = pad / 2;
+        (output, pad - after, after)
+    }
+}
+
+fn max_pool_padding_tensor(shape: &[usize], dtype: DType, device: &Device) -> Result<Tensor> {
+    match dtype {
+        DType::U8 | DType::U32 => Tensor::zeros(shape, dtype, device),
+        DType::I16 => Tensor::full(i16::MIN, shape, device),
+        DType::I32 => Tensor::full(i32::MIN, shape, device),
+        DType::I64 => Tensor::full(i64::MIN, shape, device),
+        DType::BF16 | DType::F16 => Tensor::full(f32::NEG_INFINITY, shape, device)?.to_dtype(dtype),
+        DType::F32 => Tensor::full(f32::NEG_INFINITY, shape, device),
+        DType::F64 => Tensor::full(f64::NEG_INFINITY, shape, device),
+        DType::F8E4M3 | DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+            bail!("unsupported dtype {dtype:?} for padded MaxPool")
+        }
+        _ => bail!("unsupported dtype {dtype:?} for padded MaxPool"),
+    }
+}
+
+fn max_pool_pad_with_lowest(xs: &Tensor, dim: usize, left: usize, right: usize) -> Result<Tensor> {
+    if left == 0 && right == 0 {
+        return Ok(xs.clone());
+    }
+
+    let mut dims = xs.dims().to_vec();
+    if left == 0 {
+        dims[dim] = right;
+        let right = max_pool_padding_tensor(dims.as_slice(), xs.dtype(), xs.device())?;
+        Tensor::cat(&[xs, &right], dim)
+    } else if right == 0 {
+        dims[dim] = left;
+        let left = max_pool_padding_tensor(dims.as_slice(), xs.dtype(), xs.device())?;
+        Tensor::cat(&[&left, xs], dim)
+    } else {
+        dims[dim] = left;
+        let left = max_pool_padding_tensor(dims.as_slice(), xs.dtype(), xs.device())?;
+        dims[dim] = right;
+        let right = max_pool_padding_tensor(dims.as_slice(), xs.dtype(), xs.device())?;
+        Tensor::cat(&[&left, xs, &right], dim)
+    }
+}
+
+fn max_pool2d_with_padding(
+    xs: &Tensor,
+    kernel: (usize, usize),
+    stride: (usize, usize),
+    pads: (usize, usize, usize, usize),
+    output_shape: (usize, usize),
+) -> Result<Tensor> {
+    let (_, _, h, w) = xs.dims4()?;
+    let (kernel_h, kernel_w) = kernel;
+    let (stride_h, stride_w) = stride;
+    let (pad_top, pad_left, _, _) = pads;
+    let (h_out, w_out) = output_shape;
+    let padded_h = (h_out - 1) * stride_h + kernel_h;
+    let padded_w = (w_out - 1) * stride_w + kernel_w;
+    let pad_bottom = padded_h.saturating_sub(pad_top + h);
+    let pad_right = padded_w.saturating_sub(pad_left + w);
+
+    let padded = max_pool_pad_with_lowest(xs, 2, pad_top, pad_bottom)?;
+    let padded = max_pool_pad_with_lowest(&padded, 3, pad_left, pad_right)?;
+    let ys = padded.max_pool2d_with_stride(kernel, stride)?;
+    let (_, _, actual_h, actual_w) = ys.dims4()?;
+    if actual_h < h_out || actual_w < w_out {
+        bail!("padded MaxPool produced output shape smaller than expected")
+    }
+    ys.narrow(2, 0, h_out)?.narrow(3, 0, w_out)
+}
+
 // This function provides a direct evaluation of the proto.
 // Longer-term, we should first convert the proto to an intermediate representation of the compute
 // graph so as to make multiple evaluations more efficient.
@@ -459,32 +572,75 @@ fn simple_eval_(
                 let kernel_shape = get_attr::<[i64]>(node, "kernel_shape")?;
                 let pads = get_attr_opt::<[i64]>(node, "pads")?;
                 let strides = get_attr_opt::<[i64]>(node, "strides")?;
-                let auto_pad = get_attr_opt::<str>(node, "auto_pad")?;
-                match auto_pad {
-                    None | Some("NOTSET") => (),
-                    Some(s) => bail!("unsupported auto_pad {s}"),
-                };
-                if let Some(d) = dilations {
-                    if d.iter().any(|&v| v != 1) {
+                let auto_pad = get_attr_opt::<str>(node, "auto_pad")?.unwrap_or("NOTSET");
+                let ceil_mode = get_attr_opt::<i64>(node, "ceil_mode")?
+                    .copied()
+                    .unwrap_or(0)
+                    != 0;
+
+                match dilations {
+                    None | Some([1, 1]) => (),
+                    Some(d) if d.iter().any(|&v| v != 1) => {
                         bail!("MaxPool with dilation != 1, {dilations:?}")
                     }
-                }
-                if let Some(d) = pads {
-                    if d.iter().any(|&v| v != 0) {
-                        bail!("MaxPool with pads != 0, {pads:?}")
-                    }
+                    Some(d) => bail!("only 2d MaxPool is supported, dilations {d:?}"),
                 }
                 let xs = get(&node.input[0])?;
+                let (_, _, h, w) = xs.dims4()?;
                 let (k1, k2) = match kernel_shape {
-                    [k1, k2] => (*k1 as usize, *k2 as usize),
+                    [k1, k2] if *k1 > 0 && *k2 > 0 => (*k1 as usize, *k2 as usize),
+                    [_, _] => bail!("MaxPool kernel dimensions must be positive, {kernel_shape:?}"),
                     _ => bail!("only 2d MaxPool is supported, kernel shape {kernel_shape:?}"),
                 };
-                let ys = match strides {
-                    None => xs.max_pool2d((k1, k2))?,
-                    Some([s1, s2]) => {
-                        xs.max_pool2d_with_stride((k1, k2), (*s1 as usize, *s2 as usize))?
-                    }
+                let (s1, s2) = match strides {
+                    None => (1, 1),
+                    Some([s1, s2]) if *s1 > 0 && *s2 > 0 => (*s1 as usize, *s2 as usize),
+                    Some([_, _]) => bail!("MaxPool strides must be positive, {strides:?}"),
                     Some(strides) => bail!("only 2d MaxPool is supported, strides {strides:?}"),
+                };
+                let explicit_pads = match pads {
+                    None => (0, 0, 0, 0),
+                    Some([p1, p2, p3, p4]) if *p1 >= 0 && *p2 >= 0 && *p3 >= 0 && *p4 >= 0 => {
+                        (*p1 as usize, *p2 as usize, *p3 as usize, *p4 as usize)
+                    }
+                    Some([_, _, _, _]) => bail!("MaxPool pads must be non-negative, {pads:?}"),
+                    Some(pads) => bail!("only 2d MaxPool is supported, pads {pads:?}"),
+                };
+
+                let has_explicit_padding = explicit_pads != (0, 0, 0, 0);
+                let (pads, output_shape) = match auto_pad {
+                    "NOTSET" => {
+                        let (pad_top, pad_left, pad_bottom, pad_right) = explicit_pads;
+                        let h_out = max_pool_output_dim(h, k1, s1, pad_top, pad_bottom, ceil_mode)?;
+                        let w_out = max_pool_output_dim(w, k2, s2, pad_left, pad_right, ceil_mode)?;
+                        (explicit_pads, (h_out, w_out))
+                    }
+                    "VALID" => {
+                        if has_explicit_padding {
+                            bail!("MaxPool pads cannot be used with auto_pad={auto_pad}")
+                        }
+                        let h_out = max_pool_output_dim(h, k1, s1, 0, 0, false)?;
+                        let w_out = max_pool_output_dim(w, k2, s2, 0, 0, false)?;
+                        ((0, 0, 0, 0), (h_out, w_out))
+                    }
+                    "SAME_UPPER" | "SAME_LOWER" => {
+                        if has_explicit_padding {
+                            bail!("MaxPool pads cannot be used with auto_pad={auto_pad}")
+                        }
+                        let same_upper = auto_pad == "SAME_UPPER";
+                        let (h_out, pad_top, pad_bottom) =
+                            max_pool_same_padding(h, k1, s1, same_upper);
+                        let (w_out, pad_left, pad_right) =
+                            max_pool_same_padding(w, k2, s2, same_upper);
+                        ((pad_top, pad_left, pad_bottom, pad_right), (h_out, w_out))
+                    }
+                    s => bail!("unsupported auto_pad {s}"),
+                };
+
+                let ys = if pads == (0, 0, 0, 0) && !ceil_mode {
+                    xs.max_pool2d_with_stride((k1, k2), (s1, s2))?
+                } else {
+                    max_pool2d_with_padding(xs, (k1, k2), (s1, s2), pads, output_shape)?
                 };
                 values.insert(node.output[0].clone(), ys);
             }

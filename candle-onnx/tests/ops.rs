@@ -827,7 +827,139 @@ fn test_flatten_operation() -> Result<()> {
 // Below are ops that are implemented but not tested yet
 
 // "MaxPool"
-// #[test]
+#[test]
+fn test_maxpool_operation() -> Result<()> {
+    fn attr_ints(name: &str, ints: Vec<i64>) -> AttributeProto {
+        AttributeProto {
+            name: name.to_string(),
+            r#type: AttributeType::Ints.into(),
+            ints,
+            ..AttributeProto::default()
+        }
+    }
+
+    fn attr_int(name: &str, i: i64) -> AttributeProto {
+        AttributeProto {
+            name: name.to_string(),
+            r#type: AttributeType::Int.into(),
+            i,
+            ..AttributeProto::default()
+        }
+    }
+
+    fn attr_string(name: &str, s: &str) -> AttributeProto {
+        AttributeProto {
+            name: name.to_string(),
+            r#type: AttributeType::String.into(),
+            s: s.as_bytes().to_vec(),
+            ..AttributeProto::default()
+        }
+    }
+
+    fn test(attributes: Vec<AttributeProto>, input: Tensor, expected: Tensor) -> Result<()> {
+        let model = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "MaxPool".to_string(),
+                attribute: attributes,
+                input: vec![INPUT_X.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                ..NodeProto::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                ..ValueInfoProto::default()
+            }],
+            ..GraphProto::default()
+        }));
+
+        let inputs = HashMap::from_iter([(INPUT_X.to_string(), input)]);
+        let eval = simple_eval(&model, inputs)?;
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        assert_eq!(z.dims(), expected.dims());
+        assert_eq!(
+            z.flatten_all()?.to_vec1::<f32>()?,
+            expected.flatten_all()?.to_vec1::<f32>()?
+        );
+        Ok(())
+    }
+
+    // ONNX defaults MaxPool strides to 1 when the attribute is absent.
+    test(
+        vec![attr_ints("kernel_shape", vec![2, 2])],
+        Tensor::from_vec(
+            vec![1f32, 2., 3., 4., 5., 6., 7., 8., 9.],
+            (1, 1, 3, 3),
+            &Device::Cpu,
+        )?,
+        Tensor::from_vec(vec![5f32, 6., 8., 9.], (1, 1, 2, 2), &Device::Cpu)?,
+    )?;
+
+    // ONNX excludes padding from the max. This all-negative case would fail if
+    // padding were implemented by zero-filling and using Candle's valid MaxPool.
+    test(
+        vec![
+            attr_ints("kernel_shape", vec![2, 2]),
+            attr_ints("strides", vec![1, 1]),
+            attr_ints("pads", vec![1, 1, 1, 1]),
+        ],
+        Tensor::from_vec(vec![-5f32, -6., -7., -8.], (1, 1, 2, 2), &Device::Cpu)?,
+        Tensor::from_vec(
+            vec![-5f32, -5., -6., -5., -5., -6., -7., -7., -8.],
+            (1, 1, 3, 3),
+            &Device::Cpu,
+        )?,
+    )?;
+
+    test(
+        vec![
+            attr_ints("kernel_shape", vec![3, 3]),
+            attr_ints("strides", vec![2, 2]),
+            attr_string("auto_pad", "SAME_UPPER"),
+        ],
+        Tensor::from_vec(
+            vec![
+                1f32, 2., 3., 4., 5., 6., 7., 8., 9., 10., 11., 12., 13., 14., 15., 16.,
+            ],
+            (1, 1, 4, 4),
+            &Device::Cpu,
+        )?,
+        Tensor::from_vec(vec![11f32, 12., 15., 16.], (1, 1, 2, 2), &Device::Cpu)?,
+    )?;
+
+    test(
+        vec![
+            attr_ints("kernel_shape", vec![3, 3]),
+            attr_ints("strides", vec![2, 2]),
+            attr_string("auto_pad", "SAME_LOWER"),
+        ],
+        Tensor::from_vec(
+            vec![
+                1f32, 2., 3., 4., 5., 6., 7., 8., 9., 10., 11., 12., 13., 14., 15., 16.,
+            ],
+            (1, 1, 4, 4),
+            &Device::Cpu,
+        )?,
+        Tensor::from_vec(vec![6f32, 8., 14., 16.], (1, 1, 2, 2), &Device::Cpu)?,
+    )?;
+
+    test(
+        vec![
+            attr_ints("kernel_shape", vec![3, 3]),
+            attr_ints("strides", vec![2, 2]),
+            attr_int("ceil_mode", 1),
+        ],
+        Tensor::from_vec(
+            vec![
+                1f32, 2., 3., 4., 5., 6., 7., 8., 9., 10., 11., 12., 13., 14., 15., 16.,
+            ],
+            (1, 1, 4, 4),
+            &Device::Cpu,
+        )?,
+        Tensor::from_vec(vec![11f32, 12., 15., 16.], (1, 1, 2, 2), &Device::Cpu)?,
+    )?;
+
+    Ok(())
+}
 
 // "AveragePool"
 // #[test]
