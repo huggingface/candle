@@ -358,6 +358,19 @@ fn simple_eval_(
                 let output = input0.broadcast_div(input1)?;
                 values.insert(node.output[0].clone(), output);
             }
+            "DynamicQuantizeLinear" => {
+                if node.output.len() != 3 {
+                    bail!(
+                        "DynamicQuantizeLinear expects 3 outputs, got {}",
+                        node.output.len()
+                    )
+                }
+                let input = get(&node.input[0])?;
+                let (y, y_scale, y_zero_point) = dynamic_quantize_linear(input)?;
+                values.insert(node.output[0].clone(), y);
+                values.insert(node.output[1].clone(), y_scale);
+                values.insert(node.output[2].clone(), y_zero_point);
+            }
             "Pow" => {
                 let input0 = get(&node.input[0])?;
                 let input1 = get(&node.input[1])?;
@@ -2558,6 +2571,62 @@ fn simple_eval_(
             Some(value) => Ok((output.name.clone(), value)),
         })
         .collect()
+}
+
+fn round_ties_to_even(v: f32) -> f32 {
+    let floor = v.floor();
+    let fraction = v - floor;
+    if fraction < 0.5 {
+        floor
+    } else if fraction > 0.5 {
+        floor + 1.0
+    } else if floor as i64 % 2 == 0 {
+        floor
+    } else {
+        floor + 1.0
+    }
+}
+
+fn dynamic_quantize_linear(input: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
+    if input.dtype() != DType::F32 {
+        bail!(
+            "DynamicQuantizeLinear expects F32 input, got {:?}",
+            input.dtype()
+        )
+    }
+
+    let input_data = input.flatten_all()?.to_vec1::<f32>()?;
+    if input_data.is_empty() {
+        bail!("DynamicQuantizeLinear does not support empty input")
+    }
+
+    let mut x_min = f32::INFINITY;
+    let mut x_max = f32::NEG_INFINITY;
+    for &v in input_data.iter() {
+        if v < x_min {
+            x_min = v;
+        }
+        if v > x_max {
+            x_max = v;
+        }
+    }
+
+    let x_min = x_min.min(0.0);
+    let x_max = x_max.max(0.0);
+    let range = if x_max == x_min { 1.0 } else { x_max - x_min };
+    let y_scale = range / 255.0;
+    let zero_point = round_ties_to_even((-x_min / y_scale).clamp(0.0, 255.0)) as u8;
+    let zero_point_f32 = zero_point as f32;
+
+    let output = input_data
+        .iter()
+        .map(|&v| (round_ties_to_even(v / y_scale) + zero_point_f32).clamp(0.0, 255.0) as u8)
+        .collect::<Vec<_>>();
+
+    let output = Tensor::from_vec(output, input.shape(), input.device())?;
+    let y_scale = Tensor::new(y_scale, input.device())?;
+    let y_zero_point = Tensor::new(zero_point, input.device())?;
+    Ok((output, y_scale, y_zero_point))
 }
 
 fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Result<Vec<usize>> {
