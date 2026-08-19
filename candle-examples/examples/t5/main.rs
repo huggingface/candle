@@ -13,7 +13,7 @@ use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use clap::{Parser, ValueEnum};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 const DTYPE: DType = DType::F32;
@@ -124,25 +124,39 @@ impl T5ModelBuilder {
             (None, None) => (default_model, default_revision),
         };
 
-        let repo = Repo::with_revision(model_id.clone(), RepoType::Model, revision);
-        let api = Api::new()?;
-        let repo = api.repo(repo);
+        let client = HFClientSync::new()?;
+        let (owner, name) = hf_hub::split_id(&model_id);
+        let repo = client.model(owner, name);
         let config_filename = match &args.config_file {
-            None => repo.get("config.json")?,
+            None => repo
+                .download_file()
+                .filename("config.json")
+                .revision(revision.as_str())
+                .send()?,
             Some(f) => f.into(),
         };
         let tokenizer_filename = match &args.tokenizer_file {
             None => match args.which {
-                Which::Mt5Base => api
-                    .model("lmz/mt5-tokenizers".into())
-                    .get("mt5-base.tokenizer.json")?,
-                Which::Mt5Small => api
-                    .model("lmz/mt5-tokenizers".into())
-                    .get("mt5-small.tokenizer.json")?,
-                Which::Mt5Large => api
-                    .model("lmz/mt5-tokenizers".into())
-                    .get("mt5-large.tokenizer.json")?,
-                _ => repo.get("tokenizer.json")?,
+                Which::Mt5Base => client
+                    .model("lmz", "mt5-tokenizers")
+                    .download_file()
+                    .filename("mt5-base.tokenizer.json")
+                    .send()?,
+                Which::Mt5Small => client
+                    .model("lmz", "mt5-tokenizers")
+                    .download_file()
+                    .filename("mt5-small.tokenizer.json")
+                    .send()?,
+                Which::Mt5Large => client
+                    .model("lmz", "mt5-tokenizers")
+                    .download_file()
+                    .filename("mt5-large.tokenizer.json")
+                    .send()?,
+                _ => repo
+                    .download_file()
+                    .filename("tokenizer.json")
+                    .revision(revision.as_str())
+                    .send()?,
             },
             Some(f) => f.into(),
         };
@@ -150,9 +164,17 @@ impl T5ModelBuilder {
             Some(f) => f.split(',').map(|v| v.into()).collect::<Vec<_>>(),
             None => {
                 if model_id == "google/flan-t5-xxl" || model_id == "google/flan-ul2" {
-                    candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
+                    candle_examples::hub_load_safetensors(
+                        &repo,
+                        revision.as_str(),
+                        "model.safetensors.index.json",
+                    )?
                 } else {
-                    vec![repo.get("model.safetensors")?]
+                    vec![repo
+                        .download_file()
+                        .filename("model.safetensors")
+                        .revision(revision.as_str())
+                        .send()?]
                 }
             }
         };

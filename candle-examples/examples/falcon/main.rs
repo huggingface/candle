@@ -11,7 +11,7 @@ use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 use candle_transformers::models::falcon::{Config, Falcon};
@@ -158,14 +158,20 @@ fn main() -> Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
     let start = std::time::Instant::now();
-    let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        args.model_id,
-        RepoType::Model,
-        args.revision,
-    ));
-    let tokenizer_filename = repo.get("tokenizer.json")?;
-    let filenames = candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
+    let client = HFClientSync::new()?;
+    let revision = args.revision;
+    let (owner, name) = hf_hub::split_id(&args.model_id);
+    let repo = client.model(owner, name);
+    let tokenizer_filename = repo
+        .download_file()
+        .filename("tokenizer.json")
+        .revision(revision.as_str())
+        .send()?;
+    let filenames = candle_examples::hub_load_safetensors(
+        &repo,
+        revision.as_str(),
+        "model.safetensors.index.json",
+    )?;
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 

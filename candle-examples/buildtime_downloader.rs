@@ -1,18 +1,36 @@
 use anyhow::Result;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 
 pub fn download_model(model_and_revision: &str) -> Result<()> {
     let (model_id, revision) = match model_and_revision.split_once(":") {
         Some((model_id, revision)) => (model_id, revision),
         None => (model_and_revision, "main"),
     };
-    let repo = Repo::with_revision(model_id.to_string(), RepoType::Model, revision.to_string());
     let (config_filename, tokenizer_filename, weights_filename) = {
-        let api = Api::new()?;
-        let api = api.repo(repo);
-        let config = api.get("config.json")?.to_string_lossy().to_string();
-        let tokenizer = api.get("tokenizer.json")?.to_string_lossy().to_string();
-        let weights = api.get("model.safetensors")?.to_string_lossy().to_string();
+        let client = HFClientSync::new()?;
+        let (owner, name) = hf_hub::split_id(model_id);
+        let repo = client.model(owner, name);
+        let config = repo
+            .download_file()
+            .filename("config.json")
+            .revision(revision)
+            .send()?
+            .to_string_lossy()
+            .to_string();
+        let tokenizer = repo
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(revision)
+            .send()?
+            .to_string_lossy()
+            .to_string();
+        let weights = repo
+            .download_file()
+            .filename("model.safetensors")
+            .revision(revision)
+            .send()?
+            .to_string_lossy()
+            .to_string();
         (config, tokenizer, weights)
     };
     println!("cargo::rustc-env=CANDLE_BUILDTIME_MODEL_CONFIG={config_filename}");

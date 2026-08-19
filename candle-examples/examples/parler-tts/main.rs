@@ -125,7 +125,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = hf_hub::api::sync::Api::new()?;
+    let client = hf_hub::HFClientSync::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
         None => match args.which {
@@ -137,27 +137,38 @@ fn main() -> anyhow::Result<()> {
         Some(r) => r,
         None => "main".to_string(),
     };
-    let repo = api.repo(hf_hub::Repo::with_revision(
-        model_id,
-        hf_hub::RepoType::Model,
-        revision,
-    ));
+    let (owner, name) = hf_hub::split_id(&model_id);
+    let repo = client.model(owner, name);
     let model_files = match args.model_file {
         Some(m) => vec![m.into()],
         None => match args.which {
-            Which::MiniV1 => vec![repo.get("model.safetensors")?],
-            Which::LargeV1 => {
-                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
-            }
+            Which::MiniV1 => vec![repo
+                .download_file()
+                .filename("model.safetensors")
+                .revision(revision.as_str())
+                .send()?],
+            Which::LargeV1 => candle_examples::hub_load_safetensors(
+                &repo,
+                revision.as_str(),
+                "model.safetensors.index.json",
+            )?,
         },
     };
     let config = match args.config_file {
         Some(m) => m.into(),
-        None => repo.get("config.json")?,
+        None => repo
+            .download_file()
+            .filename("config.json")
+            .revision(revision.as_str())
+            .send()?,
     };
     let tokenizer = match args.tokenizer_file {
         Some(m) => m.into(),
-        None => repo.get("tokenizer.json")?,
+        None => repo
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(revision.as_str())
+            .send()?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;

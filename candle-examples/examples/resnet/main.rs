@@ -50,8 +50,9 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("lmz/candle-resnet".into());
+            let client = hf_hub::HFClientSync::new()?;
+            let (owner, name) = hf_hub::split_id("lmz/candle-resnet");
+            let repo = client.model(owner, name);
             let filename = match args.which {
                 Which::Resnet18 => "resnet18.safetensors",
                 Which::Resnet34 => "resnet34.safetensors",
@@ -59,7 +60,7 @@ pub fn main() -> anyhow::Result<()> {
                 Which::Resnet101 => "resnet101.safetensors",
                 Which::Resnet152 => "resnet152.safetensors",
             };
-            api.get(filename)?
+            repo.download_file().filename(filename).send()?
         }
         Some(model) => model.into(),
     };

@@ -90,11 +90,12 @@ impl Args {
         let tokenizer_path = match &self.tokenizer {
             Some(config) => std::path::PathBuf::from(config),
             None => {
-                let api = hf_hub::api::sync::Api::new()?;
-                let repo = "google/gemma-3-4b-it";
-                println!("DEBUG: Downloading tokenizer from {repo}");
-                let api = api.model(repo.to_string());
-                api.get("tokenizer.json")?
+                let client = hf_hub::HFClientSync::new()?;
+                let repo_id = "google/gemma-3-4b-it";
+                println!("DEBUG: Downloading tokenizer from {repo_id}");
+                let (owner, name) = hf_hub::split_id(repo_id);
+                let repo = client.model(owner, name);
+                repo.download_file().filename("tokenizer.json").send()?
             }
         };
         println!("DEBUG: Loading tokenizer from {tokenizer_path:?}");
@@ -113,13 +114,14 @@ impl Args {
                         "gemma-3-4b-it-q4_0.gguf",
                     ),
                 };
-                let api = hf_hub::api::sync::Api::new()?;
-                api.repo(hf_hub::Repo::with_revision(
-                    repo.to_string(),
-                    hf_hub::RepoType::Model,
-                    "main".to_string(),
-                ))
-                .get(filename)?
+                let client = hf_hub::HFClientSync::new()?;
+                let (owner, name) = hf_hub::split_id(repo);
+                client
+                    .model(owner, name)
+                    .download_file()
+                    .filename(filename)
+                    .revision("main")
+                    .send()?
             }
         };
         Ok(model_path)

@@ -18,7 +18,7 @@ use candle_transformers::models::rwkv_v7::{
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 
 const EOS_TOKEN_ID: u32 = 261;
 
@@ -622,24 +622,35 @@ fn main() -> Result<()> {
         }
     }
 
-    let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        args.model_id
-            .unwrap_or_else(|| args.which.model_id().to_string()),
-        RepoType::Model,
-        args.revision
-            .unwrap_or_else(|| args.which.revision().to_string()),
-    ));
+    let client = HFClientSync::new()?;
+    let model_id = args
+        .model_id
+        .unwrap_or_else(|| args.which.model_id().to_string());
+    let revision = args
+        .revision
+        .unwrap_or_else(|| args.which.revision().to_string());
+    let (owner, name) = hf_hub::split_id(&model_id);
+    let repo = client.model(owner, name);
     let tokenizer = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
-        None => api
-            .model("lmz/candle-rwkv".to_string())
-            .get("rwkv_vocab_v20230424.json")?,
+        None => {
+            let (owner, name) = hf_hub::split_id("lmz/candle-rwkv");
+            client
+                .model(owner, name)
+                .download_file()
+                .filename("rwkv_vocab_v20230424.json")
+                .send()?
+        }
     };
     let config_filename = match (&args.config_file, args.which.is_v7()) {
         (Some(file), _) => Some(std::path::PathBuf::from(file)),
         (None, true) => None, // v7 models use built-in config, no config.json needed
-        (None, false) => Some(repo.get("config.json")?),
+        (None, false) => Some(
+            repo.download_file()
+                .filename("config.json")
+                .revision(revision.as_str())
+                .send()?,
+        ),
     };
     let filenames = match args.weight_files {
         Some(files) => files
@@ -652,48 +663,89 @@ fn main() -> Result<()> {
                     anyhow::bail!("quantized RWKV v7 models are not yet supported");
                 }
                 vec![match args.which {
-                    Which::World1b5 => api
-                        .model("lmz/candle-rwkv".to_string())
-                        .get("world1b5-q4k.gguf")?,
-                    Which::World3b => api
-                        .model("lmz/candle-rwkv".to_string())
-                        .get("world3b-q4k.gguf")?,
-                    Which::Eagle7b => api
-                        .model("lmz/candle-rwkv".to_string())
-                        .get("eagle7b-q4k.gguf")?,
-                    Which::World6_1b6 => repo.get("rwkv-6-world-1b6-q4k.gguf")?,
+                    Which::World1b5 => {
+                        let (owner, name) = hf_hub::split_id("lmz/candle-rwkv");
+                        client
+                            .model(owner, name)
+                            .download_file()
+                            .filename("world1b5-q4k.gguf")
+                            .send()?
+                    }
+                    Which::World3b => {
+                        let (owner, name) = hf_hub::split_id("lmz/candle-rwkv");
+                        client
+                            .model(owner, name)
+                            .download_file()
+                            .filename("world3b-q4k.gguf")
+                            .send()?
+                    }
+                    Which::Eagle7b => {
+                        let (owner, name) = hf_hub::split_id("lmz/candle-rwkv");
+                        client
+                            .model(owner, name)
+                            .download_file()
+                            .filename("eagle7b-q4k.gguf")
+                            .send()?
+                    }
+                    Which::World6_1b6 => repo
+                        .download_file()
+                        .filename("rwkv-6-world-1b6-q4k.gguf")
+                        .revision(revision.as_str())
+                        .send()?,
                     _ => unreachable!(),
                 }]
             } else {
                 vec![match args.which {
-                    Which::World1b5 | Which::World3b | Which::Eagle7b => {
-                        repo.get("model.safetensors")?
-                    }
-                    Which::World6_1b6 => repo.get("rwkv-6-world-1b6.safetensors")?,
-                    Which::Rwkv7G1d0_1b => {
-                        repo.get("rwkv7-g1d-0.1b-20260129-ctx8192.safetensors")?
-                    }
-                    Which::Rwkv7G1d0_4b => {
-                        repo.get("rwkv7-g1d-0.4b-20260210-ctx8192.safetensors")?
-                    }
-                    Which::Rwkv7G1d1_5b => {
-                        repo.get("rwkv7-g1d-1.5b-20260212-ctx8192.safetensors")?
-                    }
-                    Which::Rwkv7G1d2_9b => {
-                        repo.get("rwkv7-g1d-2.9b-20260131-ctx8192.safetensors")?
-                    }
-                    Which::Rwkv7G1d7_2b => {
-                        repo.get("rwkv7-g1d-7.2b-20260131-ctx8192.safetensors")?
-                    }
-                    Which::Rwkv7G1d13_3b => {
-                        repo.get("rwkv7-g1d-13.3b-20260131-ctx8192.safetensors")?
-                    }
-                    Which::Rwkv7aG1d0_1b => {
-                        repo.get("rwkv7a-g1d-0.1b-20260212-ctx8192.safetensors")?
-                    }
-                    Which::Rwkv7bG1b0_1b => {
-                        repo.get("rwkv7b-g1b-0.1b-20250822-ctx4096.safetensors")?
-                    }
+                    Which::World1b5 | Which::World3b | Which::Eagle7b => repo
+                        .download_file()
+                        .filename("model.safetensors")
+                        .revision(revision.as_str())
+                        .send()?,
+                    Which::World6_1b6 => repo
+                        .download_file()
+                        .filename("rwkv-6-world-1b6.safetensors")
+                        .revision(revision.as_str())
+                        .send()?,
+                    Which::Rwkv7G1d0_1b => repo
+                        .download_file()
+                        .filename("rwkv7-g1d-0.1b-20260129-ctx8192.safetensors")
+                        .revision(revision.as_str())
+                        .send()?,
+                    Which::Rwkv7G1d0_4b => repo
+                        .download_file()
+                        .filename("rwkv7-g1d-0.4b-20260210-ctx8192.safetensors")
+                        .revision(revision.as_str())
+                        .send()?,
+                    Which::Rwkv7G1d1_5b => repo
+                        .download_file()
+                        .filename("rwkv7-g1d-1.5b-20260212-ctx8192.safetensors")
+                        .revision(revision.as_str())
+                        .send()?,
+                    Which::Rwkv7G1d2_9b => repo
+                        .download_file()
+                        .filename("rwkv7-g1d-2.9b-20260131-ctx8192.safetensors")
+                        .revision(revision.as_str())
+                        .send()?,
+                    Which::Rwkv7G1d7_2b => repo
+                        .download_file()
+                        .filename("rwkv7-g1d-7.2b-20260131-ctx8192.safetensors")
+                        .revision(revision.as_str())
+                        .send()?,
+                    Which::Rwkv7G1d13_3b => repo
+                        .download_file()
+                        .filename("rwkv7-g1d-13.3b-20260131-ctx8192.safetensors")
+                        .revision(revision.as_str())
+                        .send()?,
+                    Which::Rwkv7aG1d0_1b => repo
+                        .download_file()
+                        .filename("rwkv7a-g1d-0.1b-20260212-ctx8192.safetensors")
+                        .revision(revision.as_str())
+                        .send()?,
+                    Which::Rwkv7bG1b0_1b => repo
+                        .download_file()
+                        .filename("rwkv7b-g1b-0.1b-20250822-ctx4096.safetensors")
+                        .revision(revision.as_str())
+                        .send()?,
                 }]
             }
         }

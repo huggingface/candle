@@ -12,7 +12,7 @@ use candle_transformers::models::chatglm::{Config, Model};
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -190,7 +190,7 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let client = HFClientSync::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
         None => "THUDM/chatglm3-6b".to_string(),
@@ -199,16 +199,26 @@ fn main() -> Result<()> {
         Some(rev) => rev.to_string(),
         None => "main".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+    let (owner, name) = hf_hub::split_id(&model_id);
+    let repo = client.model(owner, name);
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
-        None => api
-            .model("lmz/candle-chatglm".to_string())
-            .get("chatglm-tokenizer.json")?,
+        None => {
+            let (owner, name) = hf_hub::split_id("lmz/candle-chatglm");
+            client
+                .model(owner, name)
+                .download_file()
+                .filename("chatglm-tokenizer.json")
+                .send()?
+        }
     };
     let filenames = match args.weight_file {
         Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        None => candle_examples::hub_load_safetensors(
+            &repo,
+            revision.as_str(),
+            "model.safetensors.index.json",
+        )?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;

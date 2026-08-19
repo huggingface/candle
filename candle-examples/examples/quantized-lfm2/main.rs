@@ -110,14 +110,15 @@ impl Args {
             Which::Lfm2_2_6BQ4KM => ("LiquidAI/LFM2-2.6B-GGUF", "LFM2-2.6B-Q4_K_M.gguf"),
             Which::Lfm2_2_6BQ8_0 => ("LiquidAI/LFM2-2.6B-GGUF", "LFM2-2.6B-Q8_0.gguf"),
         };
-        let api = hf_hub::api::sync::Api::new()?;
-        api.repo(hf_hub::Repo::with_revision(
-            repo.to_string(),
-            hf_hub::RepoType::Model,
-            self.revision.clone(),
-        ))
-        .get(filename)
-        .map_err(Into::into)
+        let client = hf_hub::HFClientSync::new()?;
+        let (owner, name) = hf_hub::split_id(repo);
+        client
+            .model(owner, name)
+            .download_file()
+            .filename(filename)
+            .revision(self.revision.as_str())
+            .send()
+            .map_err(Into::into)
     }
 
     fn tokenizer(&self, model_path: &Path) -> Result<Tokenizer> {
@@ -136,14 +137,14 @@ impl Args {
             Which::Lfm2_350MQ4KM | Which::Lfm2_350MQ8_0 => "LiquidAI/LFM2-350M",
             Which::Lfm2_2_6BQ4KM | Which::Lfm2_2_6BQ8_0 => "LiquidAI/LFM2-2.6B",
         };
-        let api = hf_hub::api::sync::Api::new()?;
-        let tokenizer_path = api
-            .repo(hf_hub::Repo::with_revision(
-                tokenizer_repo.to_string(),
-                hf_hub::RepoType::Model,
-                self.revision.clone(),
-            ))
-            .get("tokenizer.json")?;
+        let client = hf_hub::HFClientSync::new()?;
+        let (owner, name) = hf_hub::split_id(tokenizer_repo);
+        let tokenizer_path = client
+            .model(owner, name)
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(self.revision.as_str())
+            .send()?;
         Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)
     }
 }

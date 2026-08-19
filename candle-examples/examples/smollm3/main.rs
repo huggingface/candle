@@ -14,7 +14,7 @@ use candle_examples::token_output_stream::TokenOutputStream;
 
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 // Import both model implementations
@@ -227,9 +227,10 @@ impl Args {
         let tokenizer_path = match &self.tokenizer {
             Some(path) => std::path::PathBuf::from(path),
             None => {
-                let api = Api::new()?;
-                let api = api.model("HuggingFaceTB/SmolLM3-3B".to_string());
-                api.get("tokenizer.json")?
+                let client = HFClientSync::new()?;
+                let (owner, name) = hf_hub::split_id("HuggingFaceTB/SmolLM3-3B");
+                let repo = client.model(owner, name);
+                repo.download_file().filename("tokenizer.json").send()?
             }
         };
         Tokenizer::from_file(tokenizer_path).map_err(E::msg)
@@ -248,19 +249,20 @@ fn load_quantized_model(args: &Args, device: &Device) -> Result<SmolLM3Model> {
         None => {
             let filename = args.quantization.filename_unsloth();
             let repo_id = "unsloth/SmolLM3-3B-GGUF";
-            let api = Api::new()?;
+            let client = HFClientSync::new()?;
             println!(
                 "Downloading {} from {} (~{:.2}GB)...",
                 filename,
                 repo_id,
                 args.quantization.size_gb()
             );
-            api.repo(Repo::with_revision(
-                repo_id.to_string(),
-                RepoType::Model,
-                "main".to_string(),
-            ))
-            .get(filename)?
+            let (owner, name) = hf_hub::split_id(repo_id);
+            client
+                .model(owner, name)
+                .download_file()
+                .filename(filename)
+                .revision("main")
+                .send()?
         }
     };
 
@@ -270,25 +272,28 @@ fn load_quantized_model(args: &Args, device: &Device) -> Result<SmolLM3Model> {
 }
 
 fn load_full_model(args: &Args, device: &Device) -> Result<SmolLM3Model> {
-    let api = Api::new()?;
+    let client = HFClientSync::new()?;
     let model_id = match args.model {
         WhichModel::W3b => "HuggingFaceTB/SmolLM3-3B",
         WhichModel::W3bBase => "HuggingFaceTB/SmolLM3-3B-Base",
     };
 
     println!("Loading full model from: {}", model_id);
-    let repo = api.repo(Repo::with_revision(
-        model_id.to_string(),
-        RepoType::Model,
-        "main".to_string(),
-    ));
+    let (owner, name) = hf_hub::split_id(model_id);
+    let repo = client.model(owner, name);
 
     let filenames = match &args.model_path {
         Some(path) => vec![std::path::PathBuf::from(path)],
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        None => {
+            candle_examples::hub_load_safetensors(&repo, "main", "model.safetensors.index.json")?
+        }
     };
 
-    let config_file = repo.get("config.json")?;
+    let config_file = repo
+        .download_file()
+        .filename("config.json")
+        .revision("main")
+        .send()?;
     let config: Config = serde_json::from_slice(&std::fs::read(config_file)?)?;
 
     let dtype = match args.dtype.as_str() {

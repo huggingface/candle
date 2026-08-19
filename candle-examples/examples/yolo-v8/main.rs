@@ -296,8 +296,9 @@ impl Args {
         let path = match &self.model {
             Some(model) => std::path::PathBuf::from(model),
             None => {
-                let api = hf_hub::api::sync::Api::new()?;
-                let api = api.model("lmz/candle-yolo-v8".to_string());
+                let client = hf_hub::HFClientSync::new()?;
+                let (owner, name) = hf_hub::split_id("lmz/candle-yolo-v8");
+                let repo = client.model(owner, name);
                 let size = match self.which {
                     Which::N => "n",
                     Which::S => "s",
@@ -309,7 +310,9 @@ impl Args {
                     YoloTask::Pose => "-pose",
                     YoloTask::Detect => "",
                 };
-                api.get(&format!("yolov8{size}{task}.safetensors"))?
+                repo.download_file()
+                    .filename(format!("yolov8{size}{task}.safetensors"))
+                    .send()?
             }
         };
         Ok(path)

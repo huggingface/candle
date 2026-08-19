@@ -3,7 +3,6 @@ use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::codegeex4_9b::*;
 use clap::Parser;
-use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -188,13 +187,12 @@ fn main() -> anyhow::Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = match args.cache_path.as_ref() {
-        None => hf_hub::api::sync::Api::new()?,
-        Some(path) => {
-            hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(path.to_string().into()))
-                .build()
-                .map_err(anyhow::Error::msg)?
-        }
+    let client = match args.cache_path.as_ref() {
+        None => hf_hub::HFClientSync::new()?,
+        Some(path) => hf_hub::HFClient::builder()
+            .cache_dir(path.to_string())
+            .build_sync()
+            .map_err(anyhow::Error::msg)?,
     };
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
@@ -204,24 +202,35 @@ fn main() -> anyhow::Result<()> {
         Some(rev) => rev.to_string(),
         None => "main".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+    let (owner, name) = hf_hub::split_id(&model_id);
+    let repo = client.model(owner, name);
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
-        None => api
-            .model("THUDM/codegeex4-all-9b".to_string())
-            .get("tokenizer.json")
+        None => client
+            .model("THUDM", "codegeex4-all-9b")
+            .download_file()
+            .filename("tokenizer.json")
+            .send()
             .map_err(anyhow::Error::msg)?,
     };
     let config_filename = match &args.weight_path {
         Some(path) => std::path::Path::new(path).join("config.json"),
-        None => repo.get("config.json")?,
+        None => repo
+            .download_file()
+            .filename("config.json")
+            .revision(revision.as_str())
+            .send()?,
     };
 
     let filenames = match &args.weight_path {
         Some(path) => {
             candle_examples::hub_load_local_safetensors(path, "model.safetensors.index.json")?
         }
-        _ => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        _ => candle_examples::hub_load_safetensors(
+            &repo,
+            revision.as_str(),
+            "model.safetensors.index.json",
+        )?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).expect("Tokenizer Error");

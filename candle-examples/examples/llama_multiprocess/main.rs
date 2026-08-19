@@ -17,7 +17,7 @@ use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::llama::LlamaEosToks;
 use cudarc::driver::safe::CudaDevice;
 use cudarc::nccl::safe::{Comm, Id};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use std::io::Write;
 use std::rc::Rc;
 
@@ -105,7 +105,7 @@ fn main() -> Result<()> {
         bail!("comm file {comm_file:?} already exists, please remove it first")
     }
 
-    let api = Api::new()?;
+    let client = HFClientSync::new()?;
     let model_id = match args.model_id {
         Some(model) => model,
         None => match args.which {
@@ -117,11 +117,24 @@ fn main() -> Result<()> {
     };
     println!("loading the model weights from {model_id}");
     let revision = args.revision.unwrap_or("main".to_string());
-    let api = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
-    let config_filename = api.get("config.json")?;
+    let (owner, name) = hf_hub::split_id(&model_id);
+    let repo = client.model(owner, name);
+    let config_filename = repo
+        .download_file()
+        .filename("config.json")
+        .revision(revision.as_str())
+        .send()?;
     let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
-    let tokenizer_filename = api.get("tokenizer.json")?;
-    let filenames = candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?;
+    let tokenizer_filename = repo
+        .download_file()
+        .filename("tokenizer.json")
+        .revision(revision.as_str())
+        .send()?;
+    let filenames = candle_examples::hub_load_safetensors(
+        &repo,
+        revision.as_str(),
+        "model.safetensors.index.json",
+    )?;
 
     let rank = match args.rank {
         None => {
