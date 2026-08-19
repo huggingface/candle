@@ -2023,7 +2023,15 @@ impl BackendDevice for MetalDevice {
     type Storage = MetalStorage;
 
     fn new(ordinal: usize) -> Result<Self> {
-        let device = Device::all().swap_remove(ordinal);
+        let mut devices = Device::all();
+        if ordinal >= devices.len() {
+            return Err(MetalError::Message(format!(
+                "no Metal device at ordinal {ordinal} (MTLCopyAllDevices returned {} devices)",
+                devices.len()
+            ))
+            .into());
+        }
+        let device = devices.swap_remove(ordinal);
         let command_queue = device.new_command_queue().map_err(MetalError::from)?;
         #[cfg(feature = "metal-debug-labels")]
         command_queue.setLabel(Some(&NSString::from_str("candle-metal")));
