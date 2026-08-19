@@ -231,9 +231,71 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
     }
 }
 
+/// A reusable evaluation session for an ONNX model.
+///
+/// [`simple_eval`] re-parses every initializer (weight) from the model's raw protobuf bytes on each
+/// call, which is wasteful when the same model is run more than once. `Session` creates the
+/// initializers once and [`Session::run`] reuses them for every call.
+///
+/// Prefer `Session` over [`simple_eval`] whenever a model is evaluated in a loop (e.g.
+/// autoregressive decoding) or more than once.
+///
+/// ```no_run
+/// # fn example() -> candle::Result<()> {
+/// let model = candle_onnx::read_file("model.onnx")?;
+/// let session = candle_onnx::Session::new(&model)?;
+/// for inputs in std::iter::repeat(std::collections::HashMap::new()).take(3) {
+///     let outputs = session.run(inputs)?;
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub struct Session {
+    graph: onnx::GraphProto,
+    initializers: HashMap<String, Value>,
+}
+
+impl Session {
+    /// Builds a `Session` from a model.
+    ///
+    /// # Errors
+    ///
+    /// * Will return `Err` if `model` has no graph.
+    /// * Will return `Err` if any initializer has an unsupported or malformed data type.
+    pub fn new(model: &onnx::ModelProto) -> Result<Self> {
+        let graph = match &model.graph {
+            None => bail!("no graph defined in proto"),
+            Some(graph) => graph.clone(),
+        };
+        let mut initializers = HashMap::with_capacity(graph.initializer.len());
+        for t in &graph.initializer {
+            let tensor = get_tensor(t, t.name.as_str())?;
+            initializers.insert(t.name.clone(), tensor);
+        }
+        Ok(Self { graph, initializers })
+    }
+
+    /// Runs the model against the given inputs, returning the graph's named outputs. Can be called
+    /// repeatedly on the same `Session`.
+    ///
+    /// # Errors
+    ///
+    /// * Will return `Err` if a required graph input is missing from `inputs`, or if its
+    ///   dtype/shape doesn't match the graph's declaration.
+    /// * Will return `Err` if the graph contains an unsupported op, or if a node's input can't be
+    ///   found while evaluating the graph.
+    /// * Will return `Err` if an expected graph output isn't produced.
+    pub fn run(&self, inputs: HashMap<String, Value>) -> Result<HashMap<String, Value>> {
+        let mut values = self.initializers.clone(); // Arc-bump per tensor, not a data copy
+        values.extend(inputs);
+        validate_inputs(&self.graph, &values)?;
+        eval_nodes(&self.graph, &mut values)?;
+        collect_outputs(&self.graph, &mut values)
+    }
+}
+
 // This function provides a direct evaluation of the proto.
-// Longer-term, we should first convert the proto to an intermediate representation of the compute
-// graph so as to make multiple evaluations more efficient.
+// See [`Session`] if you need to do multiple evaluations.
 // An example upside of this would be to remove intermediary values when they are not needed
 // anymore.
 pub fn simple_eval(
@@ -255,24 +317,18 @@ fn simple_eval_(
         let tensor = get_tensor(t, t.name.as_str())?;
         values.insert(t.name.to_string(), tensor);
     }
-    for input in graph.input.iter() {
-        let input_type = match &input.r#type {
-            Some(input_type) => input_type,
-            None => continue,
-        };
-        let input_type = match &input_type.value {
-            Some(input_type) => input_type,
-            None => continue,
-        };
-        let tensor_type = match input_type {
-            onnx::type_proto::Value::TensorType(tt) => tt,
-            _ => continue,
-        };
+    validate_inputs(graph, values)?;
+    eval_nodes(graph, values)?;
+    collect_outputs(graph, values)
+}
 
-        let tensor = match values.get(&input.name) {
-            None => bail!("missing input {}", input.name),
-            Some(tensor) => tensor,
-        };
+fn validate_inputs(graph: &onnx::GraphProto, values: &HashMap<String, Value>) -> Result<()> {
+    for input in &graph.input {
+        let Some(input_type) = &input.r#type else { continue };
+        let Some(input_type) = &input_type.value else { continue };
+        let onnx::type_proto::Value::TensorType(tensor_type) = input_type else { continue };
+
+        let Some(tensor) = values.get(&input.name) else { bail!("missing input {}", input.name) };
         let dt = match DataType::try_from(tensor_type.elem_type) {
             Ok(dt) => match dtype(dt) {
                 Some(dt) => dt,
@@ -310,7 +366,7 @@ fn simple_eval_(
                     }
                 }
             }
-        };
+        }
         if dt != tensor.dtype() {
             bail!(
                 "unexpected dtype for {}, got {:?}, expected {dt:?}",
@@ -319,8 +375,13 @@ fn simple_eval_(
             )
         }
     }
+
+    Ok(())
+}
+
+fn eval_nodes(graph: &onnx::GraphProto, values: &mut HashMap<String, Value>) -> Result<()> {
     // The nodes are topologically sorted so we can just process them in order.
-    for node in graph.node.iter() {
+    for node in &graph.node {
         let get = |input_name: &str| match values.get(input_name) {
             Some(value) => Ok(value),
             None => bail!("cannot find {input_name} for op '{}'", node.name),
@@ -398,9 +459,9 @@ fn simple_eval_(
                 let input1 = get(&node.input[1])?.to_vec1::<i64>()?;
                 // TODO: Check that there is at most a single -1 or 0, handle other neg values.
                 let mut other_than_minus1 = 1usize;
-                for &v in input1.iter() {
+                for &v in &input1 {
                     if v != -1 && v != 0 {
-                        other_than_minus1 *= v as usize
+                        other_than_minus1 *= v as usize;
                     }
                 }
                 let input1 = input1
@@ -463,7 +524,7 @@ fn simple_eval_(
                 match auto_pad {
                     None | Some("NOTSET") => (),
                     Some(s) => bail!("unsupported auto_pad {s}"),
-                };
+                }
                 if let Some(d) = dilations {
                     if d.iter().any(|&v| v != 1) {
                         bail!("MaxPool with dilation != 1, {dilations:?}")
@@ -498,7 +559,7 @@ fn simple_eval_(
                 match auto_pad {
                     None | Some("NOTSET") => (),
                     Some(s) => bail!("unsupported auto_pad {s}"),
-                };
+                }
                 if let Some(d) = dilations {
                     if d.iter().any(|&v| v != 1) {
                         bail!("AvgPool with dilation != 1, {dilations:?}")
@@ -570,7 +631,7 @@ fn simple_eval_(
                 axes.sort();
                 let mut xs = xs.clone();
                 for &axis in axes.iter().rev() {
-                    xs = xs.squeeze(axis)?
+                    xs = xs.squeeze(axis)?;
                 }
                 values.insert(node.output[0].clone(), xs);
             }
@@ -617,7 +678,7 @@ fn simple_eval_(
                 axes.sort();
                 let mut xs = xs.clone();
                 for &axis in axes.iter().rev() {
-                    xs = xs.unsqueeze(axis)?
+                    xs = xs.unsqueeze(axis)?;
                 }
                 values.insert(node.output[0].clone(), xs);
             }
@@ -730,7 +791,7 @@ fn simple_eval_(
                 let end = xs.normalize_axis(end)?;
                 let mut dims = vec![];
                 for idx in start..=end {
-                    dims.push(xs.dim(idx)? as i64)
+                    dims.push(xs.dim(idx)? as i64);
                 }
                 let dims = Tensor::from_vec(dims, xs.rank(), xs.device())?;
                 values.insert(node.output[0].clone(), dims);
@@ -829,9 +890,9 @@ fn simple_eval_(
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Min
             "Min" => {
                 let mut output = get(&node.input[0])?.clone();
-                for input in node.input.iter() {
+                for input in &node.input {
                     let input = get(input)?;
-                    output = output.broadcast_minimum(input)?
+                    output = output.broadcast_minimum(input)?;
                 }
 
                 values.insert(node.output[0].clone(), output);
@@ -1298,7 +1359,7 @@ fn simple_eval_(
                     }
 
                     let indexes = Tensor::arange_step(s, e, p, data.device())?;
-                    out = out.contiguous()?.index_select(&indexes, axis)?
+                    out = out.contiguous()?.index_select(&indexes, axis)?;
                 }
                 values.insert(node.output[0].clone(), out);
             }
@@ -2550,11 +2611,17 @@ fn simple_eval_(
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
+
+    Ok(())
+}
+
+
+fn collect_outputs(graph: &onnx::GraphProto, values: &mut HashMap<String, Value>) -> Result<HashMap<String, Value>> {
     graph
         .output
         .iter()
         .map(|output| match values.remove(&output.name) {
-            None => bail!("cannot find output {}", output.name),
+            None => bail!("Cannot find output {}", output.name),
             Some(value) => Ok((output.name.clone(), value)),
         })
         .collect()
