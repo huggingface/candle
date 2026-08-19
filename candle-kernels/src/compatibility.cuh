@@ -7,7 +7,10 @@
 
 // FIXME: the minimum compute capabilities are just guesses since the table is not specific enough
 
-#if __CUDA_ARCH__ < 800
+// CUDA 12.8+ provides these helpers in cuda_fp16.hpp. Keep Candle's fallback for
+// older toolkits on pre-Ampere devices, where the helpers may be missing.
+#if __CUDA_ARCH__ < 800 && \
+    (__CUDACC_VER_MAJOR__ < 12 || (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ < 8))
 __device__ __forceinline__ __half __hmax_nan(__half a, __half b) {
     return __hisnan(a) ? a : (__hisnan(b) ? b : __hmax(a, b));
 }
