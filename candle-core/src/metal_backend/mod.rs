@@ -1,7 +1,9 @@
 //! Implementation of Backend traits for Metal
 //!
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
+use crate::conv::{
+    ParamsConv1D, ParamsConv2D, ParamsConv3D, ParamsConvTranspose1D, ParamsConvTranspose2D,
+};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, Result, Shape};
 use candle_metal_kernels::kernels::binary::contiguous;
@@ -1187,6 +1189,16 @@ impl BackendStorage for MetalStorage {
         let mut res_t = self.device().zeros_impl(res_l.shape(), res.dtype())?;
         res.copy_strided_src(&mut res_t, 0, &res_l)?;
         Ok(res_t)
+    }
+
+    fn conv3d(
+        &self,
+        _layout: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &ParamsConv3D,
+    ) -> Result<Self> {
+        crate::bail!("conv3d is not implemented for the metal backend")
     }
 
     fn conv_transpose2d(
