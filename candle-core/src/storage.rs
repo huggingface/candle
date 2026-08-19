@@ -227,6 +227,15 @@ impl Storage {
         c: &dyn CustomOp2,
     ) -> Result<(Self, Shape)> {
         self.same_device(t2, c.name())?;
+        // Auto-cast FP8 for custom ops (e.g. RmsNorm).
+        if self.dtype() == DType::F8E4M3 && t2.dtype() != DType::F8E4M3 {
+            let s1_cast = self.to_dtype(l1, t2.dtype())?;
+            return s1_cast.apply_op2(l1, t2, l2, c);
+        }
+        if t2.dtype() == DType::F8E4M3 && self.dtype() != DType::F8E4M3 {
+            let t2_cast = t2.to_dtype(l2, self.dtype())?;
+            return self.apply_op2(l1, &t2_cast, l2, c);
+        }
         match (self, t2) {
             (Self::Cpu(s1), Self::Cpu(s2)) => {
                 let (s, shape) = c.cpu_fwd(s1, l1, s2, l2)?;
@@ -341,6 +350,18 @@ impl Storage {
         rhs_layout: &Layout,
     ) -> Result<Self> {
         self.same_device(rhs, B::NAME)?;
+        // Auto-cast FP8 operands for binary ops (add, mul, etc.).
+        // When one side is F8E4M3, cast it to the other side's dtype.
+        let lhs_dt = self.dtype();
+        let rhs_dt = rhs.dtype();
+        if lhs_dt == DType::F8E4M3 && rhs_dt != DType::F8E4M3 {
+            let lhs_cast = self.to_dtype(lhs_layout, rhs_dt)?;
+            return lhs_cast.binary_impl::<B>(rhs, lhs_layout, rhs_layout);
+        }
+        if rhs_dt == DType::F8E4M3 && lhs_dt != DType::F8E4M3 {
+            let rhs_cast = rhs.to_dtype(rhs_layout, lhs_dt)?;
+            return self.binary_impl::<B>(&rhs_cast, lhs_layout, rhs_layout);
+        }
         self.same_dtype(rhs, B::NAME)?;
         match (self, rhs) {
             (Storage::Cpu(lhs), Storage::Cpu(rhs)) => {
@@ -774,7 +795,22 @@ impl Storage {
         rhs_layout: &Layout,
     ) -> Result<Self> {
         self.same_device(rhs, "matmul")?;
-        self.same_dtype(rhs, "matmul")?;
+        // Allow mixed FP8 × BF16/F16 for "manual cast" FP8 inference.
+        // The CUDA backend handles casting FP8 → compute dtype on the fly.
+        let lhs_dt = self.dtype();
+        let rhs_dt = rhs.dtype();
+        let fp8_mixed = (lhs_dt == DType::F8E4M3 || rhs_dt == DType::F8E4M3)
+            && lhs_dt != rhs_dt
+            && matches!(
+                (lhs_dt, rhs_dt),
+                (DType::F8E4M3, DType::BF16)
+                    | (DType::BF16, DType::F8E4M3)
+                    | (DType::F8E4M3, DType::F16)
+                    | (DType::F16, DType::F8E4M3)
+            );
+        if !fp8_mixed {
+            self.same_dtype(rhs, "matmul")?;
+        }
         match (self, rhs) {
             (Self::Cpu(lhs), Self::Cpu(rhs)) => {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
