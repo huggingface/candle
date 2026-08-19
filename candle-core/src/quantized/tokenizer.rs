@@ -2,9 +2,15 @@ use crate::quantized::gguf_file;
 use crate::{Context, Error, Result};
 use std::collections::HashSet;
 use tokenizers::{
-    decoders::{byte_level::ByteLevel as ByteLevelDecoder, DecoderWrapper},
+    decoders::{
+        byte_fallback::ByteFallback, byte_level::ByteLevel as ByteLevelDecoder, fuse::Fuse,
+        sequence::Sequence as DecoderSequence, strip::Strip as StripDecoder, DecoderWrapper,
+    },
     models::bpe::{Vocab, BPE},
-    normalizers::{unicode::NFC, NormalizerWrapper},
+    normalizers::{
+        prepend::Prepend, replace::Replace, unicode::NFC, utils::Sequence as NormalizerSequence,
+        NormalizerWrapper,
+    },
     pre_tokenizers::{
         byte_level::ByteLevel as ByteLevelPre,
         sequence::Sequence,
@@ -66,6 +72,55 @@ fn merges_from_value(v: &gguf_file::Value) -> Result<Vec<(String, String)>> {
         .collect()
 }
 
+fn value_to_f32_array(v: &gguf_file::Value, name: &str) -> Result<Vec<f32>> {
+    let arr = v
+        .to_vec()
+        .with_context(|| format!("`{name}` is not an array"))?;
+    arr.iter()
+        .map(|v| {
+            v.to_f32()
+                .with_context(|| format!("`{name}` element is not an f32: {v:?}"))
+        })
+        .collect()
+}
+
+fn synthesize_llama_spm_merges(tokens: &[String], scores: &[f32]) -> Result<Vec<(String, String)>> {
+    // llama.cpp's SPM tokenizer merges adjacent symbols when their concatenation is a
+    // vocab token, using that token's score as priority. The `tokenizers` crate can
+    // represent the same behavior as BPE when these scored merges are synthesized.
+    if scores.len() < tokens.len() {
+        crate::bail!(
+            "`tokenizer.ggml.scores` has fewer entries than `tokenizer.ggml.tokens`: {} < {}",
+            scores.len(),
+            tokens.len()
+        );
+    }
+
+    let token_set: HashSet<&str> = tokens.iter().map(String::as_str).collect();
+    let mut seen = HashSet::new();
+    let mut merges = Vec::new();
+
+    for (token_id, token) in tokens.iter().enumerate() {
+        for (split_idx, _) in token.char_indices().skip(1) {
+            let (left, right) = token.split_at(split_idx);
+            if token_set.contains(left) && token_set.contains(right) {
+                let pair = (left.to_string(), right.to_string());
+                if seen.insert(pair.clone()) {
+                    merges.push((scores[token_id], token_id, pair));
+                }
+            }
+        }
+    }
+
+    merges.sort_by(|(left_score, left_id, _), (right_score, right_id, _)| {
+        right_score
+            .total_cmp(left_score)
+            .then_with(|| left_id.cmp(right_id))
+    });
+
+    Ok(merges.into_iter().map(|(_, _, pair)| pair).collect())
+}
+
 struct Pipeline {
     normalizer: Option<NormalizerWrapper>,
     pretokenizer: Option<PreTokenizerWrapper>,
@@ -98,6 +153,29 @@ fn pre_tokenizer_sequence(regex: &str, byte_level: ByteLevelPre) -> Result<PreTo
     )
     .map_err(Error::wrap)?;
     Ok(Sequence::new(vec![split.into(), byte_level.into()]).into())
+}
+
+fn llama_spm_pipeline() -> Result<Pipeline> {
+    Ok(Pipeline {
+        normalizer: Some(
+            NormalizerSequence::new(vec![
+                Prepend::new("▁".to_string()).into(),
+                Replace::new(" ", "▁").map_err(Error::wrap)?.into(),
+            ])
+            .into(),
+        ),
+        pretokenizer: None,
+        decoder: Some(
+            DecoderSequence::new(vec![
+                Replace::new("▁", " ").map_err(Error::wrap)?.into(),
+                ByteFallback::new().into(),
+                Fuse::new().into(),
+                StripDecoder::new(' ', 1, 0).into(),
+            ])
+            .into(),
+        ),
+        post_processor: None,
+    })
 }
 
 fn pipeline_from_pre(pre: &str) -> Result<Pipeline> {
@@ -203,8 +281,11 @@ impl TokenizerFromGguf for Tokenizer {
         let model_kind = metadata_value(ct, "tokenizer.ggml.model")?
             .to_string()?
             .to_lowercase();
-        if model_kind != "gpt2" {
-            crate::bail!("unsupported tokenizer model `{model_kind}`");
+        if model_kind != "gpt2" && model_kind != "llama" {
+            crate::bail!(
+                "unsupported tokenizer model `{model_kind}`: Candle currently supports `gpt2` \
+                and `llama` GGUF tokenizers"
+            );
         }
 
         let tokens = value_to_string_array(
@@ -216,17 +297,35 @@ impl TokenizerFromGguf for Tokenizer {
             .enumerate()
             .map(|(i, t)| (t.clone(), i as u32))
             .collect();
-        let merges = merges_from_value(metadata_value(ct, "tokenizer.ggml.merges")?)?;
+        let has_merges = ct.metadata.contains_key("tokenizer.ggml.merges");
+        let merges = if model_kind == "llama" && !has_merges {
+            let scores = value_to_f32_array(
+                metadata_value(ct, "tokenizer.ggml.scores")?,
+                "tokenizer.ggml.scores",
+            )?;
+            synthesize_llama_spm_merges(&tokens, &scores)?
+        } else {
+            merges_from_value(metadata_value(ct, "tokenizer.ggml.merges")?)?
+        };
 
         let mut builder = BPE::builder().vocab_and_merges(vocab, merges);
 
-        if let Ok(val) = metadata_value(ct, "tokenizer.ggml.unk_token_id") {
-            let token_id = gguf_value_to_u32(val)?;
-            if let Some(token) = tokens.get(token_id as usize) {
-                builder = builder.unk_token(token.clone());
+        for key in [
+            "tokenizer.ggml.unk_token_id",
+            "tokenizer.ggml.unknown_token_id",
+        ] {
+            if let Ok(val) = metadata_value(ct, key) {
+                let token_id = gguf_value_to_u32(val)?;
+                if let Some(token) = tokens.get(token_id as usize) {
+                    builder = builder.unk_token(token.clone());
+                }
+                break;
             }
         }
 
+        if model_kind == "llama" {
+            builder = builder.byte_fallback(true);
+        }
         if let Ok(val) = metadata_value(ct, "tokenizer.ggml.byte_fallback") {
             builder = builder.byte_fallback(val.to_bool()?);
         }
@@ -238,11 +337,15 @@ impl TokenizerFromGguf for Tokenizer {
         let bpe = builder.build().map_err(Error::wrap)?;
         let mut tokenizer = Tokenizer::new(bpe);
 
-        let pre = metadata_value(ct, "tokenizer.ggml.pre")
-            .and_then(|v| v.to_string())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_| "gpt2".to_string());
-        let pipeline = pipeline_from_pre(pre.as_str())?;
+        let pipeline = if model_kind == "llama" {
+            llama_spm_pipeline()?
+        } else {
+            let pre = metadata_value(ct, "tokenizer.ggml.pre")
+                .and_then(|v| v.to_string())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|_| "gpt2".to_string());
+            pipeline_from_pre(pre.as_str())?
+        };
         let post_processor_base = pipeline.post_processor.clone();
 
         let add_bos = metadata_value(ct, "tokenizer.ggml.add_bos_token")
@@ -301,8 +404,10 @@ impl TokenizerFromGguf for Tokenizer {
             "tokenizer.ggml.bos_token_id",
             "tokenizer.ggml.eos_token_id",
             "tokenizer.ggml.pad_token_id",
+            "tokenizer.ggml.padding_token_id",
             "tokenizer.ggml.sep_token_id",
             "tokenizer.ggml.unk_token_id",
+            "tokenizer.ggml.unknown_token_id",
         ] {
             if let Ok(val) = metadata_value(ct, key) {
                 explicit_specials.insert(gguf_value_to_u32(val)?);
