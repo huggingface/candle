@@ -1,9 +1,76 @@
-//! Z-Image Transformer (ZImageTransformer2DModel)
+//! Quantized Z-Image transformer (ISQ at load).
 //!
-//! Core transformer implementation for Z-Image text-to-image generation.
+//! A mechanical port of [`super::transformer`] with every
+//! `candle_nn::Linear` swapped for a [`QLinear`] (a `QMatMul` +
+//! optional bias). Weights are read from the same dense safetensors
+//! and quantized in situ at construction — no separate GGUF artifact.
+//! All forward logic is inherited verbatim: `QLinear` implements
+//! `Module`, so the computation graph is identical to the dense
+//! model's up to quantization error.
+//!
+//! Callers should run the pipeline in `F32` when quantized — the
+//! quantized matmul kernels accumulate in f32, and mixing bf16
+//! activations with quantized weights costs casts without saving
+//! resident memory.
+
+use candle::quantized::{GgmlDType, QMatMul, QTensor};
+
+/// Quantized linear layer: `QMatMul` plus an optional (unquantized)
+/// bias. Norms, embeddings, and biases stay in the float domain —
+/// they are a rounding error of the parameter count and quantizing
+/// them costs accuracy for nothing.
+#[derive(Debug, Clone)]
+pub struct QLinear {
+    inner: QMatMul,
+    bias: Option<Tensor>,
+}
+
+impl QLinear {
+    fn quantize(w: &Tensor, dt: GgmlDType) -> Result<QMatMul> {
+        // Quantization runs on the weight's device; k-quant block
+        // layouts require the last dim to be a multiple of the block
+        // size, which holds for every Z-Image linear (all dims are
+        // multiples of 256).
+        let q = QTensor::quantize(w, dt)?;
+        QMatMul::from_qtensor(q)
+    }
+
+    fn new(in_d: usize, out_d: usize, vb: VarBuilder, dt: GgmlDType) -> Result<Self> {
+        let w = vb.get((out_d, in_d), "weight")?;
+        let bias = vb.get(out_d, "bias")?;
+        Ok(Self {
+            inner: Self::quantize(&w, dt)?,
+            bias: Some(bias),
+        })
+    }
+
+    fn new_no_bias(in_d: usize, out_d: usize, vb: VarBuilder, dt: GgmlDType) -> Result<Self> {
+        let w = vb.get((out_d, in_d), "weight")?;
+        Ok(Self {
+            inner: Self::quantize(&w, dt)?,
+            bias: None,
+        })
+    }
+
+    /// The dtype activations should use with this layer (QMatMul
+    /// accumulates in f32).
+    pub fn weight_dtype() -> DType {
+        DType::F32
+    }
+}
+
+impl Module for QLinear {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let y = self.inner.forward(x)?;
+        match &self.bias {
+            Some(b) => y.broadcast_add(b),
+            None => Ok(y),
+        }
+    }
+}
 
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{linear, linear_no_bias, VarBuilder};
+use candle_nn::VarBuilder;
 
 use crate::models::with_tracing::RmsNorm;
 
@@ -40,149 +107,27 @@ pub const MAX_PERIOD: f64 = 10000.0;
 
 // ==================== Config ====================
 
-/// Z-Image Transformer configuration
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct Config {
-    #[serde(default = "default_patch_size")]
-    pub all_patch_size: Vec<usize>,
-    #[serde(default = "default_f_patch_size")]
-    pub all_f_patch_size: Vec<usize>,
-    #[serde(default = "default_in_channels")]
-    pub in_channels: usize,
-    #[serde(default = "default_dim")]
-    pub dim: usize,
-    #[serde(default = "default_n_layers")]
-    pub n_layers: usize,
-    #[serde(default = "default_n_refiner_layers")]
-    pub n_refiner_layers: usize,
-    #[serde(default = "default_n_heads")]
-    pub n_heads: usize,
-    #[serde(default = "default_n_kv_heads")]
-    pub n_kv_heads: usize,
-    #[serde(default = "default_norm_eps")]
-    pub norm_eps: f64,
-    #[serde(default = "default_qk_norm")]
-    pub qk_norm: bool,
-    #[serde(default = "default_cap_feat_dim")]
-    pub cap_feat_dim: usize,
-    #[serde(default = "default_rope_theta")]
-    pub rope_theta: f64,
-    #[serde(default = "default_t_scale")]
-    pub t_scale: f64,
-    #[serde(default = "default_axes_dims")]
-    pub axes_dims: Vec<usize>,
-    #[serde(default = "default_axes_lens")]
-    pub axes_lens: Vec<usize>,
-    /// Whether to use accelerated attention (CUDA flash-attn / Metal SDPA)
-    /// Default is true, automatically selects optimal implementation per platform
-    #[serde(default = "default_use_accelerated_attn")]
-    pub use_accelerated_attn: bool,
-}
-
-fn default_use_accelerated_attn() -> bool {
-    true
-}
-
-fn default_patch_size() -> Vec<usize> {
-    vec![2]
-}
-fn default_f_patch_size() -> Vec<usize> {
-    vec![1]
-}
-fn default_in_channels() -> usize {
-    16
-}
-fn default_dim() -> usize {
-    3840
-}
-fn default_n_layers() -> usize {
-    30
-}
-fn default_n_refiner_layers() -> usize {
-    2
-}
-fn default_n_heads() -> usize {
-    30
-}
-fn default_n_kv_heads() -> usize {
-    30
-}
-fn default_norm_eps() -> f64 {
-    1e-5
-}
-fn default_qk_norm() -> bool {
-    true
-}
-fn default_cap_feat_dim() -> usize {
-    2560
-}
-fn default_rope_theta() -> f64 {
-    256.0
-}
-fn default_t_scale() -> f64 {
-    1000.0
-}
-fn default_axes_dims() -> Vec<usize> {
-    vec![32, 48, 48]
-}
-fn default_axes_lens() -> Vec<usize> {
-    vec![1536, 512, 512]
-}
-
-impl Config {
-    /// Create configuration for Z-Image Turbo model
-    pub fn z_image_turbo() -> Self {
-        Self {
-            all_patch_size: vec![2],
-            all_f_patch_size: vec![1],
-            in_channels: 16,
-            dim: 3840,
-            n_layers: 30,
-            n_refiner_layers: 2,
-            n_heads: 30,
-            n_kv_heads: 30,
-            norm_eps: 1e-5,
-            qk_norm: true,
-            cap_feat_dim: 2560,
-            rope_theta: 256.0,
-            t_scale: 1000.0,
-            axes_dims: vec![32, 48, 48],
-            axes_lens: vec![1536, 512, 512],
-            use_accelerated_attn: true,
-        }
-    }
-
-    /// Set whether to use accelerated attention (for debugging)
-    pub fn set_use_accelerated_attn(&mut self, enabled: bool) {
-        self.use_accelerated_attn = enabled;
-    }
-
-    /// Get head dimension
-    pub fn head_dim(&self) -> usize {
-        self.dim / self.n_heads
-    }
-
-    /// Get hidden dimension for FFN
-    /// Matches Python: int(dim / 3 * 8) = 10240 for dim=3840
-    pub fn hidden_dim(&self) -> usize {
-        (self.dim / 3) * 8
-    }
-}
+pub use super::transformer::Config;
 
 // ==================== TimestepEmbedder ====================
 
 /// Timestep embedding using sinusoidal encoding + MLP
 #[derive(Debug, Clone)]
 pub struct TimestepEmbedder {
-    linear1: candle_nn::Linear,
-    linear2: candle_nn::Linear,
+    linear1: QLinear,
+    linear2: QLinear,
     frequency_embedding_size: usize,
 }
 
 impl TimestepEmbedder {
-    pub fn new(out_size: usize, mid_size: usize, vb: VarBuilder) -> Result<Self> {
-        let linear1 = linear(FREQUENCY_EMBEDDING_SIZE, mid_size, vb.pp("mlp").pp("0"))?;
-        let linear2 = linear(mid_size, out_size, vb.pp("mlp").pp("2"))?;
+    pub fn new(out_size: usize, mid_size: usize, vb: VarBuilder, qdt: GgmlDType) -> Result<Self> {
+        let linear1 = QLinear::new(
+            FREQUENCY_EMBEDDING_SIZE,
+            mid_size,
+            vb.pp("mlp").pp("0"),
+            qdt,
+        )?;
+        let linear2 = QLinear::new(mid_size, out_size, vb.pp("mlp").pp("2"), qdt)?;
         Ok(Self {
             linear1,
             linear2,
@@ -204,7 +149,7 @@ impl TimestepEmbedder {
 
     pub fn forward(&self, t: &Tensor) -> Result<Tensor> {
         let device = t.device();
-        let dtype = self.linear1.weight().dtype();
+        let dtype = QLinear::weight_dtype();
         let t_freq = self.timestep_embedding(t, device, dtype)?;
         t_freq.apply(&self.linear1)?.silu()?.apply(&self.linear2)
     }
@@ -215,16 +160,16 @@ impl TimestepEmbedder {
 /// SwiGLU feedforward network
 #[derive(Debug, Clone)]
 pub struct FeedForward {
-    w1: candle_nn::Linear,
-    w2: candle_nn::Linear,
-    w3: candle_nn::Linear,
+    w1: QLinear,
+    w2: QLinear,
+    w3: QLinear,
 }
 
 impl FeedForward {
-    pub fn new(dim: usize, hidden_dim: usize, vb: VarBuilder) -> Result<Self> {
-        let w1 = linear_no_bias(dim, hidden_dim, vb.pp("w1"))?;
-        let w2 = linear_no_bias(hidden_dim, dim, vb.pp("w2"))?;
-        let w3 = linear_no_bias(dim, hidden_dim, vb.pp("w3"))?;
+    pub fn new(dim: usize, hidden_dim: usize, vb: VarBuilder, qdt: GgmlDType) -> Result<Self> {
+        let w1 = QLinear::new_no_bias(dim, hidden_dim, vb.pp("w1"), qdt)?;
+        let w2 = QLinear::new_no_bias(hidden_dim, dim, vb.pp("w2"), qdt)?;
+        let w3 = QLinear::new_no_bias(dim, hidden_dim, vb.pp("w3"), qdt)?;
         Ok(Self { w1, w2, w3 })
     }
 }
@@ -247,7 +192,7 @@ pub struct QkNorm {
 }
 
 impl QkNorm {
-    pub fn new(head_dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+    pub fn new(head_dim: usize, eps: f64, vb: VarBuilder, _qdt: GgmlDType) -> Result<Self> {
         let norm_q = RmsNorm::new(head_dim, eps, vb.pp("norm_q"))?;
         let norm_k = RmsNorm::new(head_dim, eps, vb.pp("norm_k"))?;
         Ok(Self { norm_q, norm_k })
@@ -366,10 +311,10 @@ pub fn apply_rotary_emb(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor
 /// Z-Image attention with QK normalization and 3D RoPE
 #[derive(Debug, Clone)]
 pub struct ZImageAttention {
-    to_q: candle_nn::Linear,
-    to_k: candle_nn::Linear,
-    to_v: candle_nn::Linear,
-    to_out: candle_nn::Linear,
+    to_q: QLinear,
+    to_k: QLinear,
+    to_v: QLinear,
+    to_out: QLinear,
     qk_norm: Option<QkNorm>,
     n_heads: usize,
     head_dim: usize,
@@ -377,18 +322,18 @@ pub struct ZImageAttention {
 }
 
 impl ZImageAttention {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder, qdt: GgmlDType) -> Result<Self> {
         let dim = cfg.dim;
         let n_heads = cfg.n_heads;
         let head_dim = cfg.head_dim();
 
-        let to_q = linear_no_bias(dim, n_heads * head_dim, vb.pp("to_q"))?;
-        let to_k = linear_no_bias(dim, cfg.n_kv_heads * head_dim, vb.pp("to_k"))?;
-        let to_v = linear_no_bias(dim, cfg.n_kv_heads * head_dim, vb.pp("to_v"))?;
-        let to_out = linear_no_bias(n_heads * head_dim, dim, vb.pp("to_out").pp("0"))?;
+        let to_q = QLinear::new_no_bias(dim, n_heads * head_dim, vb.pp("to_q"), qdt)?;
+        let to_k = QLinear::new_no_bias(dim, cfg.n_kv_heads * head_dim, vb.pp("to_k"), qdt)?;
+        let to_v = QLinear::new_no_bias(dim, cfg.n_kv_heads * head_dim, vb.pp("to_v"), qdt)?;
+        let to_out = QLinear::new_no_bias(n_heads * head_dim, dim, vb.pp("to_out").pp("0"), qdt)?;
 
         let qk_norm = if cfg.qk_norm {
-            Some(QkNorm::new(head_dim, 1e-5, vb.clone())?)
+            Some(QkNorm::new(head_dim, 1e-5, vb.clone(), qdt)?)
         } else {
             None
         };
@@ -502,6 +447,17 @@ impl ZImageAttention {
             let k = k.transpose(1, 2)?;
             let v = v.transpose(1, 2)?;
 
+            // The quantized pipeline runs f32 activations, but the
+            // flash kernels are f16/bf16-only: cast around the call.
+            // bf16 keeps f32's exponent range, so no overflow risk.
+            let in_dtype = q.dtype();
+            if in_dtype == candle::DType::F32 {
+                let q = q.to_dtype(candle::DType::BF16)?;
+                let k = k.to_dtype(candle::DType::BF16)?;
+                let v = v.to_dtype(candle::DType::BF16)?;
+                let result = flash_attn(&q, &k, &v, scale as f32, false)?;
+                return result.to_dtype(in_dtype)?.transpose(1, 2);
+            }
             let result = flash_attn(&q, &k, &v, scale as f32, false)?;
             result.transpose(1, 2)
         }
@@ -585,16 +541,16 @@ pub struct ZImageTransformerBlock {
     attention_norm2: RmsNorm,
     ffn_norm1: RmsNorm,
     ffn_norm2: RmsNorm,
-    adaln_modulation: Option<candle_nn::Linear>,
+    adaln_modulation: Option<QLinear>,
 }
 
 impl ZImageTransformerBlock {
-    pub fn new(cfg: &Config, modulation: bool, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, modulation: bool, vb: VarBuilder, qdt: GgmlDType) -> Result<Self> {
         let dim = cfg.dim;
         let hidden_dim = cfg.hidden_dim();
 
-        let attention = ZImageAttention::new(cfg, vb.pp("attention"))?;
-        let feed_forward = FeedForward::new(dim, hidden_dim, vb.pp("feed_forward"))?;
+        let attention = ZImageAttention::new(cfg, vb.pp("attention"), qdt)?;
+        let feed_forward = FeedForward::new(dim, hidden_dim, vb.pp("feed_forward"), qdt)?;
 
         let attention_norm1 = RmsNorm::new(dim, cfg.norm_eps, vb.pp("attention_norm1"))?;
         let attention_norm2 = RmsNorm::new(dim, cfg.norm_eps, vb.pp("attention_norm2"))?;
@@ -603,10 +559,11 @@ impl ZImageTransformerBlock {
 
         let adaln_modulation = if modulation {
             let adaln_dim = dim.min(ADALN_EMBED_DIM);
-            Some(linear(
+            Some(QLinear::new(
                 adaln_dim,
                 4 * dim,
                 vb.pp("adaLN_modulation").pp("0"),
+                qdt,
             )?)
         } else {
             None
@@ -710,17 +667,26 @@ impl Module for LayerNormNoParams {
 #[derive(Debug, Clone)]
 pub struct FinalLayer {
     norm_final: LayerNormNoParams,
-    linear: candle_nn::Linear,
-    adaln_silu: candle_nn::Linear,
+    linear: QLinear,
+    adaln_silu: QLinear,
 }
 
 impl FinalLayer {
-    pub fn new(hidden_size: usize, out_channels: usize, vb: VarBuilder) -> Result<Self> {
+    pub fn new(
+        hidden_size: usize,
+        out_channels: usize,
+        vb: VarBuilder,
+        qdt: GgmlDType,
+    ) -> Result<Self> {
         let norm_final = LayerNormNoParams::new(1e-6);
-        let linear = candle_nn::linear(hidden_size, out_channels, vb.pp("linear"))?;
+        let linear = QLinear::new(hidden_size, out_channels, vb.pp("linear"), qdt)?;
         let adaln_dim = hidden_size.min(ADALN_EMBED_DIM);
-        let adaln_silu =
-            candle_nn::linear(adaln_dim, hidden_size, vb.pp("adaLN_modulation").pp("1"))?;
+        let adaln_silu = QLinear::new(
+            adaln_dim,
+            hidden_size,
+            vb.pp("adaLN_modulation").pp("1"),
+            qdt,
+        )?;
 
         Ok(Self {
             norm_final,
@@ -871,15 +837,15 @@ pub fn create_coordinate_grid(
     Tensor::from_vec(coords, (f * h * w, 3), device)
 }
 
-// ==================== ZImageTransformer2DModel ====================
+// ==================== QuantizedZImageTransformer2DModel ====================
 
 /// Z-Image Transformer 2D Model
 #[derive(Debug, Clone)]
-pub struct ZImageTransformer2DModel {
+pub struct QuantizedZImageTransformer2DModel {
     t_embedder: TimestepEmbedder,
     cap_embedder_norm: RmsNorm,
-    cap_embedder_linear: candle_nn::Linear,
-    x_embedder: candle_nn::Linear,
+    cap_embedder_linear: QLinear,
+    x_embedder: QLinear,
     final_layer: FinalLayer,
     #[allow(dead_code)]
     x_pad_token: Tensor,
@@ -892,14 +858,14 @@ pub struct ZImageTransformer2DModel {
     cfg: Config,
 }
 
-impl ZImageTransformer2DModel {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl QuantizedZImageTransformer2DModel {
+    pub fn new(cfg: &Config, vb: VarBuilder, qdt: GgmlDType) -> Result<Self> {
         let device = vb.device();
         let dtype = vb.dtype();
 
         // TimestepEmbedder
         let adaln_dim = cfg.dim.min(ADALN_EMBED_DIM);
-        let t_embedder = TimestepEmbedder::new(adaln_dim, 1024, vb.pp("t_embedder"))?;
+        let t_embedder = TimestepEmbedder::new(adaln_dim, 1024, vb.pp("t_embedder"), qdt)?;
 
         // Caption embedder
         let cap_embedder_norm = RmsNorm::new(
@@ -907,22 +873,31 @@ impl ZImageTransformer2DModel {
             cfg.norm_eps,
             vb.pp("cap_embedder").pp("0"),
         )?;
-        let cap_embedder_linear = linear(cfg.cap_feat_dim, cfg.dim, vb.pp("cap_embedder").pp("1"))?;
+        let cap_embedder_linear = QLinear::new(
+            cfg.cap_feat_dim,
+            cfg.dim,
+            vb.pp("cap_embedder").pp("1"),
+            qdt,
+        )?;
 
         // Patch embedder (assuming patch_size=2, f_patch_size=1)
         let patch_dim = cfg.all_f_patch_size[0]
             * cfg.all_patch_size[0]
             * cfg.all_patch_size[0]
             * cfg.in_channels;
-        let x_embedder = linear(patch_dim, cfg.dim, vb.pp("all_x_embedder").pp("2-1"))?;
+        let x_embedder = QLinear::new(patch_dim, cfg.dim, vb.pp("all_x_embedder").pp("2-1"), qdt)?;
 
         // Final layer
         let out_channels = cfg.all_patch_size[0]
             * cfg.all_patch_size[0]
             * cfg.all_f_patch_size[0]
             * cfg.in_channels;
-        let final_layer =
-            FinalLayer::new(cfg.dim, out_channels, vb.pp("all_final_layer").pp("2-1"))?;
+        let final_layer = FinalLayer::new(
+            cfg.dim,
+            out_channels,
+            vb.pp("all_final_layer").pp("2-1"),
+            qdt,
+        )?;
 
         // Pad tokens
         let x_pad_token = vb.get((1, cfg.dim), "x_pad_token")?;
@@ -935,6 +910,7 @@ impl ZImageTransformer2DModel {
                 cfg,
                 true,
                 vb.pp("noise_refiner").pp(i),
+                qdt,
             )?);
         }
 
@@ -945,6 +921,7 @@ impl ZImageTransformer2DModel {
                 cfg,
                 false,
                 vb.pp("context_refiner").pp(i),
+                qdt,
             )?);
         }
 
@@ -955,6 +932,7 @@ impl ZImageTransformer2DModel {
                 cfg,
                 true,
                 vb.pp("layers").pp(i),
+                qdt,
             )?);
         }
 
