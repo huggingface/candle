@@ -6521,6 +6521,106 @@ fn test_hard_swish() -> candle::Result<()> {
     Ok(())
 }
 
+fn resize_linear_graph(coordinate_transformation_mode: &str) -> ModelProto {
+    create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Resize".to_string(),
+            input: vec![
+                INPUT_X.to_string(),
+                "".to_string(),
+                "".to_string(),
+                "sizes".to_string(),
+            ],
+            output: vec![OUTPUT_Z.to_string()],
+            attribute: vec![
+                AttributeProto {
+                    name: "mode".to_string(),
+                    r#type: AttributeType::String.into(),
+                    s: b"linear".to_vec(),
+                    ..Default::default()
+                },
+                AttributeProto {
+                    name: "coordinate_transformation_mode".to_string(),
+                    r#type: AttributeType::String.into(),
+                    s: coordinate_transformation_mode.as_bytes().to_vec(),
+                    ..Default::default()
+                },
+                AttributeProto {
+                    name: "nearest_mode".to_string(),
+                    r#type: AttributeType::String.into(),
+                    s: b"floor".to_vec(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }],
+        input: vec![
+            ValueInfoProto {
+                name: INPUT_X.to_string(),
+                ..Default::default()
+            },
+            ValueInfoProto {
+                name: "sizes".to_string(),
+                ..Default::default()
+            },
+        ],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }))
+}
+
+fn assert_resize_linear(
+    coordinate_transformation_mode: &str,
+    sizes: [i64; 4],
+    expected_dims: &[usize],
+    expected: &[f32],
+) -> Result<()> {
+    let x = Tensor::from_vec(vec![1.0f32, 2.0, 3.0, 4.0], (1, 1, 2, 2), &Device::Cpu)?;
+    let sizes = Tensor::from_vec(sizes.to_vec(), (4,), &Device::Cpu)?;
+    let inputs = HashMap::from_iter([(INPUT_X.to_string(), x), ("sizes".to_string(), sizes)]);
+
+    let outputs = simple_eval(&resize_linear_graph(coordinate_transformation_mode), inputs)?;
+    let output = outputs.get(OUTPUT_Z).expect("missing output Z");
+    assert_eq!(output.dims(), expected_dims);
+
+    let actual = output.flatten_all()?.to_vec1::<f32>()?;
+    assert_eq!(actual.len(), expected.len());
+    for (idx, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
+        let diff = (actual - expected).abs();
+        assert!(
+            diff < 1e-6,
+            "Mismatch at index {idx}: got {actual}, expected {expected}, diff={diff}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_resize_linear_half_pixel() -> Result<()> {
+    assert_resize_linear(
+        "half_pixel",
+        [1, 1, 4, 4],
+        &[1, 1, 4, 4],
+        &[
+            1.0, 1.25, 1.75, 2.0, 1.5, 1.75, 2.25, 2.5, 2.5, 2.75, 3.25, 3.5, 3.0, 3.25, 3.75, 4.0,
+        ],
+    )
+}
+
+#[test]
+fn test_resize_linear_align_corners() -> Result<()> {
+    assert_resize_linear(
+        "align_corners",
+        [1, 1, 3, 3],
+        &[1, 1, 3, 3],
+        &[1.0, 1.5, 2.0, 2.0, 2.5, 3.0, 3.0, 3.5, 4.0],
+    )
+}
+
 #[test]
 fn test_scatternd_operation() -> Result<()> {
     // Example 1 based on ONNX documentation
