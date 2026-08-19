@@ -195,22 +195,10 @@ impl QuantizedAttention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let scale = 1.0 / (self.head_dim as f64).sqrt();
-        let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+        let scale = 1.0 / (self.head_dim as f32).sqrt();
 
-        if let Some(m) = mask {
-            let m_dtype = m.dtype();
-            let scores_dtype = scores.dtype();
-            let mask = if m_dtype != scores_dtype {
-                m.to_dtype(scores_dtype)?
-            } else {
-                m.clone()
-            };
-            scores = scores.broadcast_add(&mask)?;
-        }
+        let ctx = candle_nn::attention::attention(&q, &k, &v, scale, mask)?;
 
-        let probs = candle_nn::ops::softmax_last_dim(&scores)?;
-        let ctx = probs.matmul(&v)?; // (B, H, L, D)
         let reshaped_ctx =
             ctx.transpose(1, 2)?
                 .reshape((b, seq_len, self.n_head * self.head_dim))?;
