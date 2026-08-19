@@ -2839,3 +2839,248 @@ verify_block_sizes!(
     BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1, BlockQ2K, BlockQ3K, BlockQ4K,
     BlockQ5K, BlockQ6K, BlockQ8K, f32, f16, bf16
 );
+
+// Packed Q8_0 (llama block_q8_0x4): 4 rows interleaved in 4-byte chunks so one
+// SDOT covers 4 output columns via lane broadcast. Repacked once per tensor.
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    zerocopy::FromBytes,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::Immutable,
+)]
+#[repr(C)]
+#[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+pub struct BlockQ8_0x4 {
+    pub(crate) d: [f16; 4],
+    // qs[16*j + 4*r + l] = element 4*j + l of row r (j in 0..8, l in 0..4).
+    pub(crate) qs: [i8; 4 * QK8_0],
+}
+#[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+const _: () = assert!(std::mem::size_of::<BlockQ8_0x4>() == 136);
+
+#[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+impl BlockQ8_0x4 {
+    fn zeroed() -> Self {
+        Self {
+            d: [f16::ZERO; 4],
+            qs: [0i8; 4 * QK8_0],
+        }
+    }
+}
+
+/// Repack n (n % 4 == 0) rows of Q8_0 blocks into the x4 interleaved layout.
+#[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+pub(crate) fn repack_q8_0_weight(blocks: &[BlockQ8_0], n: usize) -> Vec<BlockQ8_0x4> {
+    assert!(n.is_multiple_of(4), "q8_0 x4 repack needs n % 4 == 0");
+    let nb = blocks.len() / n;
+    let mut out = vec![BlockQ8_0x4::zeroed(); blocks.len() / 4];
+    for g in 0..n / 4 {
+        for b in 0..nb {
+            let dst = &mut out[g * nb + b];
+            for r in 0..4 {
+                let src = &blocks[(g * 4 + r) * nb + b];
+                dst.d[r] = src.d;
+                for j in 0..QK8_0 / 4 {
+                    for l in 0..4 {
+                        dst.qs[16 * j + 4 * r + l] = src.qs[4 * j + l];
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Scalar twin of `neon::quantize_mat_q8_0x4_neon`, kept for its bit-exactness test.
+#[cfg(all(test, target_arch = "aarch64", target_feature = "dotprod"))]
+pub(crate) fn quantize_q8_0_x4_into(rows: &[&[f32]; 4], out: &mut [BlockQ8_0x4]) {
+    let nb = out.len();
+    let mut tmp = vec![BlockQ8_0::zeros(); nb];
+    for (r, row) in rows.iter().enumerate() {
+        debug_assert_eq!(row.len(), nb * QK8_0);
+        BlockQ8_0::from_float(row, &mut tmp);
+        for (b, blk) in tmp.iter().enumerate() {
+            let dst = &mut out[b];
+            dst.d[r] = blk.d;
+            for j in 0..QK8_0 / 4 {
+                for l in 0..4 {
+                    dst.qs[16 * j + 4 * r + l] = blk.qs[4 * j + l];
+                }
+            }
+        }
+    }
+}
+
+/// dst(m,n) = lhs(m,k) x W^T: 4-row GEMM tiles for m >= 4 (zero-padded tail),
+/// per-row GEMV below; column groups split across the barrier pool.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    target_feature = "dotprod"
+))]
+#[allow(clippy::needless_range_loop)]
+pub(crate) fn matmul_q8_0x4(
+    (m, k, n): (usize, usize, usize),
+    lhs: &[f32],
+    packed: &[BlockQ8_0x4],
+    dst: &mut [f32],
+) {
+    use super::neon::{gemm_q8_0x4, gemv_q8_0x4};
+    let nb = k / QK8_0;
+    let groups = n / 4;
+
+    struct DstPtr(*mut f32);
+    unsafe impl Sync for DstPtr {}
+    let dptr = DstPtr(dst.as_mut_ptr());
+
+    if m >= 4 {
+        let row_tiles = m.div_ceil(4);
+        let zeros = vec![0f32; k];
+        let mut q8: Vec<BlockQ8_0x4> = vec![BlockQ8_0x4::zeroed(); row_tiles * nb];
+        let tile_rows = |rt: usize| -> [&[f32]; 4] {
+            std::array::from_fn(|a| {
+                let r = rt * 4 + a;
+                if r < m {
+                    &lhs[r * k..(r + 1) * k]
+                } else {
+                    zeros.as_slice()
+                }
+            })
+        };
+        crate::utils::par_chunks_mut(&mut q8, nb, |rt, chunk| {
+            crate::quantized::neon::quantize_mat_q8_0x4_neon(&tile_rows(rt), chunk);
+        });
+
+        let process = |g: usize| {
+            let w = &packed[g * nb..(g + 1) * nb];
+            let p = &dptr;
+            for rt in 0..row_tiles {
+                let mut t = [0f32; 16];
+                gemm_q8_0x4(w, &q8[rt * nb..(rt + 1) * nb], &mut t);
+                for a in 0..4 {
+                    let r = rt * 4 + a;
+                    if r >= m {
+                        break;
+                    }
+                    for c in 0..4 {
+                        unsafe { *p.0.add(r * n + g * 4 + c) = t[a * 4 + c] };
+                    }
+                }
+            }
+        };
+        let pool = crate::utils::barrier_pool();
+        let n_total = pool.n_workers() + 1;
+        let gpt = groups.div_ceil(n_total);
+        pool.execute(|tid| {
+            let start = tid * gpt;
+            if start < groups {
+                let end = groups.min((tid + 1) * gpt);
+                for g in start..end {
+                    process(g);
+                }
+            }
+        });
+    } else {
+        // Decode / tiny m: plain Q8_0 activation rows + lane-broadcast GEMV.
+        let mut q8 = vec![BlockQ8_0::zeros(); m * nb];
+        for r in 0..m {
+            BlockQ8_0::from_float(&lhs[r * k..(r + 1) * k], &mut q8[r * nb..(r + 1) * nb]);
+        }
+        let process = |g: usize| {
+            let w = &packed[g * nb..(g + 1) * nb];
+            let p = &dptr;
+            for r in 0..m {
+                let mut t = [0f32; 4];
+                gemv_q8_0x4(w, &q8[r * nb..(r + 1) * nb], &mut t);
+                for c in 0..4 {
+                    unsafe { *p.0.add(r * n + g * 4 + c) = t[c] };
+                }
+            }
+        };
+        let pool = crate::utils::barrier_pool();
+        let n_total = pool.n_workers() + 1;
+        if n_total <= 1 {
+            for g in 0..groups {
+                process(g);
+            }
+        } else {
+            let gpt = groups.div_ceil(n_total);
+            pool.execute(|tid| {
+                let start = tid * gpt;
+                if start < groups {
+                    let end = groups.min((tid + 1) * gpt);
+                    for g in start..end {
+                        process(g);
+                    }
+                }
+            });
+        }
+    }
+}
+
+#[cfg(all(test, target_feature = "neon", target_feature = "dotprod"))]
+mod q8_0_packed_tests {
+    use super::*;
+
+    fn rand_f32(seed: u32, len: usize) -> Vec<f32> {
+        // Simple LCG, deterministic across runs.
+        let mut s = seed as u64;
+        (0..len)
+            .map(|_| {
+                s = s
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((s >> 33) as u32 as f32 / u32::MAX as f32) * 2.0 - 1.0
+            })
+            .collect()
+    }
+
+    #[test]
+    fn neon_activation_pack_matches_scalar() {
+        let k = 96;
+        let nb = k / QK8_0;
+        let rows_data: Vec<Vec<f32>> = (0..4).map(|r| rand_f32(50 + r, k)).collect();
+        let rows: [&[f32]; 4] = std::array::from_fn(|r| rows_data[r].as_slice());
+        let mut scalar = vec![BlockQ8_0x4::zeroed(); nb];
+        quantize_q8_0_x4_into(&rows, &mut scalar);
+        let mut neon = vec![BlockQ8_0x4::zeroed(); nb];
+        crate::quantized::neon::quantize_mat_q8_0x4_neon(&rows, &mut neon);
+        for b in 0..nb {
+            for r in 0..4 {
+                assert_eq!(
+                    scalar[b].d[r].to_bits(),
+                    neon[b].d[r].to_bits(),
+                    "d b={b} r={r}"
+                );
+            }
+            assert_eq!(scalar[b].qs, neon[b].qs, "qs b={b}");
+        }
+    }
+
+    #[test]
+    fn packed_q8_0_matmul_matches_baseline() {
+        let (k, n) = (96, 12); // 3 blocks per row, 3 column groups
+        let nb = k / QK8_0;
+        let wf = rand_f32(7, n * k);
+        let mut wq = vec![BlockQ8_0::zeros(); n * nb];
+        BlockQ8_0::from_float(&wf, &mut wq);
+        let packed = repack_q8_0_weight(&wq, n);
+
+        for m in [1usize, 3, 4, 7, 16] {
+            let lhs = rand_f32(100 + m as u32, m * k);
+            let mut want = vec![0f32; m * n];
+            matmul((m, k, n), &lhs, &wq, &mut want).unwrap();
+            let mut got = vec![0f32; m * n];
+            matmul_q8_0x4((m, k, n), &lhs, &packed, &mut got);
+            for i in 0..m * n {
+                let (a, b) = (want[i], got[i]);
+                let rel = (a - b).abs() / a.abs().max(1e-3);
+                assert!(rel < 1e-4, "m={m} i={i}: baseline {a} packed {b}");
+            }
+        }
+    }
+}
