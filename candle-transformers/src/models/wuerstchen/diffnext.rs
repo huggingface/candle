@@ -289,7 +289,8 @@ impl WDiffNeXt {
         let emb = (MAX_POSITIONS as f64).ln() / (half_dim - 1) as f64;
         let emb = (Tensor::arange(0u32, half_dim as u32, r.device())?.to_dtype(DType::F32)?
             * -emb)?
-            .exp()?;
+            .exp()?
+            .to_dtype(r.dtype())?;
         let emb = r.unsqueeze(1)?.broadcast_mul(&emb.unsqueeze(0)?)?;
         let emb = Tensor::cat(&[emb.sin()?, emb.cos()?], 1)?;
         let emb = if self.c_r % 2 == 1 {
