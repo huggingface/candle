@@ -289,6 +289,14 @@ impl CudaDevice {
         self.stream.clone()
     }
 
+    /// The underlying CUDA context, so a second `CudaDevice` can be built on
+    /// a fresh stream (via `new_stream()` + `from_context_and_stream`) while
+    /// sharing this device's already-loaded modules/weights, instead of
+    /// paying for a second `CudaContext::new()` (device init + full reload).
+    pub fn cuda_context(&self) -> Arc<cudarc::driver::CudaContext> {
+        self.context.clone()
+    }
+
     /// When turned on, all cuda tensors **created after calling this function** will
     /// not track uses via cuda events.
     ///
@@ -390,7 +398,12 @@ impl CudaDevice {
         Self::from_context_and_stream(context, stream)
     }
 
-    fn from_context_and_stream(
+    /// Builds a `CudaDevice` on an existing context with an explicit stream —
+    /// public so callers that already hold a loaded device's context (e.g. to
+    /// share cached weights/modules across concurrent streams) can build
+    /// additional stream-bound views without re-initializing the context or
+    /// reloading anything onto it.
+    pub fn from_context_and_stream(
         context: Arc<cudarc::driver::CudaContext>,
         stream: Arc<cudarc::driver::CudaStream>,
     ) -> Result<Self> {
