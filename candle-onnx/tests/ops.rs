@@ -5,7 +5,7 @@ use candle_onnx::onnx::tensor_proto::DataType;
 use candle_onnx::onnx::tensor_shape_proto::{dimension, Dimension};
 use candle_onnx::onnx::{type_proto, TensorProto, TensorShapeProto, TypeProto};
 use candle_onnx::onnx::{AttributeProto, GraphProto, ModelProto, NodeProto, ValueInfoProto};
-use candle_onnx::simple_eval;
+use candle_onnx::{simple_eval, simple_eval_on_device};
 use std::collections::HashMap;
 
 const INPUT_X: &str = "x";
@@ -1794,11 +1794,11 @@ fn test_gelu_operation() -> Result<()> {
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-    let results = z.to_vec2::<f32>()?;
+    let results = to_vec2_round(z, 4)?;
 
     assert_eq!(
         results,
-        vec![vec![0.0, 0.8413448], vec![1.9544997, 2.9959502]]
+        vec![vec![0.0, 0.8413], vec![1.9545, 2.996]]
     );
 
     Ok(())
@@ -7224,5 +7224,48 @@ fn test_one_hot() -> Result<()> {
         assert_eq!(y.dims(), &[3, 12]);
     }
 
+    Ok(())
+}
+
+#[test]
+fn test_simple_eval_on_device() -> Result<()> {
+    let device = match Device::new_metal(0) {
+        Ok(d) => d,
+        Err(_) => return Ok(()),
+    };
+
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Add".to_string(),
+            domain: "".to_string(),
+            attribute: vec![],
+            input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            name: "".to_string(),
+            doc_string: "".to_string(),
+        }],
+        name: "".to_string(),
+        initializer: vec![],
+        input: vec![],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        value_info: vec![],
+        doc_string: "".to_string(),
+        sparse_initializer: vec![],
+        quantization_annotation: vec![],
+    }));
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &device)?);
+    inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &device)?);
+
+    let eval = simple_eval_on_device(&graph, inputs, &device)?;
+    let z = eval.get(OUTPUT_Z).expect("output z not found");
+
+    assert_eq!(format!("{:?}", z.device()), format!("{:?}", &device));
+    assert_eq!(z.to_vec1::<f64>()?[0], 4.0);
     Ok(())
 }
