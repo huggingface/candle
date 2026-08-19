@@ -197,21 +197,51 @@ impl Tensor {
     /// use candle_core::{Tensor, DType, Device};
     /// let a = Tensor::ones((2, 3), DType::F32, &Device::Cpu)?;
     /// let b = Tensor::from_slice(&[1.0f32, 1.0, 1.0, 1.0, 1.0, 1.0], (2, 3), &Device::Cpu)?;
-    /// // a == b
+    /// assert_eq!(a.to_vec2::<f32>()?, b.to_vec2::<f32>()?);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn ones<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
         Self::ones_impl(shape, dtype, device, false)
     }
 
+    /// Fills the tensor with `value` in place.
+    ///
+    /// ```rust
+    /// use candle_core::{scalar::Scalar, DType, Device, Tensor};
+    ///
+    /// let tensor = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// tensor.const_set(Scalar::F32(2.5))?;
+    /// assert_eq!(tensor.to_vec2::<f32>()?, &[[2.5, 2.5, 2.5], [2.5, 2.5, 2.5]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn const_set(&self, value: crate::scalar::Scalar) -> Result<()> {
         self.storage_mut().const_set(value, self.layout())
     }
 
+    /// Fills the tensor with zeros in place.
+    ///
+    /// ```rust
+    /// use candle_core::{Device, Tensor};
+    ///
+    /// let tensor = Tensor::new(&[1f32, 2., 3.], &Device::Cpu)?;
+    /// tensor.zero_set()?;
+    /// assert_eq!(tensor.to_vec1::<f32>()?, &[0., 0., 0.]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn zero_set(&self) -> Result<()> {
         self.const_set(crate::scalar::Scalar::zero(self.dtype()))
     }
 
+    /// Fills the tensor with ones in place.
+    ///
+    /// ```rust
+    /// use candle_core::{Device, Tensor};
+    ///
+    /// let tensor = Tensor::new(&[4f32, 5., 6.], &Device::Cpu)?;
+    /// tensor.one_set()?;
+    /// assert_eq!(tensor.to_vec1::<f32>()?, &[1., 1., 1.]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn one_set(&self) -> Result<()> {
         self.const_set(crate::scalar::Scalar::one(self.dtype()))
     }
@@ -352,6 +382,19 @@ impl Tensor {
         Self::rand_impl(lo, up, s, device, false)
     }
 
+    /// Creates a tensor with the same shape, dtype, and device as `self`, sampled
+    /// uniformly from the half-open interval `[lo, up)`.
+    ///
+    /// ```rust
+    /// use candle_core::{DType, Device, Tensor};
+    ///
+    /// let input = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// let samples = input.rand_like(-1., 1.)?;
+    /// assert_eq!(samples.dims(), &[2, 3]);
+    /// assert_eq!(samples.dtype(), DType::F32);
+    /// assert!(samples.to_vec2::<f32>()?.iter().flatten().all(|&x| (-1. .. 1.).contains(&x)));
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn rand_like(&self, lo: f64, up: f64) -> Result<Self> {
         Tensor::rand_f64_impl(lo, up, self.shape(), self.dtype(), self.device(), false)
     }
@@ -383,6 +426,19 @@ impl Tensor {
         Ok(from_storage(storage, s, none, is_variable))
     }
 
+    /// Creates a tensor with the same shape, dtype, and device as `self`, sampled
+    /// from a normal distribution with the given `mean` and standard deviation.
+    ///
+    /// ```rust
+    /// use candle_core::{DType, Device, Tensor};
+    ///
+    /// let input = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// let samples = input.randn_like(0., 1.)?;
+    /// assert_eq!(samples.dims(), &[2, 3]);
+    /// assert_eq!(samples.dtype(), DType::F32);
+    /// assert_eq!(samples.device().location(), input.device().location());
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn randn_like(&self, mean: f64, stdev: f64) -> Result<Self> {
         Tensor::randn_f64_impl(
             mean,
@@ -1102,6 +1158,44 @@ impl Tensor {
         self.reduce_impl(dim, false, ReduceOp::Min)
     }
 
+    /// Returns the index of the maximum value along `dim`, retaining that
+    /// dimension with length one.
+    ///
+    /// The returned tensor has dtype [`DType::U32`].
+    ///
+    /// ```rust
+    /// use candle_core::{Device, Tensor};
+    ///
+    /// let input = Tensor::new(
+    ///     &[
+    ///         [[1f32, 9., 3.], [4., 2., 8.]],
+    ///         [[7., 5., 6.], [0., 10., 2.]],
+    ///         [[3., 4., 12.], [11., 1., 9.]],
+    ///     ],
+    ///     &Device::Cpu,
+    /// )?;
+    ///
+    /// let indexes = input.argmax_keepdim(0)?;
+    /// assert_eq!(indexes.dims(), &[1, 2, 3]);
+    /// assert_eq!(indexes.to_vec3::<u32>()?, &[[[1, 0, 2], [2, 1, 2]]]);
+    ///
+    /// let indexes = input.argmax_keepdim(1)?;
+    /// assert_eq!(indexes.dims(), &[3, 1, 3]);
+    /// assert_eq!(indexes.to_vec3::<u32>()?, &[
+    ///     [[1, 0, 1]],
+    ///     [[0, 1, 0]],
+    ///     [[1, 0, 0]],
+    /// ]);
+    ///
+    /// let indexes = input.argmax_keepdim(2)?;
+    /// assert_eq!(indexes.dims(), &[3, 2, 1]);
+    /// assert_eq!(indexes.to_vec3::<u32>()?, &[
+    ///     [[1], [2]],
+    ///     [[0], [1]],
+    ///     [[2], [0]],
+    /// ]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn argmax_keepdim<D: Dim>(&self, dim: D) -> Result<Self> {
         self.reduce_impl(dim, true, ReduceOp::ArgMax)
     }
@@ -1111,6 +1205,44 @@ impl Tensor {
         self.reduce_impl(dim, false, ReduceOp::ArgMax)
     }
 
+    /// Returns the index of the minimum value along `dim`, retaining that
+    /// dimension with length one.
+    ///
+    /// The returned tensor has dtype [`DType::U32`].
+    ///
+    /// ```rust
+    /// use candle_core::{Device, Tensor};
+    ///
+    /// let input = Tensor::new(
+    ///     &[
+    ///         [[1f32, 9., 3.], [4., 2., 8.]],
+    ///         [[7., 5., 6.], [0., 10., 2.]],
+    ///         [[3., 4., 12.], [11., 1., 9.]],
+    ///     ],
+    ///     &Device::Cpu,
+    /// )?;
+    ///
+    /// let indexes = input.argmin_keepdim(0)?;
+    /// assert_eq!(indexes.dims(), &[1, 2, 3]);
+    /// assert_eq!(indexes.to_vec3::<u32>()?, &[[[0, 2, 0], [1, 2, 1]]]);
+    ///
+    /// let indexes = input.argmin_keepdim(1)?;
+    /// assert_eq!(indexes.dims(), &[3, 1, 3]);
+    /// assert_eq!(indexes.to_vec3::<u32>()?, &[
+    ///     [[0, 1, 0]],
+    ///     [[1, 0, 1]],
+    ///     [[0, 1, 1]],
+    /// ]);
+    ///
+    /// let indexes = input.argmin_keepdim(2)?;
+    /// assert_eq!(indexes.dims(), &[3, 2, 1]);
+    /// assert_eq!(indexes.to_vec3::<u32>()?, &[
+    ///     [[0], [1]],
+    ///     [[1], [0]],
+    ///     [[0], [1]],
+    /// ]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn argmin_keepdim<D: Dim>(&self, dim: D) -> Result<Self> {
         self.reduce_impl(dim, true, ReduceOp::ArgMin)
     }
@@ -1667,6 +1799,27 @@ impl Tensor {
         Ok(())
     }
 
+    /// Writes values from `source` into a copy of `self` at `indexes` along `dim`.
+    ///
+    /// `indexes` and `source` must have the same shape. Their rank and their sizes
+    /// on dimensions other than `dim` must match `self`. An index equal to the
+    /// maximum value of its dtype is ignored.
+    ///
+    /// ```rust
+    /// use candle_core::{DType, Device, Tensor};
+    ///
+    /// let base = Tensor::zeros((2, 4), DType::F32, &Device::Cpu)?;
+    /// let indexes = Tensor::new(&[[1u32, 3], [0, 2]], &Device::Cpu)?;
+    /// let source = Tensor::new(&[[10f32, 20.], [30., 40.]], &Device::Cpu)?;
+    ///
+    /// let output = base.scatter(&indexes, &source, 1)?;
+    /// assert_eq!(output.to_vec2::<f32>()?, &[
+    ///     [0., 10., 0., 20.],
+    ///     [30., 0., 40., 0.],
+    /// ]);
+    /// assert_eq!(base.to_vec2::<f32>()?, &[[0., 0., 0., 0.], [0., 0., 0., 0.]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn scatter<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "scatter")?;
         self.scatter_checks(indexes, source, dim)?;
@@ -1689,6 +1842,24 @@ impl Tensor {
         Ok(from_storage(storage, self.shape(), op, false))
     }
 
+    /// Similar to [`Tensor::scatter`] but modifies `self` in place.
+    ///
+    /// `source` must not share storage with `self`.
+    ///
+    /// ```rust
+    /// use candle_core::{DType, Device, Tensor};
+    ///
+    /// let target = Tensor::zeros((2, 4), DType::F32, &Device::Cpu)?;
+    /// let indexes = Tensor::new(&[[1u32, 3], [0, 2]], &Device::Cpu)?;
+    /// let source = Tensor::new(&[[10f32, 20.], [30., 40.]], &Device::Cpu)?;
+    ///
+    /// target.scatter_set(&indexes, &source, 1)?;
+    /// assert_eq!(target.to_vec2::<f32>()?, &[
+    ///     [0., 10., 0., 20.],
+    ///     [30., 0., 40., 0.],
+    /// ]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn scatter_set<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<()> {
         if self.same_storage(source) {
             crate::bail!("cannot use slice_set when self and src share their storage")
@@ -1706,6 +1877,26 @@ impl Tensor {
         Ok(())
     }
 
+    /// Adds values from `source` to a copy of `self` at `indexes` along `dim`.
+    ///
+    /// The shape requirements are the same as for [`Tensor::scatter`]. Values
+    /// associated with the same index are accumulated.
+    ///
+    /// ```rust
+    /// use candle_core::{DType, Device, Tensor};
+    ///
+    /// let base = Tensor::ones((2, 4), DType::F32, &Device::Cpu)?;
+    /// let indexes = Tensor::new(&[[1u32, 3], [0, 2]], &Device::Cpu)?;
+    /// let source = Tensor::new(&[[10f32, 20.], [30., 40.]], &Device::Cpu)?;
+    ///
+    /// let output = base.scatter_add(&indexes, &source, 1)?;
+    /// assert_eq!(output.to_vec2::<f32>()?, &[
+    ///     [1., 11., 1., 21.],
+    ///     [31., 1., 41., 1.],
+    /// ]);
+    /// assert_eq!(base.to_vec2::<f32>()?, &[[1., 1., 1., 1.], [1., 1., 1., 1.]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn scatter_add<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "scatter-add")?;
         self.scatter_checks(indexes, source, dim)?;
@@ -1728,6 +1919,24 @@ impl Tensor {
         Ok(from_storage(storage, self.shape(), op, false))
     }
 
+    /// Similar to [`Tensor::scatter_add`] but modifies `self` in place.
+    ///
+    /// `source` must not share storage with `self`.
+    ///
+    /// ```rust
+    /// use candle_core::{DType, Device, Tensor};
+    ///
+    /// let target = Tensor::ones((2, 4), DType::F32, &Device::Cpu)?;
+    /// let indexes = Tensor::new(&[[1u32, 3], [0, 2]], &Device::Cpu)?;
+    /// let source = Tensor::new(&[[10f32, 20.], [30., 40.]], &Device::Cpu)?;
+    ///
+    /// target.scatter_add_set(&indexes, &source, 1)?;
+    /// assert_eq!(target.to_vec2::<f32>()?, &[
+    ///     [1., 11., 1., 21.],
+    ///     [31., 1., 41., 1.],
+    /// ]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn scatter_add_set<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<()> {
         if self.same_storage(source) {
             crate::bail!("cannot use slice_set when self and src share their storage")
@@ -2081,6 +2290,16 @@ impl Tensor {
         &self.layout
     }
 
+    /// Returns the stride for each dimension.
+    ///
+    /// ```rust
+    /// use candle_core::{Device, Tensor};
+    ///
+    /// let tensor = Tensor::new(&[[1u32, 2, 3], [4, 5, 6]], &Device::Cpu)?;
+    /// assert_eq!(tensor.stride(), &[3, 1]);
+    /// assert_eq!(tensor.transpose(0, 1)?.stride(), &[1, 3]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn stride(&self) -> &[usize] {
         self.layout.stride()
     }
@@ -2161,6 +2380,15 @@ impl Tensor {
         self.sum(dims)
     }
 
+    /// Returns the arithmetic mean of every element as a scalar tensor.
+    ///
+    /// ```rust
+    /// use candle_core::{Device, Tensor};
+    ///
+    /// let tensor = Tensor::new(&[[1f32, 2.], [3., 4.]], &Device::Cpu)?;
+    /// assert_eq!(tensor.mean_all()?.to_scalar::<f32>()?, 2.5);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn mean_all(&self) -> Result<Tensor> {
         self.sum_all()? / self.elem_count() as f64
     }
