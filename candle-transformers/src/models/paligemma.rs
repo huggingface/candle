@@ -31,6 +31,7 @@ impl Config {
         Self {
             vision_config: siglip::VisionConfig::paligemma_3b_224(),
             text_config: gemma::Config {
+                use_flash_attn: false,
                 hidden_size: 2048,
                 intermediate_size: 16384,
                 num_attention_heads: 8,
@@ -54,6 +55,7 @@ impl Config {
         Self {
             vision_config: siglip::VisionConfig::paligemma_3b_448(),
             text_config: gemma::Config {
+                use_flash_attn: false,
                 hidden_size: 2048,
                 intermediate_size: 16384,
                 num_attention_heads: 8,
@@ -112,7 +114,7 @@ impl Model {
             vb.pp("vision_tower.vision_model"),
         )?;
         let multi_modal_projector = MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
-        let language_model = gemma::Model::new(false, &cfg.text_config, vb.pp("language_model"))?;
+        let language_model = gemma::Model::new(&cfg.text_config, vb.pp("language_model"))?;
         Ok(Self {
             pos: 0,
             language_model,
