@@ -427,18 +427,20 @@ pub struct Falcon {
     config: Config,
 }
 
-fn make_causal_mask(t: usize) -> Result<Tensor> {
+fn make_causal_mask(t: usize, past_kv_len: usize) -> Result<Tensor> {
+    // With a cached prefix of `past_kv_len` tokens the attention scores are
+    // (b * h, t, past_kv_len + t): the prefix is fully visible, the new
+    // chunk is causal.
     let mask: Vec<_> = (0..t)
-        .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+        .flat_map(|i| (0..past_kv_len + t).map(move |j| u8::from(j > i + past_kv_len)))
         .collect();
-    let mask = Tensor::from_slice(&mask, (t, t), &Device::Cpu)?;
+    let mask = Tensor::from_slice(&mask, (t, past_kv_len + t), &Device::Cpu)?;
     Ok(mask)
 }
 
-fn prepare_attn_mask(b_sz: usize, seq_len: usize) -> Result<Tensor> {
-    // let mask = Tensor::ones((b_sz, seq_len), DType::U32, &Device::Cpu)?;
-    let mask = make_causal_mask(seq_len)?;
-    let mask = mask.broadcast_as((b_sz, 1, seq_len, seq_len))?;
+fn prepare_attn_mask(b_sz: usize, past_kv_len: usize, seq_len: usize) -> Result<Tensor> {
+    let mask = make_causal_mask(seq_len, past_kv_len)?;
+    let mask = mask.broadcast_as((b_sz, 1, seq_len, past_kv_len + seq_len))?;
     Ok(mask)
 }
 
@@ -481,7 +483,7 @@ impl Falcon {
         let causal_mask = if seq_len <= 1 {
             None
         } else {
-            Some(prepare_attn_mask(b_sz, seq_len)?.to_device(input_ids.device())?)
+            Some(prepare_attn_mask(b_sz, past_kv_len, seq_len)?.to_device(input_ids.device())?)
         };
         for block in self.blocks.iter_mut() {
             hidden_state = block.forward(&hidden_state, causal_mask.as_ref(), past_kv_len)?;
