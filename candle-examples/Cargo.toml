@@ -159,7 +159,7 @@ required-features = ["pdf2image"]
 
 [[example]]
 name = "voxtral"
-required-features = ["symphonia"]
+required-features = ["symphonia", "rubato", "tekken"]
 
 [[example]]
 name = "bert_single_file_binary"

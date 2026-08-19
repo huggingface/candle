@@ -42,7 +42,11 @@ jobs:
         if: matrix.os == 'ubuntu-24.04-arm'
         run: |
           export RUSTFLAGS="-C target-feature=neon"
-          cargo check --workspace 
+          cargo check --workspace
+
+      - name: Check examples on symphonia feature
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'
+        run: cargo check --examples --features="symphonia" 
 
   test:
     name: Test Suite
