@@ -432,10 +432,19 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             candle::MetalStorage::new(output, device.clone(), elem_count, storage.dtype());
         Ok((newstorage, layout.shape().clone()))
     }
+
+    fn bwd(&self, _arg: &Tensor, res: &Tensor, grad_res: &Tensor) -> Result<Option<Tensor>> {
+        // Backward pass for the softmax over the last dimension.
+        // With `y = softmax(x)` (`res`) and `g = dL/dy` (`grad_res`), the Jacobian-vector
+        // product is `dL/dx = y * (g - sum(g * y, dim=-1, keepdim=true))`.
+        let sum = grad_res.mul(res)?.sum_keepdim(D::Minus1)?;
+        let grad_arg = grad_res.broadcast_sub(&sum)?.mul(res)?;
+        Ok(Some(grad_arg))
+    }
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
-    xs.apply_op1_no_bwd(&SoftmaxLastDim)
+    xs.apply_op1(SoftmaxLastDim)
 }
 
 #[derive(Debug, Clone)]
