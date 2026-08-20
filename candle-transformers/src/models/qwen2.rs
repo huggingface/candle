@@ -400,3 +400,19 @@ impl ModelForCausalLM {
         self.base_model.clear_kv_cache()
     }
 }
+
+impl crate::auto::Model for ModelForCausalLM {
+    fn model_type(&self) -> &'static str {
+        "qwen2"
+    }
+}
+
+impl crate::auto::CausalLM for ModelForCausalLM {
+    fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        ModelForCausalLM::forward(self, input_ids, seqlen_offset)
+    }
+
+    fn clear_kv_cache(&mut self) {
+        ModelForCausalLM::clear_kv_cache(self)
+    }
+}
