@@ -128,6 +128,9 @@ impl BarrierPool {
                     .name(format!("candle-bp-{tid}"))
                     .spawn(move || {
                         set_thread_affinity();
+                        // A worker only ever runs dispatched closures, so any execute()
+                        // it reaches is nested; keep the flag set for its whole life.
+                        IN_EXECUTE.with(|c| c.set(true));
                         let inner = unsafe { &*(inner_ptr as *const BarrierPoolInner) };
                         let slot = &inner.slots[tid];
                         let mut gen = 0usize;
@@ -241,6 +244,20 @@ impl Drop for BarrierGuard<'_> {
     }
 }
 
+thread_local! {
+    // True while this thread is inside execute() (main) or running a dispatched
+    // closure (worker). Used to route a reentrant execute() to the serial path.
+    static IN_EXECUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+// Resets the main thread's IN_EXECUTE flag on scope exit (panic-safe).
+struct ExecGuard;
+impl Drop for ExecGuard {
+    fn drop(&mut self) {
+        IN_EXECUTE.with(|c| c.set(false));
+    }
+}
+
 impl BarrierPool {
     pub fn execute<F: Fn(usize) + Sync>(&self, f: F) {
         let n = self.threads.len();
@@ -248,6 +265,18 @@ impl BarrierPool {
             f(0);
             return;
         }
+
+        // Reentrant call (e.g. a Tensor op inside a pool closure): acquiring
+        // call_lock again would deadlock against the outer call, so run every
+        // participant serially on this thread instead.
+        if IN_EXECUTE.with(|c| c.get()) {
+            for tid in 0..=n {
+                f(tid);
+            }
+            return;
+        }
+        IN_EXECUTE.with(|c| c.set(true));
+        let _exec = ExecGuard;
 
         let mut guard = self.call_lock.lock().unwrap();
         let new_gen = guard.wrapping_add(1);
@@ -304,6 +333,29 @@ static BARRIER_POOL: OnceLock<BarrierPool> = OnceLock::new();
 /// Persistent barrier pool
 pub fn barrier_pool() -> &'static BarrierPool {
     BARRIER_POOL.get_or_init(|| BarrierPool::new(candle_num_threads().saturating_sub(1)))
+}
+
+// Apply `f` to each `chunk`-sized disjoint sub-slice of `dst` in parallel across the
+// barrier pool. `dst.len()` must be a multiple of `chunk`.
+pub fn par_chunks_mut<U: Send>(dst: &mut [U], chunk: usize, f: impl Fn(usize, &mut [U]) + Sync) {
+    let n = dst.len() / chunk;
+    struct DstP<U>(*mut U);
+    unsafe impl<U> Sync for DstP<U> {}
+    let dp = DstP(dst.as_mut_ptr());
+    let pool = barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let cpt = n.div_ceil(n_total);
+    pool.execute(|tid| {
+        let p = &dp;
+        let start = tid * cpt;
+        if start < n {
+            let end = n.min((tid + 1) * cpt);
+            for ci in start..end {
+                let d = unsafe { std::slice::from_raw_parts_mut(p.0.add(ci * chunk), chunk) };
+                f(ci, d);
+            }
+        }
+    });
 }
 
 pub fn with_threadpool<F: FnOnce() -> R + Send, R: Send>(f: F) -> R {
@@ -421,4 +473,27 @@ pub fn with_simd128() -> bool {
 
 pub fn with_f16c() -> bool {
     cfg!(target_feature = "f16c")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // A reentrant execute() (a pool closure that calls execute() again) must not
+    // deadlock and must still run every nested participant.
+    #[test]
+    fn nested_execute_runs_serially_no_deadlock() {
+        let pool = barrier_pool();
+        let n_total = pool.n_workers() + 1;
+        let count = AtomicUsize::new(0);
+        pool.execute(|_outer| {
+            pool.execute(|_inner| {
+                count.fetch_add(1, Ordering::Relaxed);
+            });
+        });
+        // Each of the n_total outer participants runs an inner execute that, being
+        // reentrant, does all n_total participants serially.
+        assert_eq!(count.load(Ordering::Relaxed), n_total * n_total);
+    }
 }

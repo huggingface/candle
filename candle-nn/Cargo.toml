@@ -32,6 +32,9 @@ criterion = { workspace = true }
 
 [features]
 default = []
+# Opt-in native f16.f16 attention dot (no f32 widening) for the f16-KV CPU flash
+# kernels. Not bit-exact (~1e-3), so default OFF; enable on the CPU deploy.
+f16-attn-dot = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
 cudnn = ["candle/cudnn"]
