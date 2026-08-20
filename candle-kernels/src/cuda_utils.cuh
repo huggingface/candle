@@ -151,6 +151,12 @@ __device__ __forceinline__ float absg(float a) { return fabsf(a); }
 __device__ __forceinline__ double absg(double a) { return fabs(a); }
 __device__ __forceinline__ float copysigng(float a, float b) { return copysignf(a, b); }
 __device__ __forceinline__ double copysigng(double a, double b) { return copysign(a, b); }
+__device__ __forceinline__ float asing(float a) { return asinf(a); }
+__device__ __forceinline__ double asing(double a) { return asin(a); }
+__device__ __forceinline__ float acosg(float a) { return acosf(a); }
+__device__ __forceinline__ double acosg(double a) { return acos(a); }
+__device__ __forceinline__ float atang(float a) { return atanf(a); }
+__device__ __forceinline__ double atang(double a) { return atan(a); }
 
 __device__ __forceinline__ int64_t ming(int64_t a, int64_t b) { return min(a, b); }
 __device__ __forceinline__ int64_t maxg(int64_t a, int64_t b) { return max(a, b); }
@@ -177,6 +183,9 @@ __device__ __forceinline__ __half logg(__half a) { return hlog(a); }
 __device__ __forceinline__ __half expg(__half a) { return hexp(a); }
 __device__ __forceinline__ __half absg(__half a) { return __habs(a); }
 __device__ __forceinline__ __half copysigng(__half a, __half b) { return __float2half(copysignf(__half2float(a), __half2float(b))); }
+__device__ __forceinline__ __half asing(__half a) { return __float2half(asinf(__half2float(a))); }
+__device__ __forceinline__ __half acosg(__half a) { return __float2half(acosf(__half2float(a))); }
+__device__ __forceinline__ __half atang(__half a) { return __float2half(atanf(__half2float(a))); }
 #endif
 
 #if __CUDA_ARCH__ >= 800
@@ -198,6 +207,9 @@ __device__ __forceinline__ __nv_bfloat16 logg(__nv_bfloat16 a) { return hlog(a);
 __device__ __forceinline__ __nv_bfloat16 expg(__nv_bfloat16 a) { return hexp(a); }
 __device__ __forceinline__ __nv_bfloat16 absg(__nv_bfloat16 a) { return __habs(a); }
 __device__ __forceinline__ __nv_bfloat16 copysigng(__nv_bfloat16 a, __nv_bfloat16 b) { return __float2bfloat16(copysignf(__bfloat162float(a), __bfloat162float(b))); }
+__device__ __forceinline__ __nv_bfloat16 asing(__nv_bfloat16 a) { return __float2bfloat16(asinf(__bfloat162float(a))); }
+__device__ __forceinline__ __nv_bfloat16 acosg(__nv_bfloat16 a) { return __float2bfloat16(acosf(__bfloat162float(a))); }
+__device__ __forceinline__ __nv_bfloat16 atang(__nv_bfloat16 a) { return __float2bfloat16(atanf(__bfloat162float(a))); }
 
 #define F8E4M3_TO_FLOAT(x) __half2float(__nv_cvt_fp8_to_halfraw(x.__x, __NV_E4M3))
 
@@ -219,6 +231,9 @@ __device__ __forceinline__ __nv_fp8_e4m3 logg(__nv_fp8_e4m3 a) { return __nv_fp8
 __device__ __forceinline__ __nv_fp8_e4m3 expg(__nv_fp8_e4m3 a) { return __nv_fp8_e4m3(expf(F8E4M3_TO_FLOAT(a))); }
 __device__ __forceinline__ __nv_fp8_e4m3 absg(__nv_fp8_e4m3 a) { return __nv_fp8_e4m3(fabsf(F8E4M3_TO_FLOAT(a))); }
 __device__ __forceinline__ __nv_fp8_e4m3 copysigng(__nv_fp8_e4m3 a, __nv_fp8_e4m3 b) { return __nv_fp8_e4m3(copysignf(F8E4M3_TO_FLOAT(a), F8E4M3_TO_FLOAT(b))); }
+__device__ __forceinline__ __nv_fp8_e4m3 asing(__nv_fp8_e4m3 a) { return __nv_fp8_e4m3(asinf(F8E4M3_TO_FLOAT(a))); }
+__device__ __forceinline__ __nv_fp8_e4m3 acosg(__nv_fp8_e4m3 a) { return __nv_fp8_e4m3(acosf(F8E4M3_TO_FLOAT(a))); }
+__device__ __forceinline__ __nv_fp8_e4m3 atang(__nv_fp8_e4m3 a) { return __nv_fp8_e4m3(atanf(F8E4M3_TO_FLOAT(a))); }
 
 
 #endif
