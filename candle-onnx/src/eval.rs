@@ -396,20 +396,37 @@ fn simple_eval_(
             "Reshape" => {
                 let input0 = get(&node.input[0])?;
                 let input1 = get(&node.input[1])?.to_vec1::<i64>()?;
-                // TODO: Check that there is at most a single -1 or 0, handle other neg values.
-                let mut other_than_minus1 = 1usize;
-                for &v in input1.iter() {
-                    if v != -1 && v != 0 {
-                        other_than_minus1 *= v as usize
-                    }
+                // A 0 in the target shape copies the corresponding input dimension, unless
+                // allowzero=1, where it means a literal zero-length dimension.
+                let allowzero = get_attr_opt::<i64>(node, "allowzero")?
+                    .copied()
+                    .unwrap_or(0)
+                    == 1;
+                if input1.iter().filter(|&&v| v == -1).count() > 1 {
+                    bail!("Reshape: at most one dimension of the target shape can be -1")
                 }
-                let input1 = input1
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, &v)| match v {
-                        -1 => Ok(input0.elem_count() / other_than_minus1),
-                        0 => input0.dim(idx),
-                        _ => Ok(v as usize),
+                // Resolve everything but -1 first: a copied 0 is part of the volume, so it
+                // has to be in the product that -1 is inferred against.
+                let mut resolved: Vec<Option<usize>> = Vec::with_capacity(input1.len());
+                for (idx, &v) in input1.iter().enumerate() {
+                    resolved.push(match v {
+                        -1 => None,
+                        0 if allowzero => Some(0),
+                        0 => Some(input0.dim(idx)?),
+                        v if v > 0 => Some(v as usize),
+                        v => bail!("Reshape: invalid dimension {v} in target shape"),
+                    });
+                }
+                let known: usize = resolved.iter().flatten().product();
+                let input1 = resolved
+                    .into_iter()
+                    .map(|d| match d {
+                        Some(d) => Ok(d),
+                        // A -1 has no unique value when the rest of the volume is zero.
+                        None if known == 0 => {
+                            bail!("Reshape: -1 cannot be inferred when another dimension is zero")
+                        }
+                        None => Ok(input0.elem_count() / known),
                     })
                     .collect::<Result<Vec<usize>>>()?;
                 let output = input0.reshape(input1)?;
