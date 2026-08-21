@@ -752,6 +752,14 @@ impl ConcatKvCache {
         self.v = None;
     }
 
+    /// Restore the cache to a previously saved prefix state.
+    /// Used for prefix KV caching: prefill the system prompt once, save it,
+    /// then restore before each new request instead of clearing entirely.
+    pub fn restore_from(&mut self, saved_k: Option<Tensor>, saved_v: Option<Tensor>) {
+        self.k = saved_k;
+        self.v = saved_v;
+    }
+
     /// Get reference to current K cache data
     ///
     /// Returns `None` if the cache is empty.

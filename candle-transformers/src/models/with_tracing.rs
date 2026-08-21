@@ -122,6 +122,11 @@ impl QMatMul {
         let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
         Ok(Self { inner, span })
     }
+
+    pub fn from_inner(inner: candle::quantized::QMatMul) -> Self {
+        let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
+        Self { inner, span }
+    }
 }
 
 impl Module for QMatMul {
