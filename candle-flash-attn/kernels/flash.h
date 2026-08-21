@@ -101,6 +101,10 @@ struct Flash_fwd_params : public Qkv_params {
     index_t block_table_batch_stride;
     int page_block_size;
 
+    int * __restrict__ mm_prefix_ranges;
+    index_t mm_prefix_range_batch_stride;
+    int max_mm_prefix_ranges;
+
     // The dropout probability (probability of keeping an activation).
     float p_dropout;
     // uint32_t p_dropout_in_uint;
@@ -184,6 +188,6 @@ struct Flash_bwd_params : public Flash_fwd_params {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int Headdim, bool Is_causal> void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream);
-// template<typename T, int Headdim, bool Is_causal> void run_mha_fwd_splitkv_dispatch(Flash_fwd_params &params, cudaStream_t stream);
+template<typename T, int Headdim, bool Is_causal> void run_mha_fwd_splitkv_paged_(Flash_fwd_params &params, cudaStream_t stream);
 
 // template<typename T, int Headdim, bool Is_causal> void run_mha_bwd_(Flash_bwd_params &params, cudaStream_t stream);

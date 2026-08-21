@@ -54,6 +54,16 @@ impl QMetalStorage {
         0
     }
 
+    pub fn embedding(
+        &self,
+        _rows: usize,
+        _hidden: usize,
+        _ids: &MetalStorage,
+        _ids_l: &crate::Layout,
+    ) -> Result<MetalStorage> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
     pub fn fwd(
         &self,
         _self_shape: &crate::Shape,

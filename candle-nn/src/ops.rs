@@ -481,23 +481,50 @@ impl candle::CustomOp2 for RmsNorm {
             let el_count = layout.shape().elem_count();
             let dims = layout.shape().dims();
             let dim_m1 = dims[dims.len() - 1];
+            let n_rows = el_count / dim_m1;
             let mut dst = vec![T::zero(); el_count];
-            src.par_chunks(dim_m1)
-                .zip(dst.par_chunks_mut(dim_m1))
-                .for_each(|(src, dst)| {
-                    let sum2 = src
-                        .iter()
-                        .map(|&v| {
-                            let v = v.as_();
-                            v * v
-                        })
-                        .sum::<f32>();
-                    let m = (sum2 / dim_m1 as f32 + eps).sqrt();
-                    let m = T::from_f32(m).unwrap_or_else(T::nan);
-                    for ((d, s), alpha) in dst.iter_mut().zip(src.iter()).zip(alpha) {
-                        *d = *s / m * *alpha
-                    }
-                });
+
+            fn rms_row<
+                T: candle::WithDType
+                    + num_traits::Float
+                    + num_traits::AsPrimitive<f32>
+                    + num_traits::FromPrimitive,
+            >(
+                src: &[T],
+                alpha: &[T],
+                n: usize,
+                eps: f32,
+                dst: &mut [T],
+            ) {
+                let sum2 = src
+                    .iter()
+                    .map(|&v| {
+                        let v = v.as_();
+                        v * v
+                    })
+                    .sum::<f32>();
+                let m = (sum2 / n as f32 + eps).sqrt();
+                let m = T::from_f32(m).unwrap_or_else(T::nan);
+                for ((d, s), alpha) in dst.iter_mut().zip(src.iter()).zip(alpha) {
+                    *d = *s / m * *alpha
+                }
+            }
+
+            if n_rows <= 32 {
+                let n = dim_m1;
+                for row in 0..n_rows {
+                    let src = &src[row * n..(row + 1) * n];
+                    let dst = &mut dst[row * n..(row + 1) * n];
+                    rms_row(src, alpha, n, eps, dst);
+                }
+            } else {
+                src.par_chunks(dim_m1)
+                    .zip(dst.par_chunks_mut(dim_m1))
+                    .for_each(|(src, dst)| {
+                        let n = src.len();
+                        rms_row(src, alpha, n, eps, dst);
+                    });
+            }
             let storage = candle::WithDType::to_cpu_storage_owned(dst);
             Ok((storage, Shape::from_dims(dims)))
         }

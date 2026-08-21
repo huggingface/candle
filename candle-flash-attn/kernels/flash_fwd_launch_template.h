@@ -131,6 +131,8 @@ void run_flash_splitkv_fwd(Flash_fwd_params &params, cudaStream_t stream) {
             });
         });
     });
+    // The combine kernel statically requires 128 threads; configs with fewer warps only ever run num_splits=1.
+    if constexpr (Kernel_traits::kNThreads == 128) {
     if (params.num_splits > 1) {
         // We want kBlockM to be as small as possible for more parallelism.
         // With 128 threads we can load 512 elements at a time, so if headdim is divisible by 128, kBlockM = 4.
@@ -156,6 +158,7 @@ void run_flash_splitkv_fwd(Flash_fwd_params &params, cudaStream_t stream) {
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         });
     }
+    }
 }
 
 template<typename T, int Headdim, bool Is_causal>
@@ -166,6 +169,35 @@ void run_mha_fwd_splitkv_dispatch(Flash_fwd_params &params, cudaStream_t stream)
     // Also for headdim 160 with block size 64 x 128 after the rotary addition.
     constexpr static int kBlockN = Headdim <= 64 ? 256 : (Headdim <= 128 ? 128 : (Headdim <= 256 ? 64 : 32));
     run_flash_splitkv_fwd<Flash_fwd_kernel_traits<Headdim, kBlockM, kBlockN, 4, false, false, T>, Is_causal>(params, stream);
+}
+
+template<typename T, int Headdim, bool Is_causal>
+void run_mha_fwd_splitkv_paged_dispatch(Flash_fwd_params &params, cudaStream_t stream) {
+    constexpr static int kBlockM = 64;
+    // kBlockN must divide page_block_size so a K/V tile never straddles two pages.
+    constexpr static int kBlockN = 32;
+    run_flash_splitkv_fwd<Flash_fwd_kernel_traits<Headdim, kBlockM, kBlockN, 4, false, false, T>, Is_causal>(params, stream);
+}
+
+template<typename T, bool Is_causal>
+void run_mha_fwd_splitkv_paged_hdim512(Flash_fwd_params &params, cudaStream_t stream) {
+    constexpr static int Headdim = 512;
+    int device;
+    cudaGetDevice(&device);
+    int max_smem_per_block;
+    cudaError status_ = cudaDeviceGetAttribute(
+        &max_smem_per_block, cudaDevAttrMaxSharedMemoryPerBlockOptin, device);
+    if (status_ != cudaSuccess) {
+      C10_CUDA_CHECK(status_);
+    }
+    // Mirrors run_mha_fwd_hdim512: 64 x 32 tiles need 128KB smem, sub-128KB devices use 32 x 32 (96KB).
+    // kBlockM must be a multiple of 16 * kNWarps: the MMA tile repeats over larger blocks but
+    // cannot subdivide, so a 32-row block needs 2 warps or warps 2/3 alias rows 0-31 and race.
+    if (max_smem_per_block >= 2 * Headdim * (64 + 2 * 32)) {
+        run_flash_splitkv_fwd<Flash_fwd_kernel_traits<Headdim, 64, 32, 4, false, false, T>, Is_causal>(params, stream);
+    } else {
+        run_flash_splitkv_fwd<Flash_fwd_kernel_traits<Headdim, 32, 32, 2, false, false, T>, Is_causal>(params, stream);
+    }
 }
 
 template<typename T, bool Is_causal>
@@ -375,11 +407,12 @@ void run_mha_fwd_hdim512(Flash_fwd_params &params, cudaStream_t stream) {
     }
     DROPOUT_SWITCH(params.p_dropout < 1.f, Is_dropout, [&] {
         // For A100 (164KB max smem), use 64 x 32 with 4 warps (128KB smem).
-        // For sm86/sm89 (100KB max smem), use 32 x 32 with 4 warps (96KB smem).
+        // For sm86/sm89 (100KB max smem), use 32 x 32 (96KB smem) with 2 warps: kBlockM must be
+        // a multiple of 16 * kNWarps or warps 2/3 alias rows 0-31 and race on the output.
         if (max_smem_per_block >= 2 * Headdim * (64 + 2 * 32)) {  // 128 KB
             run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 64, 32, 4, false, false, T>, Is_dropout, Is_causal>(params, stream);
         } else {
-            run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 32, 32, 4, false, false, T>, Is_dropout, Is_causal>(params, stream);
+            run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 32, 32, 2, false, false, T>, Is_dropout, Is_causal>(params, stream);
         }
     });
 }
