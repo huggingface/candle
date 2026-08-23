@@ -171,6 +171,12 @@ CAST_OP_FP8_INTO(__nv_bfloat16, __nv_fp8_e4m3, cast_bf16_f8_e4m3)
 #else
 #include <cuda.h>
 #if CUDA_VERSION >= 11000
+#if defined(CANDLE_CUDA_BF16_FALLBACK)
+CAST_OP(__nv_bfloat16, __nv_bfloat16, cast_bf16_bf16)
+CAST_THROUGH_OP(__nv_bfloat16, uint32_t, float, cast_bf16_u32)
+CAST_THROUGH_OP(uint32_t, __nv_bfloat16, float, cast_u32_bf16)
+#endif
+
 CAST_OP(__nv_bfloat16, float,    cast_bf16_f32)
 CAST_OP(float,    __nv_bfloat16, cast_f32_bf16)
 CAST_THROUGH_OP(__nv_bfloat16, uint8_t, float, cast_bf16_u8)
