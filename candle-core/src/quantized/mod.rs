@@ -544,7 +544,11 @@ impl QTensor {
         let shape = src.shape();
         let block_size = dtype.block_size();
         check_shape(shape, block_size)?;
-        let src = src.to_dtype(crate::DType::F32)?.flatten_all()?;
+        // force_contiguous (not contiguous) always copies, so a non-zero layout
+        // offset (e.g. from narrow().contiguous() on an already-contiguous
+        // view) is resolved before the raw storage reaches the quantizer below,
+        // which reads from element 0 with no offset awareness. See #3864.
+        let src = src.to_dtype(crate::DType::F32)?.force_contiguous()?.flatten_all()?;
         let elem_count = shape.elem_count();
         if !elem_count.is_multiple_of(block_size) {
             crate::bail!(
@@ -580,7 +584,10 @@ impl QTensor {
         let shape = src.shape();
         let block_size = dtype.block_size();
         check_shape(shape, block_size)?;
-        let src = src.to_dtype(crate::DType::F32)?.flatten_all()?;
+        // force_contiguous (not contiguous) always copies, resolving a non-zero
+        // layout offset before the raw storage reaches the quantizer, which
+        // reads from element 0 with no offset awareness. See #3864.
+        let src = src.to_dtype(crate::DType::F32)?.force_contiguous()?.flatten_all()?;
         let elem_count = shape.elem_count();
         if !elem_count.is_multiple_of(block_size) {
             crate::bail!(
@@ -623,7 +630,10 @@ impl QTensor {
         let shape = src.shape();
         let block_size = dtype.block_size();
         check_shape(shape, block_size)?;
-        let src = src.to_dtype(crate::DType::F32)?.flatten_all()?;
+        // force_contiguous (not contiguous) always copies, resolving a non-zero
+        // layout offset before the raw storage reaches the quantizer, which
+        // reads from element 0 with no offset awareness. See #3864.
+        let src = src.to_dtype(crate::DType::F32)?.force_contiguous()?.flatten_all()?;
         let elem_count = shape.elem_count();
         if !elem_count.is_multiple_of(block_size) {
             crate::bail!(
@@ -652,7 +662,10 @@ impl QTensor {
         let shape = src.shape();
         let block_size = dtype.block_size();
         check_shape(shape, block_size)?;
-        let src = src.to_dtype(crate::DType::F32)?.flatten_all()?;
+        // force_contiguous (not contiguous) always copies, resolving a non-zero
+        // layout offset before the raw storage reaches the quantizer, which
+        // reads from element 0 with no offset awareness. See #3864.
+        let src = src.to_dtype(crate::DType::F32)?.force_contiguous()?.flatten_all()?;
         let elem_count = shape.elem_count();
         if !elem_count.is_multiple_of(block_size) {
             crate::bail!(
