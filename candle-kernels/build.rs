@@ -8,20 +8,27 @@ fn main() -> Result<()> {
     println!("cargo::rerun-if-changed=src/cuda_utils.cuh");
     println!("cargo::rerun-if-changed=src/binary_op_macros.cuh");
     println!("cargo::rerun-if-env-changed=CUDA_COMPUTE_CAP");
+    println!("cargo::rerun-if-env-changed=CARGO_FEATURE_CUDA_LEGACY_BF16");
 
     let compute_cap = detect_compute_cap()?.base();
+    let legacy_bf16 = compute_cap < 80
+        && env::var_os("CARGO_FEATURE_CUDA_LEGACY_BF16").is_some();
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let ptx_path = out_dir.join("ptx.rs");
-    let bindings = KernelBuilder::new()
+    let mut ptx_builder = KernelBuilder::new()
         .compute_cap(compute_cap)
         .source_dir("src")
         .exclude(&["moe_*.cu", "mmvq_gguf.cu", "mmq_*.cu"])
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
-        .arg("-O3")
-        .build_ptx()?;
+        .arg("-O3");
 
+    if legacy_bf16 {
+        ptx_builder = ptx_builder.arg("-DCANDLE_CUDA_BF16_FALLBACK=1");
+    }
+
+    let bindings = ptx_builder.build_ptx()?;
     bindings.write(&ptx_path)?;
 
     let mut moe_builder = KernelBuilder::new()
@@ -52,6 +59,10 @@ fn main() -> Result<()> {
     // Keep the requested compute capability for the general CUDA/MoE
     // kernels, but compile the WMMA-only translation units at their
     // actual architectural floor when targeting pre-Volta devices.
+    if legacy_bf16 {
+        moe_builder = moe_builder.arg("-DCANDLE_CUDA_BF16_FALLBACK=1");
+    }
+
     if compute_cap < 70 {
         moe_builder = moe_builder
             .with_compute_override("moe_wmma.cu", 70)

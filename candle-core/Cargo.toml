@@ -48,6 +48,7 @@ criterion = { workspace = true }
 [features]
 default = []
 cuda = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda"]
+cuda-legacy-bf16 = ["cuda", "candle-kernels/cuda-legacy-bf16"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
 mkl = ["dep:intel-mkl-src"]
