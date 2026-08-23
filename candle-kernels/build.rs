@@ -10,7 +10,9 @@ fn main() -> Result<()> {
     println!("cargo::rerun-if-env-changed=CUDA_COMPUTE_CAP");
     println!("cargo::rerun-if-env-changed=CARGO_FEATURE_CUDA_LEGACY_BF16");
 
-    let compute_cap = detect_compute_cap()?.base();
+    let compute_cap = detect_compute_cap()
+        .map(|arch| arch.base())
+        .unwrap_or(80);
     let legacy_bf16 = compute_cap < 80
         && env::var_os("CARGO_FEATURE_CUDA_LEGACY_BF16").is_some();
 
