@@ -451,6 +451,124 @@ fn test_reshape_operation() -> Result<()> {
     Ok(())
 }
 
+// Build a single-node Reshape graph, optionally with an `allowzero` attribute.
+fn reshape_graph(allowzero: Option<i64>) -> ModelProto {
+    let attribute = allowzero
+        .map(|i| AttributeProto {
+            name: "allowzero".to_string(),
+            ref_attr_name: "allowzero".to_string(),
+            i,
+            doc_string: "allowzero".to_string(),
+            r#type: 2,
+            f: 0.0,
+            s: vec![],
+            t: None,
+            g: None,
+            sparse_tensor: None,
+            tp: None,
+            floats: vec![],
+            ints: vec![],
+            strings: vec![],
+            tensors: vec![],
+            graphs: vec![],
+            sparse_tensors: vec![],
+            type_protos: vec![],
+        })
+        .into_iter()
+        .collect();
+
+    create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Reshape".to_string(),
+            domain: "".to_string(),
+            attribute,
+            input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            name: "".to_string(),
+            doc_string: "".to_string(),
+        }],
+        name: "".to_string(),
+        initializer: vec![],
+        input: vec![
+            ValueInfoProto {
+                name: INPUT_X.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            },
+            ValueInfoProto {
+                name: INPUT_Y.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            },
+        ],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        value_info: vec![],
+        doc_string: "".to_string(),
+        sparse_initializer: vec![],
+        quantization_annotation: vec![],
+    }))
+}
+
+fn run_reshape(allowzero: Option<i64>, x: Tensor, shape: Vec<i64>) -> Result<Tensor> {
+    let len = shape.len();
+    let y = Tensor::from_vec(shape, &[len], &Device::Cpu)?;
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), x);
+    inputs.insert(INPUT_Y.to_string(), y);
+    let eval = candle_onnx::simple_eval(&reshape_graph(allowzero), inputs)?;
+    Ok(eval.get(OUTPUT_Z).expect("Output 'z' not found").clone())
+}
+
+// "Reshape" with allowzero=1: a 0 in the target shape is a literal zero-length dimension,
+// not a copy of the corresponding input dimension.
+// https://onnx.ai/onnx/operators/onnx__Reshape.html
+#[test]
+fn test_reshape_allowzero_keeps_a_literal_zero() -> Result<()> {
+    let x = Tensor::from_vec(Vec::<f32>::new(), &[3, 0], &Device::Cpu)?;
+    let z = run_reshape(Some(1), x, vec![0])?;
+    assert_eq!(z.dims(), &[0]);
+    Ok(())
+}
+
+// The default, allowzero=0: a 0 copies the input dimension, so it is part of the volume and
+// must be included in the product that -1 is inferred against. This is ONNX's own
+// `zero_and_negative_dim` test shape.
+#[test]
+fn test_reshape_infers_minus_one_past_a_copied_zero() -> Result<()> {
+    let x = Tensor::from_vec(
+        (0..24).map(|i| i as f32).collect::<Vec<_>>(),
+        &[2, 3, 4],
+        &Device::Cpu,
+    )?;
+    let z = run_reshape(None, x, vec![2, 0, 1, -1])?;
+    // The 0 copies 3, so the known product is 6 and the -1 is 24 / 6 = 4. Leaving the copied
+    // dimension out of the product would infer 12 instead.
+    assert_eq!(z.dims(), &[2, 3, 1, 4]);
+    Ok(())
+}
+
+// ONNX: "At most one dimension of the new shape can be -1." Without an explicit check the
+// inference divides by the same product twice and can silently accept an invalid shape:
+// a 1-element input with target [-1, -1] would produce [1, 1].
+#[test]
+fn test_reshape_rejects_multiple_minus_one() -> Result<()> {
+    let x = Tensor::from_vec(vec![5.0f32], &[1], &Device::Cpu)?;
+    assert!(run_reshape(None, x, vec![-1, -1]).is_err());
+    Ok(())
+}
+
+// allowzero=1 with both a 0 and a -1 is invalid: the -1 has no unique value.
+#[test]
+fn test_reshape_allowzero_rejects_zero_with_minus_one() -> Result<()> {
+    let x = Tensor::from_vec(Vec::<f32>::new(), &[3, 0], &Device::Cpu)?;
+    assert!(run_reshape(Some(1), x, vec![0, -1]).is_err());
+    Ok(())
+}
+
 // "LogSoftmax"
 #[test]
 fn test_logsoftmax_operation() -> Result<()> {
