@@ -47,7 +47,9 @@ criterion = { workspace = true }
 
 [features]
 default = []
-cuda = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda"]
+cuda = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda", "cudarc/dynamic-loading"]
+cuda-dynamic-linking = ["cuda", "cudarc/dynamic-linking"]
+cuda-moe = ["candle-kernels/cuda-moe"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
 mkl = ["dep:intel-mkl-src"]
