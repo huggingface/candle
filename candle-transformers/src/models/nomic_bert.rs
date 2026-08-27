@@ -237,11 +237,33 @@ impl NomicBertAttention {
         let k = rotary_emb.apply(&k)?;
 
         let scale = (self.head_dim as f64).sqrt();
-        let attn_scores = (q.matmul(&k.t()?)? / scale)?;
-        let attn_scores = attn_scores.broadcast_add(attention_mask)?;
-        let attn_probs = candle_nn::ops::softmax_last_dim(&attn_scores)?;
-
-        let attn_output = attn_probs.matmul(&v.contiguous()?)?;
+        // `NOMIC_BERT_NAIVE_ATTN=1` forces the unfused path for A/B timing.
+        let use_fused =
+            q.device().is_metal() && std::env::var_os("NOMIC_BERT_NAIVE_ATTN").is_none();
+        let attn_output = if use_fused {
+            // Fused scaled-dot-product attention: one kernel instead of
+            // four dispatches (two matmuls, a broadcast add, a softmax)
+            // plus their intermediate (batch, heads, seq, seq) tensors.
+            // The kernel wants the mask at full rank; `broadcast_as` is
+            // free until `contiguous` materializes it once per layer.
+            let mask = attention_mask
+                .broadcast_as((batch_size, self.num_heads, seq_len, seq_len))?
+                .contiguous()?;
+            candle_nn::ops::sdpa(
+                &q,
+                &k,
+                &v.contiguous()?,
+                Some(&mask),
+                false,
+                (1.0 / scale) as f32,
+                1.0,
+            )?
+        } else {
+            let attn_scores = (q.matmul(&k.t()?)? / scale)?;
+            let attn_scores = attn_scores.broadcast_add(attention_mask)?;
+            let attn_probs = candle_nn::ops::softmax_last_dim(&attn_scores)?;
+            attn_probs.matmul(&v.contiguous()?)?
+        };
         let attn_output = attn_output.transpose(1, 2)?.contiguous()?;
         let attn_output = attn_output.flatten_from(D::Minus2)?;
 
