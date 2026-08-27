@@ -141,7 +141,11 @@ impl LayerWeights {
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
-        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
+        // The attention output width is n_head * head_dim, which is not
+        // always n_embd (e.g. MiniCPM5-1B: 16*128=2048 vs hidden 1536).
+        let y = y
+            .transpose(1, 2)?
+            .reshape(&[b_sz, seq_len, self.n_head * self.head_dim])?;
         let y = self.attention_wo.forward(&y)?;
         Ok(y)
     }
@@ -198,7 +202,14 @@ impl ModelWeights {
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
 
-        let head_dim = embedding_length / head_count;
+        // Same decoupled-head_dim handling as quantized_llama: prefer the
+        // explicit GGUF key_length (written by llama.cpp converters) and fall
+        // back to the classic derivation, which matches all released Qwen2s.
+        let head_dim = md_get("qwen2.attention.key_length")
+            .ok()
+            .and_then(|v| v.to_u32().ok())
+            .map(|v| v as usize)
+            .unwrap_or(embedding_length / head_count);
 
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
