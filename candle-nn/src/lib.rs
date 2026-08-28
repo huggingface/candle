@@ -36,6 +36,8 @@ pub mod rnn;
 pub mod rotary_emb;
 pub mod sampling;
 pub mod sequential;
+#[cfg(feature = "sycl")]
+mod sycl_cpu_shim;
 pub mod var_builder;
 pub mod var_map;
 /// Re-export of [`attention::varlen`] for backward compatibility.

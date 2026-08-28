@@ -160,12 +160,11 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
 
     let weight = vb.get_with_hints(size, weight_tensor_name, crate::Init::Const(1.))?;
 
-    let bias_tensor_name = ["bias", "beta"]
-        .iter()
-        .find(|&name| vb.contains_tensor(name))
-        .ok_or_else(|| Error::Msg("Failed to find weight tensor".into()))?;
-
     let bias = if config.affine {
+        let bias_tensor_name = ["bias", "beta"]
+            .iter()
+            .find(|&name| vb.contains_tensor(name))
+            .ok_or_else(|| Error::Msg("Failed to find bias tensor".into()))?;
         Some(vb.get_with_hints(size, bias_tensor_name, crate::Init::Const(0.))?)
     } else {
         None

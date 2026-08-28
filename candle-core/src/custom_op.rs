@@ -1,6 +1,8 @@
 use crate::layout::LayoutRelation;
 use crate::op::{BackpropOp, Op};
 use crate::tensor::from_storage;
+#[cfg(feature = "sycl")]
+use crate::SyclStorage;
 use crate::{bail, CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Storage, Tensor};
 use std::sync::Arc;
 
@@ -30,6 +32,13 @@ pub trait CustomOp1 {
     ) -> Result<(MetalStorage, Shape)> {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+
+    #[cfg(feature = "sycl")]
+    fn sycl_fwd(&self, _storage: &SyclStorage, _layout: &Layout) -> Result<(SyclStorage, Shape)> {
+        Err(crate::Error::Sycl(
+            format!("no sycl implementation for {}", self.name()).into(),
         ))
     }
 
@@ -79,6 +88,19 @@ pub trait CustomOp2 {
     ) -> Result<(MetalStorage, Shape)> {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+
+    #[cfg(feature = "sycl")]
+    fn sycl_fwd(
+        &self,
+        _: &SyclStorage,
+        _: &Layout,
+        _: &SyclStorage,
+        _: &Layout,
+    ) -> Result<(SyclStorage, Shape)> {
+        Err(crate::Error::Sycl(
+            format!("no sycl implementation for {}", self.name()).into(),
         ))
     }
 
@@ -137,6 +159,21 @@ pub trait CustomOp3 {
     ) -> Result<(MetalStorage, Shape)> {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+
+    #[cfg(feature = "sycl")]
+    fn sycl_fwd(
+        &self,
+        _: &SyclStorage,
+        _: &Layout,
+        _: &SyclStorage,
+        _: &Layout,
+        _: &SyclStorage,
+        _: &Layout,
+    ) -> Result<(SyclStorage, Shape)> {
+        Err(crate::Error::Sycl(
+            format!("no sycl implementation for {}", self.name()).into(),
         ))
     }
 
@@ -271,6 +308,13 @@ pub trait InplaceOp1 {
             format!("no metal implementation for {}", self.name()).into(),
         ))
     }
+
+    #[cfg(feature = "sycl")]
+    fn sycl_fwd(&self, _storage: &mut SyclStorage, _layout: &Layout) -> Result<()> {
+        Err(crate::Error::Sycl(
+            format!("no sycl implementation for {}", self.name()).into(),
+        ))
+    }
 }
 
 /// In-place ops that can be defined in user-land.
@@ -342,6 +386,28 @@ pub trait InplaceOpN<const N: usize> {
     ) -> Result<()> {
         let _ = (dst, dst_l, srcs);
         bail!("no aliased metal implementation for {}", self.name())
+    }
+
+    #[cfg(feature = "sycl")]
+    fn sycl_fwd(
+        &self,
+        dst: &mut SyclStorage,
+        dst_l: &Layout,
+        srcs: [(&SyclStorage, &Layout); N],
+    ) -> Result<()> {
+        let _ = (dst, dst_l, srcs);
+        bail!("no sycl implementation for {}", self.name())
+    }
+
+    #[cfg(feature = "sycl")]
+    fn sycl_fwd_aliased(
+        &self,
+        dst: &mut SyclStorage,
+        dst_l: &Layout,
+        srcs: [(Src<'_, SyclStorage>, &Layout); N],
+    ) -> Result<()> {
+        let _ = (dst, dst_l, srcs);
+        bail!("no aliased sycl implementation for {}", self.name())
     }
 }
 
@@ -428,6 +494,8 @@ impl<C: InplaceOp1> InplaceOpN<0> for C {
     forward_op1!(cpu_fwd, cpu_fwd_aliased, CpuStorage);
     forward_op1!(cuda_fwd, cuda_fwd_aliased, CudaStorage);
     forward_op1!(metal_fwd, metal_fwd_aliased, MetalStorage);
+    #[cfg(feature = "sycl")]
+    forward_op1!(sycl_fwd, sycl_fwd_aliased, SyclStorage);
 }
 
 macro_rules! forward_op2 {
@@ -467,6 +535,8 @@ impl<C: InplaceOp2> InplaceOpN<1> for C {
     forward_op2!(cpu_fwd, cpu_fwd_aliased, CpuStorage);
     forward_op2!(cuda_fwd, cuda_fwd_aliased, CudaStorage);
     forward_op2!(metal_fwd, metal_fwd_aliased, MetalStorage);
+    #[cfg(feature = "sycl")]
+    forward_op2!(sycl_fwd, sycl_fwd_aliased, SyclStorage);
 }
 
 pub trait InplaceOp2 {
@@ -504,6 +574,13 @@ pub trait InplaceOp2 {
         _ = (s1, l1, s2, l2);
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+
+    #[cfg(feature = "sycl")]
+    fn sycl_fwd(&self, _: &mut SyclStorage, _: &Layout, _: &SyclStorage, _: &Layout) -> Result<()> {
+        Err(crate::Error::Sycl(
+            format!("no sycl implementation for {}", self.name()).into(),
         ))
     }
 }
@@ -547,6 +624,8 @@ impl<C: InplaceOp3> InplaceOpN<2> for C {
     forward_op3!(cpu_fwd, cpu_fwd_aliased, CpuStorage);
     forward_op3!(cuda_fwd, cuda_fwd_aliased, CudaStorage);
     forward_op3!(metal_fwd, metal_fwd_aliased, MetalStorage);
+    #[cfg(feature = "sycl")]
+    forward_op3!(sycl_fwd, sycl_fwd_aliased, SyclStorage);
 }
 
 pub trait InplaceOp3 {
@@ -593,6 +672,21 @@ pub trait InplaceOp3 {
     ) -> Result<()> {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+
+    #[cfg(feature = "sycl")]
+    fn sycl_fwd(
+        &self,
+        _: &mut SyclStorage,
+        _: &Layout,
+        _: &SyclStorage,
+        _: &Layout,
+        _: &SyclStorage,
+        _: &Layout,
+    ) -> Result<()> {
+        Err(crate::Error::Sycl(
+            format!("no sycl implementation for {}", self.name()).into(),
         ))
     }
 }
