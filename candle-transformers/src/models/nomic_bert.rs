@@ -237,27 +237,25 @@ impl NomicBertAttention {
         let k = rotary_emb.apply(&k)?;
 
         let scale = (self.head_dim as f64).sqrt();
+        // The fused kernel supports a fixed set of head dims (and rejects
+        // F32 at head_dim 512); anything else falls back to the naive path
+        // rather than erroring on non-default configs.
+        let fused_supported = matches!(self.head_dim, 32 | 64 | 72 | 80 | 96 | 128 | 256 | 512)
+            && !(self.head_dim == 512 && q.dtype() == DType::F32);
         // `NOMIC_BERT_NAIVE_ATTN=1` forces the unfused path for A/B timing.
-        let use_fused =
-            q.device().is_metal() && std::env::var_os("NOMIC_BERT_NAIVE_ATTN").is_none();
+        let use_fused = fused_supported
+            && q.device().is_metal()
+            && std::env::var_os("NOMIC_BERT_NAIVE_ATTN").is_none();
         let attn_output = if use_fused {
             // Fused scaled-dot-product attention: one kernel instead of
             // four dispatches (two matmuls, a broadcast add, a softmax)
             // plus their intermediate (batch, heads, seq, seq) tensors.
-            // The kernel wants the mask at full rank; `broadcast_as` is
-            // free until `contiguous` materializes it once per layer.
-            let mask = attention_mask
-                .broadcast_as((batch_size, self.num_heads, seq_len, seq_len))?
-                .contiguous()?;
-            candle_nn::ops::sdpa(
-                &q,
-                &k,
-                &v.contiguous()?,
-                Some(&mask),
-                false,
-                (1.0 / scale) as f32,
-                1.0,
-            )?
+            // The kernel takes the mask by strides, so the broadcast view
+            // costs nothing — no materialized (batch, heads, seq, seq)
+            // buffer.
+            let mask =
+                attention_mask.broadcast_as((batch_size, self.num_heads, seq_len, seq_len))?;
+            candle_nn::ops::sdpa(&q, &k, &v, Some(&mask), false, (1.0 / scale) as f32, 1.0)?
         } else {
             let attn_scores = (q.matmul(&k.t()?)? / scale)?;
             let attn_scores = attn_scores.broadcast_add(attention_mask)?;
