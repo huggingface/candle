@@ -220,6 +220,7 @@ pub enum Error {
 
     #[error("{context}\n{inner}")]
     Context {
+        #[source]
         inner: Box<Self>,
         context: Box<dyn std::fmt::Display + Send + Sync>,
     },
@@ -233,6 +234,7 @@ pub enum Error {
 
     #[error("{inner}\n{backtrace}")]
     WithBacktrace {
+        #[source]
         inner: Box<Self>,
         backtrace: Box<std::backtrace::Backtrace>,
     },
@@ -390,5 +392,24 @@ impl<T> Context<T, Infallible> for Option<T> {
             Some(v) => Ok(v),
             None => Err(Error::UnwrapNone.context(context()).bt()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn context_and_backtrace_expose_their_inner_errors_as_sources() {
+        let error = Error::Msg("root cause".into());
+        let error = Error::WithBacktrace {
+            inner: Box::new(error),
+            backtrace: Box::new(std::backtrace::Backtrace::force_capture()),
+        }
+        .context("operation failed");
+
+        let backtrace = std::error::Error::source(&error).unwrap();
+        let root_cause = backtrace.source().unwrap();
+        assert_eq!(root_cause.to_string(), "root cause");
     }
 }
