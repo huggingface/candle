@@ -102,6 +102,21 @@ impl candle::CustomOp3 for RotaryEmbI {
         }
     }
 
+    #[cfg(feature = "sycl")]
+    fn sycl_fwd(
+        &self,
+        s1: &candle::SyclStorage,
+        l1: &Layout,
+        s2: &candle::SyclStorage,
+        l2: &Layout,
+        s3: &candle::SyclStorage,
+        l3: &Layout,
+    ) -> Result<(candle::SyclStorage, Shape)> {
+        crate::sycl_cpu_shim::rope(0, s1, l1, s2, l2, s3, l3, |a, b, c, d, e, f| {
+            self.cpu_fwd(a, b, c, d, e, f)
+        })
+    }
+
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
@@ -407,6 +422,21 @@ impl candle::CustomOp3 for RotaryEmb {
         }
     }
 
+    #[cfg(feature = "sycl")]
+    fn sycl_fwd(
+        &self,
+        s1: &candle::SyclStorage,
+        l1: &Layout,
+        s2: &candle::SyclStorage,
+        l2: &Layout,
+        s3: &candle::SyclStorage,
+        l3: &Layout,
+    ) -> Result<(candle::SyclStorage, Shape)> {
+        crate::sycl_cpu_shim::rope(1, s1, l1, s2, l2, s3, l3, |a, b, c, d, e, f| {
+            self.cpu_fwd(a, b, c, d, e, f)
+        })
+    }
+
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
@@ -679,6 +709,21 @@ impl candle::CustomOp3 for RotaryEmbThd {
                 s3.dtype()
             ),
         }
+    }
+
+    #[cfg(feature = "sycl")]
+    fn sycl_fwd(
+        &self,
+        s1: &candle::SyclStorage,
+        l1: &Layout,
+        s2: &candle::SyclStorage,
+        l2: &Layout,
+        s3: &candle::SyclStorage,
+        l3: &Layout,
+    ) -> Result<(candle::SyclStorage, Shape)> {
+        crate::sycl_cpu_shim::rope(2, s1, l1, s2, l2, s3, l3, |a, b, c, d, e, f| {
+            self.cpu_fwd(a, b, c, d, e, f)
+        })
     }
 
     #[cfg(feature = "cuda")]

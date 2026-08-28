@@ -15,6 +15,15 @@ pub fn device(cpu: bool) -> Result<Device> {
         Ok(Device::new_cuda(0)?)
     } else if metal_is_available() {
         Ok(Device::new_metal(0)?)
+    } else if cfg!(feature = "sycl") {
+        #[cfg(feature = "sycl")]
+        {
+            Ok(Device::new_sycl(0)?)
+        }
+        #[cfg(not(feature = "sycl"))]
+        {
+            unreachable!()
+        }
     } else {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {
