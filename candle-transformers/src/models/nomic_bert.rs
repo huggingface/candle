@@ -89,6 +89,7 @@ impl RotaryEmbedding {
         base: f64,
         interleaved: bool,
         device: &Device,
+        dtype: DType,
     ) -> Result<Self> {
         let half_dim = dim / 2;
         let inv_freq: Vec<f32> = (0..half_dim)
@@ -99,8 +100,11 @@ impl RotaryEmbedding {
             .to_dtype(DType::F32)?
             .reshape((max_seq_len, 1))?;
         let freqs = positions.matmul(&inv_freq.unsqueeze(0)?)?;
-        let cos = freqs.cos()?;
-        let sin = freqs.sin()?;
+        // Stored in the model dtype: `apply` runs once per layer per q/k,
+        // and casting the tables there costs four dispatches per layer per
+        // forward for tensors that never change.
+        let cos = freqs.cos()?.to_dtype(dtype)?;
+        let sin = freqs.sin()?.to_dtype(dtype)?;
         Ok(Self {
             cos,
             sin,
@@ -112,12 +116,10 @@ impl RotaryEmbedding {
     /// Dispatches to interleaved (GPT-J) or non-interleaved (GPT-NeoX) style
     /// based on the model config.
     fn apply(&self, x: &Tensor) -> Result<Tensor> {
-        let cos = self.cos.to_dtype(x.dtype())?;
-        let sin = self.sin.to_dtype(x.dtype())?;
         if self.interleaved {
-            candle_nn::rotary_emb::rope_i(x, &cos, &sin)
+            candle_nn::rotary_emb::rope_i(x, &self.cos, &self.sin)
         } else {
-            candle_nn::rotary_emb::rope(x, &cos, &sin)
+            candle_nn::rotary_emb::rope(x, &self.cos, &self.sin)
         }
     }
 }
@@ -397,6 +399,7 @@ impl NomicBertEncoder {
             config.rotary_emb_base,
             config.rotary_emb_interleaved,
             vb.device(),
+            vb.dtype(),
         )?;
         Ok(Self {
             layers,
