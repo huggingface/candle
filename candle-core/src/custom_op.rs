@@ -388,13 +388,13 @@ pub enum AccessPattern {
 
 impl AccessPattern {
     fn supports(self, rel: LayoutRelation) -> bool {
-        match (self, rel) {
-            (AccessPattern::Elementwise, LayoutRelation::Identical | LayoutRelation::Disjoint) => {
-                true
-            }
-            (AccessPattern::Arbitrary, LayoutRelation::Disjoint) => true,
-            _ => false,
-        }
+        matches!(
+            (self, rel),
+            (
+                AccessPattern::Elementwise,
+                LayoutRelation::Identical | LayoutRelation::Disjoint
+            ) | (AccessPattern::Arbitrary, LayoutRelation::Disjoint)
+        )
     }
 }
 
@@ -692,8 +692,9 @@ impl Tensor {
             let s = match (&guards[i], rels[i]) {
                 (Some(g), None) => Src::Distinct(&**g),
                 (None, Some(rel)) => Src::Aliased(rel),
-                // `guards[i]` is `Some` exactly when `rels[i]` is `None`.
-                _ => unreachable!("guard presence tracks classification"),
+                _ => unreachable!(
+                    "Source is either distinct or aliased. Other match patterns should be impossible"
+                ),
             };
             (s, srcs[i].layout())
         });
