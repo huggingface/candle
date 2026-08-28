@@ -239,10 +239,15 @@ impl NomicBertAttention {
         let scale = (self.head_dim as f64).sqrt();
         // The fused kernel supports a fixed set of head dims (and rejects
         // F32 at head_dim 512); anything else falls back to the naive path
-        // rather than erroring on non-default configs.
-        let fused_supported = matches!(self.head_dim, 32 | 64 | 72 | 80 | 96 | 128 | 256 | 512)
+        // rather than erroring on non-default configs. `seq_len == 1` is
+        // excluded too: the kernel would route it to its vector variant,
+        // which supports fewer head dims and does not apply the mask.
+        let fused_supported = seq_len > 1
+            && matches!(q.dtype(), DType::F16 | DType::BF16 | DType::F32)
+            && matches!(self.head_dim, 32 | 64 | 72 | 80 | 96 | 128 | 256 | 512)
             && !(self.head_dim == 512 && q.dtype() == DType::F32);
-        // `NOMIC_BERT_NAIVE_ATTN=1` forces the unfused path for A/B timing.
+        // Setting `NOMIC_BERT_NAIVE_ATTN` (to any value) forces the
+        // unfused path, for A/B timing.
         let use_fused = fused_supported
             && q.device().is_metal()
             && std::env::var_os("NOMIC_BERT_NAIVE_ATTN").is_none();
