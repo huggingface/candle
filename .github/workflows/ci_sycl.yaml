@@ -1,0 +1,83 @@
+name: CI / sycl
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  # Compile-checks the `sycl` feature. Needs the oneAPI toolchain (`icpx`) to
+  # build `candle-sycl-kernels`, but NOT a GPU — everything here is `check` /
+  # `--no-run` / `clippy`. Maintainers cannot run Intel hardware; a backend they
+  # cannot compile-check in CI is a backend they cannot maintain.
+  check-sycl:
+    name: Check and clippy (no GPU)
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    container:
+      image: intel/oneapi-basekit:2025.1.0-0-devel-ubuntu24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      # candle-examples pulls a native-TLS dependency transitively.
+      - name: System deps
+        run: apt-get update && apt-get install -y --no-install-recommends libssl-dev pkg-config
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+
+      - name: Check (sycl)
+        run: cargo check -p candle-core -p candle-nn -p candle-transformers -p candle-examples --features sycl
+
+      - name: Check tests (sycl)
+        run: cargo test -p candle-core -p candle-nn --features sycl --no-run
+
+      - name: Build + clippy candle-sycl-kernels
+        working-directory: candle-sycl-kernels
+        run: |
+          cargo build
+          cargo clippy --all-targets -- -D warnings
+
+      # `-D warnings` only on our own crate. The shared-crate clippy is left
+      # non-fatal: a newer stable toolchain flags pre-existing lints in
+      # candle-core that are out of scope for this PR.
+      - name: Clippy (sycl feature compiles clean)
+        run: cargo clippy -p candle-core -p candle-nn --features sycl --tests
+
+      - name: Rustfmt
+        run: |
+          cargo fmt --check
+          (cd candle-sycl-kernels && cargo fmt --check)
+
+  # The GPU test suite. Inert unless dispatched by hand — there is no
+  # `intel-gpu` runner yet. Kept so the command is recorded; Phase 0 proved the
+  # route (`intel/oneapi-basekit` + `--device /dev/dri`, zero host changes).
+  test-sycl:
+    name: GPU test suite
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: [self-hosted, intel-gpu]
+    container:
+      image: intel/oneapi-basekit:2025.1.0-0-devel-ubuntu24.04
+      options: --device /dev/dri
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - name: SYCL info
+        run: sycl-ls --verbose
+
+      - name: Kernel smoke tests
+        working-directory: candle-sycl-kernels
+        run: cargo test -- --test-threads=1
+
+      - name: Test (sycl)
+        run: cargo test -p candle-core -p candle-nn --features sycl -- --test-threads=1
