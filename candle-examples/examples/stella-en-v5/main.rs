@@ -381,7 +381,7 @@ fn main() -> Result<()> {
 
     let mut embedding = Embedding::new(model, tokenizer, &device);
 
-    let task = args.task.map_or(EncodeTask::S2P, |t| t);
+    let task = args.task.unwrap_or(EncodeTask::S2P);
 
     embedding.encode(task, args.query)
 }
