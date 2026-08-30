@@ -15,12 +15,9 @@ use candle_transformers::models::bert::{BertForTokenClassification, Config as Be
 use clap::{ArgGroup, Parser};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{
-    Encoding, PaddingParams, Tokenizer, TokenizerBuilder,
-    models::wordpiece::WordPiece,
-    normalizers::BertNormalizer,
-    pre_tokenizers::bert::BertPreTokenizer,
-    processors::bert::BertProcessing,
-    decoders::wordpiece::WordPiece as WordPieceDecoder,
+    decoders::wordpiece::WordPiece as WordPieceDecoder, models::wordpiece::WordPiece,
+    normalizers::BertNormalizer, pre_tokenizers::bert::BertPreTokenizer,
+    processors::bert::BertProcessing, Encoding, PaddingParams, Tokenizer, TokenizerBuilder,
 };
 
 type Id2Label = HashMap<u32, String>;
@@ -81,7 +78,9 @@ struct Args {
 }
 
 impl Args {
-    fn build_model_and_tokenizer(&self) -> Result<(BertForTokenClassification, BertConfig, Tokenizer, Id2Label)> {
+    fn build_model_and_tokenizer(
+        &self,
+    ) -> Result<(BertForTokenClassification, BertConfig, Tokenizer, Id2Label)> {
         let device = candle_examples::device(self.cpu)?;
 
         // Get files from either the HuggingFace API, or from a specified local directory.
@@ -148,10 +147,14 @@ impl Args {
         // Build BERT WordPiece tokenizer from vocab.txt.
         // Many BERT NER models (including dslim/bert-base-NER) predate the fast tokenizer
         // format and do not ship tokenizer.json, only vocab.txt.
-        let wordpiece = WordPiece::from_file(tokenizer_filename.to_str().ok_or(E::msg("Invalid vocab path"))?)
-            .unk_token("[UNK]".to_string())
-            .build()
-            .map_err(E::msg)?;
+        let wordpiece = WordPiece::from_file(
+            tokenizer_filename
+                .to_str()
+                .ok_or(E::msg("Invalid vocab path"))?,
+        )
+        .unk_token("[UNK]".to_string())
+        .build()
+        .map_err(E::msg)?;
 
         let mut tokenizer = TokenizerBuilder::new()
             .with_model(wordpiece)
@@ -322,7 +325,11 @@ fn create_benchmark<'a>(
             let token_type_ids = model_input.token_type_ids.clone();
             let attention_mask = model_input.attention_mask.clone();
             let start = std::time::Instant::now();
-            model.forward(&model_input.input_ids, &token_type_ids, Some(&attention_mask))?;
+            model.forward(
+                &model_input.input_ids,
+                &token_type_ids,
+                Some(&attention_mask),
+            )?;
             let duration = start.elapsed();
             durations.push(duration.as_nanos());
         }
