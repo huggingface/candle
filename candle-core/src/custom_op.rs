@@ -439,6 +439,7 @@ impl InplaceOp1 for UgIOp1 {
         let device = sto.device();
         let encoder = device.command_encoder()?;
         encoder.set_compute_pipeline_state(&self.func);
+        candle_metal_kernels::debug_group!(encoder, "{}", self.name);
         let (g, b) = if elem_count.is_multiple_of(32) {
             (elem_count / 32, 32)
         } else {
@@ -450,6 +451,7 @@ impl InplaceOp1 for UgIOp1 {
             depth: 1,
         };
         let group_dims = candle_metal_kernels::utils::get_block_dims(b, 1, 1);
+        let encoder: &candle_metal_kernels::metal::ComputeCommandEncoder = encoder.as_ref();
         encoder.set_output_buffer(0, Some(sto.buffer()), 0);
         encoder.dispatch_threads(grid_dims, group_dims);
 

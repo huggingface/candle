@@ -39,6 +39,7 @@ extern "C" {
         seqlen_k: u32,
         seqlen_q_rounded: u32,
         seqlen_k_rounded: u32,
+        total_q: u32,
 
         is_bf16: c_int,
         is_causal: c_int,
@@ -48,6 +49,15 @@ extern "C" {
         window_size_right: c_int,
 
         softcap: f32,
+
+        block_table_ptr: *const i32,
+        block_table_batch_stride: u32,
+        page_block_size: c_int,
+
+        mm_prefix_ranges_ptr: *const i32,
+        mm_prefix_range_batch_stride: u32,
+        max_mm_prefix_ranges: c_int,
+        stream_ptr: *mut c_void,
     );
 
 }

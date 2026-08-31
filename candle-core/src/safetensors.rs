@@ -260,7 +260,11 @@ impl Tensor {
                     }
                     #[cfg(feature = "metal")]
                     Device::Metal(device) => {
-                        let buffer = device.new_buffer_with_data(data)?;
+                        let buffer = device
+                            .new_buffer_builder()
+                            .with_data(data)
+                            .with_label("safetensors_view")
+                            .build()?;
 
                         let storage = crate::metal_backend::MetalStorage::new(
                             buffer,
@@ -360,7 +364,11 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
         }
         #[cfg(feature = "metal")]
         Device::Metal(device) => {
-            let buffer = device.new_buffer_with_data(data)?;
+            let buffer = device
+                .new_buffer_builder()
+                .with_data(data)
+                .with_label("safetensors_load")
+                .build()?;
 
             let storage =
                 crate::metal_backend::MetalStorage::new(buffer, device.clone(), data.len(), dtype);

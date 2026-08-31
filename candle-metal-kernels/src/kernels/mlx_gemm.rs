@@ -1,7 +1,8 @@
 use crate::metal::{Buffer, ComputeCommandEncoder, Device, MetalDeviceType};
 use crate::utils::{EncoderProvider, Input};
 use crate::{
-    set_params, ConstantValues, EncoderParam, Kernels, MetalKernelError, Output, Source, Value,
+    debug_group, set_params, ConstantValues, EncoderParam, Kernels, MetalKernelError, Output,
+    Source, Value,
 };
 use objc2_metal::MTLSize;
 
@@ -622,10 +623,12 @@ pub fn call_mlx_gemm(
         trans_str, dtype_str, dtype_str, bm, bn, bk, wm, wn
     );
 
-    let pipeline = kernels.load_pipeline_with_constants(device, Source::Gemm, name, constants)?;
+    let pipeline =
+        kernels.load_pipeline_with_constants(device, Source::Gemm, name.clone(), constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "mlx_gemm {name} B={b} M={m} N={n} K={k}");
 
     impl EncoderParam for GemmParams {
         fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {

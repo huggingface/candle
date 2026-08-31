@@ -1,6 +1,6 @@
 [package]
 name = "candle-metal-kernels"
-version = "0.10.2"
+version = "0.11.0"
 edition = "2021"
 
 description = "Metal kernels for Candle"
@@ -9,6 +9,11 @@ keywords = ["blas", "tensor", "machine-learning"]
 categories = ["science"]
 license = "MIT OR Apache-2.0"
 
+
+[features]
+default = []
+# Emit per-dispatch Metal debug groups for Xcode GPU captures / Instruments.
+debug-labels = []
 
 [dependencies]
 half = { version = "2.5.0", features = [

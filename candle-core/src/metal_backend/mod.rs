@@ -10,6 +10,10 @@ use candle_metal_kernels::{
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
 };
 use objc2_foundation::NSRange;
+#[cfg(feature = "metal-debug-labels")]
+use objc2_foundation::NSString;
+#[cfg(feature = "metal-debug-labels")]
+use objc2_metal::MTLCommandQueue;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
@@ -123,9 +127,12 @@ impl BackendStorage for MetalStorage {
         let el = shape.elem_count();
         let dtype = self.dtype;
 
-        let buffer = device.new_buffer(el, self.dtype, "affine")?;
+        let buffer = device
+            .new_buffer_builder()
+            .with_size_for(el, self.dtype)
+            .with_label("affine")
+            .build()?;
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("affine");
         let src = buffer_o(&self.buffer, layout, dtype);
         if layout.is_contiguous() {
             let name = match self.dtype {
@@ -184,9 +191,12 @@ impl BackendStorage for MetalStorage {
         let el = shape.elem_count();
         let dtype = self.dtype;
 
-        let buffer = device.new_buffer(el, self.dtype, "powf")?;
+        let buffer = device
+            .new_buffer_builder()
+            .with_size_for(el, self.dtype)
+            .with_label("powf")
+            .build()?;
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("powf");
         let src = buffer_o(&self.buffer, layout, dtype);
         if layout.is_contiguous() {
             let name = match self.dtype {
@@ -237,9 +247,12 @@ impl BackendStorage for MetalStorage {
         let el = shape.elem_count();
         let dtype = self.dtype;
 
-        let buffer = device.new_buffer(el, self.dtype, "elu")?;
+        let buffer = device
+            .new_buffer_builder()
+            .with_size_for(el, self.dtype)
+            .with_label("elu")
+            .build()?;
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("elu");
         let src = buffer_o(&self.buffer, layout, self.dtype);
         if layout.is_contiguous() {
             let name = match self.dtype {
@@ -347,9 +360,12 @@ impl BackendStorage for MetalStorage {
                 Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
             }
             let dtype = if return_index { DType::U32 } else { self.dtype };
-            let buffer = device.new_buffer(dst_el, dtype, "reduce")?;
+            let buffer = device
+                .new_buffer_builder()
+                .with_size_for(dst_el, dtype)
+                .with_label("reduce")
+                .build()?;
             let encoder = self.device.command_encoder()?;
-            encoder.set_label("reduce");
             let src = buffer_o(&self.buffer, layout, self.dtype);
             candle_metal_kernels::call_reduce_contiguous(
                 &device.device,
@@ -403,9 +419,12 @@ impl BackendStorage for MetalStorage {
             Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
         }
         let dtype = if return_index { DType::U32 } else { self.dtype };
-        let buffer = device.new_buffer(dst_el, dtype, "reduce")?;
+        let buffer = device
+            .new_buffer_builder()
+            .with_size_for(dst_el, dtype)
+            .with_label("reduce")
+            .build()?;
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("reduce");
         let src = buffer_o(&self.buffer, layout, self.dtype);
         candle_metal_kernels::call_reduce_strided(
             &device.device,
@@ -447,7 +466,6 @@ impl BackendStorage for MetalStorage {
             let shape = l.shape();
             let el_count = shape.elem_count();
             let encoder = device.command_encoder()?;
-            encoder.set_label("const-set");
             let dst = buffer_o(&self_.buffer, l, self_.dtype);
 
             if l.is_contiguous() {
@@ -531,9 +549,12 @@ impl BackendStorage for MetalStorage {
         let device = self.device();
         let shape = layout.shape();
         let el_count = shape.elem_count();
-        let buffer = device.new_buffer(el_count, dtype, "to_dtype")?;
+        let buffer = device
+            .new_buffer_builder()
+            .with_size_for(el_count, dtype)
+            .with_label("to_dtype")
+            .build()?;
         let encoder = device.command_encoder()?;
-        encoder.set_label("to_dtype");
         let src = buffer_o(&self.buffer, layout, self.dtype);
         if layout.is_contiguous() {
             let kernel_name = match (self.dtype, dtype) {
@@ -650,9 +671,12 @@ impl BackendStorage for MetalStorage {
         let dtype = self.dtype;
         let shape = layout.shape();
         let el_count = shape.elem_count();
-        let buffer = device.new_buffer(el_count, dtype, B::KERNEL)?;
+        let buffer = device
+            .new_buffer_builder()
+            .with_size_for(el_count, dtype)
+            .with_label(B::KERNEL)
+            .build()?;
         let encoder = device.command_encoder()?;
-        encoder.set_label(B::KERNEL);
         let src = buffer_o(&self.buffer, layout, self.dtype);
 
         if layout.is_contiguous() {
@@ -832,9 +856,13 @@ impl BackendStorage for MetalStorage {
         let dims = shape.dims();
         let el = shape.elem_count();
         let dtype = t.dtype;
-        let buffer = self.device.new_buffer(el, dtype, "where")?;
+        let buffer = self
+            .device
+            .new_buffer_builder()
+            .with_size_for(el, dtype)
+            .with_label("where")
+            .build()?;
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("where");
         if t.dtype() != f.dtype() {
             crate::bail!(
                 "Invalid where: different dtypes for values {:?} != {:?}",
@@ -897,9 +925,11 @@ impl BackendStorage for MetalStorage {
         let dst_el = dims[0] * l_out * dims[1] * k_size;
         let dst = self
             .device
-            .new_buffer(dst_el, self.dtype, "conv1d_im2col")?;
+            .new_buffer_builder()
+            .with_size_for(dst_el, self.dtype)
+            .with_label("conv1d_im2col")
+            .build()?;
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("conv1d_im2col");
         let name = match self.dtype {
             DType::F32 => "im2col1d_f32",
             DType::F16 => "im2col1d_f16",
@@ -982,7 +1012,10 @@ impl BackendStorage for MetalStorage {
             }
             let buffer = self
                 .device
-                .new_buffer(dst_el, self.dtype, "conv_transpose1d")?;
+                .new_buffer_builder()
+                .with_size_for(dst_el, self.dtype)
+                .with_label("conv_transpose1d")
+                .build()?;
 
             let name = match self.dtype {
                 DType::F32 => "col2im1d_f32",
@@ -1012,7 +1045,6 @@ impl BackendStorage for MetalStorage {
             // _status < MTLCommandBufferStatusCommitted >
             // -[IOGPUMetalCommandBuffer setCurrentCommandEncoder:]
             let encoder = self.device.command_encoder()?;
-            encoder.set_label("col2im1d");
             candle_metal_kernels::call_col2im1d(
                 &self.device.device,
                 &encoder,
@@ -1029,10 +1061,12 @@ impl BackendStorage for MetalStorage {
         } else {
             let buffer = self
                 .device
-                .new_buffer(dst_el, self.dtype, "conv_transpose1d")?;
+                .new_buffer_builder()
+                .with_size_for(dst_el, self.dtype)
+                .with_label("conv_transpose1d")
+                .build()?;
 
             let encoder = self.device.command_encoder()?;
-            encoder.set_label("conv_transpose1d");
             let name = match self.dtype {
                 DType::F32 => "conv_transpose1d_f32",
                 DType::F16 => "conv_transpose1d_f16",
@@ -1093,9 +1127,11 @@ impl BackendStorage for MetalStorage {
 
         let dst = self
             .device
-            .new_buffer(dst_el, self.dtype, "conv2d_im2col")?;
+            .new_buffer_builder()
+            .with_size_for(dst_el, self.dtype)
+            .with_label("conv2d_im2col")
+            .build()?;
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("conv2d_im2col");
         let name = match self.dtype {
             DType::F32 => "im2col_f32",
             DType::F16 => "im2col_f16",
@@ -1177,10 +1213,12 @@ impl BackendStorage for MetalStorage {
 
         let buffer = self
             .device
-            .new_buffer(dst_el, self.dtype, "conv_transpose2d")?;
+            .new_buffer_builder()
+            .with_size_for(dst_el, self.dtype)
+            .with_label("conv_transpose2d")
+            .build()?;
 
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("conv_transpose2d");
 
         let name = match self.dtype {
             DType::F32 => "conv_transpose2d_f32",
@@ -1238,9 +1276,13 @@ impl BackendStorage for MetalStorage {
         let out_w = (width - w_k) / w_stride + 1;
         let out_h = (height - h_k) / h_stride + 1;
         let dst_el = out_w * out_h * b_size * channels;
-        let buffer = self.device.new_buffer(dst_el, self.dtype, "avg_pool2d")?;
+        let buffer = self
+            .device
+            .new_buffer_builder()
+            .with_size_for(dst_el, self.dtype)
+            .with_label("avg_pool2d")
+            .build()?;
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("avg_pool2d");
         candle_metal_kernels::call_pool2d(
             &self.device.device,
             &encoder,
@@ -1281,9 +1323,13 @@ impl BackendStorage for MetalStorage {
         let out_w = (width - w_k) / w_stride + 1;
         let out_h = (height - h_k) / h_stride + 1;
         let dst_el = out_w * out_h * b_size * channels;
-        let buffer = self.device.new_buffer(dst_el, self.dtype, "max_pool2d")?;
+        let buffer = self
+            .device
+            .new_buffer_builder()
+            .with_size_for(dst_el, self.dtype)
+            .with_label("max_pool2d")
+            .build()?;
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("max_pool2d");
         candle_metal_kernels::call_pool2d(
             &self.device.device,
             &encoder,
@@ -1328,9 +1374,11 @@ impl BackendStorage for MetalStorage {
         let dst_el = out_w * out_h * dims[0] * dims[1];
         let buffer = self
             .device
-            .new_buffer(dst_el, self.dtype, "upsample_nearest2d")?;
+            .new_buffer_builder()
+            .with_size_for(dst_el, self.dtype)
+            .with_label("upsample_nearest2d")
+            .build()?;
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("upsample_nearest2d");
         let src = buffer_o(&self.buffer, inp_l, self.dtype);
         candle_metal_kernels::call_upsample_nearest_2d(
             &self.device.device,
@@ -1377,10 +1425,12 @@ impl BackendStorage for MetalStorage {
         let dst_el = out_w * out_h * dims[0] * dims[1];
         let buffer = self
             .device
-            .new_buffer(dst_el, self.dtype, "upsample_bilinear2d")?;
+            .new_buffer_builder()
+            .with_size_for(dst_el, self.dtype)
+            .with_label("upsample_bilinear2d")
+            .build()?;
 
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("upsample_bilinear2d");
 
         let src = buffer_o(&self.buffer, inp_l, self.dtype);
         candle_metal_kernels::call_upsample_bilinear_2d(
@@ -1411,7 +1461,11 @@ impl BackendStorage for MetalStorage {
         let dst_el = ids_l.shape().elem_count();
         let dtype = self.dtype;
         let device = self.device();
-        let buffer = device.new_buffer(dst_el, dtype, "gather")?;
+        let buffer = device
+            .new_buffer_builder()
+            .with_size_for(dst_el, dtype)
+            .with_label("gather")
+            .build()?;
         let name = match (ids.dtype, self.dtype) {
             (DType::U8, DType::U8) => "gather_u8_u8",
             (DType::U8, DType::F32) => "gather_u8_f32",
@@ -1432,7 +1486,6 @@ impl BackendStorage for MetalStorage {
             (left, right) => crate::bail!("Metal gather {left:?} {right:?} not implemented"),
         };
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("gather");
         let src = buffer_o(&self.buffer, src_l, dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_gather(
@@ -1481,7 +1534,6 @@ impl BackendStorage for MetalStorage {
             })?,
         };
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("scatter");
         let dst = buffer_o(&self.buffer, l, self.dtype);
         let src = buffer_o(&src.buffer, src_l, src.dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
@@ -1531,7 +1583,6 @@ impl BackendStorage for MetalStorage {
             })?,
         };
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("scatter_add");
         let dst = buffer_o(&self.buffer, l, self.dtype);
         let src = buffer_o(&src.buffer, src_l, src.dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
@@ -1561,7 +1612,11 @@ impl BackendStorage for MetalStorage {
         let dst_el = ids_el * left_size * right_size;
         let dtype = self.dtype;
         let device = self.device();
-        let buffer = device.new_buffer(dst_el, dtype, "index_select")?;
+        let buffer = device
+            .new_buffer_builder()
+            .with_size_for(dst_el, dtype)
+            .with_label("index_select")
+            .build()?;
         let name = match (ids.dtype, self.dtype) {
             (DType::U8, DType::U8) => "is_u8_u8",
             (DType::U8, DType::U32) => "is_u8_u32",
@@ -1653,7 +1708,6 @@ impl BackendStorage for MetalStorage {
             })?,
         };
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("index_add");
         let src = buffer_o(&src.buffer, src_l, src.dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_index_add(
@@ -1680,9 +1734,13 @@ impl BackendStorage for MetalStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        let buffer = self.device.new_buffer(b * m * n, self.dtype, "matmul")?;
+        let buffer = self
+            .device
+            .new_buffer_builder()
+            .with_size_for(b * m * n, self.dtype)
+            .with_label("matmul")
+            .build()?;
         let encoder = self.device.command_encoder()?;
-        encoder.set_label("matmul");
         let dtype = match self.dtype {
             DType::F32 => candle_metal_kernels::GemmDType::F32,
             DType::F16 => candle_metal_kernels::GemmDType::F16,
@@ -1758,7 +1816,6 @@ impl BackendStorage for MetalStorage {
                 dtype => crate::bail!("Metal copy2d {dtype:?} not implemented"),
             };
             let encoder = self.device.command_encoder()?;
-            encoder.set_label("copy2d");
             candle_metal_kernels::call_copy2d(
                 &self.device.device,
                 &encoder,
@@ -1831,7 +1888,6 @@ impl BackendStorage for MetalStorage {
                 offset_in_bytes: dst_offset * dst.dtype.size_in_bytes(),
             };
             let encoder = self.device.command_encoder()?;
-            encoder.set_label("copy_strided");
             candle_metal_kernels::call_unary_strided(
                 &self.device.device,
                 &encoder,
@@ -1902,7 +1958,11 @@ impl MetalStorage {
         };
 
         let buffer = if kernel == contiguous_kernel {
-            let buffer = device.new_buffer(el_count, dtype, op)?;
+            let buffer = device
+                .new_buffer_builder()
+                .with_size_for(el_count, dtype)
+                .with_label(op)
+                .build()?;
             candle_metal_kernels::call_binary_contiguous(
                 &device.device,
                 &encoder,
@@ -1917,7 +1977,11 @@ impl MetalStorage {
             .map_err(MetalError::from)?;
             buffer
         } else {
-            let buffer = device.new_buffer(el_count, dtype, op)?;
+            let buffer = device
+                .new_buffer_builder()
+                .with_size_for(el_count, dtype)
+                .with_label(op)
+                .build()?;
             candle_metal_kernels::call_binary_strided(
                 &device.device,
                 &encoder,
@@ -1934,13 +1998,17 @@ impl MetalStorage {
             .map_err(MetalError::from)?;
             buffer
         };
-        encoder.set_label("binary");
         Ok(Self::new(buffer, device.clone(), el_count, dtype))
     }
 
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
         let size = self.count * self.dtype.size_in_bytes();
-        let buffer = self.device.allocate_buffer(size)?;
+        let buffer = self
+            .device
+            .new_buffer_builder()
+            .with_size(size)
+            .with_label("blit_to_cpu_dst")
+            .build()?;
         {
             let mut blit = self.device.blit_command_encoder()?;
             blit.set_label("blit_to_cpu");
@@ -1957,6 +2025,8 @@ impl BackendDevice for MetalDevice {
     fn new(ordinal: usize) -> Result<Self> {
         let device = Device::all().swap_remove(ordinal);
         let command_queue = device.new_command_queue().map_err(MetalError::from)?;
+        #[cfg(feature = "metal-debug-labels")]
+        command_queue.setLabel(Some(&NSString::from_str("candle-metal")));
         let kernels = Arc::new(Kernels::new());
         let residency_set = Arc::new(ResidencySet::new(&device));
         let seed_buf = device
@@ -1966,6 +2036,8 @@ impl BackendDevice for MetalDevice {
                 RESOURCE_OPTIONS,
             )
             .map_err(MetalError::from)?;
+        #[cfg(feature = "metal-debug-labels")]
+        seed_buf.set_label("rng_seed");
         residency_set.insert(&seed_buf);
         let seed = Arc::new(Mutex::new(seed_buf));
         let commands = Commands::new(command_queue, &residency_set).map_err(MetalError::from)?;
@@ -1993,7 +2065,11 @@ impl BackendDevice for MetalDevice {
     }
 
     unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
-        let buffer = self.new_buffer(shape.elem_count(), dtype, "alloc-uninit")?;
+        let buffer = self
+            .new_buffer_builder()
+            .with_size_for(shape.elem_count(), dtype)
+            .with_label("alloc-uninit")
+            .build()?;
         Ok(MetalStorage::new(
             buffer,
             self.clone(),
@@ -2004,7 +2080,11 @@ impl BackendDevice for MetalDevice {
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
         let size = shape.elem_count() * dtype.size_in_bytes();
-        let buffer = self.allocate_zeros(size)?;
+        let buffer = self
+            .new_buffer_builder()
+            .with_zeros(size)
+            .with_label("zeros")
+            .build()?;
         Ok(MetalStorage::new(
             buffer,
             self.clone(),
@@ -2014,17 +2094,78 @@ impl BackendDevice for MetalDevice {
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
+        let label = "storage_from_slice";
         let (count, buffer) = match T::cpu_storage_ref(s) {
-            CpuStorageRef::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::I16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::I32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::F8E4M3(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::U8(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorageRef::U32(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorageRef::I16(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorageRef::I32(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorageRef::I64(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorageRef::BF16(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorageRef::F16(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorageRef::F32(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorageRef::F64(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorageRef::F8E4M3(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
             CpuStorageRef::F6E2M3(_)
             | CpuStorageRef::F6E3M2(_)
             | CpuStorageRef::F4(_)
@@ -2036,17 +2177,78 @@ impl BackendDevice for MetalDevice {
     }
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
+        let label = "storage_from_cpu_storage";
         let (count, buffer) = match storage {
-            CpuStorage::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::I16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::I32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::F8E4M3(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::U8(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorage::U32(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorage::I16(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorage::I32(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorage::I64(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorage::BF16(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorage::F16(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorage::F32(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorage::F64(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
+            CpuStorage::F8E4M3(storage) => (
+                storage.len(),
+                self.new_buffer_builder()
+                    .with_data(storage)
+                    .with_label(label)
+                    .build(),
+            ),
             CpuStorage::F6E2M3(_)
             | CpuStorage::F6E3M2(_)
             | CpuStorage::F4(_)
@@ -2079,9 +2281,12 @@ impl BackendDevice for MetalDevice {
             DType::BF16 => "rand_uniform_bf16",
             dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
         };
-        let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_uniform")?;
+        let buffer = self
+            .new_buffer_builder()
+            .with_size_for(shape.elem_count(), dtype)
+            .with_label("rand_uniform")
+            .build()?;
         let encoder = self.command_encoder()?;
-        encoder.set_label("rand_uniform");
         candle_metal_kernels::call_random_uniform(
             &self.device,
             &encoder,
@@ -2116,9 +2321,12 @@ impl BackendDevice for MetalDevice {
             DType::BF16 => "rand_normal_bf16",
             dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
         };
-        let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_normal")?;
+        let buffer = self
+            .new_buffer_builder()
+            .with_size_for(shape.elem_count(), dtype)
+            .with_label("rand_normal")
+            .build()?;
         let encoder = self.command_encoder()?;
-        encoder.set_label("rand_normal");
         candle_metal_kernels::call_random_normal(
             &self.device,
             &encoder,

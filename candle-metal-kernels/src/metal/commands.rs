@@ -42,6 +42,12 @@ impl CommandsGuard<'_> {
     pub fn set_compute_pipeline_state(&self, pipeline: &ComputePipeline) {
         self.as_ref().set_compute_pipeline_state(pipeline);
     }
+
+    #[cfg(feature = "debug-labels")]
+    #[must_use = "the debug group is popped when the returned guard is dropped"]
+    pub fn debug_group(&self, label: &str) -> crate::metal::DebugGroupGuard<'_> {
+        self.as_ref().debug_group(label)
+    }
 }
 
 /// RAII guard for blit command encoder operations.
@@ -318,17 +324,23 @@ impl Commands {
                 cb.wait_until_completed();
             }
             MTLCommandBufferStatus::Completed => {}
-            MTLCommandBufferStatus::Error => {
-                let msg = cb
-                    .error()
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "unknown error".to_string());
-                return Err(MetalKernelError::CommandBufferError(msg));
-            }
+            MTLCommandBufferStatus::Error => return Err(Self::cb_error(cb)),
             _ => unreachable!(),
         }
 
+        if cb.status() == MTLCommandBufferStatus::Error {
+            return Err(Self::cb_error(cb));
+        }
+
         Ok(())
+    }
+
+    fn cb_error(cb: &CommandBuffer) -> MetalKernelError {
+        let msg = cb
+            .error()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string());
+        MetalKernelError::CommandBufferError(msg)
     }
 
     fn end_encoding(&self, encoder: ComputeCommandEncoder) {

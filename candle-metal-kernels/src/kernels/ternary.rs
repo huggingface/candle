@@ -1,9 +1,9 @@
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{get_tile_size, linear_split};
 use crate::{
-    set_params, Buffer, ComputeCommandEncoder, ConstantValues, Device, Kernels, MetalKernelError,
-    Output, Source, Value,
+    debug_group, set_params, Buffer, ComputeCommandEncoder, ConstantValues, Device, Kernels,
+    MetalKernelError, Output, Source, Value,
 };
+use crate::{get_tile_size, linear_split};
 
 #[allow(clippy::too_many_arguments)]
 pub fn call_where_cond(
@@ -38,6 +38,7 @@ pub fn call_where_cond(
 
     let size: usize = shape.iter().product();
     let rank = shape.len();
+    debug_group!(encoder, "where {name} elems={size}");
 
     set_params!(
         encoder,

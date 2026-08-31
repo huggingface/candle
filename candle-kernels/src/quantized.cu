@@ -1,4 +1,4 @@
-// Kernels adapted from llama.cpp ggml-cuda.cu
+// Kernels adapted from llama.cpp ggml-cuda.cu and ggml-cuda/getrows.cu
 // https://github.com/ggerganov/llama.cpp/blob/master/ggml-cuda.cu
 #include "cuda_fp16.h"
 #include "cuda_bf16.h"
@@ -19,6 +19,7 @@
 #define GGML_CUDA_DMMV_X 32
 #define CUDA_QUANTIZE_BLOCK_SIZE 256
 #define CUDA_DEQUANTIZE_BLOCK_SIZE 256
+#define CUDA_GET_ROWS_BLOCK_SIZE 256
 #define K_QUANTS_PER_ITERATION 2
 
 typedef uint16_t ggml_fp16_t;
@@ -1155,6 +1156,313 @@ DEQUANTIZE(q4_1)
 DEQUANTIZE(q5_0)
 DEQUANTIZE(q5_1)
 DEQUANTIZE(q8_0)
+
+template<int qk, int qr, dequantize_kernel_t dequantize_kernel>
+static __device__ void get_rows_q(
+        const void * __restrict__ src0, const uint32_t * __restrict__ src1, float * __restrict__ dst,
+        const int64_t ne00, const size_t nb01) {
+    for (int64_t i00 = 2*(blockIdx.y*blockDim.x + threadIdx.x); i00 < ne00; i00 += gridDim.y*blockDim.x) {
+        const int i10 = blockIdx.x;
+        const int i01 = src1[i10];
+
+        float * dst_row = dst + i10*ne00;
+        const void * src0_row = (const char *) src0 + i01*nb01;
+
+        const int ib   =  i00/qk;
+        const int iqs  = (i00%qk)/qr;
+        const int iybs = i00 - i00%qk;
+        const int y_offset = qr == 1 ? 1 : qk/2;
+
+        float2 v;
+        dequantize_kernel(src0_row, ib, iqs, v);
+
+        dst_row[iybs + iqs + 0]        = v.x;
+        dst_row[iybs + iqs + y_offset] = v.y;
+    }
+}
+
+static __device__ __forceinline__ float get_rows_to_float(const float v) {
+    return v;
+}
+
+static __device__ __forceinline__ float get_rows_to_float(const half v) {
+    return __half2float(v);
+}
+
+static __device__ __forceinline__ float get_rows_to_float(const __nv_bfloat16 v) {
+    return __bfloat162float(v);
+}
+
+template<typename src0_t>
+static __device__ void get_rows_float(
+        const src0_t * src0, const uint32_t * src1, float * dst, const int64_t ne00) {
+    for (int64_t i00 = blockIdx.y*blockDim.x + threadIdx.x; i00 < ne00; i00 += gridDim.y*blockDim.x) {
+        const int i10 = blockIdx.x;
+        const int i01 = src1[i10];
+
+        float * dst_row = dst + i10*ne00;
+        const src0_t * src0_row = src0 + i01*ne00;
+
+        dst_row[i00] = get_rows_to_float(src0_row[i00]);
+    }
+}
+
+static __device__ void get_rows_q2_K_block(const block_q2_K * x, float * y) {
+    const int tid = threadIdx.x;
+#if QK_K == 256
+    const int n   = tid/32;
+    const int l   = tid - 32*n;
+    const int is  = 8*n + l/16;
+
+    const uint8_t q = x->qs[32*n + l];
+    float * yy = y + 128*n;
+
+    float dall = __low2half(x->dm);
+    float dmin = __high2half(x->dm);
+    yy[l+ 0] = dall * (x->scales[is+0] & 0xF) * ((q >> 0) & 3) - dmin * (x->scales[is+0] >> 4);
+    yy[l+32] = dall * (x->scales[is+2] & 0xF) * ((q >> 2) & 3) - dmin * (x->scales[is+2] >> 4);
+    yy[l+64] = dall * (x->scales[is+4] & 0xF) * ((q >> 4) & 3) - dmin * (x->scales[is+4] >> 4);
+    yy[l+96] = dall * (x->scales[is+6] & 0xF) * ((q >> 6) & 3) - dmin * (x->scales[is+6] >> 4);
+#else
+    const int is = tid/16;
+    const int il = tid%16;
+    const uint8_t q = x->qs[il] >> (2*is);
+    float * yy = y + 16*is + il;
+    float dall = __low2half(x->dm);
+    float dmin = __high2half(x->dm);
+    yy[ 0] = dall * (x->scales[is+0] & 0xF) * ((q >> 0) & 3) - dmin * (x->scales[is+0] >> 4);
+    yy[32] = dall * (x->scales[is+2] & 0xF) * ((q >> 4) & 3) - dmin * (x->scales[is+2] >> 4);
+#endif
+}
+
+static __device__ void get_rows_q3_K_block(const block_q3_K * x, float * y) {
+#if QK_K == 256
+    const int r = threadIdx.x/4;
+    const int tid = r/2;
+    const int is0 = r%2;
+    const int l0 = 16*is0 + 4*(threadIdx.x%4);
+    const int n = tid / 4;
+    const int j = tid - 4*n;
+
+    uint8_t m = 1 << (4*n + j);
+    int is = 8*n + 2*j + is0;
+    int shift = 2*j;
+
+    int8_t us = is <  4 ? (x->scales[is-0] & 0xF) | (((x->scales[is+8] >> 0) & 3) << 4) :
+                is <  8 ? (x->scales[is-0] & 0xF) | (((x->scales[is+4] >> 2) & 3) << 4) :
+                is < 12 ? (x->scales[is-8] >>  4) | (((x->scales[is+0] >> 4) & 3) << 4) :
+                          (x->scales[is-8] >>  4) | (((x->scales[is-4] >> 6) & 3) << 4);
+    float d_all = x->d;
+    float dl = d_all * (us - 32);
+
+    float * yy = y + 128*n + 32*j;
+    const uint8_t * q = x->qs + 32*n;
+    const uint8_t * hm = x->hmask;
+
+    for (int l = l0; l < l0+4; ++l) yy[l] = dl * ((int8_t)((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
+#else
+    const int tid = threadIdx.x;
+    const int is  = tid/16;
+    const int il  = tid%16;
+    const int im  = il/8;
+    const int in  = il%8;
+
+    float * yy = y + 16*is + il;
+
+    const uint8_t q = x->qs[il] >> (2*is);
+    const uint8_t h = x->hmask[in] >> (2*is + im);
+    const float   d = (float)x->d;
+
+    if (is == 0) {
+        yy[ 0] = d * ((x->scales[0] & 0xF) - 8) * ((int8_t)((q >> 0) & 3) - ((h >> 0) & 1 ? 0 : 4));
+        yy[32] = d * ((x->scales[1] & 0xF) - 8) * ((int8_t)((q >> 4) & 3) - ((h >> 4) & 1 ? 0 : 4));
+    } else {
+        yy[ 0] = d * ((x->scales[0] >>  4) - 8) * ((int8_t)((q >> 0) & 3) - ((h >> 0) & 1 ? 0 : 4));
+        yy[32] = d * ((x->scales[1] >>  4) - 8) * ((int8_t)((q >> 4) & 3) - ((h >> 4) & 1 ? 0 : 4));
+    }
+#endif
+}
+
+static __device__ void get_rows_q4_K_block(const block_q4_K * x, float * y) {
+#if QK_K == 256
+    const int tid = threadIdx.x;
+    const int il  = tid/8;
+    const int ir  = tid%8;
+    const int is  = 2*il;
+    const int n   = 4;
+
+    float * yy = y + 64*il + n*ir;
+
+    const float dall = __low2half(x->dm);
+    const float dmin = __high2half(x->dm);
+
+    const uint8_t * q = x->qs + 32*il + n*ir;
+
+    uint8_t sc, m;
+    get_scale_min_k4(is + 0, x->scales, sc, m);
+    const float d1 = dall * sc; const float m1 = dmin * m;
+    get_scale_min_k4(is + 1, x->scales, sc, m);
+    const float d2 = dall * sc; const float m2 = dmin * m;
+    for (int l = 0; l < n; ++l) {
+        yy[l + 0] = d1 * (q[l] & 0xF) - m1;
+        yy[l +32] = d2 * (q[l] >>  4) - m2;
+    }
+#else
+    const int tid = threadIdx.x;
+    const uint8_t * q = x->qs;
+    const float d = (float)x->dm[0];
+    const float m = (float)x->dm[1];
+    y[tid+ 0] = d * (x->scales[0] & 0xF) * (q[tid] & 0xF) - m * (x->scales[0] >> 4);
+    y[tid+32] = d * (x->scales[1] & 0xF) * (q[tid] >>  4) - m * (x->scales[1] >> 4);
+#endif
+}
+
+static __device__ void get_rows_q5_K_block(const block_q5_K * x, float * y) {
+#if QK_K == 256
+    const int tid = threadIdx.x;
+    const int il  = tid/16;
+    const int ir  = tid%16;
+    const int is  = 2*il;
+
+    float * yy = y + 64*il + 2*ir;
+
+    const float dall = __low2half(x->dm);
+    const float dmin = __high2half(x->dm);
+
+    const uint8_t * ql = x->qs + 32*il + 2*ir;
+    const uint8_t * qh = x->qh + 2*ir;
+
+    uint8_t sc, m;
+    get_scale_min_k4(is + 0, x->scales, sc, m);
+    const float d1 = dall * sc; const float m1 = dmin * m;
+    get_scale_min_k4(is + 1, x->scales, sc, m);
+    const float d2 = dall * sc; const float m2 = dmin * m;
+
+    uint8_t hm = 1 << (2*il);
+    yy[ 0] = d1 * ((ql[ 0] & 0xF) + (qh[ 0] & hm ? 16 : 0)) - m1;
+    yy[ 1] = d1 * ((ql[ 1] & 0xF) + (qh[ 1] & hm ? 16 : 0)) - m1;
+    hm <<= 1;
+    yy[32] = d2 * ((ql[ 0] >>  4) + (qh[ 0] & hm ? 16 : 0)) - m2;
+    yy[33] = d2 * ((ql[ 1] >>  4) + (qh[ 1] & hm ? 16 : 0)) - m2;
+#else
+    const int tid = threadIdx.x;
+    const uint8_t q = x->qs[tid];
+    const int im = tid/8;
+    const int in = tid%8;
+    const int is = tid/16;
+    const uint8_t h = x->qh[in] >> im;
+    const float d = x->d;
+    y[tid + 0] = d * x->scales[is+0] * ((q & 0xF) - ((h >> 0) & 1 ? 0 : 16));
+    y[tid+32] = d * x->scales[is+2] * ((q >>  4) - ((h >> 4) & 1 ? 0 : 16));
+#endif
+}
+
+static __device__ void get_rows_q6_K_block(const block_q6_K * x, float * y) {
+#if QK_K == 256
+    const int64_t tid = threadIdx.x;
+    const int64_t ip  = tid/32;
+    const int64_t il  = tid - 32*ip;
+    const int64_t is  = 8*ip + il/16;
+
+    float * yy = y + 128*ip + il;
+
+    const float d = x->d;
+
+    const uint8_t * ql = x->ql + 64*ip + il;
+    const uint8_t   qh = x->qh[32*ip + il];
+    const int8_t  * sc = x->scales + is;
+
+    yy[ 0] = d * sc[0] * ((int8_t)((ql[ 0] & 0xF) | (((qh >> 0) & 3) << 4)) - 32);
+    yy[32] = d * sc[2] * ((int8_t)((ql[32] & 0xF) | (((qh >> 2) & 3) << 4)) - 32);
+    yy[64] = d * sc[4] * ((int8_t)((ql[ 0]  >> 4) | (((qh >> 4) & 3) << 4)) - 32);
+    yy[96] = d * sc[6] * ((int8_t)((ql[32]  >> 4) | (((qh >> 6) & 3) << 4)) - 32);
+#else
+    const int64_t tid = threadIdx.x;
+    const int64_t ip  = tid/16;
+    const int64_t il  = tid - 16*ip;
+
+    float * yy = y + 16*ip + il;
+
+    const float d = x->d;
+
+    const uint8_t ql = x->ql[16*ip + il];
+    const uint8_t qh = x->qh[il] >> (2*ip);
+    const int8_t * sc = x->scales;
+
+    yy[ 0] = d * sc[ip+0] * ((int8_t)((ql & 0xF) | (((qh >> 0) & 3) << 4)) - 32);
+    yy[32] = d * sc[ip+2] * ((int8_t)((ql  >> 4) | (((qh >> 4) & 3) << 4)) - 32);
+#endif
+}
+
+#define GET_ROWS_K(QNAME, BLOCK_Q_T) \
+extern "C" __global__ void get_rows_##QNAME( \
+        const void * __restrict__ src0, const uint32_t * __restrict__ src1, float * __restrict__ dst, \
+        const int64_t ne00, const size_t nb01) { \
+    const int i10 = blockIdx.x; \
+    const int i01 = src1[i10]; \
+    const int ib = blockIdx.y; \
+    const int blocks_per_row = nb01 / sizeof(BLOCK_Q_T); \
+    const BLOCK_Q_T * src0_row = (const BLOCK_Q_T *) src0 + i01*blocks_per_row; \
+    float * dst_row = dst + i10*ne00; \
+    get_rows_##QNAME##_block(src0_row + ib, dst_row + ib*QK_K); \
+}
+
+extern "C" __global__ void get_rows_q4_0(
+        const void * __restrict__ src0, const uint32_t * __restrict__ src1, float * __restrict__ dst,
+        const int64_t ne00, const size_t nb01) {
+    get_rows_q<QK4_0, QR4_0, dequantize_q4_0>(src0, src1, dst, ne00, nb01);
+}
+
+extern "C" __global__ void get_rows_q4_1(
+        const void * __restrict__ src0, const uint32_t * __restrict__ src1, float * __restrict__ dst,
+        const int64_t ne00, const size_t nb01) {
+    get_rows_q<QK4_1, QR4_1, dequantize_q4_1>(src0, src1, dst, ne00, nb01);
+}
+
+extern "C" __global__ void get_rows_q5_0(
+        const void * __restrict__ src0, const uint32_t * __restrict__ src1, float * __restrict__ dst,
+        const int64_t ne00, const size_t nb01) {
+    get_rows_q<QK5_0, QR5_0, dequantize_q5_0>(src0, src1, dst, ne00, nb01);
+}
+
+extern "C" __global__ void get_rows_q5_1(
+        const void * __restrict__ src0, const uint32_t * __restrict__ src1, float * __restrict__ dst,
+        const int64_t ne00, const size_t nb01) {
+    get_rows_q<QK5_1, QR5_1, dequantize_q5_1>(src0, src1, dst, ne00, nb01);
+}
+
+extern "C" __global__ void get_rows_q8_0(
+        const void * __restrict__ src0, const uint32_t * __restrict__ src1, float * __restrict__ dst,
+        const int64_t ne00, const size_t nb01) {
+    get_rows_q<QK8_0, QR8_0, dequantize_q8_0>(src0, src1, dst, ne00, nb01);
+}
+
+extern "C" __global__ void get_rows_f32(
+        const float * __restrict__ src0, const uint32_t * __restrict__ src1, float * __restrict__ dst,
+        const int64_t ne00, const size_t nb01) {
+    GGML_UNUSED(nb01);
+    get_rows_float(src0, src1, dst, ne00);
+}
+
+extern "C" __global__ void get_rows_f16(
+        const half * __restrict__ src0, const uint32_t * __restrict__ src1, float * __restrict__ dst,
+        const int64_t ne00, const size_t nb01) {
+    GGML_UNUSED(nb01);
+    get_rows_float(src0, src1, dst, ne00);
+}
+
+extern "C" __global__ void get_rows_bf16(
+        const __nv_bfloat16 * __restrict__ src0, const uint32_t * __restrict__ src1, float * __restrict__ dst,
+        const int64_t ne00, const size_t nb01) {
+    GGML_UNUSED(nb01);
+    get_rows_float(src0, src1, dst, ne00);
+}
+
+GET_ROWS_K(q2_K, block_q2_K)
+GET_ROWS_K(q3_K, block_q3_K)
+GET_ROWS_K(q4_K, block_q4_K)
+GET_ROWS_K(q5_K, block_q5_K)
+GET_ROWS_K(q6_K, block_q6_K)
 
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel>
 static __device__ void dequantize_mul_mat_vec(const void * __restrict__ vx, const dfloat * __restrict__ y, float * __restrict__ dst, const int ncols, const int nrows) {
