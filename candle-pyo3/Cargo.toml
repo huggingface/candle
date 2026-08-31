@@ -24,7 +24,7 @@ pyo3 = { version = "0.27", features = ["extension-module", "abi3-py313"] }
 float8 = { workspace = true }
 
 [build-dependencies]
-pyo3-build-config = "0.27"
+pyo3-build-config = "0.29"
 
 [features]
 default = []
