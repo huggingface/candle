@@ -256,7 +256,7 @@ the same `candle-kernels` code the CUDA backend launches.
 | `scatter` (set) | shared kernel | every dtype but `F8E4M3`, which has no `S_OP` |
 | `arg_sort` | shared kernel | `asort_asc_*` / `asort_desc_*`; no `F8E4M3` |
 | `matmul` | rocBLAS | `f32`/`f64`/`f16`/`bf16`, strided-batched; see the precision knobs below |
-| `conv1d`, `conv2d` | im2col + rocBLAS GEMM | MIOpen instead under `--features miopen`; no `F8E4M3` |
+| `conv1d`, `conv2d` | im2col + rocBLAS GEMM | MIOpen instead under `--features miopen`; no `F8E4M3`. The im2col buffer is capped at 256 MB — larger convolutions run the same GEMM over row chunks instead of materializing the whole matrix |
 | `conv_transpose1d` | col2im + GEMM | falls back to the shared kernel when dilation/padding/output-padding is non-trivial |
 | `conv_transpose2d` | shared kernel | always direct, as on CUDA |
 | `avg_pool2d`, `max_pool2d` | shared kernel | no `F8E4M3` |

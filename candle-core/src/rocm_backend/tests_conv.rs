@@ -212,3 +212,162 @@ fn upsample_nearest1d_is_refused() -> Result<()> {
     assert!(err.contains("upsample-nearest1d"), "{err}");
     Ok(())
 }
+
+/// Runs the chunked im2col conv2d directly with a deliberately tiny buffer
+/// cap, so multi-chunk assembly is exercised on shapes small enough to test.
+fn conv2d_chunked_to_vec(
+    inp: &Tensor,
+    kernel: &Tensor,
+    padding: usize,
+    stride: usize,
+    dilation: usize,
+    cap: usize,
+) -> Result<Vec<f32>> {
+    use crate::backend::BackendStorage;
+    let (b_size, c_in, i_h, i_w) = inp.dims4()?;
+    let (c_out, _, k_h, k_w) = kernel.dims4()?;
+    let params = crate::conv::ParamsConv2D {
+        b_size,
+        i_h,
+        i_w,
+        k_h,
+        k_w,
+        c_out,
+        c_in,
+        padding,
+        stride,
+        dilation,
+        cudnn_fwd_algo: None,
+    };
+    let (inp_s, inp_l) = inp.storage_and_layout();
+    let (k_s, k_l) = kernel.storage_and_layout();
+    let (crate::Storage::Rocm(inp_s), crate::Storage::Rocm(k_s)) = (&*inp_s, &*k_s) else {
+        crate::bail!("not rocm storage")
+    };
+    let res = super::ops_conv_chunked::conv2d(inp_s, inp_l, k_s, k_l, &params, cap)?;
+    match res.to_cpu_storage()? {
+        crate::CpuStorage::F32(v) => Ok(v),
+        _ => crate::bail!("not f32"),
+    }
+}
+
+fn conv1d_chunked_to_vec(
+    inp: &Tensor,
+    kernel: &Tensor,
+    padding: usize,
+    stride: usize,
+    dilation: usize,
+    cap: usize,
+) -> Result<Vec<f32>> {
+    use crate::backend::BackendStorage;
+    let (b_size, c_in, l_in) = inp.dims3()?;
+    let (c_out, _, k_size) = kernel.dims3()?;
+    let params = crate::conv::ParamsConv1D {
+        b_size,
+        l_in,
+        c_out,
+        c_in,
+        k_size,
+        padding,
+        stride,
+        dilation,
+        cudnn_fwd_algo: None,
+    };
+    let (inp_s, inp_l) = inp.storage_and_layout();
+    let (k_s, k_l) = kernel.storage_and_layout();
+    let (crate::Storage::Rocm(inp_s), crate::Storage::Rocm(k_s)) = (&*inp_s, &*k_s) else {
+        crate::bail!("not rocm storage")
+    };
+    let res = super::ops_conv_chunked::conv1d(inp_s, inp_l, k_s, k_l, &params, cap)?;
+    match res.to_cpu_storage()? {
+        crate::CpuStorage::F32(v) => Ok(v),
+        _ => crate::bail!("not f32"),
+    }
+}
+
+fn assert_vec_close(got: &[f32], want: &[f32]) {
+    assert_eq!(got.len(), want.len());
+    for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+        assert!((g - w).abs() < 1e-4, "element {i}: chunked {g} vs full {w}");
+    }
+}
+
+/// Every cap has to reproduce the single-shot answer: one row per chunk, a
+/// step that does not divide the row count, and a cap large enough for a
+/// single chunk (the degenerate case that mirrors the un-chunked path).
+#[test]
+fn conv2d_chunked_matches_the_single_shot_path() -> Result<()> {
+    let dev = rocm_device!();
+    let data = ramp(2 * 3 * 10 * 9);
+    let (_, g) = pair(&data, (2, 3, 10, 9), &dev)?;
+    let kd = ramp(4 * 3 * 3 * 3);
+    let (_, gk) = pair(&kd, (4, 3, 3, 3), &dev)?;
+    for (padding, stride, dilation) in [(1, 1, 1), (0, 2, 1), (1, 1, 2)] {
+        let want = g
+            .conv2d(&gk, padding, stride, dilation, 1)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        // k = 27 f32s per row = 108 bytes; 756 → 7 rows per chunk.
+        for cap in [1, 756, usize::MAX] {
+            let got = conv2d_chunked_to_vec(&g, &gk, padding, stride, dilation, cap)?;
+            assert_vec_close(&got, &want);
+        }
+    }
+    Ok(())
+}
+
+/// The chunk kernel reads through the strides in `info` like the un-chunked
+/// one; a transposed view has to give the same answer.
+#[test]
+fn conv2d_chunked_on_a_non_contiguous_input() -> Result<()> {
+    let dev = rocm_device!();
+    let data = ramp(2 * 3 * 8 * 6);
+    let (_, g) = pair(&data, (2, 3, 8, 6), &dev)?;
+    let g = g.transpose(2, 3)?;
+    let kd = ramp(4 * 3 * 2 * 2);
+    let (_, gk) = pair(&kd, (4, 3, 2, 2), &dev)?;
+    let want = g.conv2d(&gk, 1, 1, 1, 1)?.flatten_all()?.to_vec1::<f32>()?;
+    let got = conv2d_chunked_to_vec(&g, &gk, 1, 1, 1, 500)?;
+    assert_vec_close(&got, &want);
+    Ok(())
+}
+
+#[test]
+fn conv1d_chunked_matches_the_single_shot_path() -> Result<()> {
+    let dev = rocm_device!();
+    let data = ramp(2 * 3 * 50);
+    let g = Tensor::new(data.as_slice(), &dev)?.reshape((2, 3, 50))?;
+    let kd = ramp(4 * 3 * 5);
+    let gk = Tensor::new(kd.as_slice(), &dev)?.reshape((4, 3, 5))?;
+    for (padding, stride, dilation) in [(2, 1, 1), (0, 2, 1), (1, 1, 2)] {
+        let want = g
+            .conv1d(&gk, padding, stride, dilation, 1)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        // k = 15 f32s per row = 60 bytes; 420 → 7 rows per chunk.
+        for cap in [1, 420, usize::MAX] {
+            let got = conv1d_chunked_to_vec(&g, &gk, padding, stride, dilation, cap)?;
+            assert_vec_close(&got, &want);
+        }
+    }
+    Ok(())
+}
+
+/// Above [`super::ops_conv_chunked::IM2COL_MAX_BYTES`] the public entry point
+/// has to route to the chunked path: the un-chunked answer at a
+/// bigger-than-cap shape must match. Also the regression test for the OOM
+/// class reported on PR #3801 — before chunking, this shape materialized a
+/// ~786 MB im2col buffer in one piece.
+#[test]
+fn conv2d_dispatches_to_chunking_above_the_cap() -> Result<()> {
+    let dev = rocm_device!();
+    let (b, c_in, hw, c_out) = (1, 256, 292, 8);
+    let g = Tensor::rand(-1f32, 1f32, (b, c_in, hw, hw), &dev)?;
+    let gk = Tensor::rand(-1f32, 1f32, (c_out, c_in, 3, 3), &dev)?;
+    let col_bytes = hw * hw * c_in * 3 * 3 * 4;
+    assert!(col_bytes > super::ops_conv_chunked::IM2COL_MAX_BYTES);
+    let got = g.conv2d(&gk, 1, 1, 1, 1)?.flatten_all()?.to_vec1::<f32>()?;
+    let want = conv2d_chunked_to_vec(&g, &gk, 1, 1, 1, usize::MAX)?;
+    assert_vec_close(&got, &want);
+    Ok(())
+}

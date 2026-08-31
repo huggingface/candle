@@ -31,6 +31,7 @@ mod launch;
 mod miopen;
 mod ops_cast;
 mod ops_conv;
+mod ops_conv_chunked;
 mod ops_conv_direct;
 mod ops_copy;
 mod ops_elementwise;

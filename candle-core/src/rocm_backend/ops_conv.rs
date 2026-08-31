@@ -32,7 +32,7 @@ pub(super) struct Im2Col1D {
 }
 
 impl Im2Col1D {
-    fn l_out(&self, l: usize) -> usize {
+    pub(super) fn l_out(&self, l: usize) -> usize {
         (l + 2 * self.padding - self.dilation * (self.l_k - 1) - 1) / self.stride + 1
     }
 }
@@ -86,7 +86,7 @@ pub(super) struct Im2Col {
 }
 
 impl Im2Col {
-    fn hw_out(&self, h: usize, w: usize) -> (usize, usize) {
+    pub(super) fn hw_out(&self, h: usize, w: usize) -> (usize, usize) {
         let h_out = (h + 2 * self.padding - self.dilation * (self.h_k - 1) - 1) / self.stride + 1;
         let w_out = (w + 2 * self.padding - self.dilation * (self.w_k - 1) - 1) / self.stride + 1;
         (h_out, w_out)
@@ -186,7 +186,7 @@ impl Map1 for Col2Im1D {
 /// the *original* buffer anyway (`cuda_backend/mod.rs` conv1d/conv2d), so a
 /// strided or offset kernel is read as if it were packed. Pinned here by
 /// `conv2d_grad_noncontiguous_kernel`; worth fixing upstream.
-fn kernel_operand(
+pub(super) fn kernel_operand(
     kernel: &RocmStorage,
     kernel_l: &Layout,
     n: usize,
@@ -224,6 +224,19 @@ pub(super) fn conv1d(
             &device,
         )?;
         return Ok(RocmStorage { slice, device });
+    }
+
+    let col_bytes =
+        params.b_size * params.l_out() * params.k_size * params.c_in * inp.dtype().size_in_bytes();
+    if col_bytes > super::ops_conv_chunked::IM2COL_MAX_BYTES {
+        return super::ops_conv_chunked::conv1d(
+            inp,
+            l,
+            kernel,
+            kernel_l,
+            params,
+            super::ops_conv_chunked::IM2COL_MAX_BYTES,
+        );
     }
 
     let col = Im2Col1D {
@@ -271,6 +284,24 @@ pub(super) fn conv2d(
             &device,
         )?;
         return Ok(RocmStorage { slice, device });
+    }
+
+    let col_bytes = params.b_size
+        * params.out_h()
+        * params.out_w()
+        * params.k_h
+        * params.k_w
+        * params.c_in
+        * inp.dtype().size_in_bytes();
+    if col_bytes > super::ops_conv_chunked::IM2COL_MAX_BYTES {
+        return super::ops_conv_chunked::conv2d(
+            inp,
+            l,
+            kernel,
+            kernel_l,
+            params,
+            super::ops_conv_chunked::IM2COL_MAX_BYTES,
+        );
     }
 
     let col = Im2Col {
