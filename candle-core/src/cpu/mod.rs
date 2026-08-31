@@ -248,3 +248,152 @@ pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mu
     }
     *c = sum;
 }
+
+#[cfg(any(
+    target_feature = "neon",
+    target_feature = "avx2",
+    target_feature = "simd128"
+))]
+pub(crate) unsafe fn vec_add_f16(a_row: *const f16, b_row: *const f16, c: *mut f16, k: usize) {
+    let mut i = 0;
+    while i + CurrentCpuF16::STEP <= k {
+        for j in 0..CurrentCpuF16::ARR {
+            CurrentCpuF16::vec_store(
+                c.add(i + j * CurrentCpuF16::EPR),
+                CurrentCpuF16::vec_add(
+                    CurrentCpuF16::load(a_row.add(i + j * CurrentCpuF16::EPR)),
+                    CurrentCpuF16::load(b_row.add(i + j * CurrentCpuF16::EPR)),
+                ),
+            );
+        }
+        i += CurrentCpuF16::STEP;
+    }
+
+    // leftovers
+    for j in i..k {
+        *c.add(j) = *a_row.add(j) + *b_row.add(j);
+    }
+}
+
+#[cfg(not(any(
+    target_feature = "neon",
+    target_feature = "avx2",
+    target_feature = "simd128"
+)))]
+#[inline(always)]
+pub(crate) unsafe fn vec_add_f16(a_row: *const f16, b_row: *const f16, c: *mut f16, k: usize) {
+    for i in 0..k {
+        *c.add(i) = *a_row.add(i) + *b_row.add(i);
+    }
+}
+
+#[cfg(any(
+    target_feature = "neon",
+    target_feature = "avx2",
+    target_feature = "simd128"
+))]
+pub(crate) unsafe fn vec_add_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut bf16, k: usize) {
+    let mut i = 0;
+    while i + CurrentCpuBF16::STEP <= k {
+        for j in 0..CurrentCpuBF16::ARR {
+            CurrentCpuBF16::vec_store(
+                c.add(i + j * CurrentCpuBF16::EPR),
+                CurrentCpuBF16::vec_add(
+                    CurrentCpuBF16::load(a_row.add(i + j * CurrentCpuBF16::EPR)),
+                    CurrentCpuBF16::load(b_row.add(i + j * CurrentCpuBF16::EPR)),
+                ),
+            );
+        }
+        i += CurrentCpuBF16::STEP;
+    }
+
+    // leftovers
+    for j in i..k {
+        *c.add(j) = *a_row.add(j) + *b_row.add(j);
+    }
+}
+
+#[cfg(not(any(
+    target_feature = "neon",
+    target_feature = "avx2",
+    target_feature = "simd128"
+)))]
+#[inline(always)]
+pub(crate) unsafe fn vec_add_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut bf16, k: usize) {
+    for i in 0..k {
+        *c.add(i) = *a_row.add(i) + *b_row.add(i);
+    }
+}
+
+#[cfg(any(
+    target_feature = "neon",
+    target_feature = "avx2",
+    target_feature = "simd128"
+))]
+#[inline(always)]
+pub(crate) unsafe fn vec_scalar_add_f16(scalar: f16, xs: *const f16, ys: *mut f16, k: usize) {
+    let sv = CurrentCpuF16::from_f32(scalar.to_f32());
+    let mut i = 0;
+    while i + CurrentCpuF16::STEP <= k {
+        for j in 0..CurrentCpuF16::ARR {
+            CurrentCpuF16::vec_store(
+                ys.add(i + j * CurrentCpuF16::EPR),
+                CurrentCpuF16::vec_add(CurrentCpuF16::load(xs.add(i + j * CurrentCpuF16::EPR)), sv),
+            );
+        }
+        i += CurrentCpuF16::STEP;
+    }
+    for j in i..k {
+        *ys.add(j) = *xs.add(j) + scalar;
+    }
+}
+
+#[cfg(not(any(
+    target_feature = "neon",
+    target_feature = "avx2",
+    target_feature = "simd128"
+)))]
+#[inline(always)]
+pub(crate) unsafe fn vec_scalar_add_f16(scalar: f16, xs: *const f16, ys: *mut f16, k: usize) {
+    for i in 0..k {
+        *ys.add(i) = *xs.add(i) + scalar;
+    }
+}
+
+#[cfg(any(
+    target_feature = "neon",
+    target_feature = "avx2",
+    target_feature = "simd128"
+))]
+#[inline(always)]
+pub(crate) unsafe fn vec_scalar_add_bf16(scalar: bf16, xs: *const bf16, ys: *mut bf16, k: usize) {
+    let sv = CurrentCpuBF16::from_f32(scalar.to_f32());
+    let mut i = 0;
+    while i + CurrentCpuBF16::STEP <= k {
+        for j in 0..CurrentCpuBF16::ARR {
+            CurrentCpuBF16::vec_store(
+                ys.add(i + j * CurrentCpuBF16::EPR),
+                CurrentCpuBF16::vec_add(
+                    CurrentCpuBF16::load(xs.add(i + j * CurrentCpuBF16::EPR)),
+                    sv,
+                ),
+            );
+        }
+        i += CurrentCpuBF16::STEP;
+    }
+    for j in i..k {
+        *ys.add(j) = *xs.add(j) + scalar;
+    }
+}
+
+#[cfg(not(any(
+    target_feature = "neon",
+    target_feature = "avx2",
+    target_feature = "simd128"
+)))]
+#[inline(always)]
+pub(crate) unsafe fn vec_scalar_add_bf16(scalar: bf16, xs: *const bf16, ys: *mut bf16, k: usize) {
+    for i in 0..k {
+        *ys.add(i) = *xs.add(i) + scalar;
+    }
+}

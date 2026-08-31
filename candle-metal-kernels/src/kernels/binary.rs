@@ -1,9 +1,10 @@
 use crate::kernels::macros::ops;
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{get_tile_size, linear_split};
 use crate::{
-    set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Output, Source,
+    debug_group, set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError,
+    Output, Source,
 };
+use crate::{get_tile_size, linear_split};
 
 ops!(badd, bsub, bmul, bdiv, bminimum, bmaximum, eq, ne, le, lt, ge, gt);
 
@@ -19,11 +20,13 @@ pub fn call_binary_contiguous<S: ToString>(
     right: BufferOffset,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Binary, kernel_name.to_string())?;
+    let kernel_name = kernel_name.to_string();
+    let pipeline = kernels.load_pipeline(device, Source::Binary, kernel_name.clone())?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "binary {kernel_name} elems={length}");
 
     set_params!(encoder, (length, &left, &right, Output::new(output)));
 
@@ -49,7 +52,8 @@ pub fn call_binary_strided<S: ToString>(
     right_strides: &[usize],
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Binary, kernel_name.to_string())?;
+    let kernel_name = kernel_name.to_string();
+    let pipeline = kernels.load_pipeline(device, Source::Binary, kernel_name.clone())?;
 
     let num_dims: usize = shape.len();
     let encoder = ep.encoder();
@@ -60,6 +64,7 @@ pub fn call_binary_strided<S: ToString>(
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
 
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "binary_strided {kernel_name} elems={length}");
     set_params!(
         encoder,
         (

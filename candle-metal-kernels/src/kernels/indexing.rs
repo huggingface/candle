@@ -1,7 +1,8 @@
 use crate::linear_split;
 use crate::utils::{BufferOffset, EncoderProvider};
 use crate::{
-    set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Output, Source,
+    debug_group, set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError,
+    Output, Source,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -31,6 +32,7 @@ pub fn call_index_select(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "index_select {name} dim={dim} dst_el={dst_el}");
 
     set_params!(
         encoder,
@@ -79,6 +81,7 @@ pub fn call_gather(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "gather {name} dim={dim} dst_el={dst_el}");
 
     set_params!(
         encoder,
@@ -125,6 +128,7 @@ pub fn call_scatter(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "scatter {name} dim={dim} dst_el={dst_el}");
 
     set_params!(
         encoder,
@@ -172,6 +176,7 @@ pub fn call_index_add(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "index_add {name} dim={dim} dst_el={dst_el}");
 
     set_params!(
         encoder,

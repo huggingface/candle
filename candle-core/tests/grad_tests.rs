@@ -1,6 +1,8 @@
 #![allow(clippy::approx_constant)]
 use anyhow::{Context, Result};
-use candle_core::{test_device, test_utils, DType, Device, Shape, Tensor, Var};
+use candle_core::{
+    backprop::GradStore, test_device, test_utils, DType, Device, Shape, Tensor, Var,
+};
 
 fn simple_grad(device: &Device) -> Result<()> {
     let x = Var::new(&[3f32, 1., 4.], device)?;
@@ -36,6 +38,24 @@ fn sum_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn expand_grad(device: &Device) -> Result<()> {
+    // Computing the gradient sums over a middle dim of a 5D tensor, which
+    // takes the strided-index fallback path in the Metal reduce kernels,
+    // see issue #3847.
+    let data: Vec<f32> = (0..24).map(|v| v as f32).collect();
+    let x = Var::from_vec(data, (1, 1, 4, 6), device)?;
+    let e = x.as_tensor().unsqueeze(2)?.expand((1, 1, 3, 4, 6))?;
+    let loss = (e.sqr()?.sum_all()? * 0.5)?;
+    let grads = loss.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    // loss = 0.5 * sum over the 3 broadcast copies of x^2, so dloss/dx = 3.x
+    assert_eq!(
+        grad_x.flatten_all()?.to_vec1::<f32>()?,
+        (0..24).map(|v| 3. * v as f32).collect::<Vec<f32>>()
+    );
+    Ok(())
+}
+
 fn matmul_grad(device: &Device) -> Result<()> {
     let data: Vec<_> = (0..12).map(|i| i as f32).collect();
     let x = Var::from_slice(&data, (2, 2, 3), device)?;
@@ -61,6 +81,49 @@ fn matmul_grad(device: &Device) -> Result<()> {
             [[15., 15.], [17., 17.], [19., 19.]]
         ]
     );
+    Ok(())
+}
+
+fn assert_zero_grad(grads: &GradStore, var: &Var, shape: &[usize]) -> Result<()> {
+    let grad = grads.get(var).context("no gradient for variable")?;
+    assert_eq!(grad.dims(), shape);
+    assert_eq!(
+        grad.flatten_all()?.to_vec1::<f32>()?,
+        vec![0.; grad.elem_count()]
+    );
+    Ok(())
+}
+
+fn assert_zero_matmul_grads(
+    device: &Device,
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
+    output_shape: &[usize],
+) -> Result<()> {
+    let lhs = Var::zeros(lhs_shape, DType::F32, device)?;
+    let rhs = Var::zeros(rhs_shape, DType::F32, device)?;
+    let output = lhs.matmul(&rhs)?;
+    assert_eq!(output.dims(), output_shape);
+    assert_eq!(
+        output.flatten_all()?.to_vec1::<f32>()?,
+        vec![0.; output.elem_count()]
+    );
+    let grads = output.sum_all()?.backward()?;
+    assert_zero_grad(&grads, &lhs, lhs_shape)?;
+    assert_zero_grad(&grads, &rhs, rhs_shape)
+}
+
+fn zero_matmul_grad(device: &Device) -> Result<()> {
+    let cases: &[(&[usize], &[usize], &[usize])] = &[
+        (&[2, 0], &[0, 3], &[2, 3]),
+        (&[0, 2], &[2, 3], &[0, 3]),
+        (&[2, 3], &[3, 0], &[2, 0]),
+        (&[0, 2, 3], &[0, 3, 4], &[0, 2, 4]),
+        (&[2, 3, 0], &[2, 0, 4], &[2, 3, 4]),
+    ];
+    for &(lhs_shape, rhs_shape, output_shape) in cases {
+        assert_zero_matmul_grads(device, lhs_shape, rhs_shape, output_shape)?;
+    }
     Ok(())
 }
 
@@ -543,10 +606,22 @@ test_device!(
 );
 test_device!(sum_grad, sum_grad_cpu, sum_grad_gpu, sum_grad_metal);
 test_device!(
+    expand_grad,
+    expand_grad_cpu,
+    expand_grad_gpu,
+    expand_grad_metal
+);
+test_device!(
     matmul_grad,
     matmul_grad_cpu,
     matmul_grad_gpu,
     matmul_grad_metal
+);
+test_device!(
+    zero_matmul_grad,
+    zero_matmul_grad_cpu,
+    zero_matmul_grad_gpu,
+    zero_matmul_grad_metal
 );
 test_device!(
     grad_descent,

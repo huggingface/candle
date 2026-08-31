@@ -49,22 +49,39 @@ impl candle::CustomOp3 for RotaryEmbI {
             let unbatched_rope = l_cos.dims().len() == 3 && l_sin.dims().len() == 3;
             let el_count = b * h * t * d;
             let mut dst = vec![T::zero(); el_count];
-            src.par_chunks(t * d)
-                .zip(dst.par_chunks_mut(t * d))
-                .enumerate()
-                .for_each(|(bh_i, (src, dst))| {
-                    for i_over_2 in 0..t * d / 2 {
-                        let i = 2 * i_over_2;
+            if t == 1 {
+                for bh_i in 0..b * h {
+                    let off = bh_i * d;
+                    for i_over_2 in 0..d / 2 {
+                        let i = off + 2 * i_over_2;
                         let rope_i = if unbatched_rope {
                             let b_i = bh_i / h;
-                            i_over_2 + b_i * t * d / 2
+                            i_over_2 + b_i * d / 2
                         } else {
                             i_over_2
                         };
                         dst[i] = src[i] * cos[rope_i] - src[i + 1] * sin[rope_i];
                         dst[i + 1] = src[i] * sin[rope_i] + src[i + 1] * cos[rope_i];
                     }
-                });
+                }
+            } else {
+                src.par_chunks(t * d)
+                    .zip(dst.par_chunks_mut(t * d))
+                    .enumerate()
+                    .for_each(|(bh_i, (src, dst))| {
+                        for i_over_2 in 0..t * d / 2 {
+                            let i = 2 * i_over_2;
+                            let rope_i = if unbatched_rope {
+                                let b_i = bh_i / h;
+                                i_over_2 + b_i * t * d / 2
+                            } else {
+                                i_over_2
+                            };
+                            dst[i] = src[i] * cos[rope_i] - src[i + 1] * sin[rope_i];
+                            dst[i + 1] = src[i] * sin[rope_i] + src[i + 1] * cos[rope_i];
+                        }
+                    });
+            }
             let storage = candle::WithDType::to_cpu_storage_owned(dst);
             Ok((storage, (b, h, t, d).into()))
         }
@@ -202,7 +219,11 @@ impl candle::CustomOp3 for RotaryEmbI {
             0usize
         };
         let el = b * h * t * d;
-        let output = device.new_buffer(el, src.dtype(), "rope_i")?;
+        let output = device
+            .new_buffer_builder()
+            .with_size_for(el, src.dtype())
+            .with_label("rope_i")
+            .build()?;
         candle_metal_kernels::call_rope_i(
             device.metal_device(),
             &encoder,
@@ -328,26 +349,44 @@ impl candle::CustomOp3 for RotaryEmb {
             let unbatched_rope = l_cos.dims().len() == 3 && l_sin.dims().len() == 3;
             let el_count = b * h * t * d;
             let mut dst = vec![T::zero(); el_count];
-            src.par_chunks(t * d)
-                .zip(dst.par_chunks_mut(t * d))
-                .enumerate()
-                .for_each(|(bh_i, (src, dst))| {
-                    for i_t in 0..t {
-                        for i_d in 0..d / 2 {
-                            let i1 = i_t * d + i_d;
-                            let i2 = i1 + d / 2;
-                            let i_cs = i_t * (d / 2) + i_d;
-                            let i_cs = if unbatched_rope {
-                                let b_i = bh_i / h;
-                                i_cs + b_i * t * d / 2
-                            } else {
-                                i_cs
-                            };
-                            dst[i1] = src[i1] * cos[i_cs] - src[i2] * sin[i_cs];
-                            dst[i2] = src[i1] * sin[i_cs] + src[i2] * cos[i_cs];
-                        }
+            if t == 1 {
+                for bh_i in 0..b * h {
+                    let off = bh_i * d;
+                    for i_d in 0..d / 2 {
+                        let i1 = off + i_d;
+                        let i2 = i1 + d / 2;
+                        let i_cs = if unbatched_rope {
+                            let b_i = bh_i / h;
+                            i_d + b_i * d / 2
+                        } else {
+                            i_d
+                        };
+                        dst[i1] = src[i1] * cos[i_cs] - src[i2] * sin[i_cs];
+                        dst[i2] = src[i1] * sin[i_cs] + src[i2] * cos[i_cs];
                     }
-                });
+                }
+            } else {
+                src.par_chunks(t * d)
+                    .zip(dst.par_chunks_mut(t * d))
+                    .enumerate()
+                    .for_each(|(bh_i, (src, dst))| {
+                        for i_t in 0..t {
+                            for i_d in 0..d / 2 {
+                                let i1 = i_t * d + i_d;
+                                let i2 = i1 + d / 2;
+                                let i_cs = i_t * (d / 2) + i_d;
+                                let i_cs = if unbatched_rope {
+                                    let b_i = bh_i / h;
+                                    i_cs + b_i * t * d / 2
+                                } else {
+                                    i_cs
+                                };
+                                dst[i1] = src[i1] * cos[i_cs] - src[i2] * sin[i_cs];
+                                dst[i2] = src[i1] * sin[i_cs] + src[i2] * cos[i_cs];
+                            }
+                        }
+                    });
+            }
             let storage = candle::WithDType::to_cpu_storage_owned(dst);
             Ok((storage, (b, h, t, d).into()))
         }
@@ -485,7 +524,11 @@ impl candle::CustomOp3 for RotaryEmb {
             0usize
         };
         let el = b * h * t * d;
-        let output = device.new_buffer(el, src.dtype(), "rope")?;
+        let output = device
+            .new_buffer_builder()
+            .with_size_for(el, src.dtype())
+            .with_label("rope")
+            .build()?;
         candle_metal_kernels::call_rope(
             device.metal_device(),
             &encoder,
@@ -755,7 +798,11 @@ impl candle::CustomOp3 for RotaryEmbThd {
             0usize
         };
         let el = b * h * t * d;
-        let output = device.new_buffer(el, src.dtype(), "rope_thd")?;
+        let output = device
+            .new_buffer_builder()
+            .with_size_for(el, src.dtype())
+            .with_label("rope_thd")
+            .build()?;
         candle_metal_kernels::call_rope_thd(
             device.metal_device(),
             &encoder,

@@ -1,6 +1,6 @@
 //! Support for the [GGUF file format](https://github.com/philpax/ggml/blob/gguf-spec/docs/gguf.md).
 //!
-//! Spec: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md  
+//! Spec: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
 
 use super::{GgmlDType, QTensor};
 use crate::{Context, Device, Result};
@@ -99,8 +99,16 @@ impl TensorInfo {
         )
         }
         let size_in_bytes = tensor_elems / block_size * self.ggml_dtype.type_size();
+        let tensor_start = tensor_data_offset.saturating_add(self.offset);
+        let file_size = reader.seek(std::io::SeekFrom::End(0))?;
+        let remaining = file_size.saturating_sub(tensor_start);
+        if size_in_bytes as u64 > remaining {
+            crate::bail!(
+                "tensor needs {size_in_bytes} bytes at offset {tensor_start}, only {remaining} remaining in file"
+            )
+        }
         let mut raw_data = vec![0u8; size_in_bytes];
-        reader.seek(std::io::SeekFrom::Start(tensor_data_offset + self.offset))?;
+        reader.seek(std::io::SeekFrom::Start(tensor_start))?;
         reader.read_exact(&mut raw_data)?;
         super::ggml_file::qtensor_from_ggml(
             self.ggml_dtype,

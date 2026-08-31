@@ -1,7 +1,7 @@
 //! Implementation of Backend Fns for CPU
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
+use crate::{DType, Error, IntDType, Layout, NdIter, Result, Shape, WithDType};
 use float8::F8E4M3;
 use half::{bf16, f16};
 use rayon::prelude::*;
@@ -84,6 +84,39 @@ impl Map2U8 for Cmp {
 
 struct WCond<'a, T: IntDType>(&'a [T], &'a Layout);
 
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn where_impl<I, T, P, R, G>(
+    nd_iter: NdIter<3>,
+    ys_to_set: &mut [T],
+    pred: &[I],
+    t: &[T],
+    f: &[T],
+    pred_fn: P,
+    t_fn: R,
+    f_fn: G,
+) where
+    I: IntDType,
+    T: Copy,
+    P: Fn(usize, usize, usize) -> usize,
+    R: Fn(usize, usize, usize) -> usize,
+    G: Fn(usize, usize, usize) -> usize,
+{
+    let inner_size = nd_iter.inner_size;
+    let [inner_ps, inner_ts, inner_fs] = nd_iter.inner_strides;
+    let mut dst_off = 0usize;
+    for [p_off, t_off, f_off] in nd_iter {
+        for i in 0..inner_size {
+            let ep = pred[pred_fn(p_off, i, inner_ps)];
+            let et = t[t_fn(t_off, i, inner_ts)];
+            let ef = f[f_fn(f_off, i, inner_fs)];
+
+            ys_to_set[dst_off + i] = if ep.is_true() { et } else { ef };
+        }
+        dst_off += inner_size;
+    }
+}
+
 impl<I: IntDType> Map2 for WCond<'_, I> {
     const OP: &'static str = "where";
     #[inline(always)]
@@ -102,18 +135,57 @@ impl<I: IntDType> Map2 for WCond<'_, I> {
                     .map(|(p, (&t, &f))| if p.is_true() { t } else { f })
                     .collect::<Vec<_>>()
             }
-            _ => self
-                .1
-                .strided_index()
-                .zip(t_l.strided_index().zip(f_l.strided_index()))
-                .map(|(i_p, (i_t, i_f))| {
-                    if self.0[i_p].is_true() {
-                        t[i_t]
-                    } else {
-                        f[i_f]
+            _ => {
+                // Same allocation strategy as `binary_map_vec`
+                let el_count = self.1.shape().elem_count();
+
+                let mut ys: Vec<T> = Vec::with_capacity(el_count);
+                let ys_to_set = unsafe {
+                    let s = ys.spare_capacity_mut();
+                    std::mem::transmute::<&mut [std::mem::MaybeUninit<T>], &mut [T]>(s)
+                };
+
+                let nd_iter = NdIter::new([self.1, t_l, f_l]);
+                let [inner_ps, inner_ts, inner_fs] = nd_iter.inner_strides;
+
+                let offset = |off, i, _| off + i;
+                let boffset = |off, _, _| off;
+
+                match (inner_ps, inner_ts, inner_fs) {
+                    (1, 1, 1) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, offset, offset);
                     }
-                })
-                .collect::<Vec<_>>(),
+                    (1, 1, 0) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, offset, boffset);
+                    }
+                    (1, 0, 1) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, boffset, offset);
+                    }
+                    (1, 0, 0) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, boffset, boffset);
+                    }
+                    (0, 1, 1) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, boffset, offset, offset);
+                    }
+                    (0, 1, 0) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, boffset, offset, boffset);
+                    }
+                    (0, 0, 1) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, boffset, boffset, offset);
+                    }
+                    (0, 0, 0) => {
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, boffset, boffset, boffset);
+                    }
+                    _ => {
+                        let offset = |off, i, inner| off + i * inner;
+                        where_impl(nd_iter, ys_to_set, self.0, t, f, offset, offset, offset);
+                    }
+                }
+
+                // SAFETY: all el_count elements have been written in the dispatch loop above.
+                unsafe { ys.set_len(el_count) };
+                ys
+            }
         };
         Ok(vs)
     }
@@ -2464,40 +2536,20 @@ impl BackendStorage for CpuStorage {
     fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
         match self {
             Self::BF16(storage) => {
-                if B::BF16_VEC {
-                    let data = unary_map_vec(storage, layout, B::bf16, B::bf16_vec);
-                    Ok(Self::BF16(data))
-                } else {
-                    let data = unary_map(storage, layout, B::bf16);
-                    Ok(Self::BF16(data))
-                }
+                let data = unary_map_vec(storage, layout, B::bf16, B::bf16_vec);
+                Ok(Self::BF16(data))
             }
             Self::F16(storage) => {
-                if B::F16_VEC {
-                    let data = unary_map_vec(storage, layout, B::f16, B::f16_vec);
-                    Ok(Self::F16(data))
-                } else {
-                    let data = unary_map(storage, layout, B::f16);
-                    Ok(Self::F16(data))
-                }
+                let data = unary_map_vec(storage, layout, B::f16, B::f16_vec);
+                Ok(Self::F16(data))
             }
             Self::F32(storage) => {
-                if B::F32_VEC {
-                    let data = unary_map_vec(storage, layout, B::f32, B::f32_vec);
-                    Ok(Self::F32(data))
-                } else {
-                    let data = unary_map(storage, layout, B::f32);
-                    Ok(Self::F32(data))
-                }
+                let data = unary_map_vec(storage, layout, B::f32, B::f32_vec);
+                Ok(Self::F32(data))
             }
             Self::F64(storage) => {
-                if B::F64_VEC {
-                    let data = unary_map_vec(storage, layout, B::f64, B::f64_vec);
-                    Ok(Self::F64(data))
-                } else {
-                    let data = unary_map(storage, layout, B::f64);
-                    Ok(Self::F64(data))
-                }
+                let data = unary_map_vec(storage, layout, B::f64, B::f64_vec);
+                Ok(Self::F64(data))
             }
             Self::U8(storage) => {
                 let data = unary_map(storage, layout, B::u8);
@@ -2538,67 +2590,104 @@ impl BackendStorage for CpuStorage {
     ) -> Result<Self> {
         match (self, rhs) {
             (Self::BF16(lhs), Self::BF16(rhs)) => {
-                let data = if B::BF16_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::bf16, B::bf16_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::bf16)
-                };
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::bf16,
+                    B::bf16_vec,
+                    B::bf16_scalar_vec,
+                );
                 Ok(Self::BF16(data))
             }
             (Self::F16(lhs), Self::F16(rhs)) => {
-                let data = if B::F16_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::f16, B::f16_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::f16)
-                };
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::f16,
+                    B::f16_vec,
+                    B::f16_scalar_vec,
+                );
                 Ok(Self::F16(data))
             }
             (Self::F32(lhs), Self::F32(rhs)) => {
-                let data = if B::F32_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::f32, B::f32_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::f32)
-                };
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::f32,
+                    B::f32_vec,
+                    B::f32_scalar_vec,
+                );
                 Ok(Self::F32(data))
             }
             (Self::F64(lhs), Self::F64(rhs)) => {
-                let data = if B::F64_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::f64, B::f64_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::f64)
-                };
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::f64,
+                    B::f64_vec,
+                    B::f64_scalar_vec,
+                );
                 Ok(Self::F64(data))
             }
             (Self::U32(lhs), Self::U32(rhs)) => {
-                let data = if B::U32_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::u32, B::u32_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::u32)
-                };
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::u32,
+                    B::u32_vec,
+                    B::u32_scalar_vec,
+                );
                 Ok(Self::U32(data))
             }
             (Self::I16(lhs), Self::I16(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::i16);
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::i16,
+                    B::i16_vec,
+                    B::i16_scalar_vec,
+                );
                 Ok(Self::I16(data))
             }
             (Self::I32(lhs), Self::I32(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::i32);
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::i32,
+                    B::i32_vec,
+                    B::i32_scalar_vec,
+                );
                 Ok(Self::I32(data))
             }
             (Self::I64(lhs), Self::I64(rhs)) => {
-                let data = if B::I64_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::i64, B::i64_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::i64)
-                };
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::i64,
+                    B::i64_vec,
+                    B::i64_scalar_vec,
+                );
                 Ok(Self::I64(data))
             }
             (Self::U8(lhs), Self::U8(rhs)) => {
-                let data = if B::U8_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::u8, B::u8_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::u8)
-                };
+                let data =
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::u8, B::u8_vec, B::u8_scalar_vec);
                 Ok(Self::U8(data))
             }
             (Self::F8E4M3(lhs), Self::F8E4M3(rhs)) => {

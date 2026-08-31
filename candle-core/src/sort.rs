@@ -8,7 +8,11 @@ struct ArgSort {
 }
 
 impl ArgSort {
-    fn asort<T: crate::WithDType>(&self, vs: &[T], layout: &crate::Layout) -> Vec<u32> {
+    fn asort<T: crate::WithDType>(&self, vs: &[T], layout: &crate::Layout) -> Result<Vec<u32>> {
+        let vs = match layout.contiguous_offsets() {
+            None => crate::bail!("input has to be contiguous"),
+            Some((o1, o2)) => &vs[o1..o2],
+        };
         #[allow(clippy::uninit_vec)]
         // Safety: indexes are set later in the parallelized section.
         let mut sort_indexes = unsafe {
@@ -48,7 +52,7 @@ impl ArgSort {
                     })
                 });
         }
-        sort_indexes
+        Ok(sort_indexes)
     }
 }
 
@@ -114,16 +118,16 @@ impl crate::CustomOp1 for ArgSort {
         layout: &crate::Layout,
     ) -> Result<(crate::CpuStorage, crate::Shape)> {
         let sort_indexes = match storage {
-            crate::CpuStorage::U8(vs) => self.asort(vs, layout),
-            crate::CpuStorage::U32(vs) => self.asort(vs, layout),
-            crate::CpuStorage::I16(vs) => self.asort(vs, layout),
-            crate::CpuStorage::I32(vs) => self.asort(vs, layout),
-            crate::CpuStorage::I64(vs) => self.asort(vs, layout),
-            crate::CpuStorage::BF16(vs) => self.asort(vs, layout),
-            crate::CpuStorage::F16(vs) => self.asort(vs, layout),
-            crate::CpuStorage::F32(vs) => self.asort(vs, layout),
-            crate::CpuStorage::F64(vs) => self.asort(vs, layout),
-            crate::CpuStorage::F8E4M3(vs) => self.asort(vs, layout),
+            crate::CpuStorage::U8(vs) => self.asort(vs, layout)?,
+            crate::CpuStorage::U32(vs) => self.asort(vs, layout)?,
+            crate::CpuStorage::I16(vs) => self.asort(vs, layout)?,
+            crate::CpuStorage::I32(vs) => self.asort(vs, layout)?,
+            crate::CpuStorage::I64(vs) => self.asort(vs, layout)?,
+            crate::CpuStorage::BF16(vs) => self.asort(vs, layout)?,
+            crate::CpuStorage::F16(vs) => self.asort(vs, layout)?,
+            crate::CpuStorage::F32(vs) => self.asort(vs, layout)?,
+            crate::CpuStorage::F64(vs) => self.asort(vs, layout)?,
+            crate::CpuStorage::F8E4M3(vs) => self.asort(vs, layout)?,
             // Dummy types don't support sorting
             crate::CpuStorage::F6E2M3(_) => {
                 return Err(
@@ -220,7 +224,11 @@ impl crate::CustomOp1 for ArgSort {
         let ncols = self.last_dim;
         let nrows = el / ncols;
         let src = crate::metal_backend::buffer_o(storage.buffer(), layout, storage.dtype());
-        let dst = device.new_buffer(el, DType::U32, "asort")?;
+        let dst = device
+            .new_buffer_builder()
+            .with_size_for(el, DType::U32)
+            .with_label("asort")
+            .build()?;
         let mut ncols_pad = 1;
         while ncols_pad < ncols {
             ncols_pad *= 2;
