@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyList, PyTuple};
 
 #[derive(Clone, Debug)]
-#[pyclass(name = "ONNXTensorDescription")]
+#[pyclass(skip_from_py_object, name = "ONNXTensorDescription")]
 /// A wrapper around an ONNX tensor description.
 pub struct PyONNXTensorDescriptor(ONNXTensor);
 
@@ -80,7 +80,7 @@ impl PyONNXTensorDescriptor {
 }
 
 #[derive(Clone, Debug)]
-#[pyclass(name = "ONNXModel")]
+#[pyclass(skip_from_py_object, name = "ONNXModel")]
 /// A wrapper around an ONNX model.
 pub struct PyONNXModel(ModelProto);
 
