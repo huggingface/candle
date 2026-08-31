@@ -17,6 +17,13 @@ candle-metal-kernels = { workspace = true, optional = true }
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
+# `gpu-sort` (default-on) builds an amdgcn kernel via a proc-macro that shells out
+# to a nested nightly `-Zbuild-std` cargo invocation. Candle never calls rocm-rs'
+# sort, so it is disabled to keep `--features rocm` buildable on a stable toolchain.
+rocm-rs = { version = "0.5", optional = true, default-features = false, features = [
+    "macros",
+] }
+candle-rocm-kernels = { workspace = true, optional = true }
 gemm = { workspace = true }
 half = { workspace = true, features = ["zerocopy"] }
 float8 = { workspace = true }
@@ -48,6 +55,10 @@ criterion = { workspace = true }
 [features]
 default = []
 cuda = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda"]
+rocm = ["dep:rocm-rs", "dep:candle-rocm-kernels", "candle-ug?/rocm"]
+# Opt-in MIOpen conv forward, mirroring how `cudnn` layers over `cuda`. The
+# default ROCm build uses the im2col + GEMM path and never links libMIOpen.
+miopen = ["rocm", "rocm-rs/miopen"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
 mkl = ["dep:intel-mkl-src"]

@@ -1,0 +1,17 @@
+[package]
+name = "candle-rocm-kernels"
+version = "0.11.0"
+edition = "2021"
+
+description = "ROCm/HIP kernels for Candle"
+repository = "https://github.com/huggingface/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+dirs = "5"
+fslock = "0.2"
+rocm-rs = { version = "0.5", default-features = false, features = ["macros"] }
+sha2 = "0.10"
+thiserror = "2"

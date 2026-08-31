@@ -145,7 +145,10 @@ fn inplace_op1() -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(feature = "ug", any(feature = "cuda", feature = "metal")))]
+#[cfg(all(
+    feature = "ug",
+    any(feature = "cuda", feature = "metal", feature = "rocm")
+))]
 #[allow(clippy::approx_constant)]
 #[test]
 fn ug_op() -> Result<()> {
@@ -165,8 +168,10 @@ fn ug_op() -> Result<()> {
         Device::new_cuda(0)?
     } else if candle_core::utils::metal_is_available() {
         Device::new_metal(0)?
+    } else if candle_core::utils::rocm_is_available() {
+        Device::new_rocm(0)?
     } else {
-        candle_core::bail!("metal/cuda is mandatory for this test")
+        candle_core::bail!("metal/cuda/rocm is mandatory for this test")
     };
     let op = candle_core::UgIOp1::new("test", kernel, &device)?;
     let t = Tensor::arange(0u32, 12u32, &device)?.to_dtype(DType::F32)?;

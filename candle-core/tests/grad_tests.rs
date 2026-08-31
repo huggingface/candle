@@ -602,37 +602,55 @@ test_device!(
     simple_grad,
     simple_grad_cpu,
     simple_grad_gpu,
-    simple_grad_metal
+    simple_grad_metal,
+    simple_grad_rocm
 );
-test_device!(sum_grad, sum_grad_cpu, sum_grad_gpu, sum_grad_metal);
+test_device!(
+    sum_grad,
+    sum_grad_cpu,
+    sum_grad_gpu,
+    sum_grad_metal,
+    sum_grad_rocm
+);
 test_device!(
     expand_grad,
     expand_grad_cpu,
     expand_grad_gpu,
-    expand_grad_metal
+    expand_grad_metal,
+    expand_grad_rocm
 );
 test_device!(
     matmul_grad,
     matmul_grad_cpu,
     matmul_grad_gpu,
-    matmul_grad_metal
+    matmul_grad_metal,
+    matmul_grad_rocm
 );
 test_device!(
     zero_matmul_grad,
     zero_matmul_grad_cpu,
     zero_matmul_grad_gpu,
-    zero_matmul_grad_metal
+    zero_matmul_grad_metal,
+    zero_matmul_grad_rocm
 );
 test_device!(
     grad_descent,
     grad_descent_cpu,
     grad_descent_gpu,
-    grad_descent_metal
+    grad_descent_metal,
+    grad_descent_rocm
 );
-test_device!(unary_grad, unary_grad_cpu, unary_grad_gpu, unary_grad_metal);
+test_device!(
+    unary_grad,
+    unary_grad_cpu,
+    unary_grad_gpu,
+    unary_grad_metal,
+    unary_grad_rocm
+);
 test_device!(
     binary_grad,
     binary_grad_cpu,
     binary_grad_gpu,
-    binary_grad_metal
+    binary_grad_metal,
+    binary_grad_rocm
 );

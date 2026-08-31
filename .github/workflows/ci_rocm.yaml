@@ -1,0 +1,106 @@
+name: CI / rocm
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+env:
+  # ROCm release the headers are taken from. Only the version the bindings are
+  # generated against; nothing here runs on a GPU.
+  ROCM_VERSION: 7.2.4
+  ROCM_PATH: /opt/rocm
+
+jobs:
+  # No GPU required. `rocm-rs` runs bindgen over the ROCm headers, so a check
+  # and a clippy pass need the headers on disk but never a device: this job
+  # catches `#[cfg(feature = "rocm")]` rot and clippy regressions on a hosted
+  # runner. Only the `-dev` packages are unpacked (~14 MB of headers); pulling
+  # them through apt would drag in the runtime libraries too, which is ~9 GB.
+  check-rocm:
+    name: Check and clippy (no GPU)
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install ROCm headers
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libclang-dev
+          base="https://repo.radeon.com/rocm/apt/${ROCM_VERSION}"
+          curl -fsSL "${base}/dists/noble/main/binary-amd64/Packages.gz" -o Packages.gz
+          mkdir -p rocm-debs
+          for pkg in hip-dev rocblas-dev rocsolver-dev rocfft-dev rocsparse-dev rocrand-dev miopen-hip-dev; do
+            file=$(zcat Packages.gz | awk -v RS='' -v p="$pkg" '$0 ~ "^Package: " p "\n" { print }' \
+                   | sed -n 's/^Filename: //p' | head -1)
+            test -n "$file"
+            curl -fsSL "${base}/${file}" -o "rocm-debs/${pkg}.deb"
+          done
+          for deb in rocm-debs/*.deb; do
+            sudo dpkg-deb -x "$deb" /
+          done
+          # The packages unpack to /opt/rocm-<version>; ROCM_PATH points at the
+          # unversioned symlink the ROCm meta-packages would normally create.
+          sudo ln -sfn "/opt/rocm-${ROCM_VERSION}" "${ROCM_PATH}"
+          test -f "${ROCM_PATH}/include/hip/hip_runtime_api.h"
+          du -sh "/opt/rocm-${ROCM_VERSION}"
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+
+      - name: Check (rocm)
+        run: cargo check -p candle-core -p candle-nn -p candle-transformers -p candle-examples --features rocm
+
+      - name: Check candle-rocm-kernels
+        run: cargo check -p candle-rocm-kernels
+
+      - name: Check (miopen)
+        run: cargo check -p candle-core --features miopen
+
+      - name: Check candle-pyo3 (rocm)
+        run: cargo check -p candle-pyo3 --features rocm
+
+      - name: Clippy (rocm)
+        run: cargo clippy -p candle-core -p candle-nn --features rocm --tests -- -D warnings
+
+  # Inert unless dispatched by hand: there is no `amd-gpu` runner yet. Kept so
+  # the real command is recorded and ready the day one appears.
+  test-rocm:
+    name: GPU test suite
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: [self-hosted, amd-gpu]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - name: ROCm info
+        run: make rocm-info
+
+      # Compiles every shared kernel source with hipcc for the local GPU and
+      # exercises the hand-written device code in the shim.
+      - name: Shim test
+        run: make rocm-shim-test
+
+      # Single-threaded: the first process to touch a module pays the hipcc
+      # compile, and the on-disk cache is not yet race-free.
+      - name: Test (rocm)
+        run: make test-rocm

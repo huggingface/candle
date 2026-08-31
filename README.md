@@ -45,6 +45,13 @@ Having installed `candle` with Cuda support, simply define the `device` to be on
 + let device = Device::new_cuda(0)?;
 ```
 
+On an AMD GPU, build with the `rocm` feature and use:
+
+```diff
+- let device = Device::Cpu;
++ let device = Device::new_rocm(0)?;
+```
+
 For more advanced examples, please have a look at the following section.
 
 ## Check out our examples
@@ -150,6 +157,24 @@ cargo run --example quantized --release
 In order to use **CUDA** add `--features cuda` to the example command line. If
 you have cuDNN installed, use `--features cudnn` for even more speedups.
 
+For an **AMD GPU** add `--features rocm` instead. This needs a ROCm 6.2+
+installation with `hipcc` on `PATH` and `clang-offload-bundler` under
+`$ROCM_PATH` (default `/opt/rocm`). The kernels are the same
+`candle-kernels` sources the CUDA backend uses; they are compiled by `hipcc` at
+runtime on first use and cached under `~/.cache/candle-rocm`, so the first run
+of a given architecture pays a one-off compile (a few seconds per module, about
+70 s for the quantized module) and later runs load from the cache. If MIOpen is
+installed, `--features miopen` swaps convolutions onto it, the way `cudnn`
+layers over `cuda`. `--features "rocm ug"` also enables the `ug` micro-kernel
+path (`UgIOp1`, `RocmDevice::compile`); since there is no `ug-rocm` crate
+upstream, the HIP code generator lives in
+[candle-ug](./candle-ug/src/rocm/code_gen.rs) and its output goes through the
+same `hipcc` cache as everything else. Run `make test-rocm-ug` to exercise it.
+The ROCm backend started from
+[@airpods69](https://github.com/airpods69)'s
+[#3424](https://github.com/huggingface/candle/pull/3424); see
+[candle-rocm-kernels](./candle-rocm-kernels/README.md#origin).
+
 There are also some wasm examples for whisper and
 [llama2.c](https://github.com/karpathy/llama2.c). You can either build them with
 `trunk` or try them online:
@@ -211,6 +236,7 @@ If you have an addition to this list, please submit a pull request.
 - Backends.
     - Optimized CPU backend with optional MKL support for x86 and Accelerate for macs.
     - CUDA backend for efficiently running on GPUs, multiple GPU distribution via NCCL.
+    - ROCm/HIP backend for AMD GPUs, sharing the CUDA kernel sources, with optional MIOpen convolutions.
     - WASM support, run your models in a browser.
 - Included models.
     - Language Models.
@@ -288,6 +314,7 @@ Cheatsheet:
 - [candle-nn](./candle-nn/): Tools to build real models
 - [candle-examples](./candle-examples/): Examples of using the library in realistic settings
 - [candle-kernels](./candle-kernels/): CUDA custom kernels
+- [candle-rocm-kernels](./candle-rocm-kernels/): ROCm/HIP support, compiling the `candle-kernels` sources with `hipcc`
 - [candle-datasets](./candle-datasets/): Datasets and data loaders.
 - [candle-transformers](./candle-transformers): transformers-related utilities.
 - [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.
@@ -430,6 +457,44 @@ mdbook test candle-book -L .\target\debug\deps\ `
 -L native=$env:USERPROFILE\.cargo\registry\src\index.crates.io-6f17d22bba15001f\windows_x86_64_msvc-0.42.2\lib `
 -L native=$env:USERPROFILE\.cargo\registry\src\index.crates.io-6f17d22bba15001f\windows_x86_64_msvc-0.48.5\lib
 ```
+
+#### ROCm errors
+
+```
+Kernel compilation failed: could not run hipcc: No such file or directory (os error 2). Is ROCm installed?
+```
+
+The ROCm backend compiles kernels at runtime, so `hipcc` must be on `PATH` at
+*run* time, not just at build time — add `/opt/rocm/bin` to `PATH`. The
+matching `clang-offload-bundler` is taken from `$ROCM_PATH` (default
+`/opt/rocm`), so point `ROCM_PATH` at your install if it lives elsewhere.
+
+```
+ROCm error: hipGetDeviceProperties failed for device 0 ... set CANDLE_ROCM_ARCH to build kernels anyway
+```
+or a launch failing with an "invalid device function"
+
+The target architecture is read from the device the `Device::new_rocm(ordinal)`
+call opened, via `hipGetDeviceProperties`. Override it if that is unavailable or
+reports the wrong target:
+
+```bash
+CANDLE_ROCM_ARCH=gfx1101 cargo run --release --example bert --features rocm
+```
+
+The cache key covers the kernel sources, the HIP shim headers, the compile flags
+and the toolchain version, so editing a kernel or upgrading ROCm invalidates the
+affected entries on its own. To force a recompile anyway — say a crash left a
+truncated code object behind:
+
+```bash
+CANDLE_ROCM_FORCE_RECOMPILE=1 cargo run --release --example bert --features rocm
+make rocm-cache-clean   # or: rm -rf ~/.cache/candle-rocm
+```
+
+Set `CANDLE_ROCM_CACHE_DIR` to move the cache elsewhere. Without a writable
+`$HOME` — containers, CI, service accounts — it falls back to a per-uid
+directory under the system temp dir.
 
 #### Extremely slow model load time with WSL
 
