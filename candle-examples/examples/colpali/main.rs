@@ -107,7 +107,7 @@ impl PageRetriever {
                 .images_to_tensor(batch, self.config.vision_config.image_size)?
                 .to_device(&self.device)?
                 .to_dtype(dtype)?;
-            let dummy_input = dummy_input.repeat((page_images.dims()[0], 0))?;
+            let dummy_input = dummy_input.repeat((page_images.dims()[0], 1))?;
 
             let image_embeddings = self.model.forward_images(&page_images, &dummy_input)?;
             let text_embeddings = self.model.forward_text(&input)?;

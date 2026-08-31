@@ -31,6 +31,21 @@ fn device() -> Device {
     Device::system_default().unwrap()
 }
 
+#[test]
+fn pipeline_cache_distinguishes_sources() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    // Prime the cache with a name that is not present in the binary library.
+    kernels
+        .load_pipeline(&device, Source::Unary, "cos_f32")
+        .unwrap();
+    assert!(matches!(
+        kernels.load_pipeline(&device, Source::Binary, "cos_f32"),
+        Err(MetalKernelError::LoadFunctionError(_))
+    ));
+}
+
 fn approx(v: Vec<f32>, digits: i32) -> Vec<f32> {
     let b = 10f32.powi(digits);
     v.iter().map(|t| f32::round(t * b) / b).collect()
@@ -2450,4 +2465,29 @@ fn commands_concurrent_acquisition() {
     }
 
     commands.wait_until_completed().unwrap();
+}
+
+#[test]
+fn residency_set_batch_insert_remove() {
+    use objc2_metal::MTLResidencySet;
+
+    let device = device();
+    let set = ResidencySet::new(&device);
+    let Some(raw) = set.raw() else {
+        // Residency sets are unsupported on this device/OS; the set no-ops.
+        return;
+    };
+
+    let bufs: Vec<Buffer> = (0..3).map(|i| new_buffer(&device, &[i as f32])).collect();
+    let base = raw.allocationCount();
+
+    set.insert_batch(&bufs);
+    assert_eq!(raw.allocationCount(), base + bufs.len());
+    set.remove_batch(&bufs);
+    assert_eq!(raw.allocationCount(), base);
+
+    // Empty batches are valid and leave the set untouched.
+    set.insert_batch(std::iter::empty());
+    set.remove_batch(std::iter::empty());
+    assert_eq!(raw.allocationCount(), base);
 }

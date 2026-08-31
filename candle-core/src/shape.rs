@@ -9,7 +9,7 @@ pub const SCALAR: Shape = Shape(vec![]);
 
 impl std::fmt::Debug for Shape {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", &self.dims())
+        write!(f, "{:?}", self.dims())
     }
 }
 
@@ -472,8 +472,16 @@ pub trait ShapeWithOneHole {
 }
 
 impl<S: Into<Shape>> ShapeWithOneHole for S {
-    fn into_shape(self, _el_count: usize) -> Result<Shape> {
-        Ok(self.into())
+    fn into_shape(self, el_count: usize) -> Result<Shape> {
+        let shape = self.into();
+        if shape.elem_count() != el_count {
+            return Err(Error::ShapeMismatch {
+                buffer_size: el_count,
+                shape,
+            }
+            .bt());
+        }
+        Ok(shape)
     }
 }
 
