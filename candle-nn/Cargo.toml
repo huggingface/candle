@@ -12,6 +12,7 @@ readme = "README.md"
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
 candle = { workspace = true }
+candle-kernels = { workspace = true, optional = true, features = ["cutile"] }
 half = { workspace = true }
 thiserror = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -34,6 +35,7 @@ criterion = { workspace = true }
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
+cutile = ["cuda", "candle/cutile", "dep:candle-kernels"]
 cudnn = ["candle/cudnn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
 metal = ["candle/metal", "dep:candle-metal-kernels", "dep:objc2-metal"]

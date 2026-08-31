@@ -17,6 +17,7 @@ candle-metal-kernels = { workspace = true, optional = true }
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
+cutile = { workspace = true, optional = true }
 gemm = { workspace = true }
 half = { workspace = true, features = ["zerocopy"] }
 float8 = { workspace = true }
@@ -48,6 +49,7 @@ criterion = { workspace = true }
 [features]
 default = []
 cuda = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda"]
+cutile = ["cuda", "dep:cutile"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
 mkl = ["dep:intel-mkl-src"]
@@ -72,3 +74,7 @@ required-features = ["metal"]
 [[example]]
 name = "cuda_basics"
 required-features = ["cuda"]
+
+[[example]]
+name = "cutile"
+required-features = ["cutile"]

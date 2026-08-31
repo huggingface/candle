@@ -91,6 +91,8 @@ mod variable;
 
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
+#[cfg(feature = "cutile")]
+pub use cuda_backend::cutile;
 
 pub use cpu_backend::{CpuStorage, CpuStorageRef};
 #[cfg(feature = "ug")]
