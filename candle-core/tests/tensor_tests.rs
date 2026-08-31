@@ -2203,7 +2203,7 @@ fn transfers_cuda_to_device() -> Result<()> {
 fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
     use std::{ops::Deref, sync::RwLockReadGuard};
 
-    use candle_core::Storage;
+    use candle_core::{Storage, StorageRef};
     use rand::seq::SliceRandom;
 
     let first = Device::new_cuda(0)?;
@@ -2218,7 +2218,7 @@ fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
 
     let (storage1, _) = t1.storage_and_layout();
     let (storage2, _) = t2.storage_and_layout();
-    let extract = |s: RwLockReadGuard<'_, Storage>| match &s.deref() {
+    let extract = |s: StorageRef| match &s.deref() {
         Storage::Cuda(c) => {
             use cudarc::driver::DevicePtr;
             let slice = c.as_cuda_slice::<u32>().unwrap();
