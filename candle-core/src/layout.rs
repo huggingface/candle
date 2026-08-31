@@ -95,24 +95,36 @@ impl Layout {
         Some(outer_stride)
     }
 
-    /// Checks if more than one logical index lands on the same cell (a stride is 0 over a dim > 1).
+    /// Checks if more than one logical index lands on the same cell (or when we can't prove it does not)
     pub fn has_internal_overlap(&self) -> bool {
-        self.dims()
-            .iter()
-            .zip(self.stride())
-            .any(|(&d, &s)| d > 1 && s == 0)
+        !self.range().is_some_and(|f| f.injective)
     }
 
     /// Returns range of cells this layout can reach, and wether it reaches all of them.
     /// Returns `None` on arithmetic overflow.
     fn range(&self) -> Option<LayoutRange> {
-        let numel = self.shape().elem_count();
-        let mut span: usize = 0;
-        let mut injective = true;
+        // Filter out dims <= 1 as their strides are irrelevant.
+        let mut axes: Vec<(usize, usize)> = self
+            .dims()
+            .iter()
+            .zip(self.stride())
+            .filter(|(&d, _)| d > 1)
+            .map(|(&d, &s)| (d, s))
+            .collect();
+        axes.sort_unstable_by_key(|&(_, s)| s);
 
-        for (&d, &s) in self.dims().iter().zip(self.stride()) {
-            if d > 1 && s == 0 {
+        let mut span = 0usize;
+        let mut injective = true;
+        let mut dense = true;
+
+        for (d, s) in axes {
+            if s <= span {
+                // This dim can land on a cell another dim already reaches.
                 injective = false;
+                dense = false;
+            } else if s - span != 1 {
+                // Has a gap
+                dense = false;
             }
             span = span.checked_add((d - 1).checked_mul(s)?)?;
         }
@@ -121,10 +133,8 @@ impl Layout {
         Some(LayoutRange {
             lo,
             hi: lo.checked_add(span)?,
-            // injective means exactly `numel` distinct cells.
-            // if `span == numel - 1` as well then we have as many cells as elements,
-            // meaning the range is dense.
-            dense: injective && span == numel - 1,
+            injective,
+            dense,
         })
     }
 
@@ -360,6 +370,8 @@ struct LayoutRange {
     lo: usize,
     /// Highest reachable cell (inclusive).
     hi: usize,
+    /// Proven to map distinct logical indices to distinct cells.
+    injective: bool,
     /// Indicates that layout occupies every cell in `lo..=hi`.
     /// Does not necessarily mean that layout is contiguous.
     dense: bool,
