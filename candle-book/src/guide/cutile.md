@@ -80,19 +80,31 @@ observe the correct ordering and allocations stay alive while the kernel runs.
 
 ## Warmup
 
+Enable cuTile's persistent cubin cache once during process startup. The in-memory kernel cache is
+always process-wide; the persistent cache lets later process starts reuse compiled cubins:
+
+```rust,ignore
+candle_core::cutile::jit_cache::enable_default()?;
+```
+
+The default cache is opt-in because it stores executable device code. It uses cuTile's private,
+per-user cache directory and returns an error if a suitable directory cannot be established.
+
 The first invocation of a new specialization runs the cuTile JIT compiler. Build the same launcher
 that inference will use and call `compile_on` during model warmup:
 
 ```rust,ignore
+// Precompile this specialization without executing the kernel.
 cutile::kernel("my kernel warmup", || {
     launcher.compile_on(context.stream())
 })?;
 ```
 
-Warm every specialization selected by the kernel's shapes, const generics, scalar divisibility,
-pointer alignment, grid, and compile options. `compile_on` compiles and caches the kernel without
-launching it. Use `compile_on` and `async_on` with `CutileContext::stream`; the default cuTile
-scheduler may choose a different stream and would not preserve Candle's ordering.
+Warm every specialization selected by const generics, tensor stride metadata, scalar and pointer
+divisibility hints, constant grid dimensions, and compile options. Runtime tensor extents and a
+dynamic `.grid(...)` are not cache-key dimensions. `compile_on` compiles and caches the kernel
+without launching it. Use `compile_on` and `async_on` with `CutileContext::stream`; the default
+cuTile scheduler may choose a different stream and would not preserve Candle's ordering.
 
 Warm kernels before latency-sensitive serving or CUDA graph capture. The full custom-op example is
 [`candle-core/examples/cutile.rs`](https://github.com/huggingface/candle/blob/main/candle-core/examples/cutile.rs).

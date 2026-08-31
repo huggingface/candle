@@ -84,6 +84,7 @@ impl CustomOp2 for Add {
         .grid(((len / BLOCK_SIZE) as u32, 1, 1));
 
         if self.compile_only {
+            // Precompile this specialization without executing the kernel.
             cutile::kernel("add warmup", || launcher.compile_on(context.stream()))?;
         } else {
             cutile::kernel("add launch", || unsafe {
@@ -99,10 +100,14 @@ impl CustomOp2 for Add {
 }
 
 fn main() -> Result<()> {
+    // Persist compiled cubins so later process starts can skip the tileiras compilation stage.
+    cutile::jit_cache::enable_default()?;
+
     let device = candle_core::Device::new_cuda(0)?;
     let lhs = Tensor::arange(0f32, BLOCK_SIZE as f32, &device)?;
     let rhs = Tensor::ones(BLOCK_SIZE, candle_core::DType::F32, &device)?;
 
+    // Precompile the specialization without executing the add kernel.
     let _ = lhs.apply_op2_no_bwd(&rhs, &Add { compile_only: true })?;
     let output = lhs.apply_op2_no_bwd(
         &rhs,
