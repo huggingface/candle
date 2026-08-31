@@ -448,10 +448,12 @@ macro_rules! forward_op2 {
             dl: &Layout,
             srcs: [(Src<'_, $storage>, &Layout); 1],
         ) -> Result<()> {
-            let [(s, sl)] = srcs;
-            match s {
-                Src::Distinct(s) => InplaceOp2::$fwd(self, dst, dl, s, sl),
-                Src::Aliased(ref rel) => InplaceOp2::$fwd_aliased(self, dst, dl, sl, rel),
+            match srcs {
+                [(Src::Distinct(s), sl)] => InplaceOp2::$fwd(self, dst, dl, s, sl),
+                _ => bail!(
+                    "{}: aliased input requires migrating to InplaceOpN",
+                    self.name()
+                ),
             }
         }
     };
@@ -475,17 +477,6 @@ pub trait InplaceOp2 {
     fn cpu_fwd(&self, s1: &mut CpuStorage, l1: &Layout, s2: &CpuStorage, l2: &Layout)
         -> Result<()>;
 
-    fn cpu_fwd_aliased(
-        &self,
-        s: &mut CpuStorage,
-        l1: &Layout,
-        l2: &Layout,
-        rel: &LayoutRelation,
-    ) -> Result<()> {
-        _ = (s, l1, l2, rel);
-        bail!("{} does not support aliased operands on cpu", self.name())
-    }
-
     /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
     fn cuda_fwd(
@@ -501,17 +492,6 @@ pub trait InplaceOp2 {
         ))
     }
 
-    fn cuda_fwd_aliased(
-        &self,
-        s: &mut CudaStorage,
-        l1: &Layout,
-        l2: &Layout,
-        rel: &LayoutRelation,
-    ) -> Result<()> {
-        _ = (s, l1, l2, rel);
-        bail!("{} does not support aliased operands on cuda", self.name())
-    }
-
     /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
     fn metal_fwd(
@@ -525,17 +505,6 @@ pub trait InplaceOp2 {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
         ))
-    }
-
-    fn metal_fwd_aliased(
-        &self,
-        s: &mut MetalStorage,
-        l1: &Layout,
-        l2: &Layout,
-        rel: &LayoutRelation,
-    ) -> Result<()> {
-        _ = (s, l1, l2, rel);
-        bail!("{} does not support aliased operands on cuda", self.name())
     }
 }
 
