@@ -113,6 +113,7 @@ impl CudaDevice {
         &self,
         src: &Src,
     ) -> Result<Vec<T>> {
+        self.check_capture_copy("clone_dtoh")?;
         self.stream.clone_dtoh(src).w()
     }
 
@@ -137,6 +138,7 @@ impl CudaDevice {
         src: &Src,
         dst: &mut Dst,
     ) -> Result<()> {
+        self.check_capture_copy("memcpy_dtoh")?;
         self.stream.memcpy_dtoh(src, dst).w()
     }
 
@@ -151,6 +153,19 @@ impl CudaDevice {
             return self.clone_htod_capture_cached(src);
         }
         self.stream.clone_htod(src).w()
+    }
+
+    fn check_capture_copy(&self, op: &str) -> Result<()> {
+        if cuda_graph_htod_cache_enabled() {
+            let is_capturing = self.cuda_graph_capture_active();
+            if is_capturing {
+                crate::bail!(
+                    "{op} during CUDA graph capture: host/device copies are not \
+                     permitted while capturing (use param cache for kernel parameters)"
+                );
+            }
+        }
+        Ok(())
     }
 
     fn memcpy_htod_capture_cached<
@@ -230,7 +245,7 @@ impl CudaDevice {
     }
 }
 
-fn cuda_graph_htod_cache_enabled() -> bool {
+pub(crate) fn cuda_graph_htod_cache_enabled() -> bool {
     CUDA_GRAPH_HTOD_CACHE_DEPTH.with(|depth| depth.get() > 0)
 }
 

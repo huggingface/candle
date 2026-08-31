@@ -2,11 +2,27 @@
 // The cuda build time is very long so one can set the CANDLE_FLASH_ATTN_BUILD_DIR environment
 // variable in order to cache the compiled artifacts and avoid recompiling too often.
 use cudaforge::{KernelBuilder, Result};
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 const CUTLASS_COMMIT: &str = "7d49e6c7e2f8896c47f586706e67e1fb215529dc";
 
-const KERNEL_FILES: [&str; 37] = [
+const KERNEL_FILES: [&str; 53] = [
     "kernels/flash_api.cu",
+    "kernels/flash_fwd_splitkv_hdim512_fp16_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim512_bf16_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim512_fp16_causal_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim512_bf16_causal_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim64_fp16_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim128_fp16_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim256_fp16_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim64_bf16_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim128_bf16_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim256_bf16_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim64_fp16_causal_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim128_fp16_causal_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim256_fp16_causal_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim64_bf16_causal_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim128_bf16_causal_sm80.cu",
+    "kernels/flash_fwd_splitkv_hdim256_bf16_causal_sm80.cu",
     "kernels/flash_fwd_hdim128_fp16_sm80.cu",
     "kernels/flash_fwd_hdim160_fp16_sm80.cu",
     "kernels/flash_fwd_hdim192_fp16_sm80.cu",
@@ -45,21 +61,52 @@ const KERNEL_FILES: [&str; 37] = [
     "kernels/flash_fwd_hdim96_bf16_causal_sm80.cu",
 ];
 
+const HEADER_FILES: [&str; 18] = [
+    "kernels/alibi.h",
+    "kernels/block_info.h",
+    "kernels/dropout.h",
+    "kernels/error.h",
+    "kernels/flash.h",
+    "kernels/flash_fwd_kernel.h",
+    "kernels/flash_fwd_launch_template.h",
+    "kernels/hardware_info.h",
+    "kernels/kernel_helpers.h",
+    "kernels/kernel_traits.h",
+    "kernels/kernel_traits_sm90.h",
+    "kernels/kernels.h",
+    "kernels/mask.h",
+    "kernels/philox.cuh",
+    "kernels/rotary.h",
+    "kernels/softmax.h",
+    "kernels/static_switch.h",
+    "kernels/utils.h",
+];
+
+fn update_hash(hash: &mut u64, bytes: &[u8]) {
+    const FNV_PRIME: u64 = 1099511628211;
+    for &byte in bytes {
+        *hash ^= u64::from(byte);
+        *hash = hash.wrapping_mul(FNV_PRIME);
+    }
+}
+
+fn header_hash() -> Result<u64> {
+    let mut hash = 14695981039346656037;
+    for file in HEADER_FILES {
+        update_hash(&mut hash, file.as_bytes());
+        update_hash(&mut hash, &fs::read(file)?);
+    }
+    Ok(hash)
+}
+
 fn main() -> Result<()> {
     println!("cargo::rerun-if-changed=build.rs");
     for kernel_file in KERNEL_FILES.iter() {
         println!("cargo::rerun-if-changed={kernel_file}");
     }
-    println!("cargo::rerun-if-changed=kernels/flash_fwd_kernel.h");
-    println!("cargo::rerun-if-changed=kernels/flash_fwd_launch_template.h");
-    println!("cargo::rerun-if-changed=kernels/flash.h");
-    println!("cargo::rerun-if-changed=kernels/philox.cuh");
-    println!("cargo::rerun-if-changed=kernels/softmax.h");
-    println!("cargo::rerun-if-changed=kernels/utils.h");
-    println!("cargo::rerun-if-changed=kernels/kernel_traits.h");
-    println!("cargo::rerun-if-changed=kernels/block_info.h");
-    println!("cargo::rerun-if-changed=kernels/static_switch.h");
-    println!("cargo::rerun-if-changed=kernels/hardware_info.h");
+    for header_file in HEADER_FILES.iter() {
+        println!("cargo::rerun-if-changed={header_file}");
+    }
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR not set"));
     let build_dir = match std::env::var("CANDLE_FLASH_ATTN_BUILD_DIR") {
         Err(_) =>
@@ -78,6 +125,7 @@ fn main() -> Result<()> {
     };
 
     let kernels: Vec<_> = KERNEL_FILES.iter().collect();
+    let header_hash_arg = format!("-DCANDLE_FLASH_ATTN_HEADER_HASH=0x{:016x}", header_hash()?);
     let mut builder = KernelBuilder::new()
         .source_files(kernels)
         .out_dir(&build_dir)
@@ -92,6 +140,7 @@ fn main() -> Result<()> {
         .arg("--expt-extended-lambda")
         .arg("--use_fast_math")
         .arg("--verbose")
+        .arg(&header_hash_arg)
         .thread_percentage(0.5); // Use up to 50% of available threads
 
     let mut is_target_msvc = false;

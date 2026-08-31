@@ -73,7 +73,7 @@ pub fn flash_attn<T>(
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
-    T: WithDType,
+    T: WithDType + num_traits::Float,
 {
     let b = q.dims()[0];
 
