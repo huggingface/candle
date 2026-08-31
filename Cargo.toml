@@ -74,7 +74,7 @@ image = { version = "0.25.2", default-features = false, features = [
     "jpeg",
     "png",
 ] }
-imageproc = { version = "0.26.0", features = [
+imageproc = { version = "0.27.0", features = [
     "text",
 ], default-features = false }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
