@@ -307,7 +307,8 @@ impl Model {
         let mut codes0 = vec![];
         let mut codes1 = vec![];
         let mut codes2 = vec![];
-        for audio_tokens in audio_tokens.chunks_exact(7) {
+        let (audio_token_chunks, _) = audio_tokens.as_chunks::<7>();
+        for audio_tokens in audio_token_chunks {
             codes0.push(audio_tokens[0]);
             for i in [1, 4] {
                 codes1.push(audio_tokens[i]);
