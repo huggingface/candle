@@ -59,7 +59,7 @@ cudarc = { version = "0.19.8", features = [
     "cuda-version-from-build-system",
     "dynamic-linking",
 ], default-features = false }
-fancy-regex = "0.18.0"
+fancy-regex = "0.19.0"
 gemm = { version = "0.19.0", features = ["wasm-simd128-enable"] }
 hf-hub = { version = "1.0.0", features = ["blocking"] }
 half = { version = "2.5.0", features = [
