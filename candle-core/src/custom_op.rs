@@ -359,12 +359,20 @@ impl Tensor {
 
     /// Applies a unary custom op in place (for the first tensor).
     pub fn inplace_op2<C: InplaceOp2>(&self, rhs: &Self, c: &C) -> Result<()> {
+        // Write-locking self and read-locking rhs on the same storage would deadlock.
+        if self.same_storage(rhs) {
+            crate::bail!("cannot use inplace_op2 when self and rhs share their storage")
+        }
         self.storage_mut()
             .inplace_op2(self.layout(), &rhs.storage(), rhs.layout(), c)
     }
 
     /// Applies a ternary custom op in place (for the first tensor).
     pub fn inplace_op3<C: InplaceOp3>(&self, t2: &Self, t3: &Self, c: &C) -> Result<()> {
+        // Write-locking self and read-locking t2/t3 on the same storage would deadlock.
+        if self.same_storage(t2) || self.same_storage(t3) {
+            crate::bail!("cannot use inplace_op3 when self and t2/t3 share their storage")
+        }
         self.storage_mut().inplace_op3(
             self.layout(),
             &t2.storage(),
