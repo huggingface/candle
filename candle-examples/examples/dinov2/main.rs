@@ -36,9 +36,12 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("lmz/candle-dino-v2".into());
-            api.get("dinov2_vits14.safetensors")?
+            let client = hf_hub::HFClientSync::new()?;
+            let (owner, name) = hf_hub::split_id("lmz/candle-dino-v2");
+            let repo = client.model(owner, name);
+            repo.download_file()
+                .filename("dinov2_vits14.safetensors")
+                .send()?
         }
         Some(model) => model.into(),
     };

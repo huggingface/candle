@@ -14,7 +14,7 @@ use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 enum Model {
@@ -242,7 +242,7 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let client = HFClientSync::new()?;
     let model_id = match &args.model_id {
         Some(model_id) => model_id.to_string(),
         None => match args.which {
@@ -250,18 +250,24 @@ fn main() -> Result<()> {
             Which::Instruct2B => "google/recurrentgemma-2b-it".to_string(),
         },
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let revision = args.revision;
+    let (owner, name) = hf_hub::split_id(&model_id);
+    let repo = client.model(owner, name);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => repo
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(revision.as_str())
+            .send()?,
     };
     let config_filename = match args.config_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("config.json")?,
+        None => repo
+            .download_file()
+            .filename("config.json")
+            .revision(revision.as_str())
+            .send()?,
     };
     let filenames = match args.weight_files {
         Some(files) => files
@@ -274,10 +280,19 @@ fn main() -> Result<()> {
                     Which::Base2B => "recurrent-gemma-2b-q4k.gguf",
                     Which::Instruct2B => "recurrent-gemma-7b-q4k.gguf",
                 };
-                let filename = api.model("lmz/candle-gemma".to_string()).get(filename)?;
+                let (owner, name) = hf_hub::split_id("lmz/candle-gemma");
+                let filename = client
+                    .model(owner, name)
+                    .download_file()
+                    .filename(filename)
+                    .send()?;
                 vec![filename]
             } else {
-                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
+                candle_examples::hub_load_safetensors(
+                    &repo,
+                    revision.as_str(),
+                    "model.safetensors.index.json",
+                )?
             }
         }
     };

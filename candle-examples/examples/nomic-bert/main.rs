@@ -10,7 +10,7 @@ use anyhow::{bail, Error as E, Result};
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::{PaddingParams, Tokenizer};
 
 #[derive(Parser, Debug)]
@@ -58,13 +58,25 @@ fn main() -> Result<()> {
     };
 
     let device = candle_examples::device(args.cpu)?;
-    let repo = Repo::with_revision(args.model_id.clone(), RepoType::Model, args.revision);
     let (config_filename, tokenizer_filename, weights_filename) = {
-        let api = Api::new()?;
-        let api = api.repo(repo);
-        let config = api.get("config.json")?;
-        let tokenizer = api.get("tokenizer.json")?;
-        let weights = api.get("model.safetensors")?;
+        let client = HFClientSync::new()?;
+        let (owner, name) = hf_hub::split_id(&args.model_id);
+        let repo = client.model(owner, name);
+        let config = repo
+            .download_file()
+            .filename("config.json")
+            .revision(args.revision.as_str())
+            .send()?;
+        let tokenizer = repo
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(args.revision.as_str())
+            .send()?;
+        let weights = repo
+            .download_file()
+            .filename("model.safetensors")
+            .revision(args.revision.as_str())
+            .send()?;
         (config, tokenizer, weights)
     };
 

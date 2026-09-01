@@ -52,15 +52,30 @@ pub fn main() -> anyhow::Result<()> {
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
         None => match args.which {
-            Which::SqueezeNet => hf_hub::api::sync::Api::new()?
-                .model("lmz/candle-onnx".into())
-                .get("squeezenet1.1-7.onnx")?,
-            Which::EfficientNet => hf_hub::api::sync::Api::new()?
-                .model("onnx/EfficientNet-Lite4".into())
-                .get("efficientnet-lite4-11.onnx")?,
-            Which::EsrGan => hf_hub::api::sync::Api::new()?
-                .model("qualcomm/Real-ESRGAN-x4plus".into())
-                .get("Real-ESRGAN-x4plus.onnx")?,
+            Which::SqueezeNet => {
+                let (owner, name) = hf_hub::split_id("lmz/candle-onnx");
+                hf_hub::HFClientSync::new()?
+                    .model(owner, name)
+                    .download_file()
+                    .filename("squeezenet1.1-7.onnx")
+                    .send()?
+            }
+            Which::EfficientNet => {
+                let (owner, name) = hf_hub::split_id("onnx/EfficientNet-Lite4");
+                hf_hub::HFClientSync::new()?
+                    .model(owner, name)
+                    .download_file()
+                    .filename("efficientnet-lite4-11.onnx")
+                    .send()?
+            }
+            Which::EsrGan => {
+                let (owner, name) = hf_hub::split_id("qualcomm/Real-ESRGAN-x4plus");
+                hf_hub::HFClientSync::new()?
+                    .model(owner, name)
+                    .download_file()
+                    .filename("Real-ESRGAN-x4plus.onnx")
+                    .send()?
+            }
         },
     };
 

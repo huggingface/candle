@@ -33,9 +33,10 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("google/vit-base-patch16-224".into());
-            api.get("model.safetensors")?
+            let client = hf_hub::HFClientSync::new()?;
+            let (owner, name) = hf_hub::split_id("google/vit-base-patch16-224");
+            let repo = client.model(owner, name);
+            repo.download_file().filename("model.safetensors").send()?
         }
         Some(model) => model.into(),
     };

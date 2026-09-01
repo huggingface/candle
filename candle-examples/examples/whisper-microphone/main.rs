@@ -8,7 +8,7 @@ use anyhow::{Error as E, Result};
 use candle::{Device, IndexOp, Tensor};
 use candle_nn::{ops::softmax, VarBuilder};
 use clap::{Parser, ValueEnum};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use rand::{distr::Distribution, SeedableRng};
 use tokenizers::Tokenizer;
 
@@ -514,8 +514,9 @@ pub fn main() -> Result<()> {
     };
 
     let (config_filename, tokenizer_filename, weights_filename) = {
-        let api = Api::new()?;
-        let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+        let client = HFClientSync::new()?;
+        let (owner, name) = hf_hub::split_id(&model_id);
+        let repo = client.model(owner, name);
         let (config, tokenizer, model) = if args.quantized {
             let ext = match args.model {
                 WhichModel::TinyEn => "tiny-en",
@@ -523,14 +524,35 @@ pub fn main() -> Result<()> {
                 _ => unimplemented!("no quantized support for {:?}", args.model),
             };
             (
-                repo.get(&format!("config-{ext}.json"))?,
-                repo.get(&format!("tokenizer-{ext}.json"))?,
-                repo.get(&format!("model-{ext}-q80.gguf"))?,
+                repo.download_file()
+                    .filename(format!("config-{ext}.json"))
+                    .revision(revision.as_str())
+                    .send()?,
+                repo.download_file()
+                    .filename(format!("tokenizer-{ext}.json"))
+                    .revision(revision.as_str())
+                    .send()?,
+                repo.download_file()
+                    .filename(format!("model-{ext}-q80.gguf"))
+                    .revision(revision.as_str())
+                    .send()?,
             )
         } else {
-            let config = repo.get("config.json")?;
-            let tokenizer = repo.get("tokenizer.json")?;
-            let model = repo.get("model.safetensors")?;
+            let config = repo
+                .download_file()
+                .filename("config.json")
+                .revision(revision.as_str())
+                .send()?;
+            let tokenizer = repo
+                .download_file()
+                .filename("tokenizer.json")
+                .revision(revision.as_str())
+                .send()?;
+            let model = repo
+                .download_file()
+                .filename("model.safetensors")
+                .revision(revision.as_str())
+                .send()?;
             (config, tokenizer, model)
         };
         (config, tokenizer, model)

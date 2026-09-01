@@ -16,7 +16,7 @@ use candle_transformers::models::debertav2::{Config as DebertaV2Config, DebertaV
 use candle_transformers::models::debertav2::{DebertaV2SeqClassificationModel, Id2Label};
 use candle_transformers::models::debertav2::{NERItem, TextClassificationItem};
 use clap::{ArgGroup, Parser, ValueEnum};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::{Encoding, PaddingParams, Tokenizer};
 
 enum TaskType {
@@ -114,19 +114,31 @@ impl Args {
                     (config, tokenizer, weights)
                 }
                 None => {
-                    let repo = Repo::with_revision(
-                        self.model_id.as_ref().unwrap().clone(),
-                        RepoType::Model,
-                        self.revision.clone(),
-                    );
-                    let api = Api::new()?;
-                    let api = api.repo(repo);
-                    let config = api.get("config.json")?;
-                    let tokenizer = api.get("tokenizer.json")?;
+                    let client = HFClientSync::new()?;
+                    let model_id = self.model_id.as_ref().unwrap().clone();
+                    let (owner, name) = hf_hub::split_id(&model_id);
+                    let repo = client.model(owner, name);
+                    let revision = self.revision.clone();
+                    let config = repo
+                        .download_file()
+                        .filename("config.json")
+                        .revision(revision.as_str())
+                        .send()?;
+                    let tokenizer = repo
+                        .download_file()
+                        .filename("tokenizer.json")
+                        .revision(revision.as_str())
+                        .send()?;
                     let weights = if self.use_pth {
-                        api.get("pytorch_model.bin")?
+                        repo.download_file()
+                            .filename("pytorch_model.bin")
+                            .revision(revision.as_str())
+                            .send()?
                     } else {
-                        api.get("model.safetensors")?
+                        repo.download_file()
+                            .filename("model.safetensors")
+                            .revision(revision.as_str())
+                            .send()?
                     };
                     (config, tokenizer, weights)
                 }

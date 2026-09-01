@@ -46,7 +46,7 @@ struct Args {
 
 impl Args {
     fn build_model_and_tokenizer(&self) -> anyhow::Result<(BertModel, tokenizers::Tokenizer)> {
-        use hf_hub::{api::sync::Api, Repo, RepoType};
+        use hf_hub::HFClientSync;
         let model_name = match self.model.as_ref() {
             Some(model) => model.to_string(),
             None => "jinaai/jina-embeddings-v2-base-en".to_string(),
@@ -54,15 +54,21 @@ impl Args {
 
         let model = match &self.model_file {
             Some(model_file) => std::path::PathBuf::from(model_file),
-            None => Api::new()?
-                .repo(Repo::new(model_name.to_string(), RepoType::Model))
-                .get("model.safetensors")?,
+            None => {
+                let client = HFClientSync::new()?;
+                let (owner, name) = hf_hub::split_id(&model_name);
+                let repo = client.model(owner, name);
+                repo.download_file().filename("model.safetensors").send()?
+            }
         };
         let tokenizer = match &self.tokenizer {
             Some(file) => std::path::PathBuf::from(file),
-            None => Api::new()?
-                .repo(Repo::new(model_name.to_string(), RepoType::Model))
-                .get("tokenizer.json")?,
+            None => {
+                let client = HFClientSync::new()?;
+                let (owner, name) = hf_hub::split_id(&model_name);
+                let repo = client.model(owner, name);
+                repo.download_file().filename("tokenizer.json").send()?
+            }
         };
         let device = candle_examples::device(self.cpu)?;
         let tokenizer = tokenizers::Tokenizer::from_file(tokenizer).map_err(E::msg)?;

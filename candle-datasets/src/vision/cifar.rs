@@ -5,7 +5,7 @@
 //! The binary version of the dataset is used.
 use crate::vision::Dataset;
 use candle::{DType, Device, Error, Result, Tensor};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -93,19 +93,19 @@ fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(Tensor,
 }
 
 pub fn load() -> Result<Dataset> {
-    let api = Api::new().map_err(|e| Error::Msg(format!("Api error: {e}")))?;
-    let dataset_id = "cifar10".to_string();
-    let repo = Repo::with_revision(
-        dataset_id,
-        RepoType::Dataset,
-        "refs/convert/parquet".to_string(),
-    );
-    let repo = api.repo(repo);
+    let client = HFClientSync::new().map_err(|e| Error::Msg(format!("Api error: {e}")))?;
+    let repo = client.dataset("", "cifar10");
     let test_parquet_filename = repo
-        .get("plain_text/test/0000.parquet")
+        .download_file()
+        .filename("plain_text/test/0000.parquet")
+        .revision("refs/convert/parquet")
+        .send()
         .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
     let train_parquet_filename = repo
-        .get("plain_text/train/0000.parquet")
+        .download_file()
+        .filename("plain_text/train/0000.parquet")
+        .revision("refs/convert/parquet")
+        .send()
         .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
     let test_parquet = SerializedFileReader::new(std::fs::File::open(test_parquet_filename)?)
         .map_err(|e| Error::Msg(format!("Parquet error: {e}")))?;
