@@ -17,10 +17,10 @@ fn main() -> Result<()> {
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
         .arg("-O3")
+        .arg("-Xcompiler").arg("/Zc:preprocessor")
         .build_ptx()?;
 
     bindings.write(&ptx_path)?;
-
     let mut moe_builder = KernelBuilder::default()
         .source_files(vec![
             "src/moe/moe_gguf.cu",
@@ -41,7 +41,8 @@ fn main() -> Result<()> {
         ])
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
-        .arg("-O3");
+        .arg("-O3")
+        .arg("-Xcompiler").arg("/Zc:preprocessor");
 
     // Disable bf16 WMMA kernels on GPUs older than sm_80 (Ampere).
     // bf16 WMMA fragments require compute capability >= 8.0.

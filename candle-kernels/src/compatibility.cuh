@@ -7,7 +7,8 @@
 
 // FIXME: the minimum compute capabilities are just guesses since the table is not specific enough
 
-#if __CUDA_ARCH__ < 800
+// CUDA 13.3+ already defines __hmax_nan/__hmin_nan in cuda_fp16.hpp
+#if __CUDA_ARCH__ < 800 && CUDART_VERSION < 13000
 __device__ __forceinline__ __half __hmax_nan(__half a, __half b) {
     return __hisnan(a) ? a : (__hisnan(b) ? b : __hmax(a, b));
 }
