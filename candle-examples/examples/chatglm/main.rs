@@ -10,9 +10,9 @@ use clap::Parser;
 use candle_transformers::models::chatglm::{Config, Model};
 
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -199,11 +199,11 @@ fn main() -> Result<()> {
         Some(rev) => rev.to_string(),
         None => "main".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+    let repo = api.model(model_id).with_revision(revision);
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .model("lmz/candle-chatglm".to_string())
+            .model("lmz/candle-chatglm")
             .get("chatglm-tokenizer.json")?,
     };
     let filenames = match args.weight_file {

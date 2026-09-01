@@ -251,7 +251,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = hf_hub::api::tokio::Api::new()?;
+    let api = hf_hub::HFClient::new()?;
     let (model_id, revision) = match args.model_id {
         Some(model_id) => (model_id.to_string(), None),
         None => {
@@ -270,24 +270,28 @@ async fn main() -> anyhow::Result<()> {
         (None, Some(r)) => r.to_string(),
         (None, None) => "main".to_string(),
     };
-    let repo = api.repo(hf_hub::Repo::with_revision(
-        model_id,
-        hf_hub::RepoType::Model,
-        revision,
-    ));
+    let (owner, name) = hf_hub::split_id(&model_id);
+    let repo = api.model(owner, name);
+    let get = async |filename: &str| {
+        repo.download_file()
+            .filename(filename)
+            .revision(revision.clone())
+            .send()
+            .await
+    };
     let model_file = match args.model_file {
         Some(m) => m.into(),
         None => {
             if args.quantized {
-                repo.get("model-q4_0.gguf").await?
+                get("model-q4_0.gguf").await?
             } else {
-                repo.get("model.safetensors").await?
+                get("model.safetensors").await?
             }
         }
     };
     let tokenizer = match args.tokenizer_file {
         Some(m) => m.into(),
-        None => repo.get("tokenizer.json").await?,
+        None => get("tokenizer.json").await?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;

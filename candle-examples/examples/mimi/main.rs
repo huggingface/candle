@@ -6,10 +6,10 @@ extern crate accelerate_src;
 
 use anyhow::Result;
 use candle::{DType, IndexOp, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::models::mimi::{Config, Model};
 use clap::{Parser, ValueEnum};
-use hf_hub::api::sync::Api;
 
 mod audio_io;
 

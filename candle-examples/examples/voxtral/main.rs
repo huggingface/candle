@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
+use candle_examples::hub::Api;
 use clap::Parser;
-use hf_hub::api::sync::Api;
 use model::VoxtralModel;
 
 mod download;

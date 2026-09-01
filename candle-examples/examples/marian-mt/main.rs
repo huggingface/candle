@@ -70,7 +70,7 @@ struct Args {
 }
 
 pub fn main() -> anyhow::Result<()> {
-    use hf_hub::api::sync::Api;
+    use candle_examples::hub::Api;
     let args = Args::parse();
 
     let config = match (args.which, args.language_pair) {
@@ -107,9 +107,7 @@ pub fn main() -> anyhow::Result<()> {
                         anyhow::bail!("big is not supported for language pair {lp:?}")
                     }
                 };
-                Api::new()?
-                    .model(tokenizer_default_repo.to_string())
-                    .get(filename)?
+                Api::new()?.model(tokenizer_default_repo).get(filename)?
             }
         };
         Tokenizer::from_file(&tokenizer).map_err(E::msg)?
@@ -131,9 +129,7 @@ pub fn main() -> anyhow::Result<()> {
                         anyhow::bail!("big is not supported for language pair {lp:?}")
                     }
                 };
-                Api::new()?
-                    .model(tokenizer_default_repo.to_string())
-                    .get(filename)?
+                Api::new()?.model(tokenizer_default_repo).get(filename)?
             }
         };
         Tokenizer::from_file(&tokenizer).map_err(E::msg)?
@@ -147,39 +143,27 @@ pub fn main() -> anyhow::Result<()> {
             None => {
                 let api = Api::new()?;
                 let api = match (args.which, args.language_pair) {
-                    (Which::Base, LanguagePair::FrEn) => api.repo(hf_hub::Repo::with_revision(
-                        "Helsinki-NLP/opus-mt-fr-en".to_string(),
-                        hf_hub::RepoType::Model,
-                        "refs/pr/4".to_string(),
-                    )),
+                    (Which::Base, LanguagePair::FrEn) => api
+                        .model("Helsinki-NLP/opus-mt-fr-en")
+                        .with_revision("refs/pr/4"),
                     (Which::Big, LanguagePair::FrEn) => {
-                        api.model("Helsinki-NLP/opus-mt-tc-big-fr-en".to_string())
+                        api.model("Helsinki-NLP/opus-mt-tc-big-fr-en")
                     }
-                    (Which::Base, LanguagePair::EnZh) => api.repo(hf_hub::Repo::with_revision(
-                        "Helsinki-NLP/opus-mt-en-zh".to_string(),
-                        hf_hub::RepoType::Model,
-                        "refs/pr/13".to_string(),
-                    )),
-                    (Which::Base, LanguagePair::EnHi) => api.repo(hf_hub::Repo::with_revision(
-                        "Helsinki-NLP/opus-mt-en-hi".to_string(),
-                        hf_hub::RepoType::Model,
-                        "refs/pr/3".to_string(),
-                    )),
-                    (Which::Base, LanguagePair::EnEs) => api.repo(hf_hub::Repo::with_revision(
-                        "Helsinki-NLP/opus-mt-en-es".to_string(),
-                        hf_hub::RepoType::Model,
-                        "refs/pr/4".to_string(),
-                    )),
-                    (Which::Base, LanguagePair::EnFr) => api.repo(hf_hub::Repo::with_revision(
-                        "Helsinki-NLP/opus-mt-en-fr".to_string(),
-                        hf_hub::RepoType::Model,
-                        "refs/pr/9".to_string(),
-                    )),
-                    (Which::Base, LanguagePair::EnRu) => api.repo(hf_hub::Repo::with_revision(
-                        "Helsinki-NLP/opus-mt-en-ru".to_string(),
-                        hf_hub::RepoType::Model,
-                        "refs/pr/7".to_string(),
-                    )),
+                    (Which::Base, LanguagePair::EnZh) => api
+                        .model("Helsinki-NLP/opus-mt-en-zh")
+                        .with_revision("refs/pr/13"),
+                    (Which::Base, LanguagePair::EnHi) => api
+                        .model("Helsinki-NLP/opus-mt-en-hi")
+                        .with_revision("refs/pr/3"),
+                    (Which::Base, LanguagePair::EnEs) => api
+                        .model("Helsinki-NLP/opus-mt-en-es")
+                        .with_revision("refs/pr/4"),
+                    (Which::Base, LanguagePair::EnFr) => api
+                        .model("Helsinki-NLP/opus-mt-en-fr")
+                        .with_revision("refs/pr/9"),
+                    (Which::Base, LanguagePair::EnRu) => api
+                        .model("Helsinki-NLP/opus-mt-en-ru")
+                        .with_revision("refs/pr/7"),
                     (Which::Big, lp) => {
                         anyhow::bail!("big is not supported for language pair {lp:?}")
                     }
