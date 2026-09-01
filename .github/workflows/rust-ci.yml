@@ -26,7 +26,7 @@ jobs:
 
       - name: Run macos with metal
         if: matrix.os == 'macOS-latest' 
-        run: cargo check --workspace --features metal
+        run: cargo check --workspace --features metal --all-targets
 
       - name: Run normal cpu
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'

@@ -353,6 +353,33 @@ fn buf_size(size: usize) -> usize {
     size.next_power_of_two()
 }
 
+/// How many power-of-two size classes above its own a request may be served from when
+/// reusing a pooled buffer. See [`reuse_cap`].
+const REUSE_SLACK: u32 = 2;
+
+/// The largest pooled buffer a request of `size` bytes may be reused from.
+///
+/// Without a cap, [`find_available_buffer`] hands out the smallest *available* buffer of
+/// any size, however much larger than the request. A long-lived tensor that allocates at a
+/// moment when only much larger buffers happen to be free captures one for the rest of its
+/// life, and every later allocation of that larger size must then allocate a fresh buffer.
+///
+/// Measured on a Qwen2.5-7B Q4_K_M prefill (Metal, ctx 5831, chunk 512): 44 KV-cache
+/// tensors of 9-12 MB each were served from the 256 MB class that the attention scores
+/// use, forcing 46 new 256 MB allocations. Peak activations 15.12 GB, against 4.38 GB
+/// with this cap in place, and the memory-vs-chunk-size curve was non-monotonic.
+///
+/// The cap is deliberately loose. Restricting reuse to the exact size class also removes
+/// the pathology, but costs +36 % at chunk 128 (2.95 GB against 2.19 GB) by forbidding
+/// harmless reuse; allowing only one class above costs +29 %. Two classes is the knee.
+///
+/// Every pooled buffer is allocated at [`buf_size`], so the map is keyed by powers of two
+/// and only power-of-two steps are representable: a cap of `3 * buf_size` would admit
+/// exactly the same buffers as `2 * buf_size`. Hence the shift.
+fn reuse_cap(size: usize) -> usize {
+    buf_size(size).saturating_mul(1usize << REUSE_SLACK)
+}
+
 /// Applies the [`BufferBuilder`] label, clearing any stale label on a reused pooled buffer.
 #[cfg(feature = "metal-debug-labels")]
 #[inline]
@@ -483,13 +510,58 @@ mod tests {
         // a 2-byte buffer. This must not be rounded down to 1.
         assert_eq!(buf_size(2), 2);
     }
+
+    #[test]
+    fn test_reuse_cap_excludes_grossly_oversized_buffers() {
+        // The measured case: a 9 MB KV-cache tensor must not be served from the 256 MB
+        // class the attention scores allocate, or it holds 256 MB for the whole forward.
+        let kv = 9_437_184;
+        assert!(reuse_cap(kv) < 256 << 20);
+        // Its own class and a few above stay reusable -- the cap bounds waste, it does
+        // not force exact-size matching, which measured worse (2.95 GB vs 2.19 GB at
+        // chunk 128) because it also forbids harmless reuse.
+        assert!(reuse_cap(kv) >= buf_size(kv));
+        // 9 MB rounds to the 16 MB class, and REUSE_SLACK = 2 classes above it is 64 MB.
+        assert_eq!(buf_size(kv), 16 << 20);
+        assert_eq!(reuse_cap(kv), buf_size(kv) << REUSE_SLACK);
+        assert_eq!(reuse_cap(kv), 64 << 20);
+    }
+
+    /// The gate that fails if the cap is not actually applied by the allocator: the pure
+    /// `reuse_cap` tests above pass whether or not `find_available_buffer` consults it.
+    #[test]
+    fn test_allocator_does_not_serve_a_small_request_from_a_huge_free_buffer() {
+        let Ok(crate::Device::Metal(dev)) = crate::Device::new_metal(0) else {
+            return; // no Metal device on this host
+        };
+        // Free a 256 MB buffer into the pool, as an attention-score tensor does.
+        let big = dev.allocate_buffer(256 << 20).unwrap();
+        let big_len = big.length() as usize;
+        drop(big);
+        // A 9 MB KV-cache-sized request must not capture it.
+        let small = dev.allocate_buffer(9_437_184).unwrap();
+        assert_eq!(big_len, 256 << 20);
+        assert!(
+            (small.length() as usize) < big_len,
+            "9MB request was served a {}-byte buffer",
+            small.length()
+        );
+    }
+
+    #[test]
+    fn test_reuse_cap_does_not_overflow() {
+        // A cap computed for a huge request must saturate rather than wrap to a small
+        // number, which would silently disable all reuse.
+        assert_eq!(reuse_cap(usize::MAX / 2), usize::MAX);
+    }
 }
 
 fn find_available_buffer(size: usize, buffers: &BufferMap) -> Option<Arc<Buffer>> {
+    let cap = reuse_cap(size);
     let mut best_buffer: Option<&Arc<Buffer>> = None;
     let mut best_buffer_size = usize::MAX;
     for (buffer_size, subbuffers) in buffers.iter() {
-        if buffer_size >= &size && buffer_size < &best_buffer_size {
+        if buffer_size >= &size && buffer_size <= &cap && buffer_size < &best_buffer_size {
             for sub in subbuffers {
                 if Arc::strong_count(sub) == 1 {
                     best_buffer = Some(sub);
