@@ -280,6 +280,8 @@ impl ClipEncoder {
 
 /// A CLIP transformer based model.
 #[derive(Clone, Debug)]
+#[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="This sync function will not work for webgpu, use an async imp."))]
+#[cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))]
 pub struct ClipTextTransformer {
     embeddings: ClipTextEmbeddings,
     encoder: ClipEncoder,

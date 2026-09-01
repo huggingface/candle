@@ -9,6 +9,10 @@ fn run(w: &Tensor, bias: &Tensor) {
 }
 
 fn run_bias_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
+    if !device.is_dtype_available(dtype){
+        return;
+    }
+    
     // We simulate a candle-nn style conv2d + bias forward pass.
     let batch_size = 1;
     let ch = 1;
@@ -38,6 +42,10 @@ fn run_bias_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &s
 }
 
 fn run_scalar_broadcast_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
+    if !device.is_dtype_available(dtype){
+        return;
+    }
+    
     let x = Tensor::ones((1, 256, 64), dtype, device).unwrap();
     let bias = Tensor::ones((1,), dtype, device).unwrap();
 
@@ -59,6 +67,10 @@ fn run_scalar_broadcast_benchmark(c: &mut Criterion, device: &Device, dtype: DTy
 }
 
 fn run_contiguous_add_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
+    if !device.is_dtype_available(dtype){
+        return;
+    }
+
     let bias_size = 128;
     let m = 126;
 

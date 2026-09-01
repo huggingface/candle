@@ -1,0 +1,10 @@
+[package]
+name = "wgpu-compute-layer-pwgsl"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fancy-regex = "0.13.0"
+evalexpr = "11.3.0"
+once_cell = "1.18.0"
+ahash = "0.8"

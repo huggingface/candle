@@ -50,6 +50,7 @@ fn assert_close(a: &Tensor, b: &Tensor, tol: f32, label: &str) -> Result<()> {
 
 // Causal decode (q_len=1)
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn causal_decode_b1() -> Result<()> {
     let (h, d, kv_len) = (4, 16, 32);

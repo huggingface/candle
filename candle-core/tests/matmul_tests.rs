@@ -123,20 +123,25 @@ fn zero_matmul_validation(device: &Device) -> Result<()> {
     use DType::{F16, F32};
 
     let shape_error = "shape mismatch in matmul";
-    assert_matmul_error(device, (&[0, 2], F32), (&[3, 4], F16), shape_error)?;
+    if device.is_dtype_available(DType::F16){
+        assert_matmul_error(device, (&[0, 2], F32), (&[3, 4], F16), shape_error)?;
+    }
+   
     assert_matmul_error(device, (&[2, 3], F32), (&[4, 0], F32), shape_error)?;
     assert_matmul_error(device, (&[0, 2, 3], F32), (&[1, 3, 4], F32), shape_error)?;
-    assert_matmul_error(
-        device,
-        (&[0, 2], F32),
-        (&[2, 3], F16),
-        "dtype mismatch in matmul",
-    )?;
+    if device.is_dtype_available(DType::F16){
+        assert_matmul_error(
+            device,
+            (&[0, 2], F32),
+            (&[2, 3], F16),
+            "dtype mismatch in matmul",
+        )?;
+    }
     Ok(())
 }
 
 fn zero_matmul_device_validation(device: &Device) -> Result<()> {
-    if device.is_cpu() {
+    if device.is_cpu() || !device.is_dtype_available(DType::F16) {
         return Ok(());
     }
     let lhs = Tensor::zeros((0, 2), DType::F32, &Device::Cpu)?;
@@ -225,42 +230,191 @@ fn mm_layout(device: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(matmul, matmul_cpu, matmul_gpu, matmul_metal);
+test_device!(matmul, matmul_cpu, matmul_gpu, matmul_metal, matmul_wgpu);
 test_device!(
     matmul_bf16,
     matmul_bf16_cpu,
     matmul_bf16_gpu,
-    matmul_bf16_metal
+    matmul_bf16_metal,
+    matmul_bf16_wgpu
 );
 test_device!(
     broadcast_matmul,
     broadcast_matmul_cpu,
     broadcast_matmul_gpu,
-    broadcast_matmul_metal
+    broadcast_matmul_metal,
+    broadcast_matmul_wgpu
 );
 test_device!(
     zero_matmul,
     zero_matmul_cpu,
     zero_matmul_gpu,
-    zero_matmul_metal
+    zero_matmul_metal,
+    zero_matmul_wgpu
 );
 test_device!(
     zero_matmul_validation,
     zero_matmul_validation_cpu,
     zero_matmul_validation_gpu,
-    zero_matmul_validation_metal
+    zero_matmul_validation_metal,
+    zero_matmul_validation_wgpu
 );
 test_device!(
     zero_matmul_device_validation,
     zero_matmul_device_validation_cpu,
     zero_matmul_device_validation_gpu,
-    zero_matmul_device_validation_metal
+    zero_matmul_device_validation_metal,
+    zero_matmul_device_validation_wgpu
 );
 test_device!(
     broadcast_matmul_rank2_rhs,
     broadcast_matmul_rank2_rhs_cpu,
     broadcast_matmul_rank2_rhs_gpu,
-    broadcast_matmul_rank2_rhs_metal
+    broadcast_matmul_rank2_rhs_metal,
+    broadcast_matmul_rank2_rhs_wgpu
 );
-test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal);
-test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal);
+test_device!(
+    squeeze_mm,
+    squeeze_mm_cpu,
+    squeeze_mm_gpu,
+    squeeze_mm_metal,
+    squeeze_mm_wgpu
+);
+test_device!(
+    mm_layout,
+    mm_layout_cpu,
+    mm_layout_gpu,
+    mm_layout_metal,
+    mm_layout_wgpu
+);
+
+#[cfg(feature = "wgpu")]
+#[test]
+//test different wgpu matmul shaders, compares results with cpu impl
+fn test_matmul_kernels_wgpu() -> Result<()> {
+    use candle_core::wgpu::MatmulAlgorithm;
+
+    let algs = vec![
+        MatmulAlgorithm::Matmul32_64,
+        MatmulAlgorithm::Matmul32_64B,
+        MatmulAlgorithm::Matmul1_64B,
+        MatmulAlgorithm::Matmul1_64_32B,
+        MatmulAlgorithm::Matmul1_32_32B,
+        MatmulAlgorithm::Matmul7,
+        MatmulAlgorithm::Matmul1,
+        MatmulAlgorithm::MatmulX,
+        MatmulAlgorithm::Matmul16_16,
+        MatmulAlgorithm::Matmul32_32,
+        MatmulAlgorithm::Matmul64_64,
+        MatmulAlgorithm::Matmul64_64_8_8,
+        MatmulAlgorithm::Matmul24_24,
+        MatmulAlgorithm::Matmul24_48,
+        MatmulAlgorithm::Matmul24_24B,
+        MatmulAlgorithm::Matmul24_48B,
+    ];
+
+    let device = Device::new_wgpu(0)?;
+
+    if let Device::Wgpu(wgpu) = &device {
+        for alg in algs {
+            wgpu.inner_device().set_extension(alg.clone());
+            for tpa in [true, false] {
+                for tpb in [true, false] {
+                    for use_start_offset in [true, false] {
+                        for tpb_batch in [true, false] {
+                            for tpa_batch in [true, false] {
+                                big_matmul_wgpu(
+                                    &device,
+                                    tpa,
+                                    tpb,
+                                    use_start_offset,
+                                    tpb_batch,
+                                    tpa_batch,
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
+
+            matmul(&device)?;
+            broadcast_matmul(&device)?;
+            squeeze_mm(&device)?;
+            mm_layout(&device)?;
+        }
+    }
+
+    Ok(())
+}
+
+//compares wgpu matmul impl, with cpu impl
+#[cfg(feature = "wgpu")]
+fn big_matmul_wgpu(
+    device: &Device,
+    tpa: bool,
+    tpb: bool,
+    use_start_offset: bool,
+    tpb_batch: bool,
+    tpa_batch: bool,
+) -> Result<()> {
+    use candle_core::D;
+    let b = 1;
+    let m = 63;
+    let n = 63;
+    let k = 63;
+
+    let start_offset = if use_start_offset { 100 } else { 0 };
+    let lhs1 = Tensor::rand(0f32, 100f32, b * k * m + start_offset, &Device::Cpu)?
+        .to_dtype(DType::U32)?
+        .to_dtype(DType::F32)?
+        .i(start_offset..)?;
+    let rhs1 = Tensor::rand(0f32, 100f32, b * k * n + start_offset, &Device::Cpu)?
+        .to_dtype(DType::U32)?
+        .to_dtype(DType::F32)?
+        .i(start_offset..)?;
+
+    let lhs;
+    if tpa_batch {
+        if tpa {
+            lhs = lhs1
+                .reshape((m, k, b))?
+                .transpose(D::Minus1, D::Minus2)?
+                .transpose(0, 1)?;
+        } else {
+            lhs = lhs1.reshape((k, m, b))?.transpose(0, 2)?;
+        }
+    } else if tpa {
+        lhs = lhs1.reshape((b, k, m))?.transpose(D::Minus1, D::Minus2)?;
+    } else {
+        lhs = lhs1.reshape((b, m, k))?;
+    }
+
+    let rhs;
+    if tpb_batch {
+        if tpb {
+            rhs = rhs1
+                .reshape((k, n, b))?
+                .transpose(D::Minus1, D::Minus2)?
+                .transpose(0, 1)?;
+        } else {
+            rhs = rhs1.reshape((n, k, b))?.transpose(0, 2)?;
+        }
+    } else if tpb {
+        rhs = rhs1.reshape((b, n, k))?.transpose(D::Minus1, D::Minus2)?;
+    } else {
+        rhs = rhs1.reshape((b, k, n))?;
+    }
+
+    let t1 = lhs.matmul(&rhs)?.reshape((b, m, n))?;
+
+    let lhs = lhs.to_device(device)?;
+    let rhs = rhs.to_device(device)?;
+
+    let t2 = lhs.matmul(&rhs)?.reshape((b, m, n))?;
+
+    let m = candle_core::test_utils::to_vec3_round(&t1, 3)?;
+    let m2 = candle_core::test_utils::to_vec3_round(&t2, 3)?;
+
+    assert_eq!(m, m2);
+    Ok(())
+}

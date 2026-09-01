@@ -1,0 +1,331 @@
+#ifndef UTILDEFINE
+#define UTILDEFINE
+#ifdef f32
+#define DTYPE f32 
+#endif
+
+#ifdef u32
+#define DTYPE u32 
+#endif
+
+#ifdef u8
+#define DTYPE u32 
+#endif
+
+#ifdef i64
+#define DTYPE i64
+#endif
+
+#ifdef f64
+#define DTYPE f64
+#endif
+
+#ifdef f16
+enable f16;
+#define DTYPE f16
+#endif
+
+
+@group(0) @binding(0)
+var<storage, read_write> v_dest: array<DTYPE>;
+
+@group(0) @binding(0)
+var<storage, read_write> v_dest_4: array<vec4<DTYPE>>;
+
+@group(0) @binding(0)
+var<storage, read_write> v_dest_u32: array<u32>;
+
+@group(0) @binding(0)
+var<storage, read_write> v_dest_f32: array<f32>;
+
+@group(0) @binding(0)
+var<storage, read_write> v_dest_i64: array<i64>;
+
+@group(0) @binding(0)
+var<storage, read_write> v_dest_f64: array<f64>;
+
+
+
+
+
+@group(0) @binding(2)
+var<storage> v_input1: array<DTYPE>;
+
+@group(0) @binding(2)
+var<storage> v_input1_4: array<vec4<DTYPE>>;
+
+@group(0) @binding(2)
+var<storage> v_input1_u32: array<u32>;
+
+@group(0) @binding(2)
+var<storage> v_input1_i64: array<i64>;
+
+
+
+@group(0) @binding(3)
+var<storage> v_input2: array<DTYPE>;
+
+@group(0) @binding(3)
+var<storage> v_input2_4: array<vec4<DTYPE>>;
+
+@group(0) @binding(3)
+var<storage> v_input2_u32: array<u32>;
+
+@group(0) @binding(4)
+var<storage> v_input3: array<DTYPE>;
+
+
+
+
+
+
+const ZERO : DTYPE = 0;
+const ONE : DTYPE = 1;
+
+#ifdef f32
+
+const MINVALUE : f32 = -3.40282e+38;
+const MAXVALUE : f32 =  3.40282e+38;
+#define TODTYPE f32
+
+#elifdef u32
+
+const MINVALUE : u32 = 0;
+const MAXVALUE : u32 = 4294967295;
+#define TODTYPE u32
+
+#elifdef i32
+
+const MINVALUE : i32 = -2147483648;
+const MAXVALUE : i32 =  2147483647;
+#define TODTYPE i32
+
+#elifdef i64
+
+const MINVALUE : i64 = -9223372036854775807;
+const MAXVALUE : i64 =  9223372036854775807;
+#define TODTYPE i64
+
+#elifdef f64
+
+const MINVALUE : f64 = -1.7976931348623157E+308;
+const MAXVALUE : f64 = 1.7976931348623157E+308;
+#define TODTYPE f64
+
+#elifdef f16
+const MINVALUE : f16 = -65504;
+const MAXVALUE : f16 = 65504;
+#define TODTYPE f16
+
+#elifdef u8
+
+const MINVALUE : u32 = 0;
+const MAXVALUE : u32 = 255;
+#define TODTYPE u32
+
+#endif
+
+struct MatrixIndex{
+    id : u32,
+    is_valid : bool
+}
+
+
+/// f16 <-> f32
+/// https://stackoverflow.com/questions/1659440/32-bit-to-16-bit-floating-point-conversion
+fn as_uint(x: f32) -> u32 {
+    return bitcast<u32>(x);
+}
+
+fn as_float(x: u32) -> f32 {
+    return bitcast<f32>(x);
+}
+
+fn half_to_float(x: u32) -> f32 {
+
+    let e: u32 = (x & 0x7C00u) >> 10u; // Extract exponent
+    let m: u32 = (x & 0x03FFu) << 13u; // Extract and shift mantissa
+    let v: u32 = as_uint(f32(m)) >> 23u; // Approximate log2 for denormals
+
+    let sign: u32 = (x & 0x8000u) << 16u;
+    let normalized: u32 = select(0u, ((e + 112u) << 23u) | m, e != 0u);
+    let denormalized: u32 = select(0u, ((v - 37u) << 23u) | ((m << (150u - v)) & 0x007FE000u), e == 0u && m != 0u);
+
+    return as_float(sign | normalized | denormalized);
+}
+
+fn float_to_half(x: f32) -> u32 {
+    let b: u32 = as_uint(x) + 0x00001000u; // Round to nearest-even
+    let e: u32 = (b & 0x7F800000u) >> 23u; // Extract exponent
+    let m: u32 = b & 0x007FFFFFu; // Extract mantissa
+
+    let sign: u32 = (b & 0x80000000u) >> 16u;
+    let normalized: u32 = select(0u, (((e - 112u) << 10u) & 0x7C00u) | (m >> 13u), e > 112u);
+    let denormalized: u32 = select(0u, (((0x007FF000u + m) >> (125u - e)) + 1u) >> 1u, e < 113u && e > 101u);
+    let saturated: u32 = select(0x7FFFu, 0u, e <= 143u);
+
+    return u32(sign | normalized | denormalized | saturated);
+}
+
+
+#ifndef DEFINE_DIMS1
+#define DEFINE_DIMS1 0
+#endif
+#ifndef DEFINE_IS_CONTIGUOUS1
+#define DEFINE_IS_CONTIGUOUS1 1
+#endif
+#ifndef DEFINE_IS_STARTOFFSET_ZERO1
+#define DEFINE_IS_STARTOFFSET_ZERO1 1
+#endif
+
+#ifndef DEFINE_DIMS2
+#define DEFINE_DIMS2 0
+#endif
+#ifndef DEFINE_IS_CONTIGUOUS2
+#define DEFINE_IS_CONTIGUOUS2 1
+#endif
+#ifndef DEFINE_IS_STARTOFFSET_ZERO2
+#define DEFINE_IS_STARTOFFSET_ZERO2 1
+#endif
+
+#ifndef DEFINE_DIMS3
+#define DEFINE_DIMS3 0
+#endif
+#ifndef DEFINE_IS_CONTIGUOUS3
+#define DEFINE_IS_CONTIGUOUS3 1
+#endif
+#ifndef DEFINE_IS_STARTOFFSET_ZERO3
+#define DEFINE_IS_STARTOFFSET_ZERO3 1
+#endif
+
+#pp_begin GET_INDEX_IMPL(meta_buffer, input_offset, index, output_var_is_valid, output_var_index, dims, is_contiguous, is_const_start_offset_zero)
+
+#if dims > 0
+    #if is_const_start_offset_zero == 1
+        #define INPUT_OFFSET 0u
+        #define START_SHAPE_OFFSET input_offset
+    #else
+        #define INPUT_OFFSET meta_buffer[input_offset]
+        #definec START_SHAPE_OFFSET input_offset + 1u
+    #endif
+
+    #if is_contiguous == 1
+    #define INPUT_LENGTH meta_buffer[START_SHAPE_OFFSET]
+    
+    let output_var_is_valid = index < INPUT_LENGTH;
+    let output_var_index = INPUT_OFFSET + index;
+    #else
+    var output_var_is_valid : bool;
+    var output_var_index : u32;
+    {
+        var shapes_i = 1u;
+        var new_index = INPUT_OFFSET;    
+        #definec LOOP_START_INDEX dims - 1
+        for (var _i2 : i32 = i32(LOOP_START_INDEX); _i2 >= 0; _i2--){
+            let _i = u32(_i2);
+            let prev_shapes_i = shapes_i;
+            shapes_i *= meta_buffer[START_SHAPE_OFFSET + _i]; 
+
+            let si = ((index) / prev_shapes_i) % (shapes_i / prev_shapes_i);  
+            new_index += si * meta_buffer[START_SHAPE_OFFSET + dims + _i]; //s_i * stride_i
+        }
+        output_var_index = new_index;
+        output_var_is_valid = index < shapes_i;
+    }
+    #endif 
+#else
+    let output_var_is_valid = false;
+    let output_var_index = 0u;
+#endif
+#pp_end
+
+
+
+
+#pp_begin GET_SIZE(dims, is_contiguous, is_const_start_offset_zero, RESULT_NAME)
+#if dims > 0
+    #if is_const_start_offset_zero == 1
+    #define START_SHAPE_SIZE 0
+    #else
+    #define START_SHAPE_SIZE 1
+    #endif
+
+    #if is_contiguous == 1
+    #definec RESULT_NAME START_SHAPE_SIZE + 1u
+    #else
+    #definec RESULT_NAME START_SHAPE_SIZE + dims * 2
+    #endif
+#else
+    #define RESULT_NAME 0
+#endif
+#pp_end
+
+GET_SIZE(DEFINE_DIMS1, DEFINE_IS_CONTIGUOUS1, DEFINE_IS_STARTOFFSET_ZERO1, GET_SIZE1_RESULT)
+GET_SIZE(DEFINE_DIMS2, DEFINE_IS_CONTIGUOUS2, DEFINE_IS_STARTOFFSET_ZERO2, GET_SIZE2_RESULT)
+GET_SIZE(DEFINE_DIMS3, DEFINE_IS_CONTIGUOUS3, DEFINE_IS_STARTOFFSET_ZERO3, GET_SIZE3_RESULT)
+
+
+#definec GET_TOTAL_SIZE_RETURN GET_SIZE1_RESULT + GET_SIZE2_RESULT + GET_SIZE3_RESULT
+
+
+
+#pp_begin GET_INDEX1(meta_buffer, input_offset, index, output_var_is_valid, output_var_index)
+GET_INDEX_IMPL(meta_buffer, input_offset, index, output_var_is_valid, output_var_index, DEFINE_DIMS1, DEFINE_IS_CONTIGUOUS1, DEFINE_IS_STARTOFFSET_ZERO1)
+#pp_end
+
+
+#pp_begin GET_INDEX2(meta_buffer, input_offset, index, output_var_is_valid, output_var_index)
+#definec INDEX_OFFSET2 input_offset + GET_SIZE1_RESULT
+GET_INDEX_IMPL(meta_buffer, INDEX_OFFSET2, index, output_var_is_valid, output_var_index, DEFINE_DIMS2, DEFINE_IS_CONTIGUOUS2, DEFINE_IS_STARTOFFSET_ZERO2)
+#pp_end
+
+#pp_begin GET_INDEX3(meta_buffer, input_offset, index, output_var_is_valid, output_var_index)
+#definec INDEX_OFFSET3 input_offset + GET_SIZE1_RESULT + GET_SIZE2_RESULT
+GET_INDEX_IMPL(meta_buffer, INDEX_OFFSET3, index, output_var_is_valid, output_var_index, DEFINE_DIMS3, DEFINE_IS_CONTIGUOUS3, DEFINE_IS_STARTOFFSET_ZERO3)
+#pp_end
+
+
+
+
+
+
+#ifndef USE_IMMEDIATES
+#define USE_IMMEDIATES 1
+#endif
+
+#pp_begin LOAD_INFO (name, size)
+//here we might use immediates, or an extra buffer 
+#if USE_IMMEDIATES == 1
+var<immediate> name: array<u32, size>;
+#else 
+@group(0) @binding(1)
+var<storage> name: array<u32>;
+#endif
+#pp_end
+
+#pp_begin LOAD_INFO_UNKNOWN_SIZE(name, minsize)
+#definec LOAD_INFO_SIZE minsize + GET_TOTAL_SIZE_RETURN
+
+LOAD_INFO(name, LOAD_INFO_SIZE)
+#pp_end
+
+#pp_begin CONST_SELECT(FALSE, TRUE, CONDITION)
+#if CONDITION
+TRUE
+#else
+FALSE
+#endif
+#pp_end
+
+fn get_size1() -> u32{
+    return GET_SIZE1_RESULT;
+}
+
+fn get_size2() -> u32{
+    return GET_SIZE2_RESULT;
+}
+
+fn get_size3() -> u32{
+    return GET_SIZE3_RESULT;
+}
+#endif
