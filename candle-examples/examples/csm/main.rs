@@ -10,8 +10,8 @@ use clap::Parser;
 use candle_transformers::models::csm::{Config, Model};
 
 use candle::{DType, IndexOp, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -134,11 +134,7 @@ fn main() -> Result<()> {
             name.to_string()
         }
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model(model_id).with_revision(args.revision);
     let filenames = match args.weights {
         Some(files) => files
             .split(',')
@@ -148,15 +144,11 @@ fn main() -> Result<()> {
     };
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
-        None => api
-            .model("meta-llama/Llama-3.2-1B".to_string())
-            .get("tokenizer.json")?,
+        None => api.model("meta-llama/Llama-3.2-1B").get("tokenizer.json")?,
     };
     let mimi_filename = match args.mimi_weights {
         Some(model) => std::path::PathBuf::from(model),
-        None => Api::new()?
-            .model("kyutai/mimi".to_string())
-            .get("model.safetensors")?,
+        None => Api::new()?.model("kyutai/mimi").get("model.safetensors")?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;

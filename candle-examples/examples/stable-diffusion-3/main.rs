@@ -137,7 +137,7 @@ fn main() -> Result<()> {
     };
     let cfg_scale = cfg_scale.unwrap_or(default_cfg_scale);
 
-    let api = hf_hub::api::sync::Api::new()?;
+    let api = candle_examples::hub::Api::new()?;
     let (mmdit_config, mut triple, vb) = if which.is_3_5() {
         let sai_repo_for_text_encoders = {
             let name = match which {
@@ -156,7 +156,7 @@ fn main() -> Result<()> {
                 Which::V3_5Medium => "stabilityai/stable-diffusion-3.5-large",
                 Which::V3Medium => unreachable!(),
             };
-            api.repo(hf_hub::Repo::model(name.to_string()))
+            api.model(name)
         };
         let sai_repo_for_mmdit = {
             let name = match which {
@@ -165,7 +165,7 @@ fn main() -> Result<()> {
                 Which::V3_5Medium => "stabilityai/stable-diffusion-3.5-medium",
                 Which::V3Medium => unreachable!(),
             };
-            api.repo(hf_hub::Repo::model(name.to_string()))
+            api.model(name)
         };
         let clip_g_file = sai_repo_for_text_encoders.get("text_encoders/clip_g.safetensors")?;
         let clip_l_file = sai_repo_for_text_encoders.get("text_encoders/clip_l.safetensors")?;
@@ -197,7 +197,7 @@ fn main() -> Result<()> {
     } else {
         let sai_repo = {
             let name = "stabilityai/stable-diffusion-3-medium";
-            api.repo(hf_hub::Repo::model(name.to_string()))
+            api.model(name)
         };
         let model_file = sai_repo.get("sd3_medium_incl_clips_t5xxlfp16.safetensors")?;
         let vb = unsafe {

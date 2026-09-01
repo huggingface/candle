@@ -11,12 +11,12 @@ extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
 use candle::{Device, IndexOp, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::{
     ops::{log_softmax, softmax},
     VarBuilder,
 };
 use clap::{Parser, ValueEnum};
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
 use rand::SeedableRng;
@@ -677,7 +677,7 @@ fn main() -> Result<()> {
     let (config_filename, tokenizer_filename, weights_filename, input) = {
         let api = Api::new()?;
         let dataset = api.dataset("Narsil/candle-examples".to_string());
-        let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+        let repo = api.model(model_id).with_revision(revision);
         let sample = if let Some(input) = args.input {
             if let Some(sample) = input.strip_prefix("sample:") {
                 dataset.get(&format!("samples_{sample}.wav"))?

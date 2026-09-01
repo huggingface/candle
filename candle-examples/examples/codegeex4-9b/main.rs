@@ -3,7 +3,6 @@ use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::codegeex4_9b::*;
 use clap::Parser;
-use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -189,11 +188,9 @@ fn main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
     let api = match args.cache_path.as_ref() {
-        None => hf_hub::api::sync::Api::new()?,
+        None => candle_examples::hub::Api::new()?,
         Some(path) => {
-            hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(path.to_string().into()))
-                .build()
-                .map_err(anyhow::Error::msg)?
+            candle_examples::hub::Api::with_cache_dir(path.as_str()).map_err(anyhow::Error::msg)?
         }
     };
     let model_id = match args.model_id {
@@ -204,11 +201,11 @@ fn main() -> anyhow::Result<()> {
         Some(rev) => rev.to_string(),
         None => "main".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+    let repo = api.model(model_id).with_revision(revision);
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .model("THUDM/codegeex4-all-9b".to_string())
+            .model("THUDM/codegeex4-all-9b")
             .get("tokenizer.json")
             .map_err(anyhow::Error::msg)?,
     };

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use candle_examples::hub::Api;
 
 /// # Errors
 ///
@@ -14,11 +14,9 @@ pub fn model_files(model_id: &str) -> Result<((PathBuf, Vec<PathBuf>), PathBuf)>
     let revision = "main";
 
     let api = Api::new().unwrap();
-    let repo = api.repo(Repo::with_revision(
-        model_id.to_string(),
-        RepoType::Model,
-        revision.to_string(),
-    ));
+    let repo = api
+        .model(model_id.to_string())
+        .with_revision(revision.to_string());
 
     let config = repo.get("config.json")?;
 
