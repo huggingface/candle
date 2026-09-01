@@ -42,6 +42,7 @@ pub struct LlamaConfig {
     pub vocab_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
+    pub head_dim: Option<usize>,
     pub num_key_value_heads: Option<usize>,
     pub rms_norm_eps: f64,
     #[serde(default = "default_rope")]
@@ -54,6 +55,11 @@ pub struct LlamaConfig {
 }
 
 impl LlamaConfig {
+    pub fn head_dim(&self) -> usize {
+        self.head_dim
+            .unwrap_or(self.hidden_size / self.num_attention_heads)
+    }
+
     pub fn num_key_value_heads(&self) -> usize {
         self.num_key_value_heads.unwrap_or(self.num_attention_heads)
     }
@@ -71,6 +77,7 @@ impl LlamaConfig {
             vocab_size: self.vocab_size,
             num_hidden_layers: self.num_hidden_layers,
             num_attention_heads: self.num_attention_heads,
+            head_dim: self.head_dim(),
             num_key_value_heads: self.num_key_value_heads(),
             rms_norm_eps: self.rms_norm_eps,
             rope_theta: self.rope_theta,
@@ -91,6 +98,7 @@ pub struct Config {
     pub vocab_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
+    pub head_dim: usize,
     pub num_key_value_heads: usize,
     pub use_flash_attn: bool,
     pub rms_norm_eps: f64,
@@ -110,6 +118,7 @@ impl Config {
             vocab_size: 32000,
             num_hidden_layers: 32,
             num_attention_heads: 32,
+            head_dim: 128,
             num_key_value_heads: 32,
             use_flash_attn,
             rms_norm_eps: 1e-6,
@@ -129,6 +138,7 @@ impl Config {
             vocab_size: 32000,
             num_hidden_layers: 32,
             num_attention_heads: 32,
+            head_dim: 128,
             num_key_value_heads: 32,
             use_flash_attn,
             rms_norm_eps: 1e-5,
@@ -153,10 +163,9 @@ pub struct Cache {
 }
 
 fn calculate_default_inv_freq(cfg: &Config) -> Vec<f32> {
-    let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-    (0..head_dim)
+    (0..cfg.head_dim)
         .step_by(2)
-        .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / head_dim as f32))
+        .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / cfg.head_dim as f32))
         .collect()
 }
 
@@ -275,7 +284,7 @@ impl CausalSelfAttention {
         cache: &mut Cache,
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let (b_sz, seq_len, hidden_size) = x.dims3()?;
+        let (b_sz, seq_len, _) = x.dims3()?;
         let q = self.q_proj.forward(x)?;
         let k = self.k_proj.forward(x)?;
         let v = self.v_proj.forward(x)?;
@@ -350,7 +359,11 @@ impl CausalSelfAttention {
             // Convert to contiguous as matmul doesn't support strided vs for now.
             att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
         };
-        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
+        let y = y.transpose(1, 2)?.reshape(&[
+            b_sz,
+            seq_len,
+            self.num_attention_heads * self.head_dim,
+        ])?;
         let y = self.o_proj.forward(&y)?;
         Ok(y)
     }
@@ -363,8 +376,8 @@ impl CausalSelfAttention {
         let span = tracing::span!(tracing::Level::TRACE, "attn");
         let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
         let size_in = cfg.hidden_size;
-        let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
-        let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+        let size_q = cfg.head_dim * cfg.num_attention_heads;
+        let size_kv = cfg.head_dim * cfg.num_key_value_heads;
         let q_proj = linear(size_in, size_q, vb.pp("q_proj"))?;
         let k_proj = linear(size_in, size_kv, vb.pp("k_proj"))?;
         let v_proj = linear(size_in, size_kv, vb.pp("v_proj"))?;
@@ -376,7 +389,7 @@ impl CausalSelfAttention {
             o_proj,
             num_attention_heads: cfg.num_attention_heads,
             num_key_value_heads: cfg.num_key_value_heads,
-            head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            head_dim: cfg.head_dim,
             use_flash_attn: cfg.use_flash_attn,
             span,
             span_rot,
