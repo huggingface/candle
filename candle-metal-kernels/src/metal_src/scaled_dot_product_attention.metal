@@ -2064,7 +2064,8 @@ template <
 
   if (do_causal) {
     int q_max = (tid.x + 1) * BQ + params->qL_off;
-    kb_lim = (q_max + BK - 1) / BK;
+    // A partial final query tile still pads to BQ rows, so this can round past NK.
+    kb_lim = min(params->NK, (q_max + BK - 1) / BK);
   }
 
   // Loop over KV seq length
