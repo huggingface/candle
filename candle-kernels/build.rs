@@ -11,21 +11,50 @@ fn main() -> Result<()> {
     // Build for PTX
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let ptx_path = out_dir.join("ptx.rs");
-    let bindings = KernelBuilder::new()
+    let mut ptx_builder = KernelBuilder::new();
+    ptx_builder = ptx_builder
         .source_dir("src") // Scan src/ for .cu files
-        .exclude(&["moe_*.cu", "mmvq_gguf.cu", "mmq_*.cu"]) // Exclude statically compiled kernels from ptx build
+        .exclude(&["moe/*", "mmvq_gguf.cu", "mmq_*.cu"]) // Exclude statically compiled kernels from ptx build
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
-        .arg("-O3")
-        .build_ptx()?;
+        .arg("-O3");
+
+    let mut is_target_msvc = false;
+    if let Ok(target) = std::env::var("TARGET") {
+        if target.contains("msvc") {
+            is_target_msvc = true;
+            ptx_builder = ptx_builder
+                .arg("-DCCCL_IGNORE_MSVC_TRADITIONAL_PREPROCESSOR_WARNING")
+                .arg("-Xcompiler")
+                .arg("/Zc:preprocessor");
+        }
+    }
+
+    let bindings = ptx_builder.build_ptx()?;
+
+    // Normalize PTX version if compiled with bleeding-edge CUDA Toolkit (e.g. 13.2 writing .version 9.2)
+    // so that installed NVIDIA driver JIT compilers accepting PTX ISA 8.x can load the modules seamlessly.
+    if let Ok(entries) = std::fs::read_dir(&out_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "ptx") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if content.contains(".version 9.") {
+                        let normalized = content
+                            .replace(".version 9.2", ".version 8.6")
+                            .replace(".version 9.1", ".version 8.6")
+                            .replace(".version 9.0", ".version 8.6");
+                        let _ = std::fs::write(&path, normalized);
+                    }
+                }
+            }
+        }
+    }
 
     bindings.write(&ptx_path)?;
 
     let mut moe_builder = KernelBuilder::default()
         .source_files(vec![
-            "src/moe/moe_gguf.cu",
-            "src/moe/moe_wmma.cu",
-            "src/moe/moe_wmma_gguf.cu",
             "src/mmvq_gguf.cu",
             "src/mmq_gguf/mmq_quantize.cu",
             "src/mmq_gguf/mmq_instance_q4_0.cu",
@@ -52,12 +81,12 @@ fn main() -> Result<()> {
         moe_builder = moe_builder.arg("-DNO_BF16_KERNEL");
     }
 
-    let mut is_target_msvc = false;
-    if let Ok(target) = std::env::var("TARGET") {
-        if target.contains("msvc") {
-            is_target_msvc = true;
-            moe_builder = moe_builder.arg("-D_USE_MATH_DEFINES");
-        }
+    if is_target_msvc {
+        moe_builder = moe_builder
+            .arg("-D_USE_MATH_DEFINES")
+            .arg("-DCCCL_IGNORE_MSVC_TRADITIONAL_PREPROCESSOR_WARNING")
+            .arg("-Xcompiler")
+            .arg("/Zc:preprocessor");
     }
 
     if !is_target_msvc {
