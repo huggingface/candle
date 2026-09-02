@@ -7,7 +7,7 @@ on:
 jobs:
   test-cuda:
     concurrency:
-      group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
+      group: ${{ github.workflow }}-test-cuda-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
     runs-on:
       group: aws-g5-4xlarge-cache
@@ -36,7 +36,7 @@ jobs:
 
   test-cutile:
     concurrency:
-      group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
+      group: ${{ github.workflow }}-test-cutile-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
     runs-on:
       group: aws-g5-4xlarge-cache
