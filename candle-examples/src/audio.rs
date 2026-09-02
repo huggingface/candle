@@ -120,29 +120,21 @@ pub fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> Result<(Vec<f32>, u32)>
 
 #[cfg(feature = "rubato")]
 pub fn resample(pcm_in: &[f32], sr_in: u32, sr_out: u32) -> Result<Vec<f32>> {
+    use rubato::audioadapter_buffers::direct::SequentialSlice;
     use rubato::Resampler;
 
-    let mut pcm_out =
-        Vec::with_capacity((pcm_in.len() as f64 * sr_out as f64 / sr_in as f64) as usize + 1024);
-
-    let mut resampler = rubato::FftFixedInOut::<f32>::new(sr_in as usize, sr_out as usize, 1024, 1)
+    let mut resampler = rubato::Fft::<f32>::new(
+        sr_in as usize,
+        sr_out as usize,
+        1024,
+        1,
+        rubato::FixedSync::Both,
+    )
+    .map_err(candle::Error::wrap)?;
+    // Mono, so the interleaved and sequential layouts are the same.
+    let buffer_in = SequentialSlice::new(pcm_in, 1, pcm_in.len()).map_err(candle::Error::wrap)?;
+    let pcm_out = resampler
+        .process_all(&buffer_in, pcm_in.len(), None)
         .map_err(candle::Error::wrap)?;
-    let mut output_buffer = resampler.output_buffer_allocate(true);
-    let mut pos_in = 0;
-    while pos_in + resampler.input_frames_next() < pcm_in.len() {
-        let (in_len, out_len) = resampler
-            .process_into_buffer(&[&pcm_in[pos_in..]], &mut output_buffer, None)
-            .map_err(candle::Error::wrap)?;
-        pos_in += in_len;
-        pcm_out.extend_from_slice(&output_buffer[0][..out_len]);
-    }
-
-    if pos_in < pcm_in.len() {
-        let (_in_len, out_len) = resampler
-            .process_partial_into_buffer(Some(&[&pcm_in[pos_in..]]), &mut output_buffer, None)
-            .map_err(candle::Error::wrap)?;
-        pcm_out.extend_from_slice(&output_buffer[0][..out_len]);
-    }
-
-    Ok(pcm_out)
+    Ok(pcm_out.take_data())
 }

@@ -92,14 +92,14 @@ fn main() -> Result<()> {
     let config = match args.config {
         Some(c) => std::path::PathBuf::from(c),
         None => Api::new()?
-            .model(args.which.config_repo().to_string())
+            .model(args.which.config_repo())
             .get("config.json")?,
     };
     let config: Config = serde_json::from_slice(&std::fs::read(config)?)?;
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
         None => Api::new()?
-            .model("lmz/candle-snac".to_string())
+            .model("lmz/candle-snac")
             .get(args.which.model_file())?,
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };

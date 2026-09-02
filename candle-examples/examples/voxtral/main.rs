@@ -47,11 +47,11 @@ fn main() -> Result<()> {
     println!("Model loaded successfully on device: {:?}", model.device());
 
     let api = Api::new()?;
-    let dataset = api.dataset("Narsil/candle-examples".to_string());
+    let dataset = api.dataset("Narsil/candle-examples");
 
     let audio_file = if let Some(input) = args.input {
         if let Some(sample) = input.strip_prefix("sample:") {
-            dataset.get(&format!("samples_{sample}.wav"))?
+            dataset.get(format!("samples_{sample}.wav"))?
         } else {
             std::path::PathBuf::from(input)
         }

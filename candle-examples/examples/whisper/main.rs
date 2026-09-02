@@ -676,11 +676,11 @@ fn main() -> Result<()> {
 
     let (config_filename, tokenizer_filename, weights_filename, input) = {
         let api = Api::new()?;
-        let dataset = api.dataset("Narsil/candle-examples".to_string());
+        let dataset = api.dataset("Narsil/candle-examples");
         let repo = api.model(model_id).with_revision(revision);
         let sample = if let Some(input) = args.input {
             if let Some(sample) = input.strip_prefix("sample:") {
-                dataset.get(&format!("samples_{sample}.wav"))?
+                dataset.get(format!("samples_{sample}.wav"))?
             } else {
                 std::path::PathBuf::from(input)
             }
@@ -695,9 +695,9 @@ fn main() -> Result<()> {
                 _ => unimplemented!("no quantized support for {:?}", args.model),
             };
             (
-                repo.get(&format!("config-{ext}.json"))?,
-                repo.get(&format!("tokenizer-{ext}.json"))?,
-                repo.get(&format!("model-{ext}-q80.gguf"))?,
+                repo.get(format!("config-{ext}.json"))?,
+                repo.get(format!("tokenizer-{ext}.json"))?,
+                repo.get(format!("model-{ext}-q80.gguf"))?,
             )
         } else {
             let config = repo.get("config.json")?;
