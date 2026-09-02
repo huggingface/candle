@@ -38,7 +38,7 @@ impl Which {
             Self::B2G4 => "b2g4",
             Self::B3G4 => "b3g4",
         };
-        format!("timm/repvgg_{}.rvgg_in1k", name)
+        format!("timm/repvgg_{name}.rvgg_in1k")
     }
 
     fn config(&self) -> repvgg::Config {
@@ -84,7 +84,7 @@ pub fn main() -> anyhow::Result<()> {
     let model_file = match args.model {
         None => {
             let model_name = args.which.model_filename();
-            let api = hf_hub::api::sync::Api::new()?;
+            let api = candle_examples::hub::Api::new()?;
             let api = api.model(model_name);
             api.get("model.safetensors")?
         }

@@ -1,3 +1,5 @@
+//! A `VarMap` is a store that holds named variables.
+//!
 use candle::{DType, Device, Result, Shape, Tensor, Var};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -30,7 +32,7 @@ impl VarMap {
     pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> Result<()> {
         let tensor_data = self.data.lock().unwrap();
         let data = tensor_data.iter().map(|(k, v)| (k, v.as_tensor()));
-        safetensors::tensor::serialize_to_file(data, &None, path.as_ref())?;
+        safetensors::tensor::serialize_to_file(data, None, path.as_ref())?;
         Ok(())
     }
 

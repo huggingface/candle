@@ -1,0 +1,16 @@
+[package]
+name = "tensor-tools"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+candle = { workspace = true }
+clap = { workspace = true }
+rayon = { workspace = true }
+safetensors = { workspace = true }

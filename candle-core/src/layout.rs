@@ -1,3 +1,5 @@
+//! Tensor Layouts including contiguous or sparse strides
+
 use crate::{Error, Result, Shape};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -35,6 +37,12 @@ impl Layout {
         self.shape.dims()
     }
 
+    /// The dimension size for a specified dimension index.
+    pub fn dim<D: crate::shape::Dim>(&self, dim: D) -> Result<usize> {
+        let dim = dim.to_index(&self.shape, "dim")?;
+        Ok(self.dims()[dim])
+    }
+
     pub fn shape(&self) -> &Shape {
         &self.shape
     }
@@ -45,6 +53,121 @@ impl Layout {
 
     pub fn start_offset(&self) -> usize {
         self.start_offset
+    }
+
+    /// Returns outer stride along `dim` if valid.
+    ///
+    /// Two conditions must hold:
+    ///  1. Inner dims `[dim..]` has standard contiguous strides.
+    ///  2. Outer dims `[..dim]` are contiguous among themselves, i.e.
+    ///     `stride[k] == dims[k+1] * stride[k+1]` for `k` in `0..dim-1`.
+    ///
+    /// When the tensor is fully contiguous this returns `Some(dims[dim..].product())`.
+    pub(crate) fn outer_stride_for_dim(&self, dim: usize) -> Option<usize> {
+        let dims = self.dims();
+        let strides = self.stride();
+
+        // 1. Inner `dims[dim..]` must have contiguous strides.
+        let mut expected = 1usize;
+        for i in (dim..dims.len()).rev() {
+            if strides[i] != expected {
+                return None;
+            }
+            expected *= dims[i];
+        }
+
+        if dim == 0 {
+            // No outer dims.
+            // `expected = dims[dim..].product()`
+            return Some(expected);
+        }
+
+        // 2. Outer `dims[0..dim]` must be internally contiguous.
+        let outer_stride = strides[dim - 1];
+        let mut expected_outer = outer_stride;
+        for k in (0..dim - 1).rev() {
+            expected_outer *= dims[k + 1];
+            if strides[k] != expected_outer {
+                return None;
+            }
+        }
+
+        Some(outer_stride)
+    }
+
+    /// Checks if more than one logical index lands on the same cell (or when we can't prove it does not)
+    pub fn has_internal_overlap(&self) -> bool {
+        !self.range().is_some_and(|f| f.injective)
+    }
+
+    /// Returns range of cells this layout can reach, and wether it reaches all of them.
+    /// Returns `None` on arithmetic overflow.
+    fn range(&self) -> Option<LayoutRange> {
+        // Filter out dims <= 1 as their strides are irrelevant.
+        let mut axes: Vec<(usize, usize)> = self
+            .dims()
+            .iter()
+            .zip(self.stride())
+            .filter(|(&d, _)| d > 1)
+            .map(|(&d, &s)| (d, s))
+            .collect();
+        axes.sort_unstable_by_key(|&(_, s)| s);
+
+        let mut span = 0usize;
+        let mut injective = true;
+        let mut dense = true;
+
+        for (d, s) in axes {
+            if s <= span {
+                // This dim can land on a cell another dim already reaches.
+                injective = false;
+                dense = false;
+            } else if s - span != 1 {
+                // Has a gap
+                dense = false;
+            }
+            span = span.checked_add((d - 1).checked_mul(s)?)?;
+        }
+
+        let lo = self.start_offset();
+        Some(LayoutRange {
+            lo,
+            hi: lo.checked_add(span)?,
+            injective,
+            dense,
+        })
+    }
+
+    /// Relation between this layout and another
+    pub fn relation(&self, other: &Self) -> LayoutRelation {
+        if self == other {
+            return LayoutRelation::Identical;
+        }
+
+        if self.shape().elem_count() == 0 || other.shape().elem_count() == 0 {
+            return LayoutRelation::Disjoint;
+        }
+
+        // Extract [`LayoutRange`] from layout.
+        let (a, b) = match (self.range(), other.range()) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return LayoutRelation::Unknown, // address arithmetic overflowed
+        };
+
+        if a.separated_from(&b) {
+            return LayoutRelation::Disjoint;
+        }
+
+        if a.densely_contains(&b) || b.densely_contains(&a) {
+            return LayoutRelation::Overlapping;
+        }
+
+        // We end up here when layouts ranges overlap and neither is dense, such as disjoint
+        // column slices. Figuring out these cases is a bounded integer feasibility problem
+        // over the strides. This is NP-hard in general. Cheap at common tensor ranks.
+        // If we want to move more cases out of unknown into disjoint/overlapping it can be done using the
+        // same approach as numpy: https://github.com/numpy/numpy/blob/main/numpy/_core/src/common/mem_overlap.c
+        LayoutRelation::Unknown
     }
 
     /// Returns the appropriate start and stop offset if the data is stored in a C
@@ -68,6 +191,20 @@ impl Layout {
     /// Returns true if the data is stored in a Fortran contiguous (aka column major) way.
     pub fn is_fortran_contiguous(&self) -> bool {
         self.shape.is_fortran_contiguous(&self.stride)
+    }
+
+    pub fn is_scalar(&self) -> bool {
+        let dims = self.dims();
+        dims.is_empty() || dims.iter().all(|d| *d == 1)
+    }
+
+    /// Returns true if the data is actually a scalar during broadcast
+    pub fn is_scalar_broadcast(&self) -> bool {
+        self.stride().iter().all(|s| *s == 0)
+    }
+
+    pub fn is_scalar_like(&self) -> bool {
+        self.is_scalar() || self.is_scalar_broadcast()
     }
 
     pub fn narrow(&self, dim: usize, start: usize, len: usize) -> Result<Self> {
@@ -180,14 +317,19 @@ impl Layout {
         })
     }
 
-    pub(crate) fn strided_index(&self) -> crate::StridedIndex {
+    pub(crate) fn strided_index(&self) -> crate::StridedIndex<'_> {
         crate::StridedIndex::from_layout(self)
     }
 
-    pub(crate) fn strided_blocks(&self) -> crate::StridedBlocks {
-        let mut block_len = 1;
-        let mut contiguous_dims = 0; // These are counted from the right.
+    pub(crate) fn strided_blocks(&self) -> crate::StridedBlocks<'_> {
+        let mut block_len = 1usize;
+        let mut contiguous_dims = 0usize; // Counted from the right.
         for (&stride, &dim) in self.stride().iter().zip(self.dims().iter()).rev() {
+            // Size-1 dimensions are trivially contiguous regardless of their stride.
+            if dim == 1 {
+                contiguous_dims += 1;
+                continue;
+            }
             if stride != block_len {
                 break;
             }
@@ -195,77 +337,67 @@ impl Layout {
             contiguous_dims += 1;
         }
         let index_dims = self.dims().len() - contiguous_dims;
-        if index_dims == 0 {
-            crate::StridedBlocks::SingleBlock {
+        match index_dims {
+            0 => crate::StridedBlocks::SingleBlock {
                 start_offset: self.start_offset,
                 len: block_len,
-            }
-        } else {
-            let block_start_index = crate::StridedIndex::new(
-                &self.dims()[..index_dims],
-                &self.stride[..index_dims],
-                self.start_offset,
-            );
-            crate::StridedBlocks::MultipleBlocks {
-                block_start_index,
+            },
+            1 => crate::StridedBlocks::UniformBlocks {
+                start_offset: self.start_offset,
                 block_len,
+                count: self.dims()[0],
+                src_stride: self.stride[0],
+            },
+            _ => {
+                let block_start_index = crate::StridedIndex::new(
+                    &self.dims()[..index_dims],
+                    &self.stride[..index_dims],
+                    self.start_offset,
+                );
+                crate::StridedBlocks::MultipleBlocks {
+                    block_start_index,
+                    block_len,
+                }
             }
         }
-    }
-
-    // Returns the contiguous offsets with broadcast if applicable.
-    pub(crate) fn offsets_b(&self) -> Option<ContiguousOffsetsWithBroadcast> {
-        let mut left_broadcast = 1;
-        let mut right_broadcast = 1;
-        let strides = self.stride();
-        let dims = self.dims();
-        let mut start_cont = 0;
-        let mut end_cont = dims.len();
-        for (&s, &d) in strides.iter().zip(dims.iter()) {
-            if s != 0 {
-                break;
-            }
-            start_cont += 1;
-            left_broadcast *= d;
-        }
-        if start_cont == dims.len() {
-            return Some(ContiguousOffsetsWithBroadcast {
-                start: self.start_offset,
-                len: 1,
-                left_broadcast,
-                right_broadcast: 1,
-            });
-        }
-        for (&s, &d) in strides.iter().zip(dims.iter()).rev() {
-            if s != 0 {
-                break;
-            }
-            end_cont -= 1;
-            right_broadcast *= d;
-        }
-        // Check that the inner dims are contiguous
-        let strides = &strides[start_cont..end_cont];
-        let dims = &dims[start_cont..end_cont];
-        let mut len = 1;
-        for (&stride, &dim) in strides.iter().zip(dims.iter()).rev() {
-            if stride != len {
-                return None;
-            }
-            len *= dim;
-        }
-        Some(ContiguousOffsetsWithBroadcast {
-            start: self.start_offset,
-            len,
-            left_broadcast,
-            right_broadcast,
-        })
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContiguousOffsetsWithBroadcast {
-    pub start: usize,
-    pub len: usize,
-    pub left_broadcast: usize,
-    pub right_broadcast: usize,
+/// Describes the range of cells a [`Layout`] can reach within its allocation,
+/// and whether it reaches all of them.
+struct LayoutRange {
+    /// Lowest reachable cell. Equal to layout `start_offset`.
+    lo: usize,
+    /// Highest reachable cell (inclusive).
+    hi: usize,
+    /// Proven to map distinct logical indices to distinct cells.
+    injective: bool,
+    /// Indicates that layout occupies every cell in `lo..=hi`.
+    /// Does not necessarily mean that layout is contiguous.
+    dense: bool,
+}
+
+impl LayoutRange {
+    /// Bounding intervals cannot meet, which means these layouts are seperate.
+    fn separated_from(&self, other: &Self) -> bool {
+        self.hi < other.lo || other.hi < self.lo
+    }
+
+    /// If a dense layout contains another's `lo` there is overlap.
+    fn densely_contains(&self, other: &Self) -> bool {
+        self.dense && other.lo >= self.lo && other.lo <= self.hi
+    }
+}
+
+/// How two layouts over the same allocation relate.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum LayoutRelation {
+    /// Simple assignment. x[i] += x[i]
+    Identical,
+    /// Completely distinct layouts.
+    Disjoint,
+    /// Any kind of overlap.
+    Overlapping,
+    /// Could not prove relation.
+    Unknown,
 }

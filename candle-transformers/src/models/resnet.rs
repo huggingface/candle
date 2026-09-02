@@ -1,7 +1,15 @@
-//! ResNet implementation.
+//! # ResNet Implementation
 //!
-//! See "Deep Residual Learning for Image Recognition" He et al. 2015
-//! <https://arxiv.org/abs/1512.03385>
+//! Implementation of ResNet architectures as described in the paper:
+//!
+//! ## Reference
+//!
+//! [Deep Residual Learning for Image Recognition](https://arxiv.org/abs/1512.03385)
+//! He et al. (2015)
+//!
+//! This paper introduced ResNet, a deep neural network architecture that utilizes
+//! skip connections ("residual connections") to enable training of very deep networks.
+
 use candle::{Result, D};
 use candle_nn::{batch_norm, Conv2d, Func, VarBuilder};
 

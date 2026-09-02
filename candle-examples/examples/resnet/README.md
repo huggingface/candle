@@ -7,7 +7,7 @@ probabilities for the top-5 classes.
 ## Running an example
 
 ```
-$ cargo run --example resnet --release -- --image tiger.jpg
+$ cargo run --example resnet --release -- --image candle-examples/examples/yolo-v8/assets/bike.jpg
 
 loaded image Tensor[dims 3, 224, 224; f32]
 model built

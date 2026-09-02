@@ -1,13 +1,36 @@
-//! Support for the GGUF file format.
+//! Support for the [GGUF file format](https://github.com/philpax/ggml/blob/gguf-spec/docs/gguf.md).
 //!
-//! Spec: https://github.com/philpax/ggml/blob/gguf-spec/docs/gguf.md
+//! Spec: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
 
 use super::{GgmlDType, QTensor};
-use crate::{Device, Result};
+use crate::{Context, Device, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashMap;
 
 pub const DEFAULT_ALIGNMENT: u64 = 32;
+
+// Caps mirror ggml-org/llama.cpp#19856 (GGUF_MAX_STRING_LENGTH,
+// GGUF_MAX_ARRAY_ELEMENTS) and GGML_MAX_DIMS from ggml.h. The depth cap
+// bounds recursion through nested `Value::Array` so a crafted file cannot
+// overflow the stack with a chain of arrays-of-arrays.
+const GGUF_MAX_STRING_LENGTH: u64 = 1 << 30;
+const GGUF_MAX_ARRAY_ELEMENTS: u64 = 1 << 30;
+const GGUF_MAX_TENSOR_DIMS: u32 = 4;
+const GGUF_MAX_VALUE_DEPTH: usize = 64;
+
+// `file_size` is the byte length captured once up front, so this avoids
+// seeking to the end and back on every length-prefixed read.
+fn remaining_bytes<R: std::io::Seek>(reader: &mut R, file_size: u64) -> Result<u64> {
+    let cur = reader.stream_position()?;
+    Ok(file_size.saturating_sub(cur))
+}
+
+fn read_length<R: std::io::Read>(reader: &mut R, magic: &VersionedMagic) -> Result<u64> {
+    match magic {
+        VersionedMagic::GgufV1 => Ok(reader.read_u32::<LittleEndian>()? as u64),
+        VersionedMagic::GgufV2 | VersionedMagic::GgufV3 => Ok(reader.read_u64::<LittleEndian>()?),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Magic {
@@ -45,6 +68,13 @@ impl VersionedMagic {
         };
         Ok(versioned_magic)
     }
+
+    fn length_prefix_size(&self) -> u64 {
+        match self {
+            Self::GgufV1 => 4,
+            Self::GgufV2 | Self::GgufV3 => 8,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -63,14 +93,22 @@ impl TensorInfo {
     ) -> Result<QTensor> {
         let tensor_elems = self.shape.elem_count();
         let block_size = self.ggml_dtype.block_size();
-        if tensor_elems % block_size != 0 {
+        if !tensor_elems.is_multiple_of(block_size) {
             crate::bail!(
             "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
         )
         }
         let size_in_bytes = tensor_elems / block_size * self.ggml_dtype.type_size();
+        let tensor_start = tensor_data_offset.saturating_add(self.offset);
+        let file_size = reader.seek(std::io::SeekFrom::End(0))?;
+        let remaining = file_size.saturating_sub(tensor_start);
+        if size_in_bytes as u64 > remaining {
+            crate::bail!(
+                "tensor needs {size_in_bytes} bytes at offset {tensor_start}, only {remaining} remaining in file"
+            )
+        }
         let mut raw_data = vec![0u8; size_in_bytes];
-        reader.seek(std::io::SeekFrom::Start(tensor_data_offset + self.offset))?;
+        reader.seek(std::io::SeekFrom::Start(tensor_start))?;
         reader.read_exact(&mut raw_data)?;
         super::ggml_file::qtensor_from_ggml(
             self.ggml_dtype,
@@ -89,14 +127,20 @@ pub struct Content {
     pub tensor_data_offset: u64,
 }
 
-fn read_string<R: std::io::Read>(reader: &mut R, magic: &VersionedMagic) -> Result<String> {
-    let len = match magic {
-        VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
-        VersionedMagic::GgufV2 | VersionedMagic::GgufV3 => {
-            reader.read_u64::<LittleEndian>()? as usize
-        }
-    };
-    let mut v = vec![0u8; len];
+fn read_string<R: std::io::Read + std::io::Seek>(
+    reader: &mut R,
+    magic: &VersionedMagic,
+    file_size: u64,
+) -> Result<String> {
+    let len = read_length(reader, magic)?;
+    if len > GGUF_MAX_STRING_LENGTH {
+        crate::bail!("gguf: string length {len} exceeds max {GGUF_MAX_STRING_LENGTH}")
+    }
+    let remaining = remaining_bytes(reader, file_size)?;
+    if len > remaining {
+        crate::bail!("gguf: string length {len} exceeds remaining file bytes {remaining}")
+    }
+    let mut v = vec![0u8; len as usize];
     reader.read_exact(&mut v)?;
     // GGUF strings are supposed to be non-null terminated but in practice this happens.
     while let Some(0) = v.last() {
@@ -135,7 +179,6 @@ pub enum ValueType {
     // The value is a UTF-8 non-null-terminated string, with length prepended.
     String,
     // The value is an array of other values, with the length and type prepended.
-    ///
     // Arrays can be nested, and the length of the array is the number of elements in the array, not the number of bytes.
     Array,
 }
@@ -218,10 +261,16 @@ impl Value {
         }
     }
 
+    /// This will also automatically upcast any integral types which will not truncate.
     pub fn to_u64(&self) -> Result<u64> {
         match self {
             Self::U64(v) => Ok(*v),
-            v => crate::bail!("not a u64 {v:?}"),
+            // Autoupcast cases here
+            Self::U8(v) => Ok(*v as u64),
+            Self::U16(v) => Ok(*v as u64),
+            Self::U32(v) => Ok(*v as u64),
+            Self::Bool(v) => Ok(*v as u64),
+            v => crate::bail!("not a u64 or upcastable to u64 {v:?}"),
         }
     }
 
@@ -267,11 +316,16 @@ impl Value {
         }
     }
 
-    fn read<R: std::io::Read>(
+    fn read<R: std::io::Read + std::io::Seek>(
         reader: &mut R,
         value_type: ValueType,
         magic: &VersionedMagic,
+        depth: usize,
+        file_size: u64,
     ) -> Result<Self> {
+        if depth > GGUF_MAX_VALUE_DEPTH {
+            crate::bail!("gguf: value nesting depth exceeds max {GGUF_MAX_VALUE_DEPTH}")
+        }
         let v = match value_type {
             ValueType::U8 => Self::U8(reader.read_u8()?),
             ValueType::I8 => Self::I8(reader.read_i8()?),
@@ -288,19 +342,30 @@ impl Value {
                 1 => Self::Bool(true),
                 b => crate::bail!("unexpected bool value {b}"),
             },
-            ValueType::String => Self::String(read_string(reader, magic)?),
+            ValueType::String => Self::String(read_string(reader, magic, file_size)?),
             ValueType::Array => {
                 let value_type = reader.read_u32::<LittleEndian>()?;
                 let value_type = ValueType::from_u32(value_type)?;
-                let len = match magic {
-                    VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
-                    VersionedMagic::GgufV2 | VersionedMagic::GgufV3 => {
-                        reader.read_u64::<LittleEndian>()? as usize
-                    }
-                };
-                let mut vs = Vec::with_capacity(len);
+                let len = read_length(reader, magic)?;
+                if len > GGUF_MAX_ARRAY_ELEMENTS {
+                    crate::bail!("gguf: array length {len} exceeds max {GGUF_MAX_ARRAY_ELEMENTS}")
+                }
+                let needed = len.saturating_mul(value_type.min_disk_size(magic));
+                let remaining = remaining_bytes(reader, file_size)?;
+                if needed > remaining {
+                    crate::bail!(
+                        "gguf: array of {len} elements needs at least {needed} bytes, only {remaining} remaining"
+                    )
+                }
+                let mut vs = Vec::new();
                 for _ in 0..len {
-                    vs.push(Value::read(reader, value_type, magic)?)
+                    vs.push(Value::read(
+                        reader,
+                        value_type,
+                        magic,
+                        depth + 1,
+                        file_size,
+                    )?)
                 }
                 Self::Array(vs)
             }
@@ -334,7 +399,7 @@ impl Value {
                     if value_type.len() != 1 {
                         crate::bail!("multiple value-types in the same array {value_type:?}")
                     }
-                    value_type.into_iter().next().unwrap()
+                    value_type.into_iter().next().context("empty value_type")?
                 };
                 w.write_u32::<LittleEndian>(value_type.to_u32())?;
                 w.write_u64::<LittleEndian>(v.len() as u64)?;
@@ -385,37 +450,76 @@ impl ValueType {
             Self::F64 => 12,
         }
     }
+
+    /// Minimum on-disk size of one value of this type, used to reject array
+    /// lengths that exceed the remaining file size before allocating.
+    fn min_disk_size(&self, magic: &VersionedMagic) -> u64 {
+        match self {
+            Self::U8 | Self::I8 | Self::Bool => 1,
+            Self::U16 | Self::I16 => 2,
+            Self::U32 | Self::I32 | Self::F32 => 4,
+            Self::U64 | Self::I64 | Self::F64 => 8,
+            Self::String => magic.length_prefix_size(),
+            Self::Array => 4 + magic.length_prefix_size(),
+        }
+    }
 }
 
 impl Content {
     pub fn read<R: std::io::Seek + std::io::Read>(reader: &mut R) -> Result<Self> {
-        let magic = VersionedMagic::read(reader)?;
+        // Capture the file size once so the bounds checks below don't have to
+        // seek to the end and back on every length-prefixed read.
+        let start = reader.stream_position()?;
+        let file_size = reader.seek(std::io::SeekFrom::End(0))?;
+        reader.seek(std::io::SeekFrom::Start(start))?;
 
-        let tensor_count = match magic {
-            VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
-            VersionedMagic::GgufV2 | VersionedMagic::GgufV3 => {
-                reader.read_u64::<LittleEndian>()? as usize
-            }
-        };
-        let metadata_kv_count = match magic {
-            VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
-            VersionedMagic::GgufV2 | VersionedMagic::GgufV3 => {
-                reader.read_u64::<LittleEndian>()? as usize
-            }
-        };
+        let magic = VersionedMagic::read(reader)?;
+        let tensor_count = read_length(reader, &magic)?;
+        let metadata_kv_count = read_length(reader, &magic)?;
+
+        if tensor_count > GGUF_MAX_ARRAY_ELEMENTS {
+            crate::bail!("gguf: tensor_count {tensor_count} exceeds max {GGUF_MAX_ARRAY_ELEMENTS}")
+        }
+        if metadata_kv_count > GGUF_MAX_ARRAY_ELEMENTS {
+            crate::bail!(
+                "gguf: metadata_kv_count {metadata_kv_count} exceeds max {GGUF_MAX_ARRAY_ELEMENTS}"
+            )
+        }
+
+        // Reject header-declared counts that can't fit in the file at minimum size.
+        // Per-entry minima: a metadata kv is at least `key_len_prefix + u32 value_type
+        // + 1 byte value`; a tensor info is at least `name_len_prefix + u32 n_dims
+        // + u32 dtype + u64 offset`.
+        let prefix = magic.length_prefix_size();
+        let min_per_kv = prefix + 4 + 1;
+        let min_per_tensor = prefix + 4 + 4 + 8;
+        let needed = metadata_kv_count
+            .saturating_mul(min_per_kv)
+            .saturating_add(tensor_count.saturating_mul(min_per_tensor));
+        let remaining = remaining_bytes(reader, file_size)?;
+        if needed > remaining {
+            crate::bail!(
+                "gguf: header declares {tensor_count} tensors and {metadata_kv_count} metadata entries, needs at least {needed} bytes, only {remaining} remaining"
+            )
+        }
 
         let mut metadata = HashMap::new();
         for _idx in 0..metadata_kv_count {
-            let key = read_string(reader, &magic)?;
+            let key = read_string(reader, &magic, file_size)?;
             let value_type = reader.read_u32::<LittleEndian>()?;
             let value_type = ValueType::from_u32(value_type)?;
-            let value = Value::read(reader, value_type, &magic)?;
+            let value = Value::read(reader, value_type, &magic, 0, file_size)?;
             metadata.insert(key, value);
         }
         let mut tensor_infos = HashMap::new();
         for _idx in 0..tensor_count {
-            let tensor_name = read_string(reader, &magic)?;
+            let tensor_name = read_string(reader, &magic, file_size)?;
             let n_dimensions = reader.read_u32::<LittleEndian>()?;
+            if n_dimensions > GGUF_MAX_TENSOR_DIMS {
+                crate::bail!(
+                    "gguf: tensor '{tensor_name}' has {n_dimensions} dimensions, max is {GGUF_MAX_TENSOR_DIMS}"
+                )
+            }
 
             let mut dimensions: Vec<usize> = match magic {
                 VersionedMagic::GgufV1 => {
@@ -453,7 +557,7 @@ impl Content {
             Some(Value::I32(v)) if *v >= 0 => *v as u64,
             _ => DEFAULT_ALIGNMENT,
         };
-        let tensor_data_offset = (position + alignment - 1) / alignment * alignment;
+        let tensor_data_offset = position.div_ceil(alignment) * alignment;
         Ok(Self {
             magic,
             metadata,

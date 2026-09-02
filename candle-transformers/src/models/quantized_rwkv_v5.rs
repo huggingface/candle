@@ -1,3 +1,20 @@
+//! RWKV v5 model implementation with quantization support.
+//!
+//! RWKV v5 is an attention-free language model optimized for efficiency.
+//! This implementation provides quantization for reduced memory and compute.
+//!
+//! Key characteristics:
+//! - Linear attention mechanism
+//! - GroupNorm layer normalization
+//! - Time-mixing layers
+//! - State-based sequential processing
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - [RWKV Model](https://github.com/BlinkDL/RWKV-LM)
+//! - [RWKV v5 Architecture](https://www.rwkv.com/v5)
+//!
+
 use crate::{
     quantized_nn::{layer_norm, linear_no_bias as linear, Embedding, Linear},
     quantized_var_builder::VarBuilder,

@@ -1,3 +1,21 @@
+//! RWKV v6 model implementation with quantization support.
+//!
+//! RWKV is a linear attention model that combines the efficiency of RNNs
+//! with the parallelizable training of Transformers. Version 6 builds on previous
+//! versions with further optimizations.
+//!
+//! Key characteristics:
+//! - Linear attention mechanism
+//! - Time mixing layers
+//! - Channel mixing layers
+//! - RMSNorm for normalization
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - [RWKV Architecture](https://github.com/BlinkDL/RWKV-LM)
+//! - [RWKV v6 Release](https://huggingface.co/BlinkDL/rwkv-6)
+//!
+
 use crate::{
     quantized_nn::{layer_norm, linear_no_bias as linear, Embedding, Linear},
     quantized_var_builder::VarBuilder,

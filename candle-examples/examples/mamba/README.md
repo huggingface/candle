@@ -12,6 +12,6 @@ would only work for inference.
 ## Running the example
 
 ```bash
-$ cargo run --example mamba-minimal --release -- --prompt "Mamba is the"
+$ cargo run --example mamba --release -- --prompt "Mamba is the"
 ```
 

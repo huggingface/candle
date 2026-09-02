@@ -11,6 +11,7 @@ pub enum DeviceLocation {
     Metal { gpu_id: usize },
 }
 
+/// Cpu, Cuda, or Metal
 #[derive(Debug, Clone)]
 pub enum Device {
     Cpu,
@@ -102,7 +103,63 @@ impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize, const N4: 
     }
 }
 
-impl<S: NdArray> NdArray for Vec<S> {
+impl<S: WithDType> NdArray for Vec<S> {
+    fn shape(&self) -> Result<Shape> {
+        Ok(Shape::from(self.len()))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        S::to_cpu_storage(self.as_slice())
+    }
+}
+
+impl<S: WithDType> NdArray for Vec<&[S]> {
+    fn shape(&self) -> Result<Shape> {
+        if self.is_empty() {
+            crate::bail!("empty array")
+        }
+        let n = self.len();
+        let m = self[0].len();
+        for v in self.iter() {
+            if v.len() != m {
+                crate::bail!("two elements have different len {m} {}", v.len())
+            }
+        }
+        Ok(Shape::from((n, m)))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        let data = self.iter().copied().flatten().copied().collect::<Vec<_>>();
+        S::to_cpu_storage_owned(data)
+    }
+}
+
+impl<S: WithDType> NdArray for Vec<Vec<S>> {
+    fn shape(&self) -> Result<Shape> {
+        if self.is_empty() {
+            crate::bail!("empty array")
+        }
+        let n = self.len();
+        let m = self[0].len();
+        for v in self.iter() {
+            if v.len() != m {
+                crate::bail!("two elements have different len {m} {}", v.len())
+            }
+        }
+        Ok(Shape::from((n, m)))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        let len: usize = self.iter().map(|v| v.len()).sum();
+        let mut dst = Vec::with_capacity(len);
+        for v in self.iter() {
+            dst.extend(v.iter().copied());
+        }
+        S::to_cpu_storage_owned(dst)
+    }
+}
+
+impl<S: WithDType> NdArray for Vec<Vec<Vec<S>>> {
     fn shape(&self) -> Result<Shape> {
         if self.is_empty() {
             crate::bail!("empty array")
@@ -119,9 +176,57 @@ impl<S: NdArray> NdArray for Vec<S> {
     }
 
     fn to_cpu_storage(&self) -> CpuStorage {
-        // This allocates intermediary memory and shouldn't be necessary.
-        let storages = self.iter().map(|v| v.to_cpu_storage()).collect::<Vec<_>>();
-        CpuStorage::concat(storages.as_slice()).unwrap()
+        if self.is_empty() {
+            return S::to_cpu_storage_owned(vec![]);
+        }
+        let len: usize = self
+            .iter()
+            .map(|v| v.iter().map(|v| v.len()).sum::<usize>())
+            .sum();
+        let mut dst = Vec::with_capacity(len);
+        for v1 in self.iter() {
+            for v2 in v1.iter() {
+                dst.extend(v2.iter().copied());
+            }
+        }
+        S::to_cpu_storage_owned(dst)
+    }
+}
+
+impl<S: WithDType> NdArray for Vec<Vec<Vec<Vec<S>>>> {
+    fn shape(&self) -> Result<Shape> {
+        if self.is_empty() {
+            crate::bail!("empty array")
+        }
+        let shape0 = self[0].shape()?;
+        let n = self.len();
+        for v in self.iter() {
+            let shape = v.shape()?;
+            if shape != shape0 {
+                crate::bail!("two elements have different shapes {shape:?} {shape0:?}")
+            }
+        }
+        Ok(Shape::from([[n].as_slice(), shape0.dims()].concat()))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        let len: usize = self
+            .iter()
+            .map(|v| {
+                v.iter()
+                    .map(|v| v.iter().map(|v| v.len()).sum::<usize>())
+                    .sum::<usize>()
+            })
+            .sum();
+        let mut dst = Vec::with_capacity(len);
+        for v1 in self.iter() {
+            for v2 in v1.iter() {
+                for v3 in v2.iter() {
+                    dst.extend(v3.iter().copied());
+                }
+            }
+        }
+        S::to_cpu_storage_owned(dst)
     }
 }
 
@@ -130,8 +235,44 @@ impl Device {
         Ok(Self::Cuda(crate::CudaDevice::new(ordinal)?))
     }
 
+    pub fn as_cuda_device(&self) -> Result<&crate::CudaDevice> {
+        match self {
+            Self::Cuda(d) => Ok(d),
+            Self::Cpu => crate::bail!("expected a cuda device, got cpu"),
+            Self::Metal(_) => crate::bail!("expected a cuda device, got Metal"),
+        }
+    }
+
+    pub fn as_metal_device(&self) -> Result<&crate::MetalDevice> {
+        match self {
+            Self::Cuda(_) => crate::bail!("expected a metal device, got cuda"),
+            Self::Cpu => crate::bail!("expected a metal device, got cpu"),
+            Self::Metal(d) => Ok(d),
+        }
+    }
+
+    pub fn new_cuda_with_stream(ordinal: usize) -> Result<Self> {
+        Ok(Self::Cuda(crate::CudaDevice::new_with_stream(ordinal)?))
+    }
+
     pub fn new_metal(ordinal: usize) -> Result<Self> {
         Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
+    }
+
+    /// Run `f` with device specific context.
+    ///
+    /// On CPU this installs candle's private rayon thread pool for the
+    /// duration of `f`, keeping worker threads warm across the many short
+    /// parallel sections in a model forward pass. Currently noop for other backends.
+    pub fn with_context<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send,
+        R: Send,
+    {
+        match self {
+            Self::Cpu => crate::utils::with_threadpool(f),
+            _ => f(),
+        }
     }
 
     pub fn set_seed(&self, seed: u64) -> Result<()> {
@@ -139,6 +280,14 @@ impl Device {
             Self::Cpu => CpuDevice.set_seed(seed),
             Self::Cuda(c) => c.set_seed(seed),
             Self::Metal(m) => m.set_seed(seed),
+        }
+    }
+
+    pub fn get_current_seed(&self) -> Result<u64> {
+        match self {
+            Self::Cpu => CpuDevice.get_current_seed(),
+            Self::Cuda(c) => c.get_current_seed(),
+            Self::Metal(m) => m.get_current_seed(),
         }
     }
 
@@ -171,9 +320,33 @@ impl Device {
         matches!(self, Self::Metal(_))
     }
 
+    pub fn supports_bf16(&self) -> bool {
+        match self {
+            Self::Cuda(_) | Self::Metal(_) => true,
+            Self::Cpu => false,
+        }
+    }
+
+    /// Return `BF16` for devices that support it, otherwise default to `F32`.
+    pub fn bf16_default_to_f32(&self) -> DType {
+        if self.supports_bf16() {
+            DType::BF16
+        } else {
+            DType::F32
+        }
+    }
+
     pub fn cuda_if_available(ordinal: usize) -> Result<Self> {
         if crate::utils::cuda_is_available() {
             Self::new_cuda(ordinal)
+        } else {
+            Ok(Self::Cpu)
+        }
+    }
+
+    pub fn metal_if_available(ordinal: usize) -> Result<Self> {
+        if crate::utils::metal_is_available() {
+            Self::new_metal(ordinal)
         } else {
             Ok(Self::Cpu)
         }
@@ -255,23 +428,6 @@ impl Device {
         self.rand_normal_f64(mean.to_f64(), std.to_f64(), shape, T::DTYPE)
     }
 
-    pub(crate) fn ones(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
-        match self {
-            Device::Cpu => {
-                let storage = CpuDevice.ones_impl(shape, dtype)?;
-                Ok(Storage::Cpu(storage))
-            }
-            Device::Cuda(device) => {
-                let storage = device.ones_impl(shape, dtype)?;
-                Ok(Storage::Cuda(storage))
-            }
-            Device::Metal(device) => {
-                let storage = device.ones_impl(shape, dtype)?;
-                Ok(Storage::Metal(storage))
-            }
-        }
-    }
-
     pub(crate) fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
         match self {
             Device::Cpu => {
@@ -289,17 +445,48 @@ impl Device {
         }
     }
 
+    pub(crate) unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+        match self {
+            Device::Cpu => {
+                let storage = CpuDevice.alloc_uninit(shape, dtype)?;
+                Ok(Storage::Cpu(storage))
+            }
+            Device::Cuda(device) => {
+                let storage = device.alloc_uninit(shape, dtype)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = device.alloc_uninit(shape, dtype)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
+    pub(crate) fn storage_from_slice<D: WithDType>(&self, data: &[D]) -> Result<Storage> {
+        match self {
+            Device::Cpu => Ok(Storage::Cpu(data.to_cpu_storage())),
+            Device::Cuda(device) => {
+                let storage = device.storage_from_slice(data)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = device.storage_from_slice(data)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
     pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
         match self {
             Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
             Device::Cuda(device) => {
                 let storage = array.to_cpu_storage();
-                let storage = device.storage_from_cpu_storage(&storage)?;
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Cuda(storage))
             }
             Device::Metal(device) => {
                 let storage = array.to_cpu_storage();
-                let storage = device.storage_from_cpu_storage(&storage)?;
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
         }
@@ -310,14 +497,22 @@ impl Device {
             Device::Cpu => Ok(Storage::Cpu(S::to_cpu_storage_owned(data))),
             Device::Cuda(device) => {
                 let storage = S::to_cpu_storage_owned(data);
-                let storage = device.storage_from_cpu_storage(&storage)?;
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Cuda(storage))
             }
             Device::Metal(device) => {
                 let storage = S::to_cpu_storage_owned(data);
-                let storage = device.storage_from_cpu_storage(&storage)?;
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
+        }
+    }
+
+    pub fn synchronize(&self) -> Result<()> {
+        match self {
+            Self::Cpu => Ok(()),
+            Self::Cuda(d) => d.synchronize(),
+            Self::Metal(d) => d.synchronize(),
         }
     }
 }

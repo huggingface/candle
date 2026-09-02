@@ -66,7 +66,7 @@ struct Args {
 
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let api = hf_hub::api::sync::Api::new()?;
+    let api = candle_examples::hub::Api::new()?;
 
     let mut tokenizer_dec = {
         let tokenizer_file = match args.tokenizer {
@@ -85,27 +85,18 @@ pub fn main() -> anyhow::Result<()> {
             Some(model) => std::path::PathBuf::from(model),
             None => {
                 let (repo, branch) = args.which.repo_and_branch_name();
-                api.repo(hf_hub::Repo::with_revision(
-                    repo.to_string(),
-                    hf_hub::RepoType::Model,
-                    branch.to_string(),
-                ))
-                .get("model.safetensors")?
+                api.model(repo)
+                    .with_revision(branch)
+                    .get("model.safetensors")?
             }
         };
-        println!("model: {:?}", model);
+        println!("model: {model:?}");
         unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? }
     };
 
     let (encoder_config, decoder_config) = {
         let (repo, branch) = args.which.repo_and_branch_name();
-        let config_filename = api
-            .repo(hf_hub::Repo::with_revision(
-                repo.to_string(),
-                hf_hub::RepoType::Model,
-                branch.to_string(),
-            ))
-            .get("config.json")?;
+        let config_filename = api.model(repo).with_revision(branch).get("config.json")?;
         let config: Config = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
         (config.encoder, config.decoder)
     };
@@ -115,7 +106,7 @@ pub fn main() -> anyhow::Result<()> {
     let processor = image_processor::ViTImageProcessor::new(&processor_config);
 
     let image = vec![args.image.as_str()];
-    let image = processor.preprocess(image)?;
+    let image = processor.preprocess(image)?.to_device(&device)?;
 
     let encoder_xs = model.encoder().forward(&image)?;
 

@@ -1,3 +1,8 @@
+//! Implementation of the ChatGLM2/3 models from THUDM.
+//!
+//! - 💻 [GitHub](https://github.com/THUDM/ChatGLM3) ChatGLM3: Advancing Multilingual Conversational Language Models with High-Quality Data
+//! - 💻 [GitHub](https://github.com/THUDM/ChatGLM2-6B) ChatGLM2-6B.
+//!
 use crate::models::with_tracing::{linear_b as linear, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;

@@ -41,12 +41,36 @@ impl Linear {
 
 impl super::Module for Linear {
     fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
-        let w = match *x.dims() {
-            [b1, b2, _, _] => self.weight.broadcast_left((b1, b2))?.t()?,
-            [bsize, _, _] => self.weight.broadcast_left(bsize)?.t()?,
-            _ => self.weight.t()?,
+        // When possible, we avoid using a broadcasted matmul as it is much slower
+        // than the standard matmul for the cuda and cpu backends.
+        let x = match *x.dims() {
+            [b1, b2, m, k] => {
+                if x.is_contiguous() {
+                    let w = self.weight.t()?;
+                    x.reshape((b1 * b2 * m, k))?
+                        .matmul(&w)?
+                        .reshape((b1, b2, m, ()))?
+                } else {
+                    let w = self.weight.broadcast_left((b1, b2))?.t()?;
+                    x.matmul(&w)?
+                }
+            }
+            [bsize, m, k] => {
+                if x.is_contiguous() {
+                    let w = self.weight.t()?;
+                    x.reshape((bsize * m, k))?
+                        .matmul(&w)?
+                        .reshape((bsize, m, ()))?
+                } else {
+                    let w = self.weight.broadcast_left(bsize)?.t()?;
+                    x.matmul(&w)?
+                }
+            }
+            _ => {
+                let w = self.weight.t()?;
+                x.matmul(&w)?
+            }
         };
-        let x = x.matmul(&w)?;
         match &self.bias {
             None => Ok(x),
             Some(bias) => x.broadcast_add(bias),

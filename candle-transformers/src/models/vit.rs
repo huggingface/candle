@@ -1,3 +1,20 @@
+//! Vision Transformer (ViT) implementation.
+//!
+//! Vision Transformer applies transformer architecture to image classification
+//! by splitting images into patches and processing them as a sequence.
+//!
+//! Key characteristics:
+//! - Image patches as sequence tokens
+//! - Self-attention between patches
+//! - Position embeddings
+//! - CLS token for classification
+//! - Layer normalization
+//!
+//! References:
+//! - [ViT Paper](https://arxiv.org/abs/2010.11929)
+//! - [Model Card](https://huggingface.co/google/vit-base-patch16-224)
+//!
+
 use crate::models::with_tracing::{conv2d, linear, linear_no_bias, Conv2d, Linear};
 use candle::{IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};

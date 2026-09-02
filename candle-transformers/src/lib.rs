@@ -1,3 +1,4 @@
+pub mod fused_moe;
 pub mod generation;
 pub mod models;
 pub mod object_detection;

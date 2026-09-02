@@ -4,7 +4,7 @@ use candle_nn::{
     linear, ops::log_softmax, ops::softmax, sequential::seq, Activation, AdamW, Optimizer,
     ParamsAdamW, VarBuilder, VarMap,
 };
-use rand::{distributions::Distribution, rngs::ThreadRng, Rng};
+use rand::{distr::Distribution, rngs::ThreadRng, Rng};
 
 fn new_model(
     input_shape: &[usize],
@@ -14,7 +14,7 @@ fn new_model(
 ) -> Result<(impl Module, VarMap)> {
     let input_size = input_shape.iter().product();
 
-    let mut varmap = VarMap::new();
+    let varmap = VarMap::new();
     let var_builder = VarBuilder::from_varmap(&varmap, dtype, device);
 
     let model = seq()
@@ -39,7 +39,7 @@ fn accumulate_rewards(steps: &[Step<i64>]) -> Vec<f64> {
 }
 
 fn weighted_sample(probs: Vec<f32>, rng: &mut ThreadRng) -> Result<usize> {
-    let distribution = rand::distributions::WeightedIndex::new(probs).map_err(Error::wrap)?;
+    let distribution = rand::distr::weighted::WeightedIndex::new(probs).map_err(Error::wrap)?;
     let mut rng = rng;
     Ok(distribution.sample(&mut rng))
 }
@@ -65,10 +65,10 @@ pub fn run() -> Result<()> {
 
     let mut optimizer = AdamW::new(varmap.all_vars(), optimizer_params)?;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for epoch_idx in 0..100 {
-        let mut state = env.reset(rng.gen::<u64>())?;
+        let mut state = env.reset(rng.random::<u64>())?;
         let mut steps: Vec<Step<i64>> = vec![];
 
         loop {
@@ -84,7 +84,7 @@ pub fn run() -> Result<()> {
             steps.push(step.copy_with_obs(&state));
 
             if step.terminated || step.truncated {
-                state = env.reset(rng.gen::<u64>())?;
+                state = env.reset(rng.random::<u64>())?;
                 if steps.len() > 5000 {
                     break;
                 }

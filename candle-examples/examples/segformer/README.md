@@ -10,9 +10,11 @@ If you want you can use the example images from this [pull request][pr], downloa
 
 ```bash
 # run the image classification task
-cargo run --example segformer classify <path-to-image>
+cargo run --example segformer classify candle-examples/examples/yolo-v8/assets/bike.jpg
+
 # run the segmentation task
-cargo run --example segformer segment <path-to-image>
+cargo run --example segformer segment candle-examples/examples/yolo-v8/assets/bike.jpg
+
 ```
 
 Example output for classification:

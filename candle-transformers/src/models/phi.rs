@@ -1,3 +1,17 @@
+//! Microsoft Phi model implementation
+//!
+//! The Phi series are decoder-only transformers designed for code and language tasks.
+//!
+//! Key characteristics:
+//! - Decoder-only transformer architecture
+//! - RoPE embeddings
+//! - Layer normalization
+//! - QK normalization
+//!
+//! - ⚡ [Interactive Wasm Example](https://huggingface.co/spaces/radames/Candle-phi1-phi2-wasm-demo)
+//! - 🤗 [HF Link](https://huggingface.co/microsoft/phi-2)
+//!
+
 use crate::models::with_tracing::{layer_norm, linear, Embedding, LayerNorm, Linear};
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
@@ -56,24 +70,20 @@ impl RotaryEmbedding {
             .to_dtype(DType::F32)?
             .reshape((cfg.max_position_embeddings, 1))?;
         let freqs = t.matmul(&inv_freq)?;
-        let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
         Ok(Self {
             dim,
-            sin: emb.sin()?,
-            cos: emb.cos()?,
+            sin: freqs.sin()?,
+            cos: freqs.cos()?,
         })
     }
 
     fn apply_rotary_emb(&self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (_b_size, _num_heads, seq_len, _headdim) = xs.dims4()?;
-        let xs_rot = xs.i((.., .., .., ..self.dim))?;
+        let xs_rot = xs.i((.., .., .., ..self.dim))?.contiguous()?;
         let xs_pass = xs.i((.., .., .., self.dim..))?;
-        let xs12 = xs_rot.chunk(2, D::Minus1)?;
-        let (xs1, xs2) = (&xs12[0], &xs12[1]);
         let c = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let s = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let rotate_half = Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)?;
-        let xs_rot = (xs_rot.broadcast_mul(&c)? + rotate_half.broadcast_mul(&s)?)?;
+        let xs_rot = candle_nn::rotary_emb::rope(&xs_rot, &c, &s)?;
         Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)
     }
 }
@@ -174,15 +184,7 @@ impl Attention {
     }
 
     fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_heads / self.num_kv_heads;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
+        crate::utils::repeat_kv(xs, self.num_heads / self.num_kv_heads)
     }
 
     fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {

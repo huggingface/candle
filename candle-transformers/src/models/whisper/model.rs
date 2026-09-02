@@ -248,19 +248,21 @@ impl AudioEncoder {
             stride: 1,
             groups: 1,
             dilation: 1,
+            cudnn_fwd_algo: None,
         };
         let cfg2 = Conv1dConfig {
             padding: 1,
             stride: 2,
             groups: 1,
             dilation: 1,
+            cudnn_fwd_algo: None,
         };
         let conv1 = conv1d(cfg.num_mel_bins, n_state, 3, cfg1, vb.pp("conv1"))?;
         let conv2 = conv1d(n_state, n_state, 3, cfg2, vb.pp("conv2"))?;
         let positional_embedding = sinusoids(n_ctx, n_state, vb.device())?;
         let blocks = (0..cfg.encoder_layers)
             .map(|i| {
-                ResidualAttentionBlock::load(n_state, n_head, false, vb.pp(&format!("layers.{i}")))
+                ResidualAttentionBlock::load(n_state, n_head, false, vb.pp(format!("layers.{i}")))
             })
             .collect::<Result<Vec<_>>>()?;
         let ln_post = layer_norm(n_state, vb.pp("layer_norm"))?;
@@ -321,7 +323,7 @@ impl TextDecoder {
         let positional_embedding = vb.get((n_ctx, n_state), "embed_positions.weight")?;
         let blocks = (0..cfg.decoder_layers)
             .map(|i| {
-                ResidualAttentionBlock::load(n_state, n_head, true, vb.pp(&format!("layers.{i}")))
+                ResidualAttentionBlock::load(n_state, n_head, true, vb.pp(format!("layers.{i}")))
             })
             .collect::<Result<Vec<_>>>()?;
         let ln = layer_norm(n_state, vb.pp("layer_norm"))?;

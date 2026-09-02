@@ -30,7 +30,7 @@ impl Which {
             Self::M4 => "m4",
             Self::M5 => "m5",
         };
-        format!("timm/efficientvit_{}.r224_in1k", name)
+        format!("timm/efficientvit_{name}.r224_in1k")
     }
 
     fn config(&self) -> efficientvit::Config {
@@ -72,7 +72,7 @@ pub fn main() -> anyhow::Result<()> {
     let model_file = match args.model {
         None => {
             let model_name = args.which.model_filename();
-            let api = hf_hub::api::sync::Api::new()?;
+            let api = candle_examples::hub::Api::new()?;
             let api = api.model(model_name);
             api.get("model.safetensors")?
         }

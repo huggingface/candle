@@ -1,3 +1,15 @@
+//! Whisper Model Implementation
+//!
+//! Whisper is an automatic speech recognition (ASR) system trained on large amounts
+//! of multilingual and multitask supervised data collected from the web. It can be used to
+//! convert audio files (in the `.wav` format) to text. Supported features include
+//! language detection as well as multilingual speech recognition.
+//!
+//! - ⚡ [Interactive Wasm Example](https://huggingface.co/spaces/lmz/candle-whisper)
+//! - 💻 [GH Link](https://github.com/openai/whisper)
+//! - 💻 Transformers Python [reference implementation](https://github.com/huggingface/transformers/blob/main/src/transformers/models/whisper/modeling_whisper.py)
+//!
+//!
 pub mod audio;
 pub mod model;
 pub mod quantized_model;

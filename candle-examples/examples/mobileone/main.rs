@@ -28,7 +28,7 @@ impl Which {
             Self::S3 => "s3",
             Self::S4 => "s4",
         };
-        format!("timm/mobileone_{}.apple_in1k", name)
+        format!("timm/mobileone_{name}.apple_in1k")
     }
 
     fn config(&self) -> mobileone::Config {
@@ -69,7 +69,7 @@ pub fn main() -> anyhow::Result<()> {
     let model_file = match args.model {
         None => {
             let model_name = args.which.model_filename();
-            let api = hf_hub::api::sync::Api::new()?;
+            let api = candle_examples::hub::Api::new()?;
             let api = api.model(model_name);
             api.get("model.safetensors")?
         }
