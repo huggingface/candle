@@ -10,9 +10,9 @@ use candle_transformers::models::quantized_t5 as t5;
 
 use anyhow::{Error as E, Result};
 use candle::{Device, Tensor};
+use candle_examples::hub::{Api, Repo};
 use candle_transformers::generation::LogitsProcessor;
 use clap::{Parser, ValueEnum};
-use hf_hub::{api::sync::Api, api::sync::ApiRepo, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 #[derive(Clone, Debug, Copy, ValueEnum)]
@@ -91,9 +91,8 @@ impl T5ModelBuilder {
             (None, None) => (default_model, "main".to_string()),
         };
 
-        let repo = Repo::with_revision(model_id, RepoType::Model, revision);
         let api = Api::new()?;
-        let api = api.repo(repo);
+        let api = api.model(model_id).with_revision(revision);
         let config_filename = match &args.config_file {
             Some(filename) => Self::get_local_or_remote_file(filename, &api)?,
             None => match args.which {
@@ -137,7 +136,10 @@ impl T5ModelBuilder {
         Ok(t5::T5ForConditionalGeneration::load(vb, &self.config)?)
     }
 
-    fn get_local_or_remote_file(filename: &str, api: &ApiRepo) -> Result<PathBuf> {
+    fn get_local_or_remote_file(
+        filename: &str,
+        api: &Repo<hf_hub::RepoTypeModel>,
+    ) -> Result<PathBuf> {
         let local_filename = std::path::PathBuf::from(filename);
         if local_filename.exists() {
             Ok(local_filename)

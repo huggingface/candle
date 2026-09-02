@@ -45,9 +45,8 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api =
-                api.model("vincent-espitalier/dino-v2-reg4-with-plantclef2024-weights".into());
+            let api = candle_examples::hub::Api::new()?;
+            let api = api.model("vincent-espitalier/dino-v2-reg4-with-plantclef2024-weights");
             api.get(
                 "vit_base_patch14_reg4_dinov2_lvd142m_pc24_onlyclassifier_then_all.safetensors",
             )?

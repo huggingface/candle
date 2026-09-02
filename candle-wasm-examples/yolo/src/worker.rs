@@ -3,7 +3,7 @@ use candle::{DType, Device, Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
-use yew_agent::{HandlerId, Public, WorkerLink};
+use yew_agent::worker::{HandlerId, WorkerScope};
 
 #[wasm_bindgen]
 extern "C" {
@@ -194,7 +194,6 @@ impl ModelPose {
 }
 
 pub struct Worker {
-    link: WorkerLink<Self>,
     model: Option<Model>,
 }
 
@@ -210,21 +209,20 @@ pub enum WorkerOutput {
     WeightsLoaded,
 }
 
-impl yew_agent::Worker for Worker {
+impl yew_agent::worker::Worker for Worker {
     type Input = WorkerInput;
     type Message = ();
     type Output = std::result::Result<WorkerOutput, String>;
-    type Reach = Public<Self>;
 
-    fn create(link: WorkerLink<Self>) -> Self {
-        Self { link, model: None }
+    fn create(_scope: &WorkerScope<Self>) -> Self {
+        Self { model: None }
     }
 
-    fn update(&mut self, _msg: Self::Message) {
+    fn update(&mut self, _scope: &WorkerScope<Self>, _msg: Self::Message) {
         // no messaging
     }
 
-    fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
+    fn received(&mut self, scope: &WorkerScope<Self>, msg: Self::Input, id: HandlerId) {
         let output = match msg {
             WorkerInput::ModelData(md) => match Model::load(md) {
                 Ok(model) => {
@@ -243,14 +241,6 @@ impl yew_agent::Worker for Worker {
                 }
             },
         };
-        self.link.respond(id, output);
-    }
-
-    fn name_of_resource() -> &'static str {
-        "worker.js"
-    }
-
-    fn resource_path_is_relative() -> bool {
-        true
+        scope.respond(id, output);
     }
 }

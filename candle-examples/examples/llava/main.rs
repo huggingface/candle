@@ -7,6 +7,7 @@ use candle_transformers::models::llama::Cache;
 
 use anyhow::{bail, Error as E, Result};
 use candle::{DType, Device, IndexOp, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::models::llava::config::{
     HFGenerationConfig, HFLLaVAConfig, HFPreProcessorConfig,
@@ -15,7 +16,6 @@ use candle_transformers::models::llava::{config::LLaVAConfig, LLaVA};
 use clap::Parser;
 use constants::*;
 use conversation::Conversation;
-use hf_hub::api::sync::Api;
 use image_processor::{process_image, ImageProcessor};
 use std::io::Write;
 use tokenizers::Tokenizer;
