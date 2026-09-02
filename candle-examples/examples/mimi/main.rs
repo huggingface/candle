@@ -51,9 +51,7 @@ fn main() -> Result<()> {
     let device = candle_examples::device(args.cpu)?;
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
-        None => Api::new()?
-            .model("kyutai/mimi".to_string())
-            .get("model.safetensors")?,
+        None => Api::new()?.model("kyutai/mimi").get("model.safetensors")?,
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
     let config = Config::v0_1(None);

@@ -5,7 +5,7 @@ pub const SAMPLE_RATE: usize = 24_000;
 
 pub(crate) struct AudioOutputData_ {
     resampled_data: std::collections::VecDeque<f32>,
-    resampler: rubato::FastFixedIn<f32>,
+    resampler: rubato::Async<f32>,
     output_buffer: Vec<f32>,
     input_buffer: Vec<f32>,
     input_len: usize,
@@ -17,15 +17,16 @@ impl AudioOutputData_ {
 
         let resampled_data = std::collections::VecDeque::with_capacity(output_sample_rate * 10);
         let resample_ratio = output_sample_rate as f64 / input_sample_rate as f64;
-        let resampler = rubato::FastFixedIn::new(
+        let resampler = rubato::Async::<f32>::new_poly(
             resample_ratio,
             f64::max(resample_ratio, 1.0),
             rubato::PolynomialDegree::Septic,
             1024,
             1,
+            rubato::FixedAsync::Input,
         )?;
-        let input_buffer = resampler.input_buffer_allocate(true).remove(0);
-        let output_buffer = resampler.output_buffer_allocate(true).remove(0);
+        let input_buffer = vec![0f32; resampler.input_frames_max()];
+        let output_buffer = vec![0f32; resampler.output_frames_max()];
         Ok(Self {
             resampled_data,
             resampler,
@@ -33,14 +34,6 @@ impl AudioOutputData_ {
             output_buffer,
             input_len: 0,
         })
-    }
-
-    pub fn reset(&mut self) {
-        use rubato::Resampler;
-        self.output_buffer.fill(0.);
-        self.input_buffer.fill(0.);
-        self.resampler.reset();
-        self.resampled_data.clear();
     }
 
     pub(crate) fn take_all(&mut self) -> Vec<f32> {
@@ -62,6 +55,7 @@ impl AudioOutputData_ {
     }
 
     pub(crate) fn push_samples(&mut self, samples: &[f32]) -> Result<()> {
+        use rubato::audioadapter_buffers::direct::SequentialSlice;
         use rubato::Resampler;
 
         let mut pos_in = 0;
@@ -73,11 +67,13 @@ impl AudioOutputData_ {
             if self.input_len < self.input_buffer.len() {
                 break;
             }
-            let (_, out_len) = self.resampler.process_into_buffer(
-                &[&self.input_buffer],
-                &mut [&mut self.output_buffer],
-                None,
-            )?;
+            // Mono, so the interleaved and sequential layouts are the same.
+            let buffer_in = SequentialSlice::new(&self.input_buffer, 1, self.input_buffer.len())?;
+            let out_frames = self.output_buffer.len();
+            let mut buffer_out = SequentialSlice::new_mut(&mut self.output_buffer, 1, out_frames)?;
+            let (_, out_len) =
+                self.resampler
+                    .process_into_buffer(&buffer_in, &mut buffer_out, None)?;
             for &elem in self.output_buffer[..out_len].iter() {
                 self.resampled_data.push_front(elem)
             }
@@ -106,24 +102,20 @@ pub(crate) fn setup_output_stream() -> Result<(cpal::Stream, AudioOutputData)> {
             .context("no audio output available")?,
         Some(config_range) => config_range,
     };
-    let sample_rate = cpal::SampleRate(SAMPLE_RATE as u32).clamp(
+    let sample_rate = (SAMPLE_RATE as cpal::SampleRate).clamp(
         config_range.min_sample_rate(),
         config_range.max_sample_rate(),
     );
     let config: cpal::StreamConfig = config_range.with_sample_rate(sample_rate).into();
     let channels = config.channels as usize;
-    println!(
-        "cpal device: {} {} {config:?}",
-        device.name().unwrap_or_else(|_| "unk".to_string()),
-        config.sample_rate.0
-    );
+    println!("cpal device: {device} {} {config:?}", config.sample_rate);
     let audio_data = Arc::new(Mutex::new(AudioOutputData_::new(
         SAMPLE_RATE,
-        config.sample_rate.0 as usize,
+        config.sample_rate as usize,
     )?));
     let ad = audio_data.clone();
     let stream = device.build_output_stream(
-        &config,
+        config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
             data.fill(0.);
             let mut ad = ad.lock().unwrap();
@@ -161,23 +153,19 @@ pub(crate) fn setup_input_stream() -> Result<(cpal::Stream, AudioOutputData)> {
     let config_range = supported_configs_range
         .find(|c| c.channels() == 1)
         .context("no audio input available")?;
-    let sample_rate = cpal::SampleRate(SAMPLE_RATE as u32).clamp(
+    let sample_rate = (SAMPLE_RATE as cpal::SampleRate).clamp(
         config_range.min_sample_rate(),
         config_range.max_sample_rate(),
     );
     let config: cpal::StreamConfig = config_range.with_sample_rate(sample_rate).into();
-    println!(
-        "cpal device: {} {} {config:?}",
-        device.name().unwrap_or_else(|_| "unk".to_string()),
-        config.sample_rate.0
-    );
+    println!("cpal device: {device} {} {config:?}", config.sample_rate);
     let audio_data = Arc::new(Mutex::new(AudioOutputData_::new(
-        config.sample_rate.0 as usize,
+        config.sample_rate as usize,
         SAMPLE_RATE,
     )?));
     let ad = audio_data.clone();
     let stream = device.build_input_stream(
-        &config,
+        config,
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
             let mut ad = ad.lock().unwrap();
             if let Err(err) = ad.push_samples(data) {
