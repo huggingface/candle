@@ -18,6 +18,7 @@ exclude = [
     "candle-kernels",
     "candle-metal-kernels",
     "candle-onnx",
+    "candle-sycl-kernels",
 ]
 resolver = "2"
 
@@ -41,6 +42,7 @@ candle-flash-attn = { path = "./candle-flash-attn", version = "0.11.0" }
 candle-flash-attn-v3 = { path = "./candle-flash-attn-v3", version = "0.11.0" }
 candle-kernels = { path = "./candle-kernels", version = "0.11.0" }
 candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.11.0" }
+candle-sycl-kernels = { path = "./candle-sycl-kernels", version = "0.11.0" }
 candle-nn = { path = "./candle-nn", version = "0.11.0" }
 candle-onnx = { path = "./candle-onnx", version = "0.11.0" }
 candle-transformers = { path = "./candle-transformers", version = "0.11.0" }
