@@ -7,15 +7,6 @@
 
 // FIXME: the minimum compute capabilities are just guesses since the table is not specific enough
 
-#if __CUDA_ARCH__ < 800
-__device__ __forceinline__ __half __hmax_nan(__half a, __half b) {
-    return __hisnan(a) ? a : (__hisnan(b) ? b : __hmax(a, b));
-}
-__device__ __forceinline__ __half __hmin_nan(__half a, __half b) {
-    return __hisnan(a) ? a : (__hisnan(b) ? b : __hmin(a, b));
-}
-#endif
-
 #if __CUDA_ARCH__ < 600
 // Copied from https://docs.nvidia.com/cuda/cuda-c-programming-guide/#atomic-functions
 __device__ double atomicAdd(double* address, double val) {
@@ -58,6 +49,95 @@ __device__ double atomicAdd(double* address, double val) {
 //}
 #endif
 
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
+__device__ __forceinline__ __half atomicAdd(__half* address, __half val) {
+    unsigned int* address_as_ui =
+        (unsigned int*)((char*)address - ((size_t)address & 2));
+    unsigned int old = *address_as_ui;
+    unsigned int assumed;
+    const bool upper = ((size_t)address & 2) != 0;
+
+    do {
+        assumed = old;
+
+        const unsigned short old_bits =
+            upper ? (unsigned short)(old >> 16)
+                  : (unsigned short)(old & 0xffff);
+
+        const __half current = __ushort_as_half(old_bits);
+
+        const __half sum = __float2half(
+            __half2float(current) + __half2float(val)
+        );
+
+        const unsigned int sum_bits =
+            (unsigned int)__half_as_ushort(sum);
+
+        const unsigned int updated =
+            upper
+                ? ((old & 0x0000ffffu) | (sum_bits << 16))
+                : ((old & 0xffff0000u) | sum_bits);
+
+        old = atomicCAS(address_as_ui, assumed, updated);
+    } while (old != assumed);
+
+    const unsigned short result_bits =
+        upper ? (unsigned short)(old >> 16)
+              : (unsigned short)(old & 0xffff);
+
+    return __ushort_as_half(result_bits);
+}
+#endif
+
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800 && defined(CANDLE_CUDA_BF16_FALLBACK)
+__device__ __forceinline__ __nv_bfloat16 atomicAdd(
+    __nv_bfloat16* address,
+    __nv_bfloat16 val
+) {
+    unsigned int* address_as_ui =
+        (unsigned int*)((char*)address - ((size_t)address & 2));
+
+    unsigned int old = *address_as_ui;
+    unsigned int assumed;
+    const bool upper = ((size_t)address & 2) != 0;
+
+    do {
+        assumed = old;
+
+        const unsigned short old_bits =
+            upper
+                ? (unsigned short)(old >> 16)
+                : (unsigned short)(old & 0xffff);
+
+        const __nv_bfloat16 current =
+            __ushort_as_bfloat16(old_bits);
+
+        const __nv_bfloat16 sum =
+            __float2bfloat16(
+                __bfloat162float(current) +
+                __bfloat162float(val)
+            );
+
+        const unsigned int sum_bits =
+            (unsigned int)__bfloat16_as_ushort(sum);
+
+        const unsigned int updated =
+            upper
+                ? ((old & 0x0000ffffu) | (sum_bits << 16))
+                : ((old & 0xffff0000u) | sum_bits);
+
+        old = atomicCAS(address_as_ui, assumed, updated);
+    } while (old != assumed);
+
+    const unsigned short result_bits =
+        upper
+            ? (unsigned short)(old >> 16)
+            : (unsigned short)(old & 0xffff);
+
+    return __ushort_as_bfloat16(result_bits);
+}
+#endif
 
 __device__ __forceinline__ __half atomicMaxf(__half* address, __half val) {
 #if __CUDA_ARCH__ < 700
