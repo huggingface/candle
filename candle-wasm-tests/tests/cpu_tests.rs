@@ -1,3 +1,4 @@
+#![allow(unused)]
 use candle::{DType, Device, Result, Tensor};
 use wasm_bindgen_test::*;
 
