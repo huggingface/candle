@@ -26,6 +26,10 @@ cargo run --package candle-core --example cutile --features cutile
 At runtime, cuTile searches for `tileiras` in this order: `CUTILE_TILEIRAS_PATH`,
 `$CUDA_TOOLKIT_PATH/bin/tileiras`, standard CUDA installation directories, and `PATH`.
 
+`CutileContext::new` asks that `tileiras` which architectures it accepts and fails with the
+device architecture and the supported list when the device is not among them, so an unsupported
+GPU or toolkit is reported before any kernel is compiled.
+
 ## Kernel interop
 
 Import Candle's re-export under the name `cutile`. The cuTile procedural macro generates paths with

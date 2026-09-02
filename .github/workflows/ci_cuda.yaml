@@ -60,6 +60,7 @@ jobs:
         run: test -x "${CUDA_TOOLKIT_PATH}/bin/tileiras"
       - name: Test cuTile interop
         run: |
+          cargo test --package candle-core --features cutile --lib
           cargo test --package candle-core --features cutile --test cutile_tests
           cargo test --package candle-core --features cutile --doc
       - name: Test cuTile routed MoE

@@ -18,7 +18,10 @@ use super::cudarc::driver::{CudaSlice, DevicePtr, DevicePtrMut, DeviceRepr, Sync
 use super::{CudaDType, CudaDevice, CudaStorage, WrapErr};
 use crate::{Error, Layout, Result};
 use ::core::ffi::{c_int, c_void};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub use ::cutile::*;
 
@@ -34,6 +37,7 @@ impl CutileContext {
         let candle_stream = device.cuda_stream();
         let candle_context = candle_stream.context();
         candle_context.bind_to_thread().w()?;
+        check_device_support(candle_context.ordinal())?;
         let cutile_device = unsafe {
             ::cutile::cuda_core::Device::borrow_with_owner(
                 candle_context.cu_ctx() as *mut c_void,
@@ -133,6 +137,79 @@ impl CutileContext {
     }
 }
 
+/// Fails when the installed `tileiras` cannot target the device, if it can be probed.
+fn check_device_support(ordinal: usize) -> Result<()> {
+    use ::cutile::cutile_compiler::cuda_tile_runtime_utils::{get_gpu_name, tileiras_binary};
+    let tileiras = tileiras_binary();
+    let Some(supported) = tileiras_gpu_names(&tileiras) else {
+        return Ok(());
+    };
+    ensure_gpu_supported(ordinal, &get_gpu_name(ordinal), &tileiras, &supported)
+}
+
+fn ensure_gpu_supported(
+    ordinal: usize,
+    gpu_name: &str,
+    tileiras: &Path,
+    supported: &[String],
+) -> Result<()> {
+    if supported.iter().any(|name| name == gpu_name) {
+        return Ok(());
+    }
+    Err(Error::msg(format!(
+        "cuTile cannot target CUDA device {ordinal}: it is {gpu_name}, but {} supports only {}. \
+         Use a supported GPU or a CUDA toolkit whose tileiras supports {gpu_name}.",
+        tileiras.display(),
+        supported.join(", "),
+    )))
+}
+
+type GpuNames = Option<Arc<[String]>>;
+
+/// Architectures accepted by `tileiras --gpu-name`, probed once per binary.
+fn tileiras_gpu_names(tileiras: &Path) -> GpuNames {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, GpuNames>>> = OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(cached) = cache.get(tileiras) {
+        return cached.clone();
+    }
+    let names = probe_tileiras_gpu_names(tileiras);
+    cache.insert(tileiras.to_path_buf(), names.clone());
+    names
+}
+
+fn probe_tileiras_gpu_names(tileiras: &Path) -> GpuNames {
+    let output = Command::new(tileiras).arg("--help").output().ok()?;
+    let mut help = String::from_utf8_lossy(&output.stdout).into_owned();
+    help.push_str(&String::from_utf8_lossy(&output.stderr));
+    let names = parse_tileiras_gpu_names(&help);
+    (!names.is_empty()).then(|| names.into())
+}
+
+/// Extracts the `=sm_XY` choices listed under `--gpu-name` in `tileiras --help`.
+fn parse_tileiras_gpu_names(help: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_gpu_name = false;
+    for line in help.lines() {
+        let line = line.trim_start();
+        if line.starts_with("--gpu-name") {
+            in_gpu_name = true;
+        } else if in_gpu_name {
+            match line
+                .strip_prefix('=')
+                .and_then(|rest| rest.split_whitespace().next())
+            {
+                Some(name) => names.push(name.to_string()),
+                None => in_gpu_name = false,
+            }
+        }
+    }
+    names
+}
+
 /// A typed cuTile pointer that records a Candle read after it is dropped.
 #[must_use = "keep the pointer guard alive until the cuTile launch is enqueued"]
 pub struct CutileRead<'a, T> {
@@ -170,13 +247,13 @@ impl<T> CutileWrite<'_, T> {
 }
 
 /// Converts a cuTile error or panic into a Candle error.
-pub fn kernel<T, E: std::fmt::Debug>(
+pub fn kernel<T, E: std::fmt::Display>(
     operation: &str,
     f: impl FnOnce() -> std::result::Result<T, E>,
 ) -> Result<T> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(error)) => Err(Error::msg(format!("cuTile {operation}: {error:?}"))),
+        Ok(Err(error)) => Err(Error::msg(format!("cuTile {operation}: {error}"))),
         Err(payload) => {
             let message = payload
                 .downcast_ref::<String>()
@@ -187,5 +264,64 @@ pub fn kernel<T, E: std::fmt::Debug>(
                 "cuTile {operation} panicked: {message}"
             )))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ensure_gpu_supported, parse_tileiras_gpu_names};
+    use std::path::Path;
+
+    // `tileiras --help` from CUDA 13.2, trimmed.
+    const HELP: &str = "\
+OVERVIEW: tileiras: NVIDIA (R) Cuda Tile IR optimizing assembler
+
+USAGE: tileiras [options] <tile bytecode file>
+
+TileIR Assembler Options:
+
+  -O                   - Alias for --opt-level
+  --arch               - Alias for --gpu-name
+  --device-debug       - Generate debug information (if present in the input bytecode)
+  --gpu-name=<value>   - Specify name of NVIDIA GPU to generate code for.
+    =sm_80             -   SM 80
+    =sm_86             -   SM 86
+    =sm_100            -   SM 100
+    =sm_121            -   SM 121
+  --host-arch=<value>  - Specify the architecture for the generated host code.
+    =x86_64            -   x86_64
+    =aarch64           -   aarch64
+  --host-os=<value>    - Specify the operating system for the generated host code.
+    =linux             -   linux
+";
+
+    #[test]
+    fn parses_gpu_name_choices_only() {
+        assert_eq!(
+            parse_tileiras_gpu_names(HELP),
+            ["sm_80", "sm_86", "sm_100", "sm_121"]
+        );
+    }
+
+    #[test]
+    fn parses_nothing_without_gpu_name_block() {
+        assert!(parse_tileiras_gpu_names("").is_empty());
+        assert!(
+            parse_tileiras_gpu_names("  --arch - Alias for --gpu-name\n    =sm_80\n").is_empty()
+        );
+    }
+
+    #[test]
+    fn reports_unsupported_device_with_alternatives() {
+        let supported = parse_tileiras_gpu_names(HELP);
+        let tileiras = Path::new("/opt/cuda/bin/tileiras");
+        ensure_gpu_supported(0, "sm_86", tileiras, &supported).unwrap();
+        let error = ensure_gpu_supported(1, "sm_75", tileiras, &supported)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("device 1"), "{error}");
+        assert!(error.contains("sm_75"), "{error}");
+        assert!(error.contains("/opt/cuda/bin/tileiras"), "{error}");
+        assert!(error.contains("sm_80, sm_86, sm_100, sm_121"), "{error}");
     }
 }
