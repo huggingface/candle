@@ -6,7 +6,7 @@ use candle_transformers::generation::LogitsProcessor;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
-use yew_agent::{HandlerId, Public, WorkerLink};
+use yew_agent::worker::{HandlerId, WorkerScope};
 
 #[wasm_bindgen]
 extern "C" {
@@ -59,7 +59,7 @@ pub struct Model {
 impl Model {
     fn run(
         &self,
-        link: &WorkerLink<Worker>,
+        scope: &WorkerScope<Worker>,
         id: HandlerId,
         temp: f64,
         top_p: f64,
@@ -81,7 +81,7 @@ impl Model {
             .map_err(|m| candle::Error::Msg(m.to_string()))?
             .get_ids()
             .to_vec();
-        link.respond(id, Ok(WorkerOutput::Generated(prompt)));
+        scope.respond(id, Ok(WorkerOutput::Generated(prompt)));
 
         for index in 0.. {
             if tokens.len() >= self.config.seq_len {
@@ -102,7 +102,7 @@ impl Model {
             tokens.push(next_token);
             if let Some(text) = self.tokenizer.id_to_token(next_token) {
                 let text = text.replace('▁', " ").replace("<0x0A>", "\n");
-                link.respond(id, Ok(WorkerOutput::Generated(text)));
+                scope.respond(id, Ok(WorkerOutput::Generated(text)));
             }
         }
         Ok(())
@@ -267,7 +267,6 @@ impl Model {
 }
 
 pub struct Worker {
-    link: WorkerLink<Self>,
     model: Option<Model>,
 }
 
@@ -284,21 +283,20 @@ pub enum WorkerOutput {
     WeightsLoaded,
 }
 
-impl yew_agent::Worker for Worker {
+impl yew_agent::worker::Worker for Worker {
     type Input = WorkerInput;
     type Message = ();
     type Output = std::result::Result<WorkerOutput, String>;
-    type Reach = Public<Self>;
 
-    fn create(link: WorkerLink<Self>) -> Self {
-        Self { link, model: None }
+    fn create(_scope: &WorkerScope<Self>) -> Self {
+        Self { model: None }
     }
 
-    fn update(&mut self, _msg: Self::Message) {
+    fn update(&mut self, _scope: &WorkerScope<Self>, _msg: Self::Message) {
         // no messaging
     }
 
-    fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
+    fn received(&mut self, scope: &WorkerScope<Self>, msg: Self::Input, id: HandlerId) {
         let output = match msg {
             WorkerInput::ModelData(md) => match Model::load(md) {
                 Ok(model) => {
@@ -317,20 +315,12 @@ impl yew_agent::Worker for Worker {
                         }
                     }
                     let result = model
-                        .run(&self.link, id, temp, top_p, prompt)
+                        .run(scope, id, temp, top_p, prompt)
                         .map_err(|e| e.to_string());
                     Ok(WorkerOutput::GenerationDone(result))
                 }
             },
         };
-        self.link.respond(id, output);
-    }
-
-    fn name_of_resource() -> &'static str {
-        "worker.js"
-    }
-
-    fn resource_path_is_relative() -> bool {
-        true
+        scope.respond(id, output);
     }
 }
