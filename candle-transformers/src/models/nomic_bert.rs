@@ -89,6 +89,7 @@ impl RotaryEmbedding {
         base: f64,
         interleaved: bool,
         device: &Device,
+        dtype: DType,
     ) -> Result<Self> {
         let half_dim = dim / 2;
         let inv_freq: Vec<f32> = (0..half_dim)
@@ -99,8 +100,11 @@ impl RotaryEmbedding {
             .to_dtype(DType::F32)?
             .reshape((max_seq_len, 1))?;
         let freqs = positions.matmul(&inv_freq.unsqueeze(0)?)?;
-        let cos = freqs.cos()?;
-        let sin = freqs.sin()?;
+        // Stored in the model dtype: `apply` runs once per layer per q/k,
+        // and casting the tables there costs four dispatches per layer per
+        // forward for tensors that never change.
+        let cos = freqs.cos()?.to_dtype(dtype)?;
+        let sin = freqs.sin()?.to_dtype(dtype)?;
         Ok(Self {
             cos,
             sin,
@@ -112,12 +116,10 @@ impl RotaryEmbedding {
     /// Dispatches to interleaved (GPT-J) or non-interleaved (GPT-NeoX) style
     /// based on the model config.
     fn apply(&self, x: &Tensor) -> Result<Tensor> {
-        let cos = self.cos.to_dtype(x.dtype())?;
-        let sin = self.sin.to_dtype(x.dtype())?;
         if self.interleaved {
-            candle_nn::rotary_emb::rope_i(x, &cos, &sin)
+            candle_nn::rotary_emb::rope_i(x, &self.cos, &self.sin)
         } else {
-            candle_nn::rotary_emb::rope(x, &cos, &sin)
+            candle_nn::rotary_emb::rope(x, &self.cos, &self.sin)
         }
     }
 }
@@ -237,11 +239,36 @@ impl NomicBertAttention {
         let k = rotary_emb.apply(&k)?;
 
         let scale = (self.head_dim as f64).sqrt();
-        let attn_scores = (q.matmul(&k.t()?)? / scale)?;
-        let attn_scores = attn_scores.broadcast_add(attention_mask)?;
-        let attn_probs = candle_nn::ops::softmax_last_dim(&attn_scores)?;
-
-        let attn_output = attn_probs.matmul(&v.contiguous()?)?;
+        // The fused kernel supports a fixed set of head dims (and rejects
+        // F32 at head_dim 512); anything else falls back to the naive path
+        // rather than erroring on non-default configs. `seq_len == 1` is
+        // excluded too: the kernel would route it to its vector variant,
+        // which supports fewer head dims and does not apply the mask.
+        let fused_supported = seq_len > 1
+            && matches!(q.dtype(), DType::F16 | DType::BF16 | DType::F32)
+            && matches!(self.head_dim, 32 | 64 | 72 | 80 | 96 | 128 | 256 | 512)
+            && !(self.head_dim == 512 && q.dtype() == DType::F32);
+        // Setting `NOMIC_BERT_NAIVE_ATTN` (to any value) forces the
+        // unfused path, for A/B timing.
+        let use_fused = fused_supported
+            && q.device().is_metal()
+            && std::env::var_os("NOMIC_BERT_NAIVE_ATTN").is_none();
+        let attn_output = if use_fused {
+            // Fused scaled-dot-product attention: one kernel instead of
+            // four dispatches (two matmuls, a broadcast add, a softmax)
+            // plus their intermediate (batch, heads, seq, seq) tensors.
+            // The kernel takes the mask by strides, so the broadcast view
+            // costs nothing — no materialized (batch, heads, seq, seq)
+            // buffer.
+            let mask =
+                attention_mask.broadcast_as((batch_size, self.num_heads, seq_len, seq_len))?;
+            candle_nn::ops::sdpa(&q, &k, &v, Some(&mask), false, (1.0 / scale) as f32, 1.0)?
+        } else {
+            let attn_scores = (q.matmul(&k.t()?)? / scale)?;
+            let attn_scores = attn_scores.broadcast_add(attention_mask)?;
+            let attn_probs = candle_nn::ops::softmax_last_dim(&attn_scores)?;
+            attn_probs.matmul(&v.contiguous()?)?
+        };
         let attn_output = attn_output.transpose(1, 2)?.contiguous()?;
         let attn_output = attn_output.flatten_from(D::Minus2)?;
 
@@ -372,6 +399,7 @@ impl NomicBertEncoder {
             config.rotary_emb_base,
             config.rotary_emb_interleaved,
             vb.device(),
+            vb.dtype(),
         )?;
         Ok(Self {
             layers,
