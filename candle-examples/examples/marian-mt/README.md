@@ -13,9 +13,9 @@ cargo run --example marian-mt --release -- \
 ```
 
 ```
-<NIL> Tomorrow, at dawn, at the time when the country is whitening, I will go. See,
-I know you are waiting for me. I will go through the forest, I will go through the
-mountain. I cannot stay far from you any longer.</s>
+Tomorrow, at dawn, at the time when the country is whitening, I will go. See, I
+know you are waiting for me. I will go through the forest, I will go through the
+mountain. I cannot stay far from you any longer.
 ```
 
 ### Changing model and language pairs
@@ -26,11 +26,11 @@ $ cargo run --example marian-mt --release -- --text "hello, how are you." --whic
 你好,你好吗?
 ```
 
-## Generating the tokenizer.json files
+## Tokenizers
 
-The tokenizer for each `marian-mt` model was trained independently, 
-meaning each new model needs unique tokenizer encoders and decoders.
-You can use the `./python/convert_slow_tokenizer.py` script in this directory to generate 
-the `tokenizer.json` config files from the hf-hub repos.
-The script requires all the packages in `./python/requirements.txt` or `./python/uv.lock` 
-to be installed, and has only been tested for `python 3.12.7`.  
+The tokenizer for each `marian-mt` model was trained independently, meaning each
+model needs unique tokenizer encoders and decoders. These are built on the fly
+from the `source.spm`, `target.spm` and `vocab.json` files of the model repo, so
+adding a new language pair does not require any conversion step. Pre-built
+`tokenizer.json` files can be used instead via `--tokenizer` and
+`--tokenizer-dec`.
