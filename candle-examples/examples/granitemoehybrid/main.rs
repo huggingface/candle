@@ -10,10 +10,10 @@ use anyhow::{bail, Error as E, Result};
 use clap::Parser;
 
 use candle::{DType, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::models::granitemoehybrid as model;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use model::{GraniteMoeHybrid, GraniteMoeHybridCache, GraniteMoeHybridConfig};
 
 use std::{io::Write, path::Path};
@@ -153,7 +153,7 @@ fn main() -> Result<()> {
         } else {
             let api = Api::new()?;
             let revision = args.revision.clone().unwrap_or_else(|| "main".to_string());
-            let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+            let repo = api.model(model_id).with_revision(revision);
 
             let tokenizer_filename = repo.get("tokenizer.json")?;
             let config_filename = repo.get("config.json")?;

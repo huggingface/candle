@@ -60,9 +60,9 @@ cudarc = { version = "0.19.8", features = [
     "dynamic-linking",
 ], default-features = false }
 cutile = "=0.3.0"
-fancy-regex = "0.18.0"
+fancy-regex = "0.19.0"
 gemm = { version = "0.19.0", features = ["wasm-simd128-enable"] }
-hf-hub = "0.5.0"
+hf-hub = { version = "1.0.0", features = ["blocking"] }
 half = { version = "2.5.0", features = [
     "num-traits",
     "use-intrinsics",
