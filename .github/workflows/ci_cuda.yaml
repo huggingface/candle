@@ -15,8 +15,7 @@ jobs:
       image: nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
     if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     permissions:
-      contents: write
-      packages: write
+      contents: read
       # This is used to complete the identity challenge
       # with sigstore/fulcio when running outside of PRs.
       id-token: write
