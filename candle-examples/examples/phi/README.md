@@ -1,8 +1,9 @@
 # candle-phi: 1.3b and 2.7b LLM with state of the art performance for <10b models.
 
-[Phi-1.5](https://huggingface.co/microsoft/phi-1_5) and
-[Phi-2](https://huggingface.co/microsoft/phi-2) are language models using
-only 1.3 and 2.7 billion parameters but with state of the art performance compared to
+[Phi-1.5](https://huggingface.co/microsoft/phi-1_5), 
+[Phi-2](https://huggingface.co/microsoft/phi-2), and
+[Phi-3](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct) are language models using
+only 1.3, 2.7, and 3.8 billion parameters but with state of the art performance compared to
 models with up to 10 billion parameters.
 
 The candle implementation provides both the standard version as well as a

@@ -262,9 +262,19 @@ impl BatchNorm {
         let target_shape = target_shape.as_slice();
 
         let x = x
-            .broadcast_sub(&self.running_mean.as_tensor().reshape(target_shape)?)?
+            .broadcast_sub(
+                &self
+                    .running_mean
+                    .as_detached_tensor()
+                    .reshape(target_shape)?,
+            )?
             .broadcast_div(
-                &(self.running_var.as_tensor().reshape(target_shape)? + self.eps)?.sqrt()?,
+                &(self
+                    .running_var
+                    .as_detached_tensor()
+                    .reshape(target_shape)?
+                    + self.eps)?
+                    .sqrt()?,
             )?;
 
         match &self.weight_and_bias {

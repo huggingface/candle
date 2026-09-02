@@ -1,10 +1,26 @@
-use crate::models::with_tracing::{linear_no_bias, Linear};
+//! StableLM model implementation.
+//!
+//! StableLM is a family of language models trained by Stability AI.
+//! This implementation supports the StableLM architecture.
+//!
+//! Key characteristics:
+//! - Grouped query attention (GQA)
+//! - Layer normalization
+//! - Rotary positional embeddings (RoPE)
+//! - Support for different model sizes (3B, 7B)
+//!
+//! References:
+//! - 🤗 [Model Card](https://huggingface.co/stabilityai/stablelm-3b-4e1t)
+//!
+
+use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, LayerNorm, VarBuilder};
+use serde::Deserialize;
 use std::sync::Arc;
 
-// https://huggingface.co/stabilityai/stablelm-3b-4e1t/blob/main/configuration_stablelm_epoch.py
-#[derive(Debug, Clone, PartialEq)]
+// https://huggingface.co/stabilityai/stablelm-3b-4e1t/blob/main/configuration_stablelm.py
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) intermediate_size: usize,
@@ -13,12 +29,15 @@ pub struct Config {
     pub(crate) num_attention_heads: usize,
     pub(crate) num_key_value_heads: usize,
     pub(crate) hidden_act: Activation,
-    pub(crate) rope_pct: f64,
+    pub(crate) partial_rotary_factor: f64,
     pub(crate) rope_theta: f64,
     pub(crate) max_position_embeddings: usize,
-    pub(crate) norm_eps: f64,
+    pub(crate) layer_norm_eps: f64,
     pub(crate) use_cache: bool,
-    pub(crate) use_flash_attn: bool,
+    #[serde(default)]
+    pub(crate) use_qkv_bias: bool, // Used in StableLM-2
+    #[serde(default)]
+    pub(crate) use_flash_attn: bool, // Not in config.json
 }
 
 impl Config {
@@ -31,10 +50,11 @@ impl Config {
             num_attention_heads: 32,
             num_key_value_heads: 32,
             hidden_act: Activation::Silu,
-            rope_pct: 0.25,
+            partial_rotary_factor: 0.25,
             rope_theta: 10_000.,
             max_position_embeddings: 4096,
-            norm_eps: 1e-5,
+            layer_norm_eps: 1e-5,
+            use_qkv_bias: false,
             use_cache: true,
             use_flash_attn,
         }
@@ -45,11 +65,15 @@ impl Config {
     }
 
     pub fn rotary_ndims(&self) -> usize {
-        (self.head_dim() as f64 * self.rope_pct) as usize
+        (self.head_dim() as f64 * self.partial_rotary_factor) as usize
     }
 
     pub fn num_kv_groups(&self) -> usize {
         self.num_attention_heads / self.num_key_value_heads
+    }
+
+    pub fn set_use_flash_attn(&mut self, use_flash_attn: bool) {
+        self.use_flash_attn = use_flash_attn
     }
 }
 
@@ -179,9 +203,15 @@ impl Attention {
         let head_dim = cfg.head_dim();
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let q_proj = linear_no_bias(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
+        let linear_layer = if cfg.use_qkv_bias {
+            linear
+        } else {
+            linear_no_bias
+        };
+
+        let q_proj = linear_layer(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
+        let k_proj = linear_layer(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
+        let v_proj = linear_layer(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let o_proj = linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
         Ok(Self {
             q_proj,
@@ -200,18 +230,6 @@ impl Attention {
             use_flash_attn: cfg.use_flash_attn,
             span: tracing::span!(tracing::Level::TRACE, "attn"),
         })
-    }
-
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_kv_groups;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
     }
 
     fn forward(
@@ -260,8 +278,9 @@ impl Attention {
             self.kv_cache = Some((key_states.clone(), value_states.clone()));
         }
 
-        let key_states = self.repeat_kv(key_states)?.contiguous()?;
-        let value_states = self.repeat_kv(value_states)?.contiguous()?;
+        let key_states = crate::utils::repeat_kv(key_states, self.num_kv_groups)?.contiguous()?;
+        let value_states =
+            crate::utils::repeat_kv(value_states, self.num_kv_groups)?.contiguous()?;
 
         let attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
@@ -301,11 +320,14 @@ impl DecoderLayer {
     fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
-        let input_layernorm =
-            candle_nn::layer_norm(cfg.hidden_size, cfg.norm_eps, vb.pp("input_layernorm"))?;
+        let input_layernorm = candle_nn::layer_norm(
+            cfg.hidden_size,
+            cfg.layer_norm_eps,
+            vb.pp("input_layernorm"),
+        )?;
         let post_attention_layernorm = candle_nn::layer_norm(
             cfg.hidden_size,
-            cfg.norm_eps,
+            cfg.layer_norm_eps,
             vb.pp("post_attention_layernorm"),
         )?;
         Ok(Self {
@@ -357,7 +379,7 @@ impl Model {
             let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
-        let norm = candle_nn::layer_norm(cfg.hidden_size, cfg.norm_eps, vb_m.pp("norm"))?;
+        let norm = candle_nn::layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb_m.pp("norm"))?;
         let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         Ok(Self {
             embed_tokens,

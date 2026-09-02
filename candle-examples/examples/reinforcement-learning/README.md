@@ -2,6 +2,11 @@
 
 Reinforcement Learning examples for candle.
 
+> [!WARNING]  
+> uv is not currently compatible with pyo3 as of 2025/3/28.
+
+## System wide python
+
 This has been tested with `gymnasium` version `0.29.1`. You can install the
 Python package with:
 ```bash

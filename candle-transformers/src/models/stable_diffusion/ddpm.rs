@@ -1,19 +1,14 @@
 use super::schedulers::{betas_for_alpha_bar, BetaSchedule, PredictionType};
 use candle::{Result, Tensor};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum DDPMVarianceType {
+    #[default]
     FixedSmall,
     FixedSmallLog,
     FixedLarge,
     FixedLargeLog,
     Learned,
-}
-
-impl Default for DDPMVarianceType {
-    fn default() -> Self {
-        Self::FixedSmall
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -104,7 +99,7 @@ impl DDPMScheduler {
         };
         let current_beta_t = 1. - alpha_prod_t / alpha_prod_t_prev;
 
-        // For t > 0, compute predicted variance βt (see formula (6) and (7) from https://arxiv.org/pdf/2006.11239.pdf)
+        // For t > 0, compute predicted variance βt (see formula (6) and (7) from [the pdf](https://arxiv.org/pdf/2006.11239.pdf))
         // and sample from it to get previous sample
         // x_{t-1} ~ N(pred_prev_sample, variance) == add variance to pred_sample
         let variance = (1. - alpha_prod_t_prev) / (1. - alpha_prod_t) * current_beta_t;

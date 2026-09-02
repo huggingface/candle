@@ -41,6 +41,10 @@ impl crate::backend::BackendStorage for MetalStorage {
         fail!()
     }
 
+    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
@@ -128,15 +132,27 @@ impl crate::backend::BackendStorage for MetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn scatter_add(
-        &self,
+    fn scatter_set(
+        &mut self,
         _: &Layout,
         _: &Self,
         _: &Layout,
         _: &Self,
         _: &Layout,
         _: usize,
-    ) -> Result<Self> {
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn scatter_add_set(
+        &mut self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<()> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
@@ -166,6 +182,19 @@ impl crate::backend::BackendStorage for MetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
+    fn copy2d(
+        &self,
+        _: &mut Self,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
     fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
         Err(Error::NotCompiledWithMetalSupport)
     }
@@ -181,6 +210,18 @@ impl crate::backend::BackendStorage for MetalStorage {
     fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithMetalSupport)
     }
+
+    fn upsample_bilinear2d(
+        &self,
+        _: &Layout,
+        _: usize,
+        _: usize,
+        _: bool,
+        _: Option<f64>,
+        _: Option<f64>,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
 }
 
 impl crate::backend::BackendDevice for MetalDevice {
@@ -190,6 +231,10 @@ impl crate::backend::BackendDevice for MetalDevice {
     }
 
     fn set_seed(&self, _: u64) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn get_current_seed(&self) -> Result<u64> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
@@ -205,11 +250,19 @@ impl crate::backend::BackendDevice for MetalDevice {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
@@ -219,5 +272,9 @@ impl crate::backend::BackendDevice for MetalDevice {
 
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn synchronize(&self) -> Result<()> {
+        Ok(())
     }
 }

@@ -38,7 +38,7 @@ impl Model {
     pub fn set_image_embeddings(&mut self, image_data: Vec<u8>) -> Result<(), JsError> {
         sam::console_log!("image data: {}", image_data.len());
         let image_data = std::io::Cursor::new(image_data);
-        let image = image::io::Reader::new(image_data)
+        let image = image::ImageReader::new(image_data)
             .with_guessed_format()?
             .decode()
             .map_err(candle::Error::wrap)?;
@@ -81,14 +81,12 @@ impl Model {
         for &(x, y, _bool) in &transformed_points {
             if !(0.0..=1.0).contains(&x) {
                 return Err(JsError::new(&format!(
-                    "x has to be between 0 and 1, got {}",
-                    x
+                    "x has to be between 0 and 1, got {x}"
                 )));
             }
             if !(0.0..=1.0).contains(&y) {
                 return Err(JsError::new(&format!(
-                    "y has to be between 0 and 1, got {}",
-                    y
+                    "y has to be between 0 and 1, got {y}"
                 )));
             }
         }

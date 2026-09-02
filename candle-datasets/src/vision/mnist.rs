@@ -3,7 +3,7 @@
 //! The files can be obtained from the following link:
 //! <http://yann.lecun.com/exdb/mnist/>
 use candle::{DType, Device, Error, Result, Tensor};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 use std::io::{self, BufReader, Read};
@@ -16,10 +16,9 @@ fn read_u32<T: Read>(reader: &mut T) -> std::io::Result<u32> {
 fn check_magic_number<T: Read>(reader: &mut T, expected: u32) -> Result<()> {
     let magic_number = read_u32(reader)?;
     if magic_number != expected {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("incorrect magic number {magic_number} != {expected}"),
-        ))?;
+        Err(io::Error::other(format!(
+            "incorrect magic number {magic_number} != {expected}"
+        )))?;
     }
     Ok(())
 }
@@ -87,21 +86,21 @@ fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(Tensor,
     Ok((images, labels))
 }
 
-pub fn load() -> Result<crate::vision::Dataset> {
-    let api = Api::new().map_err(|e| Error::Msg(format!("Api error: {e}")))?;
-    let dataset_id = "mnist".to_string();
-    let repo = Repo::with_revision(
-        dataset_id,
-        RepoType::Dataset,
-        "refs/convert/parquet".to_string(),
-    );
-    let repo = api.repo(repo);
-    let test_parquet_filename = repo
-        .get("mnist/test/0000.parquet")
-        .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
-    let train_parquet_filename = repo
-        .get("mnist/train/0000.parquet")
-        .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
+pub(crate) fn load_mnist_like(
+    dataset_id: &str,
+    revision: &str,
+    test_filename: &str,
+    train_filename: &str,
+) -> Result<crate::vision::Dataset> {
+    let api = HFClientSync::new().map_err(|e| Error::Msg(format!("Api error: {e}")))?;
+    let (owner, name) = hf_hub::split_id(dataset_id);
+    let repo = api.dataset(owner, name);
+    let get = |filename: &str| {
+        crate::hub::cached_download(&repo, revision, filename)
+            .map_err(|e| Error::Msg(format!("Api error: {e}")))
+    };
+    let test_parquet_filename = get(test_filename)?;
+    let train_parquet_filename = get(train_filename)?;
     let test_parquet = SerializedFileReader::new(std::fs::File::open(test_parquet_filename)?)
         .map_err(|e| Error::Msg(format!("Parquet error: {e}")))?;
     let train_parquet = SerializedFileReader::new(std::fs::File::open(train_parquet_filename)?)
@@ -115,4 +114,13 @@ pub fn load() -> Result<crate::vision::Dataset> {
         test_labels,
         labels: 10,
     })
+}
+
+pub fn load() -> Result<crate::vision::Dataset> {
+    load_mnist_like(
+        "ylecun/mnist",
+        "refs/convert/parquet",
+        "mnist/test/0000.parquet",
+        "mnist/train/0000.parquet",
+    )
 }

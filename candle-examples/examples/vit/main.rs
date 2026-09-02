@@ -28,13 +28,13 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image = candle_examples::imagenet::load_image224(args.image)?;
+    let image = candle_examples::imagenet::load_image224(args.image)?.to_device(&device)?;
     println!("loaded image {image:?}");
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("google/vit-base-patch16-224".into());
+            let api = candle_examples::hub::Api::new()?;
+            let api = api.model("google/vit-base-patch16-224");
             api.get("model.safetensors")?
         }
         Some(model) => model.into(),

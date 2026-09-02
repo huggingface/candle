@@ -55,7 +55,7 @@ const SEP_TOKEN_ID: u32 = 102;
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 384, 384). OpenAI normalization is applied.
 pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
-    let img = image::io::Reader::open(p)?
+    let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(384, 384, image::imageops::FilterType::Triangle);
@@ -76,16 +76,14 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
+            let api = candle_examples::hub::Api::new()?;
             if args.quantized {
-                let api = api.model("lmz/candle-blip".to_string());
+                let api = api.model("lmz/candle-blip");
                 api.get("blip-image-captioning-large-q4k.gguf")?
             } else {
-                let api = api.repo(hf_hub::Repo::with_revision(
-                    "Salesforce/blip-image-captioning-large".to_string(),
-                    hf_hub::RepoType::Model,
-                    "refs/pr/18".to_string(),
-                ));
+                let api = api
+                    .model("Salesforce/blip-image-captioning-large")
+                    .with_revision("refs/pr/18");
                 api.get("model.safetensors")?
             }
         }
@@ -93,8 +91,8 @@ pub fn main() -> anyhow::Result<()> {
     };
     let tokenizer = match args.tokenizer {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("Salesforce/blip-image-captioning-large".to_string());
+            let api = candle_examples::hub::Api::new()?;
+            let api = api.model("Salesforce/blip-image-captioning-large");
             api.get("tokenizer.json")?
         }
         Some(file) => file.into(),
@@ -106,17 +104,17 @@ pub fn main() -> anyhow::Result<()> {
 
     let config = blip::Config::image_captioning_large();
 
+    let device = candle_examples::device(args.cpu)?;
     let (image_embeds, device, mut model) = if args.quantized {
         let device = Device::Cpu;
         let image = load_image(args.image)?.to_device(&device)?;
         println!("loaded image {image:?}");
 
-        let vb = quantized_blip::VarBuilder::from_gguf(model_file)?;
+        let vb = quantized_blip::VarBuilder::from_gguf(model_file, &device)?;
         let model = quantized_blip::BlipForConditionalGeneration::new(&config, vb)?;
         let image_embeds = image.unsqueeze(0)?.apply(model.vision_model())?;
         (image_embeds, device, Model::Q(model))
     } else {
-        let device = candle_examples::device(args.cpu)?;
         let image = load_image(args.image)?.to_device(&device)?;
         println!("loaded image {image:?}");
 

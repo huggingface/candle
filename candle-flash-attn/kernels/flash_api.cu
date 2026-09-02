@@ -1,15 +1,28 @@
+#include "kernels.h"
+#include "kernel_helpers.h"
 #include "flash_fwd_launch_template.h"
 
-void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel=false) {
-    FP16_SWITCH(!params.is_bf16, [&] {
-        FWD_HEADDIM_SWITCH(params.d, [&] {
-//            if (params.num_splits <= 1 && !force_split_kernel) {  // If we don't set it num_splits == 0
-            run_mha_fwd_<elem_type, kHeadDim>(params, stream);
-//            } else {
-//                run_mha_fwd_splitkv_dispatch<elem_type, kHeadDim>(params, stream);
-//            }
-        });
-    });
+void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
+  FP16_SWITCH(!params.is_bf16, [&] {
+      BOOL_SWITCH(params.is_causal, Is_causal, [&] {
+          if (params.block_table != nullptr) {
+              // Only the splitkv kernel understands paged KV; head dims here match the host-side gate.
+              if (params.d <= 64) {
+                  run_mha_fwd_splitkv_paged_<elem_type, 64, Is_causal>(params, stream);
+              } else if (params.d <= 128) {
+                  run_mha_fwd_splitkv_paged_<elem_type, 128, Is_causal>(params, stream);
+              } else if (params.d <= 256) {
+                  run_mha_fwd_splitkv_paged_<elem_type, 256, Is_causal>(params, stream);
+              } else {
+                  run_mha_fwd_splitkv_paged_<elem_type, 512, Is_causal>(params, stream);
+              }
+          } else {
+              HEADDIM_SWITCH(params.d, [&] {
+                  run_mha_fwd_<elem_type, kHeadDim, Is_causal>(params, stream);
+              });
+          }
+      });
+  });
 }
 
 extern "C" void run_mha(
@@ -50,12 +63,25 @@ extern "C" void run_mha(
     uint32_t seqlen_k,
     uint32_t seqlen_q_rounded,
     uint32_t seqlen_k_rounded,
+    uint32_t total_q,
 
     int is_bf16,
     int is_causal,
+    int unpadded_lse,
 
     int window_size_left,
-    int window_size_right
+    int window_size_right,
+
+    float softcap,
+
+    int32_t *block_table_ptr,
+    uint32_t block_table_batch_stride,
+    int page_block_size,
+
+    int32_t *mm_prefix_ranges_ptr,
+    uint32_t mm_prefix_range_batch_stride,
+    int max_mm_prefix_ranges,
+    void *stream_ptr
 ) {
     Flash_fwd_params params;
     // Reset the parameters
@@ -95,12 +121,21 @@ extern "C" void run_mha(
     params.seqlen_k = seqlen_k;
     params.seqlen_q_rounded = seqlen_q_rounded;
     params.seqlen_k_rounded = seqlen_k_rounded;
+    params.total_q = total_q;
     params.d = d;
     params.d_rounded = d_rounded;
 
     // Set the different scale values.
-    params.scale_softmax = softmax_scale;
-    params.scale_softmax_log2 = softmax_scale * M_LOG2E;
+    if (softcap > 0.0) {
+        params.softcap = softmax_scale / softcap;
+        params.scale_softmax = softcap;
+        params.scale_softmax_log2 = softcap * M_LOG2E;
+    } else{
+        // Remove potential NaN
+        params.softcap = 0.0;
+        params.scale_softmax = softmax_scale;
+        params.scale_softmax_log2 = softmax_scale * M_LOG2E;
+    }
 
     params.p_dropout = 1.; // probability to keep
     params.p_dropout_in_uint8_t = uint8_t(std::floor(params.p_dropout * 255.0));
@@ -111,6 +146,12 @@ extern "C" void run_mha(
     params.cu_seqlens_k = cu_seqlens_k_ptr;
     params.p_ptr = nullptr; // used for `return_softmax`.
     params.seqused_k = nullptr;
+    params.block_table = block_table_ptr;
+    params.block_table_batch_stride = block_table_batch_stride;
+    params.page_block_size = page_block_size;
+    params.mm_prefix_ranges = mm_prefix_ranges_ptr;
+    params.mm_prefix_range_batch_stride = mm_prefix_range_batch_stride;
+    params.max_mm_prefix_ranges = max_mm_prefix_ranges;
 
     params.is_causal = is_causal;
     params.window_size_left = window_size_left;
@@ -118,7 +159,8 @@ extern "C" void run_mha(
 
     params.is_seqlens_k_cumulative = true;
     params.num_splits = 1;
+    params.unpadded_lse = unpadded_lse;
 
-    cudaStream_t stream = 0; // Use the default stream.
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
     run_mha_fwd(params, stream);
 }

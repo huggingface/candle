@@ -1,3 +1,5 @@
+//! 1D and 2D Convolutions
+//!
 use crate::{op::BackpropOp, op::Op, Error, Result, Tensor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +14,7 @@ pub struct ParamsConv1D {
     pub(crate) padding: usize,
     pub(crate) stride: usize,
     pub(crate) dilation: usize,
+    pub(crate) cudnn_fwd_algo: Option<CudnnFwdAlgo>,
 }
 
 impl ParamsConv1D {
@@ -52,7 +55,7 @@ impl ParamsConvTranspose1D {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CudnnFwdAlgo {
     ImplicitGemm,
     ImplicitPrecompGemm,
@@ -150,6 +153,19 @@ impl Tensor {
         dilation: usize,
         groups: usize,
     ) -> Result<Self> {
+        self.conv1d_with_algo(kernel, padding, stride, dilation, groups, None)
+    }
+
+    /// Applies a 1D convolution over the input tensor.
+    pub fn conv1d_with_algo(
+        &self,
+        kernel: &Self,
+        padding: usize,
+        stride: usize,
+        dilation: usize,
+        groups: usize,
+        cudnn_fwd_algo: Option<CudnnFwdAlgo>,
+    ) -> Result<Self> {
         let (c_out, c_in_k, k_size) = kernel.dims3()?;
         let (b_size, c_in, l_in) = self.dims3()?;
         if c_in != c_in_k * groups {
@@ -172,6 +188,7 @@ impl Tensor {
             padding,
             stride,
             dilation,
+            cudnn_fwd_algo,
         };
         if groups == 1 {
             self.conv1d_single_group(kernel, &params)
@@ -187,36 +204,16 @@ impl Tensor {
         }
     }
 
-    /// Applies a 1D transposed convolution over the input tensor.
-    pub fn conv_transpose1d(
+    fn conv_transpose1d_single_group(
         &self,
         kernel: &Self,
-        padding: usize,
-        output_padding: usize,
-        stride: usize,
-        dilation: usize,
+        params: &ParamsConvTranspose1D,
     ) -> Result<Self> {
-        let (b_size, c_in, l_in) = self.dims3()?;
-        let (c_in_k, c_out, k_size) = kernel.dims3()?;
-        if c_in != c_in_k {
-            crate::bail!("in_channel mismatch between input ({c_in}) and kernel ({c_in_k})")
-        }
-        let params = ParamsConvTranspose1D {
-            b_size,
-            l_in,
-            k_size,
-            c_out,
-            c_in,
-            padding,
-            output_padding,
-            stride,
-            dilation,
-        };
         let storage = self.storage().conv_transpose1d(
             self.layout(),
             &kernel.storage(),
             kernel.layout(),
-            &params,
+            params,
         )?;
         let op = BackpropOp::new2(self, kernel, |arg, kernel| Op::ConvTranspose1D {
             arg,
@@ -228,6 +225,49 @@ impl Tensor {
         });
         let out_dims = params.out_dims();
         Ok(crate::tensor::from_storage(storage, out_dims, op, false))
+    }
+
+    /// Applies a 1D transposed convolution over the input tensor.
+    pub fn conv_transpose1d(
+        &self,
+        kernel: &Self,
+        padding: usize,
+        output_padding: usize,
+        stride: usize,
+        dilation: usize,
+        groups: usize,
+    ) -> Result<Self> {
+        let (c_in_k, c_out, k_size) = kernel.dims3()?;
+        let (b_size, c_in, l_in) = self.dims3()?;
+        if c_in != c_in_k {
+            crate::bail!("in_channel mismatch between input ({c_in}) and kernel ({c_in_k})")
+        }
+        if c_in % groups != 0 {
+            crate::bail!("in_channel {c_in} is not divisible by the number of groups")
+        }
+        let params = ParamsConvTranspose1D {
+            b_size,
+            l_in,
+            k_size,
+            c_out,
+            c_in: c_in / groups,
+            padding,
+            output_padding,
+            stride,
+            dilation,
+        };
+        if groups == 1 {
+            self.conv_transpose1d_single_group(kernel, &params)
+        } else {
+            let blocks = self.chunk(groups, 1)?;
+            let kernel = kernel.chunk(groups, 0)?;
+            let blocks = blocks
+                .iter()
+                .zip(&kernel)
+                .map(|(block, kernel)| block.conv_transpose1d_single_group(kernel, &params))
+                .collect::<Result<Vec<_>>>()?;
+            Tensor::cat(&blocks, 1)
+        }
     }
 
     fn conv2d_single_group(&self, kernel: &Self, params: &ParamsConv2D) -> Result<Self> {
@@ -254,6 +294,18 @@ impl Tensor {
         dilation: usize,
         groups: usize,
     ) -> Result<Self> {
+        self.conv2d_with_algo(kernel, padding, stride, dilation, groups, None)
+    }
+
+    pub fn conv2d_with_algo(
+        &self,
+        kernel: &Self,
+        padding: usize,
+        stride: usize,
+        dilation: usize,
+        groups: usize,
+        cudnn_fwd_algo: Option<CudnnFwdAlgo>,
+    ) -> Result<Self> {
         let (b_size, c_in, i_h, i_w) = self.dims4()?;
         let (c_out, c_in_k, k_h, k_w) = kernel.dims4()?;
         if c_in != c_in_k * groups {
@@ -272,7 +324,7 @@ impl Tensor {
             padding,
             stride,
             dilation,
-            cudnn_fwd_algo: None,
+            cudnn_fwd_algo,
         };
         if groups == 1 {
             self.conv2d_single_group(kernel, &params)

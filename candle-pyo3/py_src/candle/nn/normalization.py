@@ -14,6 +14,7 @@ class LayerNorm(Module):
     math::
         y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta
     """
+
     __constants__ = ["normalized_shape", "eps"]
     normalized_shape: Tuple[int, ...]
     eps: float

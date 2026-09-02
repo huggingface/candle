@@ -1,3 +1,11 @@
+//! Module implementing the MPT (Multi-Purpose Transformer) model
+//!
+//! References:
+//! - [MPT Model used by replit-code-v1_5-3b](https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/modeling_mpt.py)
+//! - [Configuration](https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/configuration_mpt.py)
+//!
+//! The model uses grouped query attention and alibi positional embeddings.
+
 use crate::models::with_tracing::{linear_no_bias, Embedding, Linear};
 /// MPT model used by replit-code-v1_5-3b
 /// https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/modeling_mpt.py
@@ -104,8 +112,8 @@ impl GroupedQueryAttention {
         };
         self.kv_cache = Some((key.clone(), value.clone()));
         let query = query.contiguous()?;
-        let key = repeat_kv(key, self.n_heads / self.kv_n_heads)?.contiguous()?;
-        let value = repeat_kv(value, self.n_heads / self.kv_n_heads)?.contiguous()?;
+        let key = crate::utils::repeat_kv(key, self.n_heads / self.kv_n_heads)?.contiguous()?;
+        let value = crate::utils::repeat_kv(value, self.n_heads / self.kv_n_heads)?.contiguous()?;
         let attn_weights = (query.matmul(&key)? * self.softmax_scale)?;
         let attn_bias = {
             let s_q = query.dim(D::Minus2)?;
@@ -131,20 +139,6 @@ impl GroupedQueryAttention {
             .flatten_from(D::Minus2)?;
         let out = attn_output.apply(&self.out_proj)?;
         Ok(out)
-    }
-}
-
-// This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep).
-// The hidden states go from (batch, num_key_value_heads, seqlen, head_dim) to
-// (batch, num_attention_heads, seqlen, head_dim)
-pub(crate) fn repeat_kv(xs: Tensor, n_rep: usize) -> Result<Tensor> {
-    if n_rep == 1 {
-        Ok(xs)
-    } else {
-        let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-        xs.unsqueeze(2)?
-            .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-            .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
     }
 }
 

@@ -5,7 +5,7 @@
 //! The binary version of the dataset is used.
 use crate::vision::Dataset;
 use candle::{DType, Device, Error, Result, Tensor};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -72,6 +72,8 @@ fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(Tensor,
             if let parquet::record::Field::Group(subrow) = field {
                 for (_name, field) in subrow.get_column_iter() {
                     if let parquet::record::Field::Bytes(value) = field {
+                        // image-rs crate convention is to load in (width, height, channels) order
+                        // See: https://docs.rs/image/latest/image/trait.ImageDecoder.html#tymethod.dimensions
                         let image = image::load_from_memory(value.data()).unwrap();
                         buffer_images.extend(image.to_rgb8().as_raw());
                     }
@@ -81,28 +83,24 @@ fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(Tensor,
             }
         }
     }
-    let images = (Tensor::from_vec(buffer_images, (samples, 3, 32, 32), &Device::Cpu)?
-        .to_dtype(DType::U8)?
+    // Reorder image-rs convention (width, height, channels) to candle/pytorch convolution convention (channels, height, width)
+    let images = (Tensor::from_vec(buffer_images, (samples, 32, 32, 3), &Device::Cpu)?
+        .to_dtype(DType::F32)?
+        .permute((0, 3, 2, 1))?
         / 255.)?;
     let labels = Tensor::from_vec(buffer_labels, (samples,), &Device::Cpu)?;
     Ok((images, labels))
 }
 
 pub fn load() -> Result<Dataset> {
-    let api = Api::new().map_err(|e| Error::Msg(format!("Api error: {e}")))?;
-    let dataset_id = "cifar10".to_string();
-    let repo = Repo::with_revision(
-        dataset_id,
-        RepoType::Dataset,
-        "refs/convert/parquet".to_string(),
-    );
-    let repo = api.repo(repo);
-    let test_parquet_filename = repo
-        .get("plain_text/test/0000.parquet")
-        .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
-    let train_parquet_filename = repo
-        .get("plain_text/train/0000.parquet")
-        .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
+    let api = HFClientSync::new().map_err(|e| Error::Msg(format!("Api error: {e}")))?;
+    let repo = api.dataset("", "cifar10");
+    let get = |filename: &str| {
+        crate::hub::cached_download(&repo, "refs/convert/parquet", filename)
+            .map_err(|e| Error::Msg(format!("Api error: {e}")))
+    };
+    let test_parquet_filename = get("plain_text/test/0000.parquet")?;
+    let train_parquet_filename = get("plain_text/train/0000.parquet")?;
     let test_parquet = SerializedFileReader::new(std::fs::File::open(test_parquet_filename)?)
         .map_err(|e| Error::Msg(format!("Parquet error: {e}")))?;
     let train_parquet = SerializedFileReader::new(std::fs::File::open(train_parquet_filename)?)

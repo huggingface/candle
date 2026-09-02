@@ -1,3 +1,17 @@
+//! Persimmon Model
+//!
+//! A transformer language model for efficient inference and general-purpose tasks. The model uses a standard transformer architecture with:
+//! - Layer normalization for Q/K attention
+//! - RoPE embeddings with partial rotary factor
+//! - ReLU activation
+//! - Separate number of attention heads and KV heads
+//!
+//! References:
+//! - 💻 [Hugging Face Implementation](https://github.com/huggingface/transformers/blob/main/src/transformers/models/persimmon/modeling_persimmon.py)
+//! - 💻 [Persimmon Config](https://github.com/huggingface/transformers/blob/main/src/transformers/models/persimmon/configuration_persimmon.py)
+//! - 🤗 [Hugging Face](https://huggingface.co/adept/persimmon-8b-base)
+//!
+
 use candle::DType;
 use serde::Deserialize;
 

@@ -1,27 +1,287 @@
-use crate::{Device, Result, Shape, Tensor};
+use crate::{
+    backend::BackendStorage, CpuStorage, DType, Device, Result, Shape, Storage, Tensor, D,
+};
+use k_quants::*;
+use std::{borrow::Cow, sync::OnceLock};
 
-#[cfg(target_feature = "avx")]
+#[cfg(target_feature = "avx2")]
 pub mod avx;
+mod dummy_cuda;
+mod dummy_metal;
 pub mod ggml_file;
 pub mod gguf_file;
+pub mod imatrix_file;
 pub mod k_quants;
+#[cfg(feature = "metal")]
+pub mod metal;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tokenizer;
+#[cfg(not(feature = "metal"))]
+mod metal {
+    pub use super::dummy_metal::*;
+}
+#[cfg(feature = "cuda")]
+pub mod cuda;
+#[cfg(feature = "cuda")]
+pub mod fast_mmq;
+#[cfg(feature = "cuda")]
+pub mod fast_mmvq;
+#[cfg(not(feature = "cuda"))]
+mod cuda {
+    pub use super::dummy_cuda::*;
+}
+
 #[cfg(target_feature = "neon")]
 pub mod neon;
 #[cfg(target_feature = "simd128")]
 pub mod simd128;
 pub mod utils;
+use half::{bf16, f16};
 
 pub use k_quants::GgmlType;
 
+fn as_t_slice<T>(data: &[u8]) -> &[T] {
+    let size = std::mem::size_of::<T>();
+    assert_eq!(
+        data.len() % size,
+        0,
+        "Data length must be a multiple of T's size"
+    );
+    let ptr = data.as_ptr();
+    assert_eq!(
+        (ptr as usize) % std::mem::align_of::<T>(),
+        0,
+        "Data pointer must be aligned to T's alignment"
+    );
+    unsafe { std::slice::from_raw_parts(ptr as *const T, data.len() / size) }
+}
+
 pub struct QTensor {
-    data: Box<dyn QuantizedType>,
+    storage: QStorage,
     shape: Shape,
+    /// Lazily initialized storage for repacked quantized data. Currently raw bits, could be `QStorage` in the future.
+    /// Not always used.
+    #[allow(dead_code)]
+    repacked_qs: OnceLock<Option<Vec<u8>>>,
+}
+
+impl Device {
+    fn qzeros(&self, elem_count: usize, dtype: GgmlDType) -> Result<QStorage> {
+        match self {
+            Device::Cpu => {
+                let storage = dtype.cpu_zeros(elem_count);
+                Ok(QStorage::Cpu(storage))
+            }
+            Device::Metal(metal) => {
+                let storage = metal::QMetalStorage::zeros(metal, elem_count, dtype)?;
+                Ok(QStorage::Metal(storage))
+            }
+            Device::Cuda(cuda) => {
+                let storage = cuda::QCudaStorage::zeros(cuda, elem_count, dtype)?;
+                Ok(QStorage::Cuda(storage))
+            }
+        }
+    }
+}
+
+pub enum QStorage {
+    Cpu(Box<dyn QuantizedType>),
+    Metal(metal::QMetalStorage),
+    Cuda(cuda::QCudaStorage),
+}
+
+impl QStorage {
+    pub fn from_data(data: Cow<'_, [u8]>, device: &Device, dtype: GgmlDType) -> Result<Self> {
+        let data: &[u8] = &data;
+        match device {
+            Device::Cpu => Ok(Self::Cpu(dtype.from_data(Cow::Borrowed(data)))),
+            Device::Metal(d) => match dtype {
+                GgmlDType::F32 => metal::load_quantized(d, as_t_slice::<f32>(data)),
+                GgmlDType::F16 => metal::load_quantized(d, as_t_slice::<f16>(data)),
+                GgmlDType::Q4_0 => metal::load_quantized(d, as_t_slice::<BlockQ4_0>(data)),
+                GgmlDType::Q4_1 => metal::load_quantized(d, as_t_slice::<BlockQ4_1>(data)),
+                GgmlDType::Q5_0 => metal::load_quantized(d, as_t_slice::<BlockQ5_0>(data)),
+                GgmlDType::Q5_1 => metal::load_quantized(d, as_t_slice::<BlockQ5_1>(data)),
+                GgmlDType::Q8_0 => metal::load_quantized(d, as_t_slice::<BlockQ8_0>(data)),
+                GgmlDType::Q8_1 => metal::load_quantized(d, as_t_slice::<BlockQ8_1>(data)),
+                GgmlDType::Q2K => metal::load_quantized(d, as_t_slice::<BlockQ2K>(data)),
+                GgmlDType::Q3K => metal::load_quantized(d, as_t_slice::<BlockQ3K>(data)),
+                GgmlDType::Q4K => metal::load_quantized(d, as_t_slice::<BlockQ4K>(data)),
+                GgmlDType::Q5K => metal::load_quantized(d, as_t_slice::<BlockQ5K>(data)),
+                GgmlDType::Q6K => metal::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
+                GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
+                GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
+            },
+            Device::Cuda(d) => match dtype {
+                GgmlDType::F32 => cuda::load_quantized(d, as_t_slice::<f32>(data)),
+                GgmlDType::F16 => cuda::load_quantized(d, as_t_slice::<f16>(data)),
+                GgmlDType::Q4_0 => cuda::load_quantized(d, as_t_slice::<BlockQ4_0>(data)),
+                GgmlDType::Q4_1 => cuda::load_quantized(d, as_t_slice::<BlockQ4_1>(data)),
+                GgmlDType::Q5_0 => cuda::load_quantized(d, as_t_slice::<BlockQ5_0>(data)),
+                GgmlDType::Q5_1 => cuda::load_quantized(d, as_t_slice::<BlockQ5_1>(data)),
+                GgmlDType::Q8_0 => cuda::load_quantized(d, as_t_slice::<BlockQ8_0>(data)),
+                GgmlDType::Q8_1 => cuda::load_quantized(d, as_t_slice::<BlockQ8_1>(data)),
+                GgmlDType::Q2K => cuda::load_quantized(d, as_t_slice::<BlockQ2K>(data)),
+                GgmlDType::Q3K => cuda::load_quantized(d, as_t_slice::<BlockQ3K>(data)),
+                GgmlDType::Q4K => cuda::load_quantized(d, as_t_slice::<BlockQ4K>(data)),
+                GgmlDType::Q5K => cuda::load_quantized(d, as_t_slice::<BlockQ5K>(data)),
+                GgmlDType::Q6K => cuda::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
+                GgmlDType::Q8K => cuda::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
+                GgmlDType::BF16 => cuda::load_quantized(d, as_t_slice::<bf16>(data)),
+            },
+        }
+    }
+
+    fn block_size(&self) -> usize {
+        match self {
+            QStorage::Cpu(storage) => storage.block_size(),
+            QStorage::Metal(storage) => storage.dtype().block_size(),
+            QStorage::Cuda(storage) => storage.dtype().block_size(),
+        }
+    }
+
+    fn dtype(&self) -> GgmlDType {
+        match self {
+            QStorage::Cpu(storage) => storage.dtype(),
+            QStorage::Metal(storage) => storage.dtype(),
+            QStorage::Cuda(storage) => storage.dtype(),
+        }
+    }
+
+    fn device(&self) -> Device {
+        match self {
+            QStorage::Cpu(_storage) => Device::Cpu,
+            QStorage::Metal(storage) => Device::Metal(storage.device().clone()),
+            QStorage::Cuda(storage) => Device::Cuda(storage.device().clone()),
+        }
+    }
+
+    fn size_in_bytes(&self) -> usize {
+        match self {
+            QStorage::Cpu(storage) => storage.storage_size_in_bytes(),
+            QStorage::Metal(storage) => storage.storage_size_in_bytes(),
+            QStorage::Cuda(storage) => storage.storage_size_in_bytes(),
+        }
+    }
+
+    fn quantize(&mut self, src: &Storage) -> Result<()> {
+        match (self, src) {
+            (QStorage::Cpu(storage), Storage::Cpu(src)) => {
+                storage.from_float(src.as_slice::<f32>()?);
+            }
+            (QStorage::Metal(storage), Storage::Metal(src)) => storage.quantize(src)?,
+            (QStorage::Cuda(storage), Storage::Cuda(src)) => storage.quantize(src)?,
+            _ => crate::bail!("Invalid quantize storage locations do not match"),
+        }
+        Ok(())
+    }
+
+    fn quantize_imatrix(
+        &mut self,
+        src: &Storage,
+        imatrix_weights: &[f32],
+        n_per_row: usize,
+    ) -> Result<()> {
+        match (self, src) {
+            (QStorage::Cpu(storage), Storage::Cpu(src)) => {
+                storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
+            }
+            (QStorage::Metal(storage), Storage::Metal(src)) => {
+                storage.quantize_imatrix(src, imatrix_weights, n_per_row)?
+            }
+            (QStorage::Cuda(storage), Storage::Cuda(src)) => {
+                storage.quantize_imatrix(src, imatrix_weights, n_per_row)?
+            }
+            _ => crate::bail!("Invalid quantize storage locations do not match"),
+        }
+        Ok(())
+    }
+
+    fn quantize_onto(&mut self, src: &Storage) -> Result<()> {
+        match (self, src) {
+            (QStorage::Cpu(storage), Storage::Cpu(src)) => {
+                storage.from_float(src.as_slice::<f32>()?);
+            }
+            (QStorage::Metal(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
+            (QStorage::Cuda(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
+            _ => crate::bail!("Invalid quantize source storage locations: not on cpu"),
+        }
+        Ok(())
+    }
+
+    fn quantize_imatrix_onto(
+        &mut self,
+        src: &Storage,
+        imatrix_weights: &[f32],
+        n_per_row: usize,
+    ) -> Result<()> {
+        match (self, src) {
+            (QStorage::Cpu(storage), Storage::Cpu(src)) => {
+                storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
+            }
+            (QStorage::Metal(storage), Storage::Cpu(src)) => {
+                storage.quantize_imatrix_onto(src, imatrix_weights, n_per_row)?
+            }
+            (QStorage::Cuda(storage), Storage::Cpu(src)) => {
+                storage.quantize_imatrix_onto(src, imatrix_weights, n_per_row)?
+            }
+            _ => crate::bail!("Invalid quantize storage locations do not match"),
+        }
+        Ok(())
+    }
+
+    fn dequantize(&self, elem_count: usize) -> Result<Storage> {
+        match self {
+            QStorage::Cpu(storage) => Ok(Storage::Cpu(storage.dequantize(elem_count)?)),
+            QStorage::Metal(storage) => Ok(Storage::Metal(storage.dequantize(elem_count)?)),
+            QStorage::Cuda(storage) => Ok(Storage::Cuda(storage.dequantize(elem_count)?)),
+        }
+    }
+
+    fn data(&self) -> Result<Cow<'_, [u8]>> {
+        match self {
+            QStorage::Cpu(storage) => {
+                let data_ptr = storage.as_ptr();
+                let size_in_bytes = storage.storage_size_in_bytes();
+                let data = unsafe { std::slice::from_raw_parts(data_ptr, size_in_bytes) };
+                Ok(Cow::from(data))
+            }
+            QStorage::Cuda(storage) => Ok(Cow::from(storage.data()?)),
+            QStorage::Metal(storage) => Ok(Cow::from(storage.data()?)),
+        }
+    }
+
+    pub fn device_ptr(&self) -> Result<*const u8> {
+        match self {
+            QStorage::Cuda(storage) => storage.device_ptr(),
+            QStorage::Metal(_) | QStorage::Cpu(_) => {
+                crate::bail!("not implemented");
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    pub fn device_ptr_with_guard<'a>(
+        &'a self,
+        stream: &'a crate::cuda_backend::cudarc::driver::CudaStream,
+    ) -> Result<(
+        *const u8,
+        crate::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+    )> {
+        match self {
+            QStorage::Cuda(storage) => storage.device_ptr_with_guard(stream),
+            QStorage::Metal(_) | QStorage::Cpu(_) => {
+                crate::bail!("not implemented");
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GgmlDType {
     F32,
     F16,
+    BF16,
     Q4_0,
     Q4_1,
     Q5_0,
@@ -53,6 +313,8 @@ impl GgmlDType {
             13 => Self::Q5K,
             14 => Self::Q6K,
             15 => Self::Q8K,
+            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
+            30 => Self::BF16,
             _ => crate::bail!("unknown dtype for tensor {u}"),
         };
         Ok(dtype)
@@ -74,6 +336,50 @@ impl GgmlDType {
             Self::Q5K => 13,
             Self::Q6K => 14,
             Self::Q8K => 15,
+            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
+            Self::BF16 => 30,
+        }
+    }
+
+    /// The block dtype
+    pub fn cpu_zeros(&self, elem_count: usize) -> Box<dyn QuantizedType> {
+        match self {
+            Self::F32 => Box::new(vec![f32::zeros(); elem_count]),
+            Self::F16 => Box::new(vec![f16::zeros(); elem_count]),
+            Self::Q4_0 => Box::new(vec![BlockQ4_0::zeros(); elem_count / BlockQ4_0::BLCK_SIZE]),
+            Self::Q4_1 => Box::new(vec![BlockQ4_1::zeros(); elem_count / BlockQ4_1::BLCK_SIZE]),
+            Self::Q5_0 => Box::new(vec![BlockQ5_0::zeros(); elem_count / BlockQ5_0::BLCK_SIZE]),
+            Self::Q5_1 => Box::new(vec![BlockQ5_1::zeros(); elem_count / BlockQ5_1::BLCK_SIZE]),
+            Self::Q8_0 => Box::new(vec![BlockQ8_0::zeros(); elem_count / BlockQ8_0::BLCK_SIZE]),
+            Self::Q8_1 => Box::new(vec![BlockQ8_1::zeros(); elem_count / BlockQ8_1::BLCK_SIZE]),
+            Self::Q2K => Box::new(vec![BlockQ2K::zeros(); elem_count / BlockQ2K::BLCK_SIZE]),
+            Self::Q3K => Box::new(vec![BlockQ3K::zeros(); elem_count / BlockQ3K::BLCK_SIZE]),
+            Self::Q4K => Box::new(vec![BlockQ4K::zeros(); elem_count / BlockQ4K::BLCK_SIZE]),
+            Self::Q5K => Box::new(vec![BlockQ5K::zeros(); elem_count / BlockQ5K::BLCK_SIZE]),
+            Self::Q6K => Box::new(vec![BlockQ6K::zeros(); elem_count / BlockQ6K::BLCK_SIZE]),
+            Self::Q8K => Box::new(vec![BlockQ8K::zeros(); elem_count / BlockQ8K::BLCK_SIZE]),
+            Self::BF16 => Box::new(vec![bf16::zeros(); elem_count]),
+        }
+    }
+
+    pub fn from_data(&self, data: Cow<'_, [u8]>) -> Box<dyn QuantizedType> {
+        let data: &[u8] = &data;
+        match self {
+            Self::F32 => Box::new(as_t_slice::<f32>(data).to_vec()),
+            Self::F16 => Box::new(as_t_slice::<f16>(data).to_vec()),
+            Self::Q4_0 => Box::new(as_t_slice::<BlockQ4_0>(data).to_vec()),
+            Self::Q4_1 => Box::new(as_t_slice::<BlockQ4_1>(data).to_vec()),
+            Self::Q5_0 => Box::new(as_t_slice::<BlockQ5_0>(data).to_vec()),
+            Self::Q5_1 => Box::new(as_t_slice::<BlockQ5_1>(data).to_vec()),
+            Self::Q8_0 => Box::new(as_t_slice::<BlockQ8_0>(data).to_vec()),
+            Self::Q8_1 => Box::new(as_t_slice::<BlockQ8_1>(data).to_vec()),
+            Self::Q2K => Box::new(as_t_slice::<BlockQ2K>(data).to_vec()),
+            Self::Q3K => Box::new(as_t_slice::<BlockQ3K>(data).to_vec()),
+            Self::Q4K => Box::new(as_t_slice::<BlockQ4K>(data).to_vec()),
+            Self::Q5K => Box::new(as_t_slice::<BlockQ5K>(data).to_vec()),
+            Self::Q6K => Box::new(as_t_slice::<BlockQ6K>(data).to_vec()),
+            Self::Q8K => Box::new(as_t_slice::<BlockQ8K>(data).to_vec()),
+            Self::BF16 => Box::new(as_t_slice::<bf16>(data).to_vec()),
         }
     }
 
@@ -82,7 +388,7 @@ impl GgmlDType {
         use k_quants::*;
         match self {
             Self::F32 => 4,
-            Self::F16 => 2,
+            Self::F16 | Self::BF16 => 2,
             Self::Q4_0 => std::mem::size_of::<BlockQ4_0>(),
             Self::Q4_1 => std::mem::size_of::<BlockQ4_1>(),
             Self::Q5_0 => std::mem::size_of::<BlockQ5_0>(),
@@ -100,10 +406,10 @@ impl GgmlDType {
     }
 
     /// The block size, i.e. the number of elements stored in each block.
-    pub fn blck_size(&self) -> usize {
+    pub fn block_size(&self) -> usize {
         match self {
             Self::F32 => 1,
-            Self::F16 => 1,
+            Self::F16 | Self::BF16 => 1,
             Self::Q4_0 => k_quants::QK4_0,
             Self::Q4_1 => k_quants::QK4_1,
             Self::Q5_0 => k_quants::QK5_0,
@@ -119,22 +425,79 @@ impl GgmlDType {
 pub trait QuantizedType: Send + Sync {
     fn dtype(&self) -> GgmlDType;
     fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()>;
-    fn to_float(&self, ys: &mut [f32]) -> Result<()>;
+    fn matmul_t_f16(&self, mkn: (usize, usize, usize), lhs: &[f16], dst: &mut [f16]) -> Result<()>;
+    fn embedding(&self, ids: &[u32], rows: usize, hidden: usize) -> Result<CpuStorage>;
+    fn dequantize(&self, elem_count: usize) -> Result<CpuStorage>;
     fn storage_size_in_bytes(&self) -> usize;
     fn as_ptr(&self) -> *const u8;
+    fn block_size(&self) -> usize;
+    #[allow(clippy::wrong_self_convention)]
+    fn from_float(&mut self, xs: &[f32]);
+    #[allow(clippy::wrong_self_convention)]
+    fn from_float_imatrix(&mut self, xs: &[f32], imatrix_weights: &[f32], n_per_row: usize);
+    fn size(&self) -> usize;
 }
 
 impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
     fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()> {
         k_quants::matmul(mkn, lhs, self.as_slice(), dst)
     }
+    fn matmul_t_f16(&self, mkn: (usize, usize, usize), lhs: &[f16], dst: &mut [f16]) -> Result<()> {
+        k_quants::matmul_f16(mkn, lhs, self.as_slice(), dst)
+    }
+
+    fn embedding(&self, ids: &[u32], rows: usize, hidden: usize) -> Result<CpuStorage> {
+        if !hidden.is_multiple_of(T::BLCK_SIZE) {
+            crate::bail!(
+                "quantized embedding hidden size {hidden} is not divisible by block size {}",
+                T::BLCK_SIZE
+            )
+        }
+        let row_blocks = hidden / T::BLCK_SIZE;
+        if self.len() != rows * row_blocks {
+            crate::bail!(
+                "quantized tensor has {} blocks, expected {}",
+                self.len(),
+                rows * row_blocks
+            )
+        }
+        let mut out = vec![0f32; ids.len() * hidden];
+        for (out_row, &row_id) in ids.iter().enumerate() {
+            let row = row_id as usize;
+            if row >= rows {
+                crate::bail!("embedding id {row} is out of range for {rows} rows")
+            }
+            let src = &self[row * row_blocks..(row + 1) * row_blocks];
+            let dst = &mut out[out_row * hidden..(out_row + 1) * hidden];
+            T::to_float(src, dst);
+        }
+        Ok(CpuStorage::F32(out))
+    }
+
+    fn size(&self) -> usize {
+        self.len() * core::mem::size_of::<T>()
+    }
+
+    fn from_float(&mut self, xs: &[f32]) {
+        T::from_float(xs, self)
+    }
+
+    fn from_float_imatrix(&mut self, xs: &[f32], imatrix_weights: &[f32], n_per_row: usize) {
+        T::from_float_imatrix(xs, self, imatrix_weights, n_per_row)
+    }
 
     fn dtype(&self) -> GgmlDType {
         T::DTYPE
     }
 
-    fn to_float(&self, ys: &mut [f32]) -> Result<()> {
-        T::to_float(self.as_slice(), ys)
+    fn block_size(&self) -> usize {
+        T::BLCK_SIZE
+    }
+
+    fn dequantize(&self, elem_count: usize) -> Result<CpuStorage> {
+        let mut ys = vec![0.0f32; elem_count];
+        T::to_float(self.as_slice(), &mut ys);
+        Ok(CpuStorage::F32(ys))
     }
 
     fn storage_size_in_bytes(&self) -> usize {
@@ -152,56 +515,167 @@ impl std::fmt::Debug for QTensor {
     }
 }
 
-fn check_shape<T: k_quants::GgmlType>(shape: &Shape) -> Result<()> {
+fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
     let dims = shape.dims();
     if dims.is_empty() {
         crate::bail!("scalar tensor cannot be quantized {shape:?}")
     }
-    if dims[dims.len() - 1] % T::BLCK_SIZE != 0 {
+    if !dims[dims.len() - 1].is_multiple_of(block_size) {
         crate::bail!(
             "quantized tensor must have their last dim divisible by block size {shape:?} {}",
-            T::BLCK_SIZE
+            block_size
         )
     }
     Ok(())
 }
 
 impl QTensor {
-    pub fn new<S: Into<Shape>, T: k_quants::GgmlType + Send + Sync + 'static>(
-        data: Vec<T>,
-        shape: S,
-    ) -> Result<Self> {
+    pub fn new<S: Into<Shape>>(storage: QStorage, shape: S) -> Result<Self> {
         let shape = shape.into();
-        check_shape::<T>(&shape)?;
+        check_shape(&shape, storage.block_size())?;
         Ok(Self {
-            data: Box::new(data),
+            storage,
             shape,
+            repacked_qs: OnceLock::new(),
         })
     }
 
-    pub fn quantize<T: k_quants::GgmlType + Send + Sync + 'static>(src: &Tensor) -> Result<Self> {
+    pub fn quantize(src: &Tensor, dtype: GgmlDType) -> Result<Self> {
         let shape = src.shape();
-        check_shape::<T>(shape)?;
-        let src = src
-            .to_dtype(crate::DType::F32)?
-            .flatten_all()?
-            .to_vec1::<f32>()?;
-        if src.len() % T::BLCK_SIZE != 0 {
+        let block_size = dtype.block_size();
+        check_shape(shape, block_size)?;
+        let src = src.to_dtype(crate::DType::F32)?.flatten_all()?;
+        let elem_count = shape.elem_count();
+        if !elem_count.is_multiple_of(block_size) {
             crate::bail!(
                 "tensor size ({shape:?}) is not divisible by block size {}",
-                T::BLCK_SIZE
+                block_size
             )
         }
-        let mut data = vec![T::zeros(); src.len() / T::BLCK_SIZE];
-        T::from_float(&src, &mut data)?;
+        let mut storage = src.device().qzeros(elem_count, dtype)?;
+        storage.quantize(&src.storage())?;
         Ok(Self {
-            data: Box::new(data),
+            storage,
             shape: shape.clone(),
+            repacked_qs: OnceLock::new(),
+        })
+    }
+
+    pub fn quantize_imatrix(
+        src: &Tensor,
+        imatrix_weights: &[f32],
+        dtype: GgmlDType,
+    ) -> Result<Self> {
+        // (n_per_row/QK_K-1)*QK_K+(QK_K/32-1)*32+32=n_per_row
+        // Size of imatrix == last dim of tensor
+        let n_per_row = src.dim(D::Minus1)?;
+        if imatrix_weights.len() != n_per_row {
+            crate::bail!(
+                "imatrix weights must have the same length {} as the last dim of src {}",
+                imatrix_weights.len(),
+                src.dim(D::Minus1)?
+            );
+        }
+
+        let shape = src.shape();
+        let block_size = dtype.block_size();
+        check_shape(shape, block_size)?;
+        let src = src.to_dtype(crate::DType::F32)?.flatten_all()?;
+        let elem_count = shape.elem_count();
+        if !elem_count.is_multiple_of(block_size) {
+            crate::bail!(
+                "tensor size ({shape:?}) is not divisible by block size {}",
+                block_size
+            );
+        }
+        let mut storage = src.device().qzeros(elem_count, dtype)?;
+        storage.quantize_imatrix(&src.storage(), imatrix_weights, n_per_row)?;
+        Ok(Self {
+            storage,
+            shape: shape.clone(),
+            repacked_qs: OnceLock::new(),
+        })
+    }
+
+    /// Quantize `src` (currently on the CPU) to a QTensor on `dev`
+    pub fn quantize_imatrix_onto(
+        src: &Tensor,
+        imatrix_weights: &[f32],
+        dtype: GgmlDType,
+        dev: &Device,
+    ) -> Result<Self> {
+        if !src.device().is_cpu() {
+            crate::bail!(
+                "`quantize_onto` expects a `src` to be on the cpu, got {:?}.",
+                src.device()
+            )
+        }
+        // (n_per_row/QK_K-1)*QK_K+(QK_K/32-1)*32+32=n_per_row
+        // Size of imatrix == last dim of tensor
+        let n_per_row = src.dim(D::Minus1)?;
+        if imatrix_weights.len() != n_per_row {
+            crate::bail!(
+                "imatrix weights must have the same length {} as the last dim of src {}",
+                imatrix_weights.len(),
+                src.dim(D::Minus1)?
+            );
+        }
+        let shape = src.shape();
+        let block_size = dtype.block_size();
+        check_shape(shape, block_size)?;
+        let src = src.to_dtype(crate::DType::F32)?.flatten_all()?;
+        let elem_count = shape.elem_count();
+        if !elem_count.is_multiple_of(block_size) {
+            crate::bail!(
+                "tensor size ({shape:?}) is not divisible by block size {}",
+                block_size
+            )
+        }
+        // storage is on the `dev`, src is on `cpu`
+        let mut storage = dev.qzeros(elem_count, dtype)?;
+        storage.quantize_imatrix_onto(&src.storage(), imatrix_weights, n_per_row)?;
+        Ok(Self {
+            storage,
+            shape: shape.clone(),
+            repacked_qs: OnceLock::new(),
+        })
+    }
+
+    /// Quantize `src` (currently on the CPU) to a QTensor on `dev`
+    pub fn quantize_onto(src: &Tensor, dtype: GgmlDType, dev: &Device) -> Result<Self> {
+        if !src.device().is_cpu() {
+            crate::bail!(
+                "`quantize_onto` expects a `src` to be on the cpu, got {:?}.",
+                src.device()
+            )
+        }
+        let shape = src.shape();
+        let block_size = dtype.block_size();
+        check_shape(shape, block_size)?;
+        let src = src.to_dtype(crate::DType::F32)?.flatten_all()?;
+        let elem_count = shape.elem_count();
+        if !elem_count.is_multiple_of(block_size) {
+            crate::bail!(
+                "tensor size ({shape:?}) is not divisible by block size {}",
+                block_size
+            )
+        }
+        // storage is on the `dev`, src is on `cpu`
+        let mut storage = dev.qzeros(elem_count, dtype)?;
+        storage.quantize_onto(&src.storage())?;
+        Ok(Self {
+            storage,
+            shape: shape.clone(),
+            repacked_qs: OnceLock::new(),
         })
     }
 
     pub fn dtype(&self) -> GgmlDType {
-        self.data.dtype()
+        self.storage.dtype()
+    }
+
+    pub fn device(&self) -> Device {
+        self.storage.device()
     }
 
     pub fn rank(&self) -> usize {
@@ -213,21 +687,120 @@ impl QTensor {
     }
 
     pub fn dequantize(&self, device: &Device) -> Result<Tensor> {
-        let mut f32_data = vec![0f32; self.shape.elem_count()];
-        self.data.to_float(&mut f32_data)?;
-        Tensor::from_vec(f32_data, &self.shape, device)
+        let storage = self.storage.dequantize(self.shape.elem_count())?;
+        let none = crate::op::BackpropOp::none();
+        crate::tensor::from_storage(storage, self.shape.clone(), none, false).to_device(device)
     }
 
-    pub fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()> {
-        self.data.matmul_t(mkn, lhs, dst)
+    pub fn dequantize_f16(&self, device: &Device) -> Result<Tensor> {
+        // In the CUDA case, we have a specialized kernel as this can be useful for volta
+        // architectures. https://github.com/huggingface/candle/issues/2136
+        match &self.storage {
+            QStorage::Cuda(s) => {
+                let s = s.dequantize_f16(self.shape.elem_count())?;
+                let none = crate::op::BackpropOp::none();
+                crate::tensor::from_storage(Storage::Cuda(s), self.shape.clone(), none, false)
+                    .to_device(device)
+            }
+            _ => {
+                let s = self.dequantize(device)?.to_dtype(crate::DType::F16)?;
+                Ok(s)
+            }
+        }
+    }
+
+    pub fn embedding(&self, ids: &Tensor) -> Result<Tensor> {
+        let (rows, hidden) = self.shape.dims2()?;
+        if !hidden.is_multiple_of(self.dtype().block_size()) {
+            crate::bail!(
+                "quantized embedding hidden size {hidden} is not divisible by block size {}",
+                self.dtype().block_size()
+            )
+        }
+        let mut out_shape = ids.dims().to_vec();
+        out_shape.push(hidden);
+        let device = self.device();
+        let ids = ids
+            .to_device(&device)?
+            .to_dtype(DType::U32)?
+            .flatten_all()?
+            .contiguous()?;
+        let storage = match &self.storage {
+            QStorage::Cpu(storage) => {
+                let ids = ids.to_vec1::<u32>()?;
+                Storage::Cpu(storage.embedding(&ids, rows, hidden)?)
+            }
+            QStorage::Metal(storage) => match &*ids.storage() {
+                Storage::Metal(ids_storage) => {
+                    Storage::Metal(storage.embedding(rows, hidden, ids_storage, ids.layout())?)
+                }
+                _ => unreachable!("ids were moved to the QTensor device"),
+            },
+            QStorage::Cuda(storage) => match &*ids.storage() {
+                Storage::Cuda(ids_storage) => {
+                    Storage::Cuda(storage.embedding(rows, hidden, ids_storage, ids.layout())?)
+                }
+                _ => unreachable!("ids were moved to the QTensor device"),
+            },
+        };
+        let none = crate::op::BackpropOp::none();
+        Ok(crate::tensor::from_storage(storage, out_shape, none, false))
     }
 
     pub fn storage_size_in_bytes(&self) -> usize {
-        self.data.storage_size_in_bytes()
+        self.storage.size_in_bytes()
     }
 
-    pub fn as_ptr(&self) -> *const u8 {
-        self.data.as_ptr()
+    pub fn data(&self) -> Result<Cow<'_, [u8]>> {
+        self.storage.data()
+    }
+
+    pub fn indexed_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+        match &self.storage {
+            QStorage::Cuda(s) => match (&*x.storage(), &*ids.storage()) {
+                (Storage::Cuda(x_storage), Storage::Cuda(ids_storage)) => {
+                    let (storage, out_shape) = s.indexed_moe_forward(
+                        self.shape(),
+                        x_storage,
+                        x.layout(),
+                        ids_storage,
+                        ids.layout(),
+                    )?;
+                    Ok(crate::tensor::from_storage(
+                        Storage::Cuda(storage),
+                        out_shape,
+                        crate::op::BackpropOp::none(),
+                        false,
+                    ))
+                }
+                _ => {
+                    panic!("Non-cuda indexed_moe_forward is not implemented!");
+                }
+            },
+            _ => {
+                panic!("indexed_moe_forward is not implemented in this platform!");
+            }
+        }
+    }
+
+    pub fn device_ptr(&self) -> Result<*const u8> {
+        match &self.storage {
+            QStorage::Cuda(storage) => storage.device_ptr(),
+            QStorage::Metal(_) | QStorage::Cpu(_) => {
+                crate::bail!("not implemented");
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    pub fn device_ptr_with_guard<'a>(
+        &'a self,
+        stream: &'a crate::cuda_backend::cudarc::driver::CudaStream,
+    ) -> Result<(
+        *const u8,
+        crate::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+    )> {
+        self.storage.device_ptr_with_guard(stream)
     }
 }
 
@@ -235,6 +808,7 @@ impl QTensor {
 pub enum QMatMul {
     QTensor(std::sync::Arc<QTensor>),
     Tensor(Tensor),
+    TensorF16(Tensor),
 }
 
 thread_local! {
@@ -248,15 +822,29 @@ thread_local! {
     }
 }
 
+thread_local! {
+    static DEQUANTIZE_ALL_F16: bool = {
+        match std::env::var("CANDLE_DEQUANTIZE_ALL_F16") {
+            Ok(s) => {
+                !s.is_empty() && s != "0"
+            },
+            Err(_) => false,
+        }
+    }
+}
+
 impl QMatMul {
     pub fn from_arc(qtensor: std::sync::Arc<QTensor>) -> Result<Self> {
         let dequantize = match qtensor.dtype() {
-            GgmlDType::F32 | GgmlDType::F16 => true,
+            GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16 => true,
             _ => DEQUANTIZE_ALL.with(|b| *b),
         };
         let t = if dequantize {
-            let tensor = qtensor.dequantize(&Device::Cpu)?;
+            let tensor = qtensor.dequantize(&qtensor.device())?;
             Self::Tensor(tensor)
+        } else if DEQUANTIZE_ALL_F16.with(|b| *b) {
+            let tensor = qtensor.dequantize_f16(&qtensor.device())?;
+            Self::TensorF16(tensor)
         } else {
             Self::QTensor(qtensor)
         };
@@ -265,6 +853,46 @@ impl QMatMul {
 
     pub fn from_qtensor(qtensor: QTensor) -> Result<Self> {
         Self::from_arc(std::sync::Arc::new(qtensor))
+    }
+
+    pub fn dequantize_f16(&self) -> Result<Tensor> {
+        match self {
+            Self::QTensor(t) => t.dequantize_f16(&t.device()),
+            Self::Tensor(t) => t.to_dtype(DType::F16),
+            Self::TensorF16(t) => Ok(t.clone()),
+        }
+    }
+
+    pub fn forward_via_f16(&self, xs: &Tensor) -> Result<Tensor> {
+        let w = self.dequantize_f16()?;
+        let in_dtype = xs.dtype();
+        let w = match *xs.dims() {
+            [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
+            [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
+            _ => w.t()?,
+        };
+        xs.to_dtype(DType::F16)?.matmul(&w)?.to_dtype(in_dtype)
+    }
+
+    pub fn indexed_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::QTensor(t) => t.indexed_moe_forward(x, ids),
+            _ => {
+                panic!("Not implemented!")
+            }
+        }
+    }
+
+    pub fn embedding(&self, ids: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::QTensor(t) => t.embedding(ids),
+            Self::Tensor(w) | Self::TensorF16(w) => {
+                let mut final_dims = ids.dims().to_vec();
+                final_dims.push(w.dim(D::Minus1)?);
+                let ids = ids.to_device(w.device())?.flatten_all()?;
+                w.index_select(&ids, 0)?.reshape(final_dims)
+            }
+        }
     }
 }
 
@@ -294,16 +922,98 @@ impl crate::CustomOp1 for QTensor {
         }
         dst_shape.push(n);
         let dst_shape = Shape::from(dst_shape);
-        let storage = storage.as_slice::<f32>()?;
-        let storage =
-            &storage[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
-        let mut dst_storage = vec![0f32; dst_shape.elem_count()];
-        self.matmul_t(
-            (dst_shape.elem_count() / n, k, n),
-            storage,
-            &mut dst_storage,
-        )?;
-        Ok((crate::CpuStorage::F32(dst_storage), dst_shape))
+        #[allow(clippy::infallible_destructuring_match)]
+        let self_storage = match &self.storage {
+            QStorage::Cpu(storage) => storage,
+            QStorage::Metal(_) | QStorage::Cuda(_) => crate::bail!("Invalid storage"),
+        };
+        match storage.dtype() {
+            DType::F32 => {
+                let slice = storage.as_slice::<f32>()?;
+                let slice =
+                    &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
+                let mut dst_storage = vec![0f32; dst_shape.elem_count()];
+
+                // Try the 8-column BlockQ4Kx8 repacked path.
+                #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+                if self_storage.dtype() == GgmlDType::Q4K && n.is_multiple_of(8) {
+                    use zerocopy::{FromBytes, IntoBytes};
+
+                    let total_blocks =
+                        self_storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ4K>();
+                    let repacked = self.repacked_qs.get_or_init(|| {
+                        let blocks = unsafe {
+                            std::slice::from_raw_parts(
+                                self_storage.as_ptr() as *const BlockQ4K,
+                                total_blocks,
+                            )
+                        };
+                        let packed = k_quants::pack_to_q4kx8(blocks, n);
+                        Some(packed.as_bytes().to_vec())
+                    });
+                    if let Some(repacked_bytes) = repacked {
+                        let block_x8: &[BlockQ4Kx8] =
+                            <[BlockQ4Kx8]>::ref_from_bytes(repacked_bytes).map_err(|_| {
+                                crate::Error::Msg(
+                                    "repacked_qs alignment invariant violated".to_string(),
+                                )
+                            })?;
+
+                        k_quants::matmul_q4k_x8(
+                            (dst_shape.elem_count() / n, k, n),
+                            slice,
+                            block_x8,
+                            &mut dst_storage,
+                        )?;
+                        return Ok((crate::CpuStorage::F32(dst_storage), dst_shape));
+                    }
+                }
+
+                self_storage.matmul_t(
+                    (dst_shape.elem_count() / n, k, n),
+                    slice,
+                    &mut dst_storage,
+                )?;
+                Ok((crate::CpuStorage::F32(dst_storage), dst_shape))
+            }
+            DType::F16 => {
+                let slice = storage.as_slice::<f16>()?;
+                let slice =
+                    &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
+                let mut dst_storage = vec![f16::ZERO; dst_shape.elem_count()];
+                self_storage.matmul_t_f16(
+                    (dst_shape.elem_count() / n, k, n),
+                    slice,
+                    &mut dst_storage,
+                )?;
+                Ok((crate::CpuStorage::F16(dst_storage), dst_shape))
+            }
+            _ => crate::bail!("Expected f32/f16"),
+        }
+    }
+
+    fn metal_fwd(
+        &self,
+        storage: &crate::MetalStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::MetalStorage, Shape)> {
+        let self_storage = match &self.storage {
+            QStorage::Metal(metal) => metal,
+            _ => unreachable!("Cannot call metal matmul on non metal QTensor"),
+        };
+        self_storage.fwd(&self.shape, storage, layout)
+    }
+
+    fn cuda_fwd(
+        &self,
+        storage: &crate::CudaStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::CudaStorage, Shape)> {
+        let self_storage = match &self.storage {
+            QStorage::Cuda(cuda) => cuda,
+            _ => unreachable!("Cannot call cuda matmul on non cuda QTensor"),
+        };
+        self_storage.fwd(&self.shape, storage, layout)
     }
 }
 
@@ -318,6 +1028,15 @@ impl crate::Module for QMatMul {
                     _ => w.t()?,
                 };
                 xs.matmul(&w)
+            }
+            Self::TensorF16(w) => {
+                let in_dtype = xs.dtype();
+                let w = match *xs.dims() {
+                    [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
+                    [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
+                    _ => w.t()?,
+                };
+                xs.to_dtype(DType::F16)?.matmul(&w)?.to_dtype(in_dtype)
             }
         }
     }

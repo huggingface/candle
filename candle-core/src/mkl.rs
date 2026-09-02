@@ -334,6 +334,16 @@ pub fn vd_tanh_inplace(y: &mut [f64]) {
 }
 
 #[inline]
+pub fn vs_exp_inplace(y: &mut [f32]) {
+    unsafe { ffi::vsExp(y.len() as i32, y.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vd_exp_inplace(y: &mut [f64]) {
+    unsafe { ffi::vdExp(y.len() as i32, y.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
 pub fn vs_gelu(vs: &[f32], ys: &mut [f32]) {
     for (&v, y) in vs.iter().zip(ys.iter_mut()) {
         *y = (2.0f32 / std::f32::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)
@@ -352,6 +362,28 @@ pub fn vd_gelu(vs: &[f64], ys: &mut [f64]) {
     vd_tanh_inplace(ys);
     for (&v, y) in vs.iter().zip(ys.iter_mut()) {
         *y = 0.5 * v * (1.0 + *y)
+    }
+}
+
+#[inline]
+pub fn vs_silu(vs: &[f32], ys: &mut [f32]) {
+    for (&v, y) in vs.iter().zip(ys.iter_mut()) {
+        *y = -v
+    }
+    vs_exp_inplace(ys);
+    for (&v, y) in vs.iter().zip(ys.iter_mut()) {
+        *y = v / (1.0 + *y)
+    }
+}
+
+#[inline]
+pub fn vd_silu(vs: &[f64], ys: &mut [f64]) {
+    for (&v, y) in vs.iter().zip(ys.iter_mut()) {
+        *y = -v
+    }
+    vd_exp_inplace(ys);
+    for (&v, y) in vs.iter().zip(ys.iter_mut()) {
+        *y = v / (1.0 + *y)
     }
 }
 

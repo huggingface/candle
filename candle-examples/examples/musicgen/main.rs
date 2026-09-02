@@ -10,17 +10,15 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-mod encodec_model;
 mod musicgen_model;
-mod nn;
 
 use musicgen_model::{GenConfig, MusicgenForConditionalGeneration};
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 
 const DTYPE: DType = DType::F32;
 
@@ -54,7 +52,7 @@ fn main() -> Result<()> {
     let tokenizer = match args.tokenizer {
         Some(tokenizer) => std::path::PathBuf::from(tokenizer),
         None => Api::new()?
-            .model("facebook/musicgen-small".to_string())
+            .model("facebook/musicgen-small")
             .get("tokenizer.json")?,
     };
     let mut tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
@@ -66,11 +64,8 @@ fn main() -> Result<()> {
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
         None => Api::new()?
-            .repo(Repo::with_revision(
-                "facebook/musicgen-small".to_string(),
-                RepoType::Model,
-                "refs/pr/13".to_string(),
-            ))
+            .model("facebook/musicgen-small")
+            .with_revision("refs/pr/13")
             .get("model.safetensors")?,
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DTYPE, &device)? };

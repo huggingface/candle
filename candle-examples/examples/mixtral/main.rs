@@ -10,10 +10,10 @@ use clap::Parser;
 use candle_transformers::models::mixtral::{Config, Model};
 
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -143,7 +143,7 @@ struct Args {
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, short = 'n', default_value_t = 100)]
+    #[arg(long, short = 'n', default_value_t = 10000)]
     sample_len: usize,
 
     #[arg(long, default_value = "mistralai/Mixtral-8x7B-v0.1")]
@@ -195,11 +195,7 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        args.model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model(args.model_id).with_revision(args.revision);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("tokenizer.json")?,
@@ -217,11 +213,7 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let config = Config::v0_1_8x7b(args.use_flash_attn);
     let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
-        DType::BF16
-    } else {
-        DType::F32
-    };
+    let dtype = device.bf16_default_to_f32();
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
     let model = Model::new(&config, vb)?;
     println!("loaded the model in {:?}", start.elapsed());

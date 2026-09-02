@@ -121,8 +121,8 @@ impl Args {
         let path = match &self.config {
             Some(config) => std::path::PathBuf::from(config),
             None => {
-                let api = hf_hub::api::sync::Api::new()?;
-                let api = api.model("lmz/candle-yolo-v3".to_string());
+                let api = candle_examples::hub::Api::new()?;
+                let api = api.model("lmz/candle-yolo-v3");
                 api.get("yolo-v3.cfg")?
             }
         };
@@ -133,8 +133,8 @@ impl Args {
         let path = match &self.model {
             Some(model) => std::path::PathBuf::from(model),
             None => {
-                let api = hf_hub::api::sync::Api::new()?;
-                let api = api.model("lmz/candle-yolo-v3".to_string());
+                let api = candle_examples::hub::Api::new()?;
+                let api = api.model("lmz/candle-yolo-v3");
                 api.get("yolo-v3.safetensors")?
             }
         };
@@ -159,7 +159,7 @@ pub fn main() -> Result<()> {
         let net_width = darknet.width()?;
         let net_height = darknet.height()?;
 
-        let original_image = image::io::Reader::open(&image_name)?
+        let original_image = image::ImageReader::open(&image_name)?
             .decode()
             .map_err(candle::Error::wrap)?;
         let image = {

@@ -4,7 +4,7 @@ use candle_nn::{
     linear, ops::log_softmax, ops::softmax, sequential::seq, Activation, AdamW, Optimizer,
     ParamsAdamW, VarBuilder, VarMap,
 };
-use rand::{distributions::Distribution, rngs::ThreadRng, Rng};
+use rand::{distr::Distribution, rngs::ThreadRng, Rng};
 
 fn new_model(
     input_shape: &[usize],
@@ -14,7 +14,7 @@ fn new_model(
 ) -> Result<(impl Module, VarMap)> {
     let input_size = input_shape.iter().product();
 
-    let mut varmap = VarMap::new();
+    let varmap = VarMap::new();
     let var_builder = VarBuilder::from_varmap(&varmap, dtype, device);
 
     let model = seq()
@@ -39,7 +39,7 @@ fn accumulate_rewards(steps: &[Step<i64>]) -> Vec<f64> {
 }
 
 fn weighted_sample(probs: Vec<f32>, rng: &mut ThreadRng) -> Result<usize> {
-    let distribution = rand::distributions::WeightedIndex::new(probs).map_err(Error::wrap)?;
+    let distribution = rand::distr::weighted::WeightedIndex::new(probs).map_err(Error::wrap)?;
     let mut rng = rng;
     Ok(distribution.sample(&mut rng))
 }
@@ -65,16 +65,16 @@ pub fn run() -> Result<()> {
 
     let mut optimizer = AdamW::new(varmap.all_vars(), optimizer_params)?;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for epoch_idx in 0..100 {
-        let mut state = env.reset(rng.gen::<u64>())?;
+        let mut state = env.reset(rng.random::<u64>())?;
         let mut steps: Vec<Step<i64>> = vec![];
 
         loop {
             let action = {
                 let action_probs: Vec<f32> =
-                    softmax(&model.forward(&state.detach()?.unsqueeze(0)?)?, 1)?
+                    softmax(&model.forward(&state.detach().unsqueeze(0)?)?, 1)?
                         .squeeze(0)?
                         .to_vec1()?;
                 weighted_sample(action_probs, &mut rng)? as i64
@@ -84,7 +84,7 @@ pub fn run() -> Result<()> {
             steps.push(step.copy_with_obs(&state));
 
             if step.terminated || step.truncated {
-                state = env.reset(rng.gen::<u64>())?;
+                state = env.reset(rng.random::<u64>())?;
                 if steps.len() > 5000 {
                     break;
                 }
@@ -109,7 +109,7 @@ pub fn run() -> Result<()> {
 
         let rewards = Tensor::from_vec(accumulate_rewards(&steps), batch_size, &Device::Cpu)?
             .to_dtype(DType::F32)?
-            .detach()?;
+            .detach();
 
         let actions_mask = {
             let actions: Vec<i64> = steps.iter().map(|s| s.action).collect();
@@ -126,12 +126,12 @@ pub fn run() -> Result<()> {
                         .unwrap()
                 })
                 .collect();
-            Tensor::stack(&actions_mask, 0)?.detach()?
+            Tensor::stack(&actions_mask, 0)?.detach()
         };
 
         let states = {
             let states: Vec<Tensor> = steps.into_iter().map(|s| s.state).collect();
-            Tensor::stack(&states, 0)?.detach()?
+            Tensor::stack(&states, 0)?.detach()
         };
 
         let log_probs = actions_mask

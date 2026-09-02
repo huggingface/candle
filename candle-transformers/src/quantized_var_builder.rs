@@ -1,8 +1,15 @@
+//! Varbuilder for Loading gguf files
+//!
+//! VarBuilder is a utility to store quantized tensors from a [GGUF model file](https://huggingface.co/docs/hub/gguf).
+//! These tensors can be loaded from disk using `from_gguf` or from an in-memory
+//! buffer using `from_gguf_buffer`.
+
 use candle::quantized::QTensor;
 use candle::{Device, Result, Shape};
 use std::sync::Arc;
 
 // VarBuilder specialized for QTensors
+#[derive(Clone)]
 pub struct VarBuilder {
     data: Arc<std::collections::HashMap<String, Arc<QTensor>>>,
     path: Vec<String>,
@@ -10,33 +17,33 @@ pub struct VarBuilder {
 }
 
 impl VarBuilder {
-    pub fn from_gguf<P: AsRef<std::path::Path>>(p: P) -> Result<Self> {
+    pub fn from_gguf<P: AsRef<std::path::Path>>(p: P, device: &Device) -> Result<Self> {
         let mut file = std::fs::File::open(p)?;
         let content = candle::quantized::gguf_file::Content::read(&mut file)?;
         let mut data = std::collections::HashMap::new();
         for tensor_name in content.tensor_infos.keys() {
-            let tensor = content.tensor(&mut file, tensor_name)?;
+            let tensor = content.tensor(&mut file, tensor_name, device)?;
             data.insert(tensor_name.to_string(), Arc::new(tensor));
         }
         Ok(Self {
             data: Arc::new(data),
             path: Vec::new(),
-            device: Device::Cpu,
+            device: device.clone(),
         })
     }
 
-    pub fn from_gguf_buffer(buffer: &[u8]) -> Result<Self> {
+    pub fn from_gguf_buffer(buffer: &[u8], device: &Device) -> Result<Self> {
         let mut cursor = std::io::Cursor::new(buffer);
         let content = candle::quantized::gguf_file::Content::read(&mut cursor)?;
         let mut data = std::collections::HashMap::new();
         for tensor_name in content.tensor_infos.keys() {
-            let tensor = content.tensor(&mut cursor, tensor_name)?;
+            let tensor = content.tensor(&mut cursor, tensor_name, device)?;
             data.insert(tensor_name.to_string(), Arc::new(tensor));
         }
         Ok(Self {
             data: Arc::new(data),
             path: Vec::new(),
-            device: Device::Cpu,
+            device: device.clone(),
         })
     }
 
@@ -62,7 +69,7 @@ impl VarBuilder {
         let path = self.path(name);
         match self.data.get(&path) {
             None => {
-                candle::bail!("cannot find tensor {name}")
+                candle::bail!("cannot find tensor {path}")
             }
             Some(qtensor) => {
                 let shape = s.into();

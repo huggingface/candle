@@ -6,7 +6,7 @@ extern crate accelerate_src;
 
 use anyhow::Result;
 use candle::{test_utils, DType, Device, Tensor};
-use candle_nn::BatchNorm;
+use candle_nn::{batch_norm, BatchNorm, BatchNormConfig, VarBuilder, VarMap};
 
 /* The test below has been generated using the following PyTorch code:
 import torch
@@ -20,7 +20,7 @@ print(m.running_mean)
 print(m.running_var)
 */
 #[test]
-fn batch_norm() -> Result<()> {
+fn batch_norm_test() -> Result<()> {
     let running_mean = Tensor::zeros(5, DType::F32, &Device::Cpu)?;
     let running_var = Tensor::ones(5, DType::F32, &Device::Cpu)?;
     let bn = BatchNorm::new_no_bias(5, running_mean.clone(), running_var.clone(), 1e-8)?;
@@ -81,6 +81,48 @@ fn batch_norm() -> Result<()> {
     assert_eq!(
         test_utils::to_vec1_round(bn.running_var(), 4)?,
         &[0.9972, 0.9842, 0.9956, 0.9866, 0.9898]
+    );
+    Ok(())
+}
+
+// This test makes sure that we can train a batch norm layer using a VarMap.
+#[test]
+fn train_batch_norm() -> Result<()> {
+    let vm = VarMap::new();
+    let vb = VarBuilder::from_varmap(&vm, DType::F32, &Device::Cpu);
+    let bn = batch_norm(1, BatchNormConfig::default(), vb)?;
+    // Get a copy of the original mean to ensure it is being updated.
+    let original_mean = bn.running_mean().detach().copy()?;
+    let var_map_mean = {
+        vm.data()
+            .lock()
+            .unwrap()
+            .get("running_mean")
+            .unwrap()
+            .clone()
+    };
+    // Ensure the var map mean is the same as the running mean.
+    assert_eq!(
+        test_utils::to_vec1_round(bn.running_mean(), 4)?,
+        test_utils::to_vec1_round(var_map_mean.as_tensor(), 4)?,
+    );
+    // Train with a something guaranteed to be different from the running mean.
+    let mean_plus_one = {
+        let one = original_mean.ones_like()?;
+        original_mean.add(&one)?.reshape((1, 1))?
+    };
+
+    bn.forward_train(&mean_plus_one)?;
+    // Assert that the running mean has been updated.
+    assert_ne!(
+        test_utils::to_vec1_round(bn.running_mean(), 4)?,
+        test_utils::to_vec1_round(&original_mean, 4)?,
+    );
+
+    // Assert that the var map mean has been updated.
+    assert_eq!(
+        test_utils::to_vec1_round(bn.running_mean(), 4)?,
+        test_utils::to_vec1_round(var_map_mean.as_tensor(), 4)?,
     );
     Ok(())
 }

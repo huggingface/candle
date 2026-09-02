@@ -2,6 +2,9 @@
 
 This is based on [mamba-minimal](https://github.com/johnma2006/mamba-minimal).
 
+Compared to the mamba example, this version can handle training but is much
+slower.
+
 ## Running the example
 
 ```bash

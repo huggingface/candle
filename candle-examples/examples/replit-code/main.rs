@@ -11,9 +11,9 @@ use candle_transformers::models::mpt::{Config, Model as M};
 use candle_transformers::models::quantized_mpt::Model as Q;
 
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 enum Model {
@@ -217,7 +217,7 @@ fn main() -> Result<()> {
         Some(rev) => rev.to_string(),
         None => "main".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+    let repo = api.model(model_id).with_revision(revision);
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("tokenizer.json")?,
@@ -236,16 +236,15 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
+    let device = candle_examples::device(args.cpu)?;
     let config = Config::replit_code_v1_5_3b();
-    let (model, device) = if args.quantized {
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filename)?;
-        let model = Model::Q(Q::new(&config, vb.pp("transformer"))?);
-        (model, Device::Cpu)
+    let model = if args.quantized {
+        let vb =
+            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filename, &device)?;
+        Model::Q(Q::new(&config, vb.pp("transformer"))?)
     } else {
-        let device = candle_examples::device(args.cpu)?;
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[filename], DType::F32, &device)? };
-        let model = Model::M(M::new(&config, vb.pp("transformer"))?);
-        (model, device)
+        Model::M(M::new(&config, vb.pp("transformer"))?)
     };
     println!("loaded the model in {:?}", start.elapsed());
 

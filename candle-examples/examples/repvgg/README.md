@@ -1,7 +1,9 @@
 # candle-repvgg
 
-A candle implementation of inference using a pre-trained [repvgg](https://arxiv.org/abs/2101.03697).
-This uses a classification head trained on the ImageNet dataset and returns the
+[RepVGG: Making VGG-style ConvNets Great Again](https://arxiv.org/abs/2101.03697).
+
+This candle implementation uses a pre-trained RepVGG network for inference. The
+classification head has been trained on the ImageNet dataset and returns the
 probabilities for the top-5 classes.
 
 ## Running an example
