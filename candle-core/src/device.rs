@@ -322,7 +322,8 @@ impl Device {
 
     pub fn supports_bf16(&self) -> bool {
         match self {
-            Self::Cuda(_) | Self::Metal(_) => true,
+            Self::Cuda(cuda) => cuda.supports_bf16(),
+            Self::Metal(_) => true,
             Self::Cpu => false,
         }
     }
