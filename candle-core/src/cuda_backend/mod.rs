@@ -1520,7 +1520,7 @@ impl BackendStorage for CudaStorage {
             S::F16(s) => (slice_ptr(s, src_o), "const_set_f16"),
             S::F32(s) => (slice_ptr(s, src_o), "const_set_f32"),
             S::F64(s) => (slice_ptr(s, src_o), "const_set_f64"),
-            S::F8E4M3(s) => (slice_ptr(s, src_o), "const_set_f8_e4m3"),
+            S::F8E4M3(s) => (slice_ptr(s, src_o), "const_set_f8e4m3"),
             S::F4(_) | S::F6E2M3(_) | S::F6E3M2(_) | S::F8E8M0(_) => {
                 return Err(CudaError::UnsupportedDtype {
                     dtype: self.dtype(),
@@ -1841,15 +1841,16 @@ impl BackendStorage for CudaStorage {
                 Layout::contiguous_with_offset((n, k), kernel_l.start_offset()).transpose(0, 1)?;
             col.matmul(kernel, (1, b * m, n, k), &col_l, &kernel_l)?
         } else {
-            // Make the kernel contiguous if not already the case.
+            // Make the kernel contiguous if not already the case. copy_strided_src writes the
+            // materialized kernel starting at offset 0, so the matmul layout must use offset 0,
+            // not the original (strided) kernel's start offset.
             let mut kernel_c = unsafe {
                 self.device()
                     .alloc_uninit(kernel_l.shape(), kernel.dtype())?
             };
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
-            let kernel_l =
-                Layout::contiguous_with_offset((n, k), kernel_l.start_offset()).transpose(0, 1)?;
-            col.matmul(kernel, (1, b * m, n, k), &col_l, &kernel_l)?
+            let kernel_l = Layout::contiguous_with_offset((n, k), 0).transpose(0, 1)?;
+            col.matmul(&kernel_c, (1, b * m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, n)).transpose(1, 2)?;
         let mut res_t = unsafe { self.device().alloc_uninit(res_l.shape(), res.dtype())? };

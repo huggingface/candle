@@ -15,8 +15,15 @@ pub enum CudaError {
     #[error(transparent)]
     Curand(#[from] cudarc::curand::result::CurandError),
 
-    #[error("missing kernel '{module_name}'")]
-    MissingKernel { module_name: String },
+    #[error(
+        "cuda: kernel `{kernel_name}` not found in module `{module_name}` (this kernel may not be compiled for the target architecture)"
+    )]
+    MissingKernel {
+        kernel_name: String,
+        module_name: String,
+        #[source]
+        source: cudarc::driver::DriverError,
+    },
 
     #[error("unsupported dtype {dtype:?} for {op}")]
     UnsupportedDtype { dtype: DType, op: &'static str },
