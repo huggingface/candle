@@ -76,8 +76,11 @@ jobs:
           RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
         run: cargo test --workspace
       - name: Run tests (Windows & macOS)
-        if: runner.os != 'Linux'
+        if: runner.os != 'Linux' && runner.os != 'macOS'
         run: cargo test --workspace
+      - name: Run tests (macOS with Metal)
+        if: runner.os == 'macOS'
+        run: cargo test --workspace --features metal
 
   fmt:
     name: Rustfmt
