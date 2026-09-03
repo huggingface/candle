@@ -28,6 +28,7 @@
 //! - Scheduler: FlowMatchEulerDiscreteScheduler (shift=3.0)
 
 pub mod preprocess;
+pub mod quantized_transformer;
 pub mod sampling;
 pub mod scheduler;
 pub mod text_encoder;
@@ -36,6 +37,7 @@ pub mod vae;
 
 // Re-export main types
 pub use preprocess::{prepare_inputs, PreparedInputs};
+pub use quantized_transformer::QuantizedZImageTransformer2DModel;
 pub use sampling::{get_noise, get_schedule, postprocess_image};
 pub use scheduler::{calculate_shift, FlowMatchEulerDiscreteScheduler, SchedulerConfig};
 pub use text_encoder::{TextEncoderConfig, ZImageTextEncoder};
