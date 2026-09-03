@@ -2200,6 +2200,32 @@ fn transfers_cuda_to_device() -> Result<()> {
 
 #[cfg(feature = "cuda")]
 #[test]
+fn cuda_integer_to_integer_dtype_casts() -> Result<()> {
+    let device = match Device::new_cuda(0) {
+        Ok(device) => device,
+        Err(_) => return Ok(()),
+    };
+
+    let i32s = Tensor::from_slice(&[-1i32, 0, 7, 42], (4,), &device)?;
+    let i64s = i32s.to_dtype(DType::I64)?;
+    assert_eq!(i64s.to_vec1::<i64>()?, &[-1, 0, 7, 42]);
+
+    let u32s = Tensor::from_slice(&[0u32, 7, 42], (3,), &device)?;
+    let i32s = u32s.to_dtype(DType::I32)?;
+    assert_eq!(i32s.to_vec1::<i32>()?, &[0, 7, 42]);
+
+    let i64s = Tensor::from_slice(&[-3i64, 11, 1024], (3,), &device)?;
+    let i32s = i64s.to_dtype(DType::I32)?;
+    assert_eq!(i32s.to_vec1::<i32>()?, &[-3, 11, 1024]);
+
+    let i16s = i32s.to_dtype(DType::I16)?;
+    assert_eq!(i16s.to_vec1::<i16>()?, &[-3, 11, 1024]);
+
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
 fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
     use std::ops::Deref;
 
