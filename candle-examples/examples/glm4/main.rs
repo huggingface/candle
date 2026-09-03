@@ -5,7 +5,6 @@ use candle_transformers::models::glm4::{Config as ConfigOld, EosTokenId, Model a
 use candle_transformers::models::glm4_new::{Config as ConfigNew, ModelForCausalLM as ModelNew};
 
 use clap::Parser;
-use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
 
 enum Model {
@@ -214,11 +213,9 @@ fn main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
     let api = match args.cache_path.as_ref() {
-        None => hf_hub::api::sync::Api::new()?,
+        None => candle_examples::hub::Api::new()?,
         Some(path) => {
-            hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(path.to_string().into()))
-                .build()
-                .map_err(anyhow::Error::msg)?
+            candle_examples::hub::Api::with_cache_dir(path.as_str()).map_err(anyhow::Error::msg)?
         }
     };
 
@@ -233,7 +230,7 @@ fn main() -> anyhow::Result<()> {
         Some(rev) => rev.to_string(),
         None => "main".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+    let repo = api.model(model_id).with_revision(revision);
     let tokenizer_filename = match (args.weight_path.as_ref(), args.tokenizer.as_ref()) {
         (Some(_), Some(file)) => std::path::PathBuf::from(file),
         (None, Some(file)) => std::path::PathBuf::from(file),

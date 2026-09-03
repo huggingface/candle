@@ -59,9 +59,10 @@ cudarc = { version = "0.19.8", features = [
     "cuda-version-from-build-system",
     "dynamic-linking",
 ], default-features = false }
-fancy-regex = "0.18.0"
+cutile = "=0.3.0"
+fancy-regex = "0.19.0"
 gemm = { version = "0.19.0", features = ["wasm-simd128-enable"] }
-hf-hub = "0.5.0"
+hf-hub = { version = "1.0.0", features = ["blocking"] }
 half = { version = "2.5.0", features = [
     "num-traits",
     "use-intrinsics",
@@ -74,7 +75,7 @@ image = { version = "0.25.2", default-features = false, features = [
     "jpeg",
     "png",
 ] }
-imageproc = { version = "0.26.0", features = [
+imageproc = { version = "0.27.0", features = [
     "text",
 ], default-features = false }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
@@ -84,7 +85,7 @@ log = "0.4"
 memmap2 = { version = "0.9.3", features = ["stable_deref_trait"] }
 num_cpus = "1.15.0"
 num-traits = "0.2.15"
-parquet = "58"
+parquet = "59"
 rand = "0.9.0"
 rand_distr = "0.5.1"
 rayon = "1.7.0"
@@ -93,7 +94,7 @@ serde = { version = "1.0.171", features = ["derive"] }
 serde_plain = "1.0.2"
 serde_json = "1.0.99"
 thiserror = "2"
-tokenizers = { version = "0.22.0", default-features = false }
+tokenizers = { version = "0.23.1", default-features = false }
 tracing = "0.1.37"
 tracing-chrome = "0.7.1"
 tracing-subscriber = "0.3.7"

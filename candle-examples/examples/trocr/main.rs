@@ -66,7 +66,7 @@ struct Args {
 
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let api = hf_hub::api::sync::Api::new()?;
+    let api = candle_examples::hub::Api::new()?;
 
     let mut tokenizer_dec = {
         let tokenizer_file = match args.tokenizer {
@@ -85,12 +85,9 @@ pub fn main() -> anyhow::Result<()> {
             Some(model) => std::path::PathBuf::from(model),
             None => {
                 let (repo, branch) = args.which.repo_and_branch_name();
-                api.repo(hf_hub::Repo::with_revision(
-                    repo.to_string(),
-                    hf_hub::RepoType::Model,
-                    branch.to_string(),
-                ))
-                .get("model.safetensors")?
+                api.model(repo)
+                    .with_revision(branch)
+                    .get("model.safetensors")?
             }
         };
         println!("model: {model:?}");
@@ -99,13 +96,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let (encoder_config, decoder_config) = {
         let (repo, branch) = args.which.repo_and_branch_name();
-        let config_filename = api
-            .repo(hf_hub::Repo::with_revision(
-                repo.to_string(),
-                hf_hub::RepoType::Model,
-                branch.to_string(),
-            ))
-            .get("config.json")?;
+        let config_filename = api.model(repo).with_revision(branch).get("config.json")?;
         let config: Config = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
         (config.encoder, config.decoder)
     };

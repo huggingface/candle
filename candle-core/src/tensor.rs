@@ -4,8 +4,10 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims, ShapeWithOneHole};
+use crate::storage::{StorageMutRef, StorageRef};
 use crate::{bail, storage::Storage, DType, Device, Error, Layout, Result, Shape};
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// Unique identifier for tensors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -696,9 +698,11 @@ impl Tensor {
             self.clone()
         };
         for (idx, &repeat) in repeats.iter().enumerate() {
-            if repeat > 1 {
-                inp = Tensor::cat(&vec![&inp; repeat], idx)?
-            }
+            inp = match repeat {
+                0 => inp.narrow(idx, 0, 0)?,
+                1 => inp,
+                repeat => Tensor::cat(&vec![&inp; repeat], idx)?,
+            };
         }
         Ok(inp)
     }
@@ -1226,7 +1230,7 @@ impl Tensor {
     /// # Arguments
     ///
     /// * `target_h` - Target height
-    /// * `target_w` - Target width  
+    /// * `target_w` - Target width
     /// * `align_corners` - If true, corner pixels are aligned. If false (default),
     ///   pixels are treated as areas (matches PyTorch default behavior).
     ///
@@ -1513,9 +1517,6 @@ impl Tensor {
         let n = b_dims[dim - 1];
 
         let c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
-        if c_shape.elem_count() == 0 || k == 0 {
-            return Tensor::zeros(c_shape, self.dtype(), self.device());
-        }
         let batching: usize = a_dims[..dim - 2].iter().product();
         let batching_b: usize = b_dims[..dim - 2].iter().product();
         if k != k2 || batching != batching_b {
@@ -1525,6 +1526,18 @@ impl Tensor {
                 op: "matmul",
             }
             .bt())?
+        }
+        if c_shape.elem_count() == 0 || k == 0 {
+            {
+                let lhs_storage = self.storage();
+                let rhs_storage = rhs.storage();
+                lhs_storage.same_device(&rhs_storage, "matmul")?;
+                lhs_storage.same_dtype(&rhs_storage, "matmul")?;
+            }
+
+            let storage = self.device().zeros(&c_shape, self.dtype())?;
+            let op = BackpropOp::new2(self, rhs, Op::Matmul);
+            return Ok(from_storage(storage, c_shape, op, false));
         }
 
         let storage = self.storage().matmul(
@@ -1553,6 +1566,21 @@ impl Tensor {
                 .broadcast_as(&l_shape)?
                 .contiguous()?
                 .matmul(&rhs.broadcast_as(&r_shape)?.contiguous()?),
+            // A rank-2 rhs is only broadcast over the batch dimensions, so the whole product is
+            // a single 2D matmul once the leading dims of lhs are folded into its row dimension.
+            // Broadcasting the rhs instead would copy it `batch` times -- for an lm_head that is
+            // the entire vocabulary matrix, per call. Same trick, and same contiguity guard, as
+            // `candle_nn::Linear::forward`.
+            (false, true) if rhs.rank() == 2 && lhs.is_contiguous() => {
+                let (lhs_dims, rhs_dims) = (lhs.dims(), rhs.dims());
+                let (m, k) = (lhs_dims[lhs.rank() - 2], lhs_dims[lhs.rank() - 1]);
+                let n = rhs_dims[1];
+                let batch: usize = lhs_dims[..lhs.rank() - 2].iter().product();
+                let mut out_dims = lhs_dims.to_vec();
+                out_dims.pop();
+                out_dims.push(n);
+                lhs.reshape((batch * m, k))?.matmul(rhs)?.reshape(out_dims)
+            }
             (false, true) => lhs.matmul(&rhs.broadcast_as(&r_shape)?.contiguous()?),
             (true, false) => lhs.broadcast_as(&l_shape)?.contiguous()?.matmul(rhs),
             (false, false) => lhs.matmul(rhs),
@@ -2729,33 +2757,41 @@ impl Tensor {
         m.forward_t(self, train)
     }
 
-    pub(crate) fn storage(&self) -> std::sync::RwLockReadGuard<'_, Storage> {
-        self.storage.read().unwrap()
+    /// Acquire read lock on storage and returns guard.
+    /// `read_recursive` allows for shared read access.
+    pub(crate) fn storage(&self) -> StorageRef<'_> {
+        self.storage.read_recursive()
     }
 
-    pub(crate) fn storage_mut(&self) -> std::sync::RwLockWriteGuard<'_, Storage> {
-        self.storage.write().unwrap()
+    /// Acquire write lock on storage and returns guard.
+    pub(crate) fn storage_mut(&self) -> StorageMutRef<'_> {
+        self.storage.write()
     }
 
     // If we extend the visibility of this function to be usable outside of this crate, we should
     // make it unsafe.
-    pub(crate) fn storage_mut_and_layout(
-        &self,
-    ) -> (std::sync::RwLockWriteGuard<'_, Storage>, &Layout) {
-        let storage = self.storage.write().unwrap();
+    pub(crate) fn storage_mut_and_layout(&self) -> (StorageMutRef<'_>, &Layout) {
+        let storage = self.storage.write();
         (storage, &self.layout)
     }
 
     /// The storage used by this tensor, together with the layout to use to access it safely.
-    pub fn storage_and_layout(&self) -> (std::sync::RwLockReadGuard<'_, Storage>, &Layout) {
-        let storage = self.storage.read().unwrap();
+    pub fn storage_and_layout(&self) -> (StorageRef<'_>, &Layout) {
+        let storage = self.storage.read();
         (storage, &self.layout)
     }
 
+    /// Unique key for this tensor's storage. Equal keys mean the tensors share the same allocation.
+    #[inline]
+    pub(crate) fn storage_key(&self) -> usize {
+        let lock: &RwLock<Storage> = self.storage.as_ref();
+        std::ptr::from_ref(lock).addr()
+    }
+
+    /// Check if two tensors share the same underlying allocation.
+    #[inline]
     pub(crate) fn same_storage(&self, rhs: &Self) -> bool {
-        let lhs: &RwLock<Storage> = self.storage.as_ref();
-        let rhs: &RwLock<Storage> = rhs.storage.as_ref();
-        std::ptr::eq(lhs, rhs)
+        self.storage_key() == rhs.storage_key()
     }
 
     /// Normalize a 'relative' axis value: positive values are kept, negative

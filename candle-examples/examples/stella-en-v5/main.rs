@@ -14,8 +14,8 @@ use candle_transformers::models::stella_en_v5::{
 };
 
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
-use hf_hub::{api::sync::Api, Repo};
 use tokenizers::{PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer};
 
 struct Embedding {
@@ -330,7 +330,7 @@ fn main() -> Result<()> {
         ),
     };
 
-    let repo = api.repo(Repo::model(repo.to_string()));
+    let repo = api.model(repo);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("tokenizer.json")?,
@@ -381,7 +381,7 @@ fn main() -> Result<()> {
 
     let mut embedding = Embedding::new(model, tokenizer, &device);
 
-    let task = args.task.map_or(EncodeTask::S2P, |t| t);
+    let task = args.task.unwrap_or(EncodeTask::S2P);
 
     embedding.encode(task, args.query)
 }
