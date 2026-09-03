@@ -6,6 +6,10 @@ on:
 
 name: Continuous integration
 
+env:
+  # Incremental compilation would just be overhead, so we can disable it entirely.
+  CARGO_INCREMENTAL: 0
+
 jobs:
   check:
     name: Check
@@ -23,9 +27,14 @@ jobs:
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          key: ${{ matrix.os }}
+          # Save only from main
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run macos with metal
-        if: matrix.os == 'macOS-latest' 
+        if: matrix.os == 'macOS-latest'
         run: cargo check --workspace --all-targets --features metal
 
       - name: Run normal cpu
@@ -67,6 +76,11 @@ jobs:
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          key: ${{ matrix.os }}
+          # Save only from main
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install lld (Linux only)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y lld
@@ -101,5 +115,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --tests --examples --benches -- -D warnings
- 
