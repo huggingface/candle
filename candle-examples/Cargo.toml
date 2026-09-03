@@ -61,7 +61,7 @@ tokio = "1.48.0"
 [build-dependencies]
 anyhow = { workspace = true }
 cudaforge = { version = "0.1.2", optional = true }
-hf-hub = { workspace = true }
+hf-hub = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -95,7 +95,7 @@ mimi = ["cpal", "symphonia", "rubato"]
 snac = ["cpal", "symphonia", "rubato"]
 depth_anything_v2 = ["palette", "enterpolation"]
 tekken = ["tekken-rs"]
-buildtime-download = []
+buildtime-download = ["dep:hf-hub"]
 
 [[example]]
 name = "llama_multiprocess"
