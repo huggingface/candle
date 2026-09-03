@@ -12,6 +12,20 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use super::{CudaError, CudaStorage, CudaStorageSlice, WrapErr};
 
+/// Enable peer access from the currently-bound context to `peer_ctx`; the
+/// caller must `bind_to_thread` the source context first. Maps
+/// `CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED` to success so callers are idempotent.
+fn enable_peer_access_one_way(peer_ctx: cudarc::driver::sys::CUcontext) -> Result<()> {
+    let res = unsafe { cudarc::driver::sys::cuCtxEnablePeerAccess(peer_ctx, 0) };
+    if res == cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS
+        || res == cudarc::driver::sys::cudaError_enum::CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED
+    {
+        Ok(())
+    } else {
+        Err(cudarc::driver::DriverError(res)).w()
+    }
+}
+
 /// Unique identifier for cuda devices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DeviceId(usize);
@@ -305,6 +319,46 @@ impl CudaDevice {
 
     pub fn is_event_tracking(&self) -> bool {
         self.context.is_event_tracking()
+    }
+
+    /// Enable peer access between this device's context and `other`'s, in both
+    /// directions, so cross-card transfers (`memcpy_peer_async`,
+    /// `Tensor::to_device`) can route over NVLink/PCIe P2P instead of failing
+    /// with `CUDA_ERROR_INVALID_CONTEXT`.
+    ///
+    /// Idempotent: handles sharing one context are a no-op, and repeat calls on
+    /// an already-enabled pair return `Ok(())` (the driver's
+    /// `CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED` is mapped to success).
+    ///
+    /// # Side effects
+    ///
+    /// Binds `self`'s context as the calling thread's current context on return,
+    /// regardless of what was bound before, including on the error paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying CUDA error if the pair does not support peer
+    /// access (some heterogeneous or IOMMU-isolated configs) or a context is in
+    /// a terminal state. Probe with `cuDeviceCanAccessPeer` first if needed.
+    pub fn enable_peer_access(&self, other: &Self) -> Result<()> {
+        let self_ctx = self.context.cu_ctx();
+        let other_ctx = other.context.cu_ctx();
+        // Compare contexts, not ordinals: two handles on the same physical GPU
+        // but distinct contexts still transfer via `memcpy_peer_async`, so they
+        // need peer access enabled; only a shared context is a true no-op.
+        if self_ctx == other_ctx {
+            return Ok(());
+        }
+        // Enable self->other (current = self), then other->self (current =
+        // other). Capture the outcome and rebind `self` on every path so a
+        // failure in the second direction can't leave the thread on `other`.
+        self.context.bind_to_thread().w()?;
+        let res = enable_peer_access_one_way(other_ctx).and_then(|()| {
+            other.context.bind_to_thread().w()?;
+            enable_peer_access_one_way(self_ctx)
+        });
+        self.context.bind_to_thread().w()?;
+        res
     }
 
     #[cfg(all(feature = "ug", not(target_arch = "wasm32")))]

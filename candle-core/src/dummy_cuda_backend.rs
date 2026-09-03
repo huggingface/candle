@@ -31,6 +31,9 @@ impl CudaDevice {
     pub fn id(&self) -> DeviceId {
         DeviceId(0)
     }
+    pub fn enable_peer_access(&self, _other: &Self) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
 }
 
 impl crate::backend::BackendStorage for CudaStorage {
