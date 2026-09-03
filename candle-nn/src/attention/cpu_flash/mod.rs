@@ -31,6 +31,22 @@ use super::AttnMask;
 #[inline]
 pub(crate) fn dot_f32<T: WithDType>(a: &[T], b: &[T]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
+    if matches!(T::DTYPE, DType::F16) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if is_x86_feature_detected!("f16c") && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+                return unsafe { dot_f16_avx2_fma(a.as_ptr() as *const u16, b.as_ptr() as *const u16, a.len()) };
+            }
+        }
+    }
+    if matches!(T::DTYPE, DType::BF16) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+                return unsafe { dot_bf16_avx2_fma(a.as_ptr() as *const u16, b.as_ptr() as *const u16, a.len()) };
+            }
+        }
+    }
     if matches!(T::DTYPE, DType::F16 | DType::BF16) {
         let mut acc = 0f32;
         for (&x, &y) in a.iter().zip(b.iter()) {
@@ -43,6 +59,126 @@ pub(crate) fn dot_f32<T: WithDType>(a: &[T], b: &[T]) -> f32 {
     // out pointer, pre-zeroed for the scalar fallback that accumulates into it.
     unsafe { T::vec_dot(a.as_ptr(), b.as_ptr(), &mut res, a.len()) };
     res.to_f64() as f32
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma,f16c")]
+unsafe fn dot_f16_avx2_fma(a: *const u16, b: *const u16, len: usize) -> f32 {
+    use std::arch::x86_64::*;
+    let mut sum0 = _mm256_setzero_ps();
+    let mut sum1 = _mm256_setzero_ps();
+    let mut i = 0;
+
+    // 16-way unrolled AVX2 + F16C hardware decompression
+    while i + 16 <= len {
+        let va0 = _mm_loadu_si128(a.add(i) as *const __m128i);
+        let vb0 = _mm_loadu_si128(b.add(i) as *const __m128i);
+        let fa0 = _mm256_cvtph_ps(va0);
+        let fb0 = _mm256_cvtph_ps(vb0);
+        sum0 = _mm256_fmadd_ps(fa0, fb0, sum0);
+
+        let va1 = _mm_loadu_si128(a.add(i + 8) as *const __m128i);
+        let vb1 = _mm_loadu_si128(b.add(i + 8) as *const __m128i);
+        let fa1 = _mm256_cvtph_ps(va1);
+        let fb1 = _mm256_cvtph_ps(vb1);
+        sum1 = _mm256_fmadd_ps(fa1, fb1, sum1);
+
+        i += 16;
+    }
+
+    if i + 8 <= len {
+        let va = _mm_loadu_si128(a.add(i) as *const __m128i);
+        let vb = _mm_loadu_si128(b.add(i) as *const __m128i);
+        let fa = _mm256_cvtph_ps(va);
+        let fb = _mm256_cvtph_ps(vb);
+        sum0 = _mm256_fmadd_ps(fa, fb, sum0);
+        i += 8;
+    }
+
+    sum0 = _mm256_add_ps(sum0, sum1);
+
+    // Horizontal reduction
+    let hi128 = _mm256_extractf128_ps(sum0, 1);
+    let lo128 = _mm256_castps256_ps128(sum0);
+    let sum128 = _mm_add_ps(lo128, hi128);
+    let shuf = _mm_movehl_ps(sum128, sum128);
+    let sums = _mm_add_ps(sum128, shuf);
+    let shuf2 = _mm_movehdup_ps(sums);
+    let sums2 = _mm_add_ss(sums, shuf2);
+    let mut acc = _mm_cvtss_f32(sums2);
+
+    // Residual elements
+    while i < len {
+        let ha = half::f16::from_bits(*a.add(i));
+        let hb = half::f16::from_bits(*b.add(i));
+        acc += (ha.to_f64() as f32) * (hb.to_f64() as f32);
+        i += 1;
+    }
+
+    acc
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn dot_bf16_avx2_fma(a: *const u16, b: *const u16, len: usize) -> f32 {
+    use std::arch::x86_64::*;
+    let mut sum0 = _mm256_setzero_ps();
+    let mut sum1 = _mm256_setzero_ps();
+    let mut i = 0;
+
+    // 16-way unrolled AVX2 FMA for BF16 via exponent shift
+    while i + 16 <= len {
+        let va0_raw = _mm_loadu_si128(a.add(i) as *const __m128i);
+        let vb0_raw = _mm_loadu_si128(b.add(i) as *const __m128i);
+        let va0_32 = _mm256_cvtepu16_epi32(va0_raw);
+        let vb0_32 = _mm256_cvtepu16_epi32(vb0_raw);
+        let fa0 = _mm256_castsi256_ps(_mm256_slli_epi32(va0_32, 16));
+        let fb0 = _mm256_castsi256_ps(_mm256_slli_epi32(vb0_32, 16));
+        sum0 = _mm256_fmadd_ps(fa0, fb0, sum0);
+
+        let va1_raw = _mm_loadu_si128(a.add(i + 8) as *const __m128i);
+        let vb1_raw = _mm_loadu_si128(b.add(i + 8) as *const __m128i);
+        let va1_32 = _mm256_cvtepu16_epi32(va1_raw);
+        let vb1_32 = _mm256_cvtepu16_epi32(vb1_raw);
+        let fa1 = _mm256_castsi256_ps(_mm256_slli_epi32(va1_32, 16));
+        let fb1 = _mm256_castsi256_ps(_mm256_slli_epi32(vb1_32, 16));
+        sum1 = _mm256_fmadd_ps(fa1, fb1, sum1);
+
+        i += 16;
+    }
+
+    if i + 8 <= len {
+        let va_raw = _mm_loadu_si128(a.add(i) as *const __m128i);
+        let vb_raw = _mm_loadu_si128(b.add(i) as *const __m128i);
+        let va_32 = _mm256_cvtepu16_epi32(va_raw);
+        let vb_32 = _mm256_cvtepu16_epi32(vb_raw);
+        let fa = _mm256_castsi256_ps(_mm256_slli_epi32(va_32, 16));
+        let fb = _mm256_castsi256_ps(_mm256_slli_epi32(vb_32, 16));
+        sum0 = _mm256_fmadd_ps(fa, fb, sum0);
+        i += 8;
+    }
+
+    sum0 = _mm256_add_ps(sum0, sum1);
+
+    // Horizontal reduction
+    let hi128 = _mm256_extractf128_ps(sum0, 1);
+    let lo128 = _mm256_castps256_ps128(sum0);
+    let sum128 = _mm_add_ps(lo128, hi128);
+    let shuf = _mm_movehl_ps(sum128, sum128);
+    let sums = _mm_add_ps(sum128, shuf);
+    let shuf2 = _mm_movehdup_ps(sums);
+    let sums2 = _mm_add_ss(sums, shuf2);
+    let mut acc = _mm_cvtss_f32(sums2);
+
+    // Residual elements
+    while i < len {
+        let ha = half::bf16::from_bits(*a.add(i));
+        let hb = half::bf16::from_bits(*b.add(i));
+        acc += (ha.to_f64() as f32) * (hb.to_f64() as f32);
+        i += 1;
+    }
+
+    acc
 }
 
 /// Flash attention with automatic dispatch.
