@@ -9,26 +9,90 @@ use std::sync::Arc;
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{linear_b as linear, Activation, Linear, VarBuilder};
 
+fn default_attention_bias() -> bool {
+    false
+}
+fn default_head_dim() -> usize {
+    256
+}
+fn default_hidden_activation() -> candle_nn::Activation {
+    candle_nn::Activation::GeluPytorchTanh
+}
+fn default_rms_norm_eps() -> f64 {
+    1e-6
+}
+fn default_rope_theta() -> f64 {
+    1_000_000.
+}
+fn default_rope_local_base_freq() -> f64 {
+    10_000.
+}
+fn default_query_pre_attn_scalar() -> usize {
+    256
+}
+fn default_sliding_window() -> usize {
+    4096
+}
+fn default_sliding_window_pattern() -> usize {
+    6
+}
+fn default_max_position_embeddings() -> usize {
+    131072
+}
+fn default_num_attention_heads() -> usize {
+    8
+}
+fn default_num_key_value_heads() -> usize {
+    4
+}
+fn default_vocab_size() -> usize {
+    262208
+}
+
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct Config {
+    #[serde(default = "default_attention_bias")]
     pub attention_bias: bool,
+    #[serde(default = "default_head_dim")]
     pub head_dim: usize,
+    #[serde(default = "default_hidden_activation")]
     pub hidden_activation: Activation,
     pub hidden_size: usize,
     pub intermediate_size: usize,
+    #[serde(default = "default_num_attention_heads")]
     pub num_attention_heads: usize,
     pub num_hidden_layers: usize,
+    #[serde(default = "default_num_key_value_heads")]
     pub num_key_value_heads: usize,
+    #[serde(default = "default_rms_norm_eps")]
     pub rms_norm_eps: f64,
+    #[serde(default = "default_rope_theta")]
     pub rope_theta: f64,
+    #[serde(default = "default_rope_local_base_freq")]
     pub rope_local_base_freq: f64,
+    #[serde(default = "default_vocab_size")]
     pub vocab_size: usize,
     pub final_logit_softcapping: Option<f64>,
     pub attn_logit_softcapping: Option<f64>,
+    #[serde(default = "default_query_pre_attn_scalar")]
     pub query_pre_attn_scalar: usize,
+    #[serde(default = "default_sliding_window")]
     pub sliding_window: usize,
+    #[serde(default = "default_sliding_window_pattern")]
     pub sliding_window_pattern: usize,
+    #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
+    pub rope_scaling: Option<RopeScaling>,
+}
+
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct RopeScaling {
+    #[serde(default = "default_rope_scaling_factor")]
+    pub factor: f64,
+}
+
+fn default_rope_scaling_factor() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone)]
@@ -81,9 +145,16 @@ impl RotaryEmbedding {
         } else {
             cfg.rope_theta
         };
+        let rope_scaling_factor = if sliding_window.is_none() {
+            cfg.rope_scaling.as_ref().map(|s| s.factor).unwrap_or(1.0)
+        } else {
+            1.0
+        };
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / rope_freq.powf(i as f64 / dim as f64) as f32)
+            .map(|i| {
+                (1f32 / rope_freq.powf(i as f64 / dim as f64) as f32) / rope_scaling_factor as f32
+            })
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
@@ -235,14 +306,14 @@ impl Attention {
             .transpose(1, 2)?;
         let value_states = value_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let query_states = self.q_norm.forward(&query_states)?;
         let key_states = self.k_norm.forward(&key_states)?;
 
         let (query_states, key_states) =
             self.rotary_emb
                 .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
-
         let (key_states, value_states) = match &mut self.kv_cache {
             KvCache::Normal(cache) => cache.append(&key_states, &value_states)?,
             KvCache::Rotating(cache) => cache.append(&key_states, &value_states)?,
@@ -467,6 +538,68 @@ impl Model {
             hidden_size: cfg.hidden_size,
             sliding_window: cfg.sliding_window,
         })
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    pub fn embed_tokens(&self) -> &candle_nn::Embedding {
+        &self.embed_tokens
+    }
+
+    pub fn forward_embeds(
+        &mut self,
+        xs: Tensor,
+        seqlen_offset: usize,
+        image_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let (b_size, seq_len, _) = xs.dims3()?;
+        let mut xs = xs;
+
+        let (attention_mask, sliding_attention_mask) =
+            self.create_attention_masks(b_size, seq_len, seqlen_offset)?;
+
+        let (attention_mask, sliding_attention_mask) = if let Some(img_mask) = image_mask {
+            let img_mask_f = img_mask.to_dtype(self.dtype)?;
+            let is_image_query = img_mask_f.unsqueeze(1)?.unsqueeze(D::Minus1)?;
+
+            let apply_override = |mask: Option<Tensor>| -> Result<Option<Tensor>> {
+                match mask {
+                    None => Ok(None),
+                    Some(m) => {
+                        let is_img = is_image_query.broadcast_as(m.shape())?;
+                        let zero = Tensor::zeros_like(&m)?;
+                        Ok(Some(is_img.gt(0.0)?.where_cond(&zero, &m)?))
+                    }
+                }
+            };
+
+            (
+                apply_override(attention_mask)?,
+                apply_override(sliding_attention_mask)?,
+            )
+        } else {
+            (attention_mask, sliding_attention_mask)
+        };
+
+        for layer in self.layers.iter_mut() {
+            let mask = if layer.sliding_window.is_some() {
+                &sliding_attention_mask
+            } else {
+                &attention_mask
+            };
+            xs = layer.forward(&xs, mask.as_ref(), seqlen_offset)?
+        }
+        let logits = xs
+            .narrow(1, seq_len - 1, 1)?
+            .apply(&self.norm)?
+            .apply(&self.lm_head)?;
+        let logits = match self.final_logit_softcapping {
+            None => logits,
+            Some(sc) => ((logits / sc)?.tanh()? * sc)?,
+        };
+        Ok(logits)
     }
 
     fn create_attention_masks(
