@@ -775,6 +775,8 @@ impl BackendStorage for MetalStorage {
                 ("urelu", DType::F32) => strided::relu::FLOAT,
                 ("uround", DType::F32) => strided::round::FLOAT,
                 ("utanh", DType::F32) => strided::tanh::FLOAT,
+                ("urecip", DType::F32) => strided::recip::FLOAT,
+                ("usign", DType::F32) => strided::sign::FLOAT,
 
                 ("ucos", DType::F16) => strided::cos::HALF,
                 ("usin", DType::F16) => strided::sin::HALF,
@@ -793,6 +795,8 @@ impl BackendStorage for MetalStorage {
                 ("urelu", DType::F16) => strided::relu::HALF,
                 ("uround", DType::F16) => strided::round::HALF,
                 ("utanh", DType::F16) => strided::tanh::HALF,
+                ("urecip", DType::F16) => strided::recip::HALF,
+                ("usign", DType::F16) => strided::sign::HALF,
 
                 ("ucos", DType::BF16) => strided::cos::BFLOAT,
                 ("usin", DType::BF16) => strided::sin::BFLOAT,
@@ -811,6 +815,8 @@ impl BackendStorage for MetalStorage {
                 ("urelu", DType::BF16) => strided::relu::BFLOAT,
                 ("uround", DType::BF16) => strided::round::BFLOAT,
                 ("utanh", DType::BF16) => strided::tanh::BFLOAT,
+                ("urecip", DType::BF16) => strided::recip::BFLOAT,
+                ("usign", DType::BF16) => strided::sign::BFLOAT,
 
                 (name, dtype) => {
                     crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
@@ -1456,6 +1462,12 @@ impl BackendStorage for MetalStorage {
         if !ids_l.is_contiguous() {
             return Err(crate::Error::RequiresContiguous { op: "gather" }.bt());
         };
+        // The Metal gather kernel indexes the source assuming a contiguous
+        // layout, so a strided source silently produced wrong results. Require a
+        // contiguous source, matching the CPU backend and the `ids` check above.
+        if !src_l.is_contiguous() {
+            return Err(crate::Error::RequiresContiguous { op: "gather" }.bt());
+        };
         let ids_el = ids_l.dims()[dim];
         let dst_el = ids_l.shape().elem_count();
         let dtype = self.dtype;
@@ -1654,6 +1666,7 @@ impl BackendStorage for MetalStorage {
             ids_el,
             dim,
             src_l.is_contiguous(),
+            src_l.dims().len(),
             src_l.dims(),
             src_l.stride(),
             src,
