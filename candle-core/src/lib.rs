@@ -1,3 +1,5 @@
+#![allow(clippy::chunks_exact_to_as_chunks)]
+
 //! ML framework for Rust
 //!
 //! ```rust
