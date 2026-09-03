@@ -115,6 +115,8 @@ impl QMetalStorage {
                 let vec: Vec<crate::quantized::BlockQ8K> = read_to_vec(&buffer, block_len);
                 crate::quantized::BlockQ8K::to_float(&vec, &mut out);
             }
+            // CPU-only; never loaded onto Metal (from_data bails first).
+            GgmlDType::Q6Kx8 => crate::bail!("Q6Kx8 is CPU-only"),
         }
 
         let buffer = self
@@ -497,6 +499,8 @@ impl From<GgmlDType> for candle_metal_kernels::GgmlDType {
             GgmlDType::F16 => candle_metal_kernels::GgmlDType::F16,
             GgmlDType::F32 => candle_metal_kernels::GgmlDType::F32,
             GgmlDType::BF16 => candle_metal_kernels::GgmlDType::BF16,
+            // CPU-only; no Metal-kernel equivalent and never reaches Metal storage.
+            GgmlDType::Q6Kx8 => unreachable!("Q6Kx8 is CPU-only"),
         }
     }
 }
