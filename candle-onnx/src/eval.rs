@@ -1191,13 +1191,21 @@ fn simple_eval_(
                 let mode = get_attr_opt(node, "mode")?.unwrap_or("constant");
                 let data = get(&node.input[0])?;
                 let pads = get(&node.input[1])?;
-                if node.input.len() > 2 {
+                // Opset 11+ allows an optional third input holding the value
+                // used by the "constant" mode, and an optional fourth input
+                // selecting the axes. Only the former is handled here.
+                if node.input.len() > 3 {
                     bail!(
-                        "unsupported number of inputs {} for Pad node {:?}, expected 2",
+                        "unsupported number of inputs {} for Pad node {:?}, expected 2 or 3",
                         node.input.len(),
                         node.name
                     );
                 }
+                let constant_value = if node.input.len() > 2 && !node.input[2].is_empty() {
+                    Some(get(&node.input[2])?)
+                } else {
+                    None
+                };
                 if pads.rank() != 1 {
                     bail!("Pad expects 'pads' input to be 1D vector: {pads:?}");
                 }
@@ -1234,11 +1242,223 @@ fn simple_eval_(
 
                         values.insert(node.output[0].clone(), out);
                     }
+                    "constant" => {
+                        // Pad with a constant, defaulting to zero. The
+                        // padding is built as separate tensors and
+                        // concatenated, one axis at a time.
+                        let value = match constant_value {
+                            Some(v) => v.flatten_all()?.to_dtype(data.dtype())?,
+                            None => Tensor::zeros((1,), data.dtype(), data.device())?,
+                        };
+                        let value = value.reshape(())?;
+
+                        let mut out = data.clone();
+                        for (i, _) in data.dims().iter().enumerate() {
+                            let (pre, post) = (pads_pre[i], pads_post[i]);
+                            if pre == 0 && post == 0 {
+                                continue;
+                            }
+                            if pre < 0 || post < 0 {
+                                bail!(
+                                    "negative padding is not supported for Pad node {:?}",
+                                    node.name
+                                );
+                            }
+                            let mut parts: Vec<Tensor> = Vec::with_capacity(3);
+                            let mut block = out.dims().to_vec();
+                            if pre > 0 {
+                                block[i] = pre as usize;
+                                parts.push(value.broadcast_as(block.clone())?);
+                            }
+                            parts.push(out.clone());
+                            if post > 0 {
+                                block[i] = post as usize;
+                                parts.push(value.broadcast_as(block)?);
+                            }
+                            out = Tensor::cat(&parts, i)?;
+                        }
+
+                        values.insert(node.output[0].clone(), out);
+                    }
                     _ => bail!(
                         "unsupported 'mode' value {mode:?} for Pad node {:?}",
                         node.name
                     ),
                 }
+            }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Softplus
+            "Softplus" => {
+                let input = get(&node.input[0])?;
+                // ln(1 + e^x) written as max(x, 0) + ln(1 + e^-|x|).
+                // The naive form overflows for large x; this one is
+                // stable at both ends.
+                let zeros = input.zeros_like()?;
+                let positive = input.maximum(&zeros)?;
+                let stable = input.abs()?.neg()?.exp()?.affine(1.0, 1.0)?.log()?;
+                let output = (positive + stable)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#NonZero
+            "NonZero" => {
+                let input = get(&node.input[0])?;
+                let dims = input.dims().to_vec();
+                let flat = input
+                    .flatten_all()?
+                    .to_dtype(DType::F32)?
+                    .to_vec1::<f32>()?;
+
+                // Output shape is [rank, count]: each COLUMN holds the
+                // coordinates of one non-zero element.
+                let mut coords: Vec<Vec<i64>> = vec![Vec::new(); dims.len()];
+                for (linear, &v) in flat.iter().enumerate() {
+                    if v == 0.0 {
+                        continue;
+                    }
+                    let mut rest = linear;
+                    for axis in (0..dims.len()).rev() {
+                        coords[axis].push((rest % dims[axis]) as i64);
+                        rest /= dims[axis];
+                    }
+                }
+
+                let count = coords.first().map(|v| v.len()).unwrap_or(0);
+                let flat: Vec<i64> = coords.into_iter().flatten().collect();
+                let output = Tensor::from_vec(flat, (dims.len(), count), input.device())?;
+                values.insert(node.output[0].clone(), output);
+            }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#GatherND
+            "GatherND" => {
+                let data = get(&node.input[0])?;
+                let indices = get(&node.input[1])?;
+                let batch_dims = get_attr_opt::<i64>(node, "batch_dims")?
+                    .copied()
+                    .unwrap_or(0);
+                if batch_dims != 0 {
+                    bail!(
+                        "unsupported batch_dims {batch_dims} for GatherND node {:?}",
+                        node.name
+                    );
+                }
+
+                let data_shape = data.dims().to_vec();
+                let index_shape = indices.dims().to_vec();
+                let k = *index_shape.last().unwrap_or(&0);
+                if k == 0 || k > data_shape.len() {
+                    bail!(
+                        "GatherND indices last dim is {k} but data rank is {} for node {:?}",
+                        data_shape.len(),
+                        node.name
+                    );
+                }
+
+                let slice_len: usize = data_shape[k..].iter().product();
+                let idx = indices
+                    .flatten_all()?
+                    .to_dtype(DType::I64)?
+                    .to_vec1::<i64>()?;
+                let count = idx.len() / k;
+                let flat = data.flatten_all()?;
+
+                let mut parts: Vec<Tensor> = Vec::with_capacity(count);
+                for i in 0..count {
+                    let mut offset = 0usize;
+                    for axis in 0..k {
+                        let mut v = idx[i * k + axis];
+                        // Negative indices count from the end.
+                        if v < 0 {
+                            v += data_shape[axis] as i64;
+                        }
+                        if v < 0 || v as usize >= data_shape[axis] {
+                            bail!(
+                                "GatherND index out of bounds on axis {axis}: {v} not in \
+                                 0..{} for node {:?}",
+                                data_shape[axis],
+                                node.name
+                            );
+                        }
+                        offset = offset * data_shape[axis] + v as usize;
+                    }
+                    parts.push(flat.narrow(0, offset * slice_len, slice_len)?);
+                }
+
+                let joined = if parts.is_empty() {
+                    Tensor::zeros((0,), data.dtype(), data.device())?
+                } else {
+                    Tensor::cat(&parts, 0)?
+                };
+
+                // Output shape: indices.shape[..-1] ++ data.shape[k..]
+                let mut out_shape: Vec<usize> = index_shape[..index_shape.len() - 1].to_vec();
+                out_shape.extend_from_slice(&data_shape[k..]);
+                values.insert(node.output[0].clone(), joined.reshape(out_shape)?);
+            }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#ConvTranspose
+            "ConvTranspose" => {
+                let input = get(&node.input[0])?;
+                let weight = get(&node.input[1])?;
+
+                // Only the 1D case is implemented; erroring out is better
+                // than silently producing a wrong result.
+                if input.rank() != 3 {
+                    bail!(
+                        "only 1D ConvTranspose is supported (input rank {}) for node {:?}",
+                        input.rank(),
+                        node.name
+                    );
+                }
+
+                let stride = get_attr_opt::<[i64]>(node, "strides")?
+                    .and_then(|v| v.first().copied())
+                    .unwrap_or(1) as usize;
+                let dilation = get_attr_opt::<[i64]>(node, "dilations")?
+                    .and_then(|v| v.first().copied())
+                    .unwrap_or(1) as usize;
+                let groups = get_attr_opt::<i64>(node, "group")?.copied().unwrap_or(1) as usize;
+                let padding = get_attr_opt::<[i64]>(node, "pads")?
+                    .and_then(|v| v.first().copied())
+                    .unwrap_or(0) as usize;
+                let output_padding = get_attr_opt::<[i64]>(node, "output_padding")?
+                    .and_then(|v| v.first().copied())
+                    .unwrap_or(0) as usize;
+
+                let mut output = input.conv_transpose1d(
+                    weight,
+                    padding,
+                    output_padding,
+                    stride,
+                    dilation,
+                    groups,
+                )?;
+
+                if node.input.len() > 2 && !node.input[2].is_empty() {
+                    let bias = get(&node.input[2])?;
+                    let channels = bias.dims1()?;
+                    output = output.broadcast_add(&bias.reshape((1, channels, 1))?)?;
+                }
+                values.insert(node.output[0].clone(), output);
+            }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#RandomNormalLike
+            "RandomNormalLike" => {
+                let input = get(&node.input[0])?;
+                let mean = get_attr_opt::<f32>(node, "mean")?.copied().unwrap_or(0.0);
+                let scale = get_attr_opt::<f32>(node, "scale")?.copied().unwrap_or(1.0);
+                if get_attr_opt::<f32>(node, "seed")?.is_some() {
+                    bail!(
+                        "seed is not supported for RandomNormalLike node {:?}",
+                        node.name
+                    );
+                }
+                // The dtype attribute overrides the input's dtype when present.
+                let dtype = match get_attr_opt::<i64>(node, "dtype")?.copied() {
+                    Some(dt) => match DataType::try_from(dt as i32) {
+                        Ok(dt) => dtype(dt).unwrap_or(input.dtype()),
+                        Err(_) => input.dtype(),
+                    },
+                    None => input.dtype(),
+                };
+                let output =
+                    Tensor::randn(mean, scale, input.dims(), input.device())?.to_dtype(dtype)?;
+                values.insert(node.output[0].clone(), output);
             }
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#slice
             "Slice" => {
