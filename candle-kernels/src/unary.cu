@@ -122,6 +122,9 @@ UNARY_OP(__nv_bfloat16, usilu_bf16, silu_fwd(x))
 UNARY_OP1(__nv_bfloat16, upowf_bf16, powg(x, param))
 UNARY_OP(__nv_bfloat16, usign_bf16, sign_(x))
 UNARY_OP(__nv_bfloat16, usigmoid_bf16, sigmoid_fwd(x))
+UNARY_OP(__nv_bfloat16, uasin_bf16, asing(x))
+UNARY_OP(__nv_bfloat16, uacos_bf16, acosg(x))
+UNARY_OP(__nv_bfloat16, uatan_bf16, atang(x))
 #endif
 
 #if __CUDA_ARCH__ >= 890
@@ -151,6 +154,9 @@ UNARY_OP(__nv_fp8_e4m3, usilu_fp8_e4m3, __nv_fp8_e4m3(silu_fwd(F8E4M3_TO_FLOAT(x
 UNARY_OP1(__nv_fp8_e4m3, upowf_fp8_e4m3, powg(x, param))
 UNARY_OP(__nv_fp8_e4m3, usign_fp8_e4m3, __nv_fp8_e4m3(sign_(F8E4M3_TO_FLOAT(x))))
 UNARY_OP(__nv_fp8_e4m3, usigmoid_fp8_e4m3, __nv_fp8_e4m3(sigmoid_fwd(F8E4M3_TO_FLOAT(x))))
+UNARY_OP(__nv_fp8_e4m3, uasin_fp8_e4m3, asing(x))
+UNARY_OP(__nv_fp8_e4m3, uacos_fp8_e4m3, acosg(x))
+UNARY_OP(__nv_fp8_e4m3, uatan_fp8_e4m3, atang(x))
 #endif
 
 #if __CUDA_ARCH__ >= 530
@@ -178,6 +184,9 @@ UNARY_OP(__half, usilu_f16, silu_fwd(x))
 UNARY_OP1(__half, upowf_f16, powg(x, param))
 UNARY_OP(__half, usign_f16, sign_(x))
 UNARY_OP(__half, usigmoid_f16, sigmoid_fwd(x))
+UNARY_OP(__half, uasin_f16, asing(x))
+UNARY_OP(__half, uacos_f16, acosg(x))
+UNARY_OP(__half, uatan_f16, atang(x))
 #endif
 
 UNARY_OP(uint8_t, ucopy_u8, x)
@@ -231,3 +240,9 @@ UNARY_OP(float, usign_f32, sign_(x))
 UNARY_OP(double, usign_f64, sign_(x))
 UNARY_OP(float, usigmoid_f32, sigmoid_fwd(x))
 UNARY_OP(double, usigmoid_f64, sigmoid_fwd(x))
+UNARY_OP(float, uasin_f32, asing(x))
+UNARY_OP(double, uasin_f64, asing(x))
+UNARY_OP(float, uacos_f32, acosg(x))
+UNARY_OP(double, uacos_f64, acosg(x))
+UNARY_OP(float, uatan_f32, atang(x))
+UNARY_OP(double, uatan_f64, atang(x))

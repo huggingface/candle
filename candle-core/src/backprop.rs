@@ -543,6 +543,24 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.sub(&(&grad * arg.sin())?)?
                     }
+                    Op::Unary(arg, UnaryOp::Asin) => {
+                        // d/dx asin(x) = 1/sqrt(1-x^2)
+                        let sum_grad = grads.or_insert(arg)?;
+                        let asin_grad = (arg.sqr()?.neg()? + 1.)?.sqrt()?.recip()?;
+                        *sum_grad = sum_grad.add(&(&grad * asin_grad)?)?
+                    }
+                    Op::Unary(arg, UnaryOp::Acos) => {
+                        // d/dx acos(x) = -1/sqrt(1-x^2)
+                        let sum_grad = grads.or_insert(arg)?;
+                        let acos_grad = (arg.sqr()?.neg()? + 1.)?.sqrt()?.recip()?.neg()?;
+                        *sum_grad = sum_grad.add(&(&grad * acos_grad)?)?
+                    }
+                    Op::Unary(arg, UnaryOp::Atan) => {
+                        // d/dx atan(x) = 1/(1+x^2)
+                        let sum_grad = grads.or_insert(arg)?;
+                        let atan_grad = (arg.sqr()? + 1.)?.recip()?;
+                        *sum_grad = sum_grad.add(&(&grad * atan_grad)?)?
+                    }
                     Op::Unary(arg, UnaryOp::Tanh) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let minus_dtanh = (node.sqr()? - 1.)?;
