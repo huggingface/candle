@@ -39,9 +39,6 @@ parking_lot = "0.12.5"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokenizers = { workspace = true, features = ["onig"] }
 
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
-candle-ug = { workspace = true, optional = true }
-
 [dev-dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
@@ -49,7 +46,7 @@ criterion = { workspace = true }
 
 [features]
 default = []
-cuda = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda"]
+cuda = ["cudarc", "dep:candle-kernels"]
 cutile = ["cuda", "dep:cutile"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
@@ -59,10 +56,8 @@ metal = [
     "dep:objc2-metal",
     "dep:objc2-foundation",
     "dep:candle-metal-kernels",
-    "candle-ug?/metal",
 ]
 metal-debug-labels = ["metal", "candle-metal-kernels/debug-labels"]
-ug = ["dep:candle-ug"]
 
 [[bench]]
 name = "bench_main"
