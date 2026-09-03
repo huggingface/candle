@@ -1,6 +1,9 @@
 [build]
 rustflags = ["-C", "target-cpu=native"]
 
+[target.wasm32-wasip2]
+rustflags = ["-C", "target-feature=+simd128"]
+
 [target.wasm32-unknown-unknown]
 rustflags = ["-C", "target-feature=+simd128", "--cfg", 'getrandom_backend="wasm_js"']
 
