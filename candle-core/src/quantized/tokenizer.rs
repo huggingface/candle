@@ -327,3 +327,65 @@ impl TokenizerFromGguf for Tokenizer {
         Ok(tokenizer)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokenizers::tokenizer::{OffsetReferential, OffsetType, PreTokenizedString, PreTokenizer};
+
+    fn splits(pre: &str, input: &str) -> Vec<String> {
+        let pipeline = pipeline_from_pre(pre).unwrap();
+        let mut pre_tokenized = PreTokenizedString::from(input);
+        pipeline
+            .pretokenizer
+            .unwrap()
+            .pre_tokenize(&mut pre_tokenized)
+            .unwrap();
+        pre_tokenized
+            .get_splits(OffsetReferential::Original, OffsetType::Byte)
+            .into_iter()
+            .map(|(s, _, _)| s.to_string())
+            .collect()
+    }
+
+    // Sample made to test negative lookahead like (`\s+(?!\S)`).
+    // If someone changes the backend to one that does not support backtracking regex the tests below will fail.
+    const SAMPLE: &str = "Hello'Ve world 123\n\n  foo";
+
+    #[test]
+    fn qwen2_pretokenizer_splits() {
+        assert_eq!(
+            splits("qwen2", SAMPLE),
+            [
+                "Hello",
+                "'Ve",
+                "\u{120}world",
+                "\u{120}",
+                "1",
+                "2",
+                "3",
+                "\u{10a}\u{10a}",
+                "\u{120}",
+                "\u{120}foo"
+            ]
+        );
+    }
+
+    #[test]
+    fn llama3_pretokenizer_splits() {
+        // Differs from qwen2 only in digit grouping: `\p{N}{1,3}` vs `\p{N}`.
+        assert_eq!(
+            splits("llama3", SAMPLE),
+            [
+                "Hello",
+                "'Ve",
+                "\u{120}world",
+                "\u{120}",
+                "123",
+                "\u{10a}\u{10a}",
+                "\u{120}",
+                "\u{120}foo"
+            ]
+        );
+    }
+}
