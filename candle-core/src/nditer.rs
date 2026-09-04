@@ -36,6 +36,7 @@ pub struct NdIter<const N: usize> {
     outer_strides: [[usize; MAX_DIMS]; N],
     outer_len: usize,
 
+    start_offsets: [usize; N],
     offsets: [usize; N],
     coords: [usize; MAX_DIMS],
     remaining: usize,
@@ -134,6 +135,7 @@ impl<const N: usize> NdIter<N> {
             outer_dims,
             outer_strides,
             outer_len,
+            start_offsets: offsets,
             offsets,
             coords: [0; MAX_DIMS],
             remaining,
@@ -167,6 +169,30 @@ impl<const N: usize> Iterator for NdIter<N> {
         }
 
         Some(item)
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        if n >= self.remaining {
+            self.remaining = 0;
+            return None;
+        }
+
+        let total = self.outer_dims[..self.outer_len].iter().product::<usize>();
+        let mut position = total - self.remaining + n;
+        self.offsets = self.start_offsets;
+        self.coords = [0; MAX_DIMS];
+
+        for k in (0..self.outer_len).rev() {
+            let coord = position % self.outer_dims[k];
+            position /= self.outer_dims[k];
+            self.coords[k] = coord;
+            for layout in 0..N {
+                self.offsets[layout] += coord * self.outer_strides[layout][k];
+            }
+        }
+        self.remaining -= n;
+        self.next()
     }
 
     #[inline]
@@ -315,5 +341,23 @@ mod tests {
         let l = Layout::new(Shape::from(vec![2, 3]), vec![4, 1], 10);
         let offsets: Vec<_> = NdIter::new([&l]).collect();
         assert_eq!(offsets, vec![[10], [14]]);
+    }
+
+    #[test]
+    fn nth_jumps_to_outer_block() {
+        let lhs = Layout::new(Shape::from(vec![2, 3, 4]), vec![40, 10, 1], 5);
+        let rhs = Layout::new(Shape::from(vec![2, 3, 4]), vec![50, 12, 1], 7);
+        let expected: Vec<_> = NdIter::new([&lhs, &rhs]).collect();
+
+        for (n, &offsets) in expected.iter().enumerate() {
+            assert_eq!(NdIter::new([&lhs, &rhs]).nth(n), Some(offsets));
+        }
+        assert_eq!(NdIter::new([&lhs, &rhs]).nth(expected.len()), None);
+
+        let mut iter = NdIter::new([&lhs, &rhs]);
+        assert_eq!(iter.next(), Some(expected[0]));
+        assert_eq!(iter.nth(2), Some(expected[3]));
+        assert_eq!(iter.next(), Some(expected[4]));
+        assert_eq!(iter.len(), expected.len() - 5);
     }
 }

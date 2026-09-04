@@ -362,7 +362,7 @@ pub fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U
     }
 }
 
-// Below this many contiguous elements the barrier-pool split costs more than it saves.
+// Below this many logical elements the barrier-pool split costs more than it saves.
 const PAR_ELEMWISE_MIN: usize = 64 * 1024;
 // Per-unit span: big enough to amortize dispatch, small enough to balance.
 const PAR_ELEMWISE_CHUNK: usize = 16 * 1024;
@@ -406,7 +406,7 @@ pub fn binary_map_vec_par<
     T: Copy + Send + Sync,
     F: Fn(T, T) -> T + Sync,
     FV: Fn(&[T], &[T], &mut [T]) + Sync,
-    FSV: FnMut(T, &[T], &mut [T]),
+    FSV: Fn(T, &[T], &mut [T]) + Sync,
 >(
     lhs_l: &Layout,
     rhs_l: &Layout,
@@ -416,36 +416,159 @@ pub fn binary_map_vec_par<
     f_vec: FV,
     f_scalar_vec: FSV,
 ) -> Vec<T> {
-    if let (
-        crate::StridedBlocks::SingleBlock {
-            start_offset: lo_l,
-            len: len_l,
-        },
-        crate::StridedBlocks::SingleBlock {
-            start_offset: lo_r,
-            len: len_r,
-        },
-    ) = (lhs_l.strided_blocks(), rhs_l.strided_blocks())
-    {
-        if len_l == len_r && len_l >= PAR_ELEMWISE_MIN {
-            let a = &lhs[lo_l..lo_l + len_l];
-            let b = &rhs[lo_r..lo_r + len_r];
-            let mut ys: Vec<T> = Vec::with_capacity(len_l);
-            let ys_ptr = ys.as_mut_ptr() as usize;
-            let n_units = len_l.div_ceil(PAR_ELEMWISE_CHUNK);
-            crate::utils::barrier_pool().execute_chunked(n_units, |range| {
-                let ys_ptr = ys_ptr as *mut T;
-                for unit in range {
-                    let lo = unit * PAR_ELEMWISE_CHUNK;
-                    let hi = len_l.min(lo + PAR_ELEMWISE_CHUNK);
-                    let dst = unsafe { std::slice::from_raw_parts_mut(ys_ptr.add(lo), hi - lo) };
-                    f_vec(&a[lo..hi], &b[lo..hi], dst);
-                }
-            });
-            // SAFETY: every element is written by exactly one unit.
-            unsafe { ys.set_len(len_l) };
-            return ys;
-        }
+    let el_count = lhs_l.shape().elem_count();
+    if el_count < PAR_ELEMWISE_MIN {
+        return binary_map_vec(lhs_l, rhs_l, lhs, rhs, f, f_vec, f_scalar_vec);
     }
-    binary_map_vec(lhs_l, rhs_l, lhs, rhs, f, f_vec, f_scalar_vec)
+
+    let nd_iter = NdIter::new([lhs_l, rhs_l]);
+    let inner_size = nd_iter.inner_size;
+    let [lhs_stride, rhs_stride] = nd_iter.inner_strides;
+    debug_assert!(inner_size > 0);
+
+    let mut ys: Vec<T> = Vec::with_capacity(el_count);
+    let ys_ptr = ys.as_mut_ptr() as usize;
+    let n_units = el_count.div_ceil(PAR_ELEMWISE_CHUNK);
+    crate::utils::barrier_pool().execute_chunked(n_units, |range| {
+        let ys_ptr = ys_ptr as *mut T;
+        for unit in range {
+            let mut dst_offset = unit * PAR_ELEMWISE_CHUNK;
+            let hi = el_count.min(dst_offset + PAR_ELEMWISE_CHUNK);
+            let mut inner_offset = dst_offset % inner_size;
+            let mut nd_iter = NdIter::new([lhs_l, rhs_l]);
+            let mut offsets = nd_iter
+                .nth(dst_offset / inner_size)
+                .expect("logical output offset must map to an NdIter block");
+
+            while dst_offset < hi {
+                let len = (inner_size - inner_offset).min(hi - dst_offset);
+                let lhs_offset = offsets[0] + inner_offset * lhs_stride;
+                let rhs_offset = offsets[1] + inner_offset * rhs_stride;
+                // SAFETY: work units own disjoint output ranges, all written before set_len.
+                let dst = unsafe { std::slice::from_raw_parts_mut(ys_ptr.add(dst_offset), len) };
+
+                match (lhs_stride, rhs_stride) {
+                    (1, 1) => f_vec(
+                        &lhs[lhs_offset..lhs_offset + len],
+                        &rhs[rhs_offset..rhs_offset + len],
+                        dst,
+                    ),
+                    (1, 0) => {
+                        f_scalar_vec(rhs[rhs_offset], &lhs[lhs_offset..lhs_offset + len], dst)
+                    }
+                    _ => {
+                        for (i, dst) in dst.iter_mut().enumerate() {
+                            *dst = f(
+                                lhs[lhs_offset + i * lhs_stride],
+                                rhs[rhs_offset + i * rhs_stride],
+                            );
+                        }
+                    }
+                }
+
+                dst_offset += len;
+                inner_offset = 0;
+                if dst_offset < hi {
+                    offsets = nd_iter
+                        .next()
+                        .expect("logical output range must stay within NdIter blocks");
+                }
+            }
+        }
+    });
+    // SAFETY: every element is written by exactly one work unit.
+    unsafe { ys.set_len(el_count) };
+    ys
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Shape;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn binary_map_vec_par_chunks_non_contiguous_broadcasts() {
+        const ROWS: usize = 2;
+        const COLS: usize = 2 * PAR_ELEMWISE_CHUNK;
+        const LHS_ROW_STRIDE: usize = COLS + 1;
+
+        let mut lhs = vec![i64::MAX; ROWS * LHS_ROW_STRIDE];
+        for row in 0..ROWS {
+            for col in 0..COLS {
+                lhs[row * LHS_ROW_STRIDE + col] = (row * COLS + col) as i64;
+            }
+        }
+        let rhs = [11i64, 29];
+        let shape = Shape::from((ROWS, COLS));
+        let lhs_l = Layout::new(shape.clone(), vec![LHS_ROW_STRIDE, 1], 0);
+        let rhs_l = Layout::new(shape, vec![1, 0], 0);
+
+        let calls = AtomicUsize::new(0);
+        let elements = AtomicUsize::new(0);
+        let result = binary_map_vec_par(
+            &lhs_l,
+            &rhs_l,
+            &lhs,
+            &rhs,
+            |lhs, rhs| lhs - rhs,
+            |_, _, _| panic!("broadcast layout must not use the two-vector kernel"),
+            |scalar, xs, ys| {
+                assert!(xs.len() <= PAR_ELEMWISE_CHUNK);
+                calls.fetch_add(1, Ordering::Relaxed);
+                elements.fetch_add(xs.len(), Ordering::Relaxed);
+                for (&x, y) in xs.iter().zip(ys) {
+                    *y = x - scalar;
+                }
+            },
+        );
+
+        let expected: Vec<_> = (0..ROWS)
+            .flat_map(|row| (0..COLS).map(move |col| (row * COLS + col) as i64 - rhs[row]))
+            .collect();
+        assert_eq!(result, expected);
+        assert_eq!(calls.load(Ordering::Relaxed), 4);
+        assert_eq!(elements.load(Ordering::Relaxed), ROWS * COLS);
+    }
+
+    #[test]
+    fn binary_map_vec_par_handles_two_strided_inputs() {
+        const ROWS: usize = 2;
+        const COLS: usize = 2 * PAR_ELEMWISE_CHUNK;
+        const LHS_ROW_STRIDE: usize = COLS + 1;
+        const RHS_ROW_STRIDE: usize = COLS + 2;
+
+        let mut lhs = vec![0i64; ROWS * LHS_ROW_STRIDE];
+        let mut rhs = vec![0i64; ROWS * RHS_ROW_STRIDE];
+        for row in 0..ROWS {
+            for col in 0..COLS {
+                lhs[row * LHS_ROW_STRIDE + col] = (row * COLS + col) as i64;
+                rhs[row * RHS_ROW_STRIDE + col] = (2 * row * COLS + col) as i64;
+            }
+        }
+        let shape = Shape::from((COLS, ROWS));
+        let lhs_l = Layout::new(shape.clone(), vec![1, LHS_ROW_STRIDE], 0);
+        let rhs_l = Layout::new(shape, vec![1, RHS_ROW_STRIDE], 0);
+
+        let result = binary_map_vec_par(
+            &lhs_l,
+            &rhs_l,
+            &lhs,
+            &rhs,
+            |lhs, rhs| lhs - rhs,
+            |_, _, _| panic!("strided layout must not use the two-vector kernel"),
+            |_, _, _| panic!("strided layout must not use the scalar-vector kernel"),
+        );
+
+        let lhs = &lhs;
+        let rhs = &rhs;
+        let expected: Vec<_> = (0..COLS)
+            .flat_map(|col| {
+                (0..ROWS).map(move |row| {
+                    lhs[row * LHS_ROW_STRIDE + col] - rhs[row * RHS_ROW_STRIDE + col]
+                })
+            })
+            .collect();
+        assert_eq!(result, expected);
+    }
 }
