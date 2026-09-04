@@ -37,6 +37,20 @@ impl QMetalStorage {
         &self.buffer
     }
 
+    /// Converts an element-stride array to bytes for this storage's
+    /// (possibly sub-byte-per-element, block-quantized) dtype. Shared by
+    /// `fwd` and `indexed_moe_forward` so the two matmul paths can't
+    /// silently diverge on how quantized weight strides are computed.
+    fn quantized_byte_strides(&self, stride: &[usize]) -> Vec<usize> {
+        stride
+            .iter()
+            .map(|x| {
+                (*x as f32 * (self.dtype.type_size() as f32 / self.dtype.block_size() as f32))
+                    as usize
+            })
+            .collect()
+    }
+
     pub fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
         use crate::quantized::k_quants::GgmlType;
 
@@ -395,14 +409,7 @@ impl QMetalStorage {
         let src0_l = crate::Layout::contiguous(
             [vec![1; 4 - self_shape.rank()], self_shape.dims().to_vec()].concat(),
         );
-        let src0_stride = src0_l
-            .stride()
-            .iter()
-            .map(|x| {
-                (*x as f32 * (self.dtype.type_size() as f32 / self.dtype.block_size() as f32))
-                    as usize
-            })
-            .collect::<Vec<_>>();
+        let src0_stride = self.quantized_byte_strides(src0_l.stride());
 
         if src_shape.rank() > 4 {
             crate::bail!("weight rank ({}) must be <= 4", src_shape.rank())
@@ -432,6 +439,180 @@ impl QMetalStorage {
             &dst,
         )
         .map_err(MetalError::from)?;
+
+        let dst_storage =
+            crate::MetalStorage::new(dst, device.clone(), dst_shape.elem_count(), DType::F32);
+        Ok((dst_storage, dst_shape))
+    }
+
+    /// Indexed/routed matmul for MoE expert dispatch: `self` holds all
+    /// experts' weights stacked as `[num_experts, n, k]`; `ids` is the
+    /// routing table `[batch, topk]` (one row of expert indices per token);
+    /// `input` is `[batch, topk_or_1, k]` (the `topk_or_1` broadcasts a
+    /// single per-token embedding across all its selected experts when 1,
+    /// or supplies a distinct value per selected expert when `topk`).
+    /// Returns `[batch, topk, n]`, one row per (token, selected-expert)
+    /// pair -- this does not apply top-k routing weights or sum across
+    /// experts; see candle_metal_kernels::call_quantized_matmul_mm_id.
+    pub fn indexed_moe_forward(
+        &self,
+        self_shape: &Shape,
+        input: &MetalStorage,
+        input_l: &crate::Layout,
+        ids: &MetalStorage,
+        ids_l: &crate::Layout,
+    ) -> Result<(MetalStorage, Shape)> {
+        use crate::MetalError;
+
+        if !input_l.is_contiguous() {
+            crate::bail!("indexed_moe_forward input is not contiguous {input_l:?}")
+        }
+        if !ids_l.is_contiguous() {
+            crate::bail!("indexed_moe_forward ids is not contiguous {ids_l:?}")
+        }
+        if input.dtype() != DType::F32 {
+            crate::bail!(
+                "indexed_moe_forward input must be F32, got {:?}",
+                input.dtype()
+            )
+        }
+        // The kernel unconditionally reads `ids` as raw int32_t regardless of
+        // the Rust-side dtype tag; U32 is bit-compatible for the small
+        // non-negative expert indices this carries, but anything else would
+        // silently misread the buffer at the byte-stride computed below.
+        if ids.dtype() != DType::U32 {
+            crate::bail!("indexed_moe_forward ids must be U32, got {:?}", ids.dtype())
+        }
+
+        let (_num_experts, n, k) = self_shape.dims3()?;
+        let in_shape = input_l.shape();
+        let (batch, in_dim1, in_k) = in_shape.dims3()?;
+        if in_k != k {
+            crate::bail!(
+                "indexed_moe_forward input {:?} incompatible with weight {:?}",
+                in_shape,
+                self_shape
+            )
+        }
+        let idx_shape = ids_l.shape();
+        let (idx_batch, topk) = idx_shape.dims2()?;
+        if idx_batch != batch {
+            crate::bail!("indexed_moe_forward batch mismatch: input {batch} vs ids {idx_batch}")
+        }
+        if in_dim1 != 1 && in_dim1 != topk {
+            crate::bail!("indexed_moe_forward input dim1 ({in_dim1}) must be 1 or topk ({topk})")
+        }
+
+        let device = input.device().clone();
+        let dst_shape = Shape::from((batch, topk, n));
+        let dst = device
+            .new_buffer_builder()
+            .with_size_for(dst_shape.elem_count(), DType::F32)
+            .with_label("indexed_moe_forward")
+            .build()?;
+        let encoder = device.command_encoder()?;
+
+        let src0_l = crate::Layout::contiguous(self_shape.dims());
+        let src0_stride = self.quantized_byte_strides(src0_l.stride());
+
+        let input_stride = input_l
+            .stride()
+            .iter()
+            .map(|x| x * DType::F32.size_in_bytes())
+            .collect::<Vec<_>>();
+        let ids_stride = ids_l
+            .stride()
+            .iter()
+            .map(|x| x * ids.dtype().size_in_bytes())
+            .collect::<Vec<_>>();
+
+        // Decode (batch == 1) and small multi-token batches (batch <= 8,
+        // e.g. a speculative-decode verify step) route to the matrix-
+        // *vector* kernel. `mv_id`'s Metal dispatch grid depth is
+        // `nei0 * nei1` (top-k * n_tokens) -- proportional to real work --
+        // while `mm_id`'s is `ne02` (total expert count), effectively
+        // fixed regardless of batch size; at these small batch sizes
+        // `mm_id` pays that near-fixed dispatch tax against very little
+        // real work, `mv_id` doesn't. Measured (production 256-expert/
+        // top-8/2048-in/512-out shape): `mv_id` beats `mm_id` by 10-20%
+        // throughout batch 1-16, roughly ties at 16, and loses clearly by
+        // 32+ -- `8` is chosen with a safety margin below the measured
+        // crossover, matching the real speculative-decode verify-window
+        // range this targets, not the full range `mv_id` still wins.
+        // Batch-general correctness (not just batch == 1) confirmed via a
+        // bit-exact self-differential (`mv_id` at batch N vs. N
+        // independent batch-1 calls) plus a tolerance-based `mm_id`
+        // cross-check, both at this same production shape (see this
+        // crate's test suite). `mv_id_eligible`
+        // (candle-metal-kernels/src/kernels/quantized.rs) is the single
+        // source of truth for which dtypes qualify and the minimum
+        // contraction-dim (k) each needs -- not duplicated here, so it
+        // can't drift from the wrapper's own per-dtype tuning table. Every
+        // other dtype, every too-small-k shape, and every batch > 8 call
+        // keeps using the matrix-*matrix* kernel -- always correct, just
+        // not what this extension targets.
+        let use_mv = batch <= 8 && candle_metal_kernels::mv_id_eligible(self.dtype.into(), k);
+
+        // call_quantized_matmul_mv_id, call_quantized_matmul_mm_id, and
+        // call_quantized_matmul_mm_id_chunked all take the same leading
+        // 19-argument shape (chunked takes one more, `max_nei1`, trailing);
+        // this macro keeps every dispatch site (which must stay in exact
+        // argument-for-argument sync on that shared prefix) structurally
+        // unable to desync, rather than independent ~20-line call
+        // expressions a future edit could update one of and forget the
+        // others. Variadic in its trailing args (review finding, 2026-07-27:
+        // an earlier version only covered the exact-19-arg case, so adding
+        // chunking meant hand-writing a second, unprotected ~20-line call
+        // site for mm_id instead of extending this macro).
+        macro_rules! dispatch_indexed_moe {
+            ($f:path $(, $extra:expr)*) => {
+                $f(
+                    device.device(),
+                    &encoder,
+                    device.kernels(),
+                    self.dtype.into(),
+                    self_shape.dims(),
+                    &src0_stride,
+                    &self.buffer,
+                    0, // this storage always owns its buffer outright, so its offset is always 0
+                    in_shape.dims(),
+                    &input_stride,
+                    input.buffer(),
+                    input_l.start_offset() * DType::F32.size_in_bytes(),
+                    idx_shape.dims(),
+                    &ids_stride,
+                    ids.buffer(),
+                    ids_l.start_offset() * ids.dtype().size_in_bytes(),
+                    dst_shape.dims(),
+                    0,
+                    &dst,
+                    $($extra),*
+                )
+                .map_err(MetalError::from)?
+            };
+        }
+
+        if use_mv {
+            dispatch_indexed_moe!(candle_metal_kernels::call_quantized_matmul_mv_id);
+        } else {
+            // mm_id, unlike mv_id, has a hard per-dispatch ceiling: its
+            // rowids scratch is sized off the *whole-batch* token count in
+            // threadgroup memory, so a large enough prefill batch overflows
+            // the device's fixed budget regardless of tuning -- found live
+            // via a real ~2594-token prompt.
+            let max_nei1 = candle_metal_kernels::mm_id_max_nei1(device.device(), topk as i64);
+            // Per-expert row counts let the kernel skip the routing-table
+            // scan for a token tile that holds none of its expert's rows,
+            // rather than paying the full scan to discover that -- measured
+            // 3.61s of a 9.42s prefill. `call_quantized_matmul_mm_id_chunked`
+            // computes these itself, per chunk rather than once for the
+            // whole batch, since a chunk-local count is what its chunk-local
+            // guard actually needs (see that function's own doc comment).
+            dispatch_indexed_moe!(
+                candle_metal_kernels::call_quantized_matmul_mm_id_chunked,
+                max_nei1
+            );
+        }
 
         let dst_storage =
             crate::MetalStorage::new(dst, device.clone(), dst_shape.elem_count(), DType::F32);
