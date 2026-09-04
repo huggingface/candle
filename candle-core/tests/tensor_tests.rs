@@ -1209,6 +1209,33 @@ fn slice_scatter(device: &Device) -> Result<()> {
             [103.0, 104.0, 105.0],
         ]
     );
+
+    // The source is a view whose storage continues past it, which is what
+    // `narrow` yields. Only the two rows the view describes may be written:
+    // sizing the copy from the storage instead lets it run to the end of the
+    // source's buffer and overwrite the rows after the scatter point.
+    let big = Tensor::arange(100f32, 112f32, device)?.reshape((4, 3))?;
+    let src_view = big.narrow(0, 0, 2)?;
+    assert_eq!(
+        t.slice_scatter0(&src_view, 1)?.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [100.0, 101.0, 102.0],
+            [103.0, 104.0, 105.0],
+            [9.0, 10.0, 11.0]
+        ]
+    );
+    // Same, with the view starting partway into its storage.
+    let src_view = big.narrow(0, 2, 1)?;
+    assert_eq!(
+        t.slice_scatter0(&src_view, 2)?.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [3.0, 4.0, 5.0],
+            [106.0, 107.0, 108.0],
+            [9.0, 10.0, 11.0]
+        ]
+    );
     Ok(())
 }
 
