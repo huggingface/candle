@@ -319,22 +319,83 @@ impl QMetalStorage {
             .with_label("qmatmul")
             .build()?;
         let encoder = device.command_encoder()?;
-        // In some cases it would be better to use the mm variant, though it has its drawbacks
-        // around memory alignment.
-        for batch_id in 0..m {
+        // `call_quantized_matmul_mv_t`'s own dispatch grid already supports
+        // multiple rows in one dispatch (`height: ne11`, `ne11 = m`) -- for
+        // the block-quantized dtypes below, every row is read via
+        // `src1 + r1*ne10 + ...` inside the kernel itself (`ne10` is the
+        // contraction dim, a stride that's correct for any contiguous
+        // multi-row `src1` on its own, independent of the wrapper's own
+        // `nb11` field), so one batched call is exactly equivalent to `m`
+        // independent single-row calls -- confirmed against the actual
+        // kernel bodies (`metal_src/quantized.metal`) AND against a real
+        // bit-exact differential test per dtype
+        // (`candle-core/tests/quantized_tests.rs`'s
+        // `qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact`),
+        // not assumed from source reading alone. F16, BF16, F32 index via
+        // `src1 + r1*nb11 + ...` (their own distinct kernel template), and
+        // the wrapper always passes `nb11 = 0` -- every row would silently
+        // read row 0 for those three dtypes at `m > 1`, so they keep the
+        // old, always-correct per-row loop. **`Q2K` and `Q5_1` also stay on
+        // the loop, despite superficially matching the `ne10`-indexed
+        // template**: the differential test suite above found real, silent
+        // per-dtype corruption at `batch > 1` for both -- `Q2K` scattered
+        // zeros within rows at `batch == 2` (this dtype already carries a
+        // known Metal-kernel quirk elsewhere in this file, see the "Fixing
+        // a bug in Metal for GGML" comment in `candle-metal-kernels`' own
+        // tuning table), `Q5_1` an entirely-zeroed row 0 at `batch == 4`
+        // with rows 1-3 correct (a distinct failure shape, root cause not
+        // chased further). Root cause not chased for either -- this list is
+        // deliberately built from "verified correct by a real differential
+        // test," not "looks safe by reading the kernel source," after these
+        // two proved that shortcut wrong twice. `Q8_1` is also absent: its
+        // own mat-vec Metal kernel (`kernel_mul_mv_q8_1_f32`) doesn't exist
+        // anywhere in the vendored `.metal` source at all -- a pre-existing
+        // gap this change neither causes nor fixes (the identical
+        // kernel-load failure already happens at `batch == 1` through the
+        // unchanged loop path).
+        let batched_dispatch_safe = matches!(
+            self.dtype,
+            GgmlDType::Q4_0
+                | GgmlDType::Q4_1
+                | GgmlDType::Q5_0
+                | GgmlDType::Q8_0
+                | GgmlDType::Q3K
+                | GgmlDType::Q4K
+                | GgmlDType::Q5K
+                | GgmlDType::Q6K
+        );
+        if batched_dispatch_safe {
             candle_metal_kernels::call_quantized_matmul_mv_t(
                 device.device(),
                 &encoder,
                 device.kernels(),
                 self.dtype.into(),
-                (1, 1, n, k),
+                (1, m, n, k),
                 storage.buffer(),
-                (layout.start_offset() + batch_id * k) * storage.dtype().size_in_bytes(),
+                layout.start_offset() * storage.dtype().size_in_bytes(),
                 &self.buffer,
-                batch_id * n * DType::F32.size_in_bytes(),
+                0,
                 &dst,
             )
             .map_err(MetalError::from)?;
+        } else {
+            // In some cases it would be better to use the mm variant, though it has its drawbacks
+            // around memory alignment.
+            for batch_id in 0..m {
+                candle_metal_kernels::call_quantized_matmul_mv_t(
+                    device.device(),
+                    &encoder,
+                    device.kernels(),
+                    self.dtype.into(),
+                    (1, 1, n, k),
+                    storage.buffer(),
+                    (layout.start_offset() + batch_id * k) * storage.dtype().size_in_bytes(),
+                    &self.buffer,
+                    batch_id * n * DType::F32.size_in_bytes(),
+                    &dst,
+                )
+                .map_err(MetalError::from)?;
+            }
         }
         let dst_storage =
             crate::MetalStorage::new(dst, device.clone(), dst_shape.elem_count(), DType::F32);
@@ -369,7 +430,50 @@ impl QMetalStorage {
             )
         }
 
-        if src_shape.dim(D::Minus2)? == 1 {
+        // Decode (batch == 1) and small multi-token batches (batch <= 8,
+        // e.g. a speculative-decode verify step) route to `fwd_mv`'s
+        // matrix-vector dispatch. `mv_t`'s own Metal dispatch grid is
+        // `height: ne11` (the row/batch count) -- proportional to real
+        // work -- while `mm_t`'s `width: ne11/32` stays at a fixed 1 for
+        // any batch from 1 to 32, so `mm_t` pays nearly the same dispatch
+        // tax at batch 2 as it would at batch 32: a near-fixed cost poorly
+        // amortized at small batch. `8` is a conservative margin below an
+        // unmeasured-past-that-point crossover, not a proven-optimal
+        // number. `fwd_mv` requires a rank-2 weight and a rank-<=3 src --
+        // routing a rank-3-weight or rank-4-src call into it would trade a
+        // previously-working `mm_t` path for a hard error, so those stay
+        // on `mm_t` regardless of batch size.
+        //
+        // `Q5_1` is excluded from this `m > 1` routing entirely (not just
+        // from `fwd_mv`'s own internal batched-dispatch dtype list): a
+        // real differential test found `fwd_mv`'s pre-existing per-row
+        // *loop* -- unmodified by this change, previously only reachable
+        // at `m > 1` via a rank-3, leading-batch-dim-`b`-greater-than-1
+        // input, never via this rank-2 path -- silently zeroes row 0's
+        // output for this dtype specifically at `m == 4`, rows 1..m
+        // unaffected. Root cause not found (plausibly a Metal hazard-
+        // tracking/encoder-ordering issue specific to this dtype's own
+        // kernel tuning, across repeated same-buffer dispatches); `Q5_1`
+        // keeps its exact prior behavior (`mm_t` for any `m > 1`) rather
+        // than risk exposing the same latent bug through this new code
+        // path.
+        //
+        // `Q2K` is excluded the same way, for the same reason, found the
+        // same way: the pre-existing `qmm_batch` test (`quantized_tests.rs`,
+        // stacks real batches up to `m == 12`) failed once `m > 1` could
+        // reach `fwd_mv`'s loop at all for this dtype -- beyond the `m <= 8`
+        // range this fix's own differential test suite swept, where the
+        // loop looked correct. Root cause not chased (plausibly the same
+        // hazard-tracking family of issue as `Q5_1`, just with a larger
+        // `m` threshold before it manifests); excluded rather than
+        // partially trusted.
+        let m_gt_1_safe_for_fwd_mv = !matches!(self.dtype, GgmlDType::Q5_1 | GgmlDType::Q2K);
+        if src_shape.dim(D::Minus2)? == 1
+            || (src_shape.dim(D::Minus2)? <= 8
+                && self_shape.rank() == 2
+                && src_shape.rank() <= 3
+                && m_gt_1_safe_for_fwd_mv)
+        {
             return self.fwd_mv(self_shape, storage, layout);
         }
 
