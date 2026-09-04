@@ -8,9 +8,12 @@ pub mod utils;
 pub use err::MetalKernelError;
 pub use kernel::Kernels;
 pub use kernels::{
-    affine::*, call_binary_contiguous, call_binary_strided, call_mlx_gemm, cast::*, convolution::*,
-    fill::*, indexing::*, quantized::*, random::*, reduce::*, sdpa::*, sort::*, ternary::*, unary,
-    unary::*, GemmDType, GgmlDType,
+    affine::*, call_binary_contiguous, call_binary_strided, call_gdn_causal_conv1d_output_f32,
+    call_gdn_causal_conv1d_state_f32, call_gdn_chunked_scan_build_and_solve_f32,
+    call_gdn_chunked_scan_solve_f32, call_gdn_decay_beta_gate_f32, call_gdn_decode_step_f32,
+    call_gdn_l2_normalize_scale_f32, call_mlx_gemm, cast::*, convolution::*, fill::*, indexing::*,
+    quantized::*, random::*, reduce::*, sdpa::*, sort::*, ternary::*, unary, unary::*, GemmDType,
+    GgmlDType, GDN_SCAN_CHUNK,
 };
 use metal::{
     Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function,
