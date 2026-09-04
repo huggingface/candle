@@ -52,14 +52,27 @@ impl RotaryEmbedding {
             .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
             .collect();
         let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
+        // Compute the cos/sin tables in fp32, then cast to `dtype`
+        // only at the end. Casting `inv_freq` and `t` to bf16 *before*
+        // the matmul loses precision for `position * inv_freq` at
+        // long-context positions: bf16's 7-bit mantissa cannot
+        // represent integer positions above ~256 precisely, so for
+        // `position = 15000+` the angle rounds to neighbouring
+        // representable values, and `cos()` / `sin()` of those
+        // rounded angles diverge wildly from the true cosines (e.g.
+        // `cos(15962) ≈ -0.547` vs `cos(15968) ≈ -0.882` — both
+        // representable bf16 neighbours of 15962). HuggingFace's
+        // Python reference forces fp32 here via
+        // `torch.autocast(enabled=False)` + explicit `.float()`;
+        // candle's own `qwen3_vl/text.rs` already does the same.
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
+            .to_dtype(DType::F32)?
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
         Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
+            sin: freqs.sin()?.to_dtype(dtype)?,
+            cos: freqs.cos()?.to_dtype(dtype)?,
         })
     }
 
