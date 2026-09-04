@@ -33,7 +33,7 @@ hf-hub = { workspace = true }
 clap = { workspace = true }
 memmap2 = { workspace = true }
 rand = { workspace = true }
-tokenizers = { workspace = true, features = ["onig"] }
+tokenizers = { workspace = true, features = ["fancy-regex"] }
 tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }

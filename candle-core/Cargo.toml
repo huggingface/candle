@@ -37,7 +37,7 @@ zerocopy = { workspace = true }
 zip = { workspace = true }
 parking_lot = "0.12.5"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokenizers = { workspace = true, features = ["onig"] }
+tokenizers = { workspace = true, features = ["fancy-regex"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }

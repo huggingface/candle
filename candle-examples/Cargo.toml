@@ -39,7 +39,7 @@ safetensors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 symphonia = { version = "0.6.0", features = ["all"], optional = true }
-tokenizers = { workspace = true, features = ["onig"] }
+tokenizers = { workspace = true, features = ["fancy-regex"] }
 cpal = { version = "0.18.2", optional = true }
 pdf2image = { version = "0.1.2", optional = true }
 tekken-rs = { version = "0.1.1", optional = true }
