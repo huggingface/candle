@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::Thread;
 
+const DEFAULT_BARRIER_POOL_SPIN_LIMIT: u32 = 25_000;
+
 /// Per-worker control on its own 64-byte cache line to prevent false sharing.
 #[repr(C, align(64))]
 struct Slot {
@@ -51,6 +53,10 @@ pub struct BarrierPool {
 
 unsafe impl Sync for BarrierPool {}
 unsafe impl Send for BarrierPool {}
+
+thread_local! {
+    static IN_BARRIER_POOL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 unsafe fn call_trampoline<F: Fn(usize)>(data: *const (), tid: usize) {
     (*(data as *const F))(tid);
@@ -98,6 +104,13 @@ fn get_cluster_size() -> usize {
     usize::MAX
 }
 
+fn barrier_pool_spin_limit() -> u32 {
+    std::env::var("CANDLE_BARRIER_POOL_SPIN_LIMIT")
+        .ok()
+        .and_then(|s| u32::from_str(&s).ok())
+        .unwrap_or(DEFAULT_BARRIER_POOL_SPIN_LIMIT)
+}
+
 impl BarrierPool {
     fn new(n_workers: usize) -> Self {
         let inner = Box::new(BarrierPoolInner {
@@ -120,6 +133,7 @@ impl BarrierPool {
         let inner_ptr = &*inner as *const BarrierPoolInner as usize;
         let cluster_size = get_cluster_size();
         let (children, root_workers) = compute_tree(n_workers, cluster_size);
+        let spin_limit = barrier_pool_spin_limit();
 
         let threads: Vec<_> = (0..n_workers)
             .map(|tid| {
@@ -127,12 +141,12 @@ impl BarrierPool {
                 std::thread::Builder::new()
                     .name(format!("candle-bp-{tid}"))
                     .spawn(move || {
+                        IN_BARRIER_POOL.with(|f| f.set(true));
                         set_thread_affinity();
                         let inner = unsafe { &*(inner_ptr as *const BarrierPoolInner) };
                         let slot = &inner.slots[tid];
                         let mut gen = 0usize;
 
-                        const SPIN_LIMIT: u32 = 10_000;
                         loop {
                             // Spin briefly then park, waiting for next work item.
                             let mut spins = 0u32;
@@ -146,7 +160,7 @@ impl BarrierPool {
                                     return;
                                 }
                                 spins += 1;
-                                if spins < SPIN_LIMIT {
+                                if spins < spin_limit {
                                     spin_loop();
                                 } else {
                                     // Park deposits a token; unpark() before park() returns immediately — no race.
@@ -276,6 +290,30 @@ impl BarrierPool {
         f(n);
         // _guard drops here, waiting for root workers.
     }
+
+    // Static per-tid slices make every op wait for the slowest thread; a shared cursor
+    // lets fast threads absorb a straggler's work instead of spinning at the barrier.
+    pub fn execute_chunked<F: Fn(std::ops::Range<usize>) + Sync>(&self, n_items: usize, f: F) {
+        if n_items == 0 {
+            return;
+        }
+        // nested use from a worker would deadlock on the call lock; run inline instead
+        if IN_BARRIER_POOL.with(|f| f.get()) {
+            f(0..n_items);
+            return;
+        }
+        let n_threads = self.threads.len() + 1;
+        // ~8 grabs per thread amortizes cursor contention while keeping tail imbalance small
+        let chunk = n_items.div_ceil(n_threads * 8).max(1);
+        let cursor = AtomicUsize::new(0);
+        self.execute(|_| loop {
+            let start = cursor.fetch_add(chunk, Ordering::Relaxed);
+            if start >= n_items {
+                break;
+            }
+            f(start..n_items.min(start + chunk));
+        });
+    }
 }
 
 impl Drop for BarrierPool {
@@ -310,13 +348,28 @@ pub fn with_threadpool<F: FnOnce() -> R + Send, R: Send>(f: F) -> R {
     candle_pool().install(f)
 }
 
+pub fn init_global_threadpool() {
+    set_thread_affinity();
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(get_num_threads())
+        .start_handler(|_| set_thread_affinity())
+        .build_global();
+}
+
 fn default_num_threads() -> usize {
     let physical = {
         #[cfg(target_os = "macos")]
         {
             perf_core_count().unwrap_or_else(num_cpus::get_physical)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            linux_env_cpu_mask()
+                .or_else(linux_preferred_cpus)
+                .map(<[_]>::len)
+                .unwrap_or_else(num_cpus::get_physical)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             num_cpus::get_physical()
         }
@@ -337,7 +390,7 @@ fn candle_num_threads() -> usize {
         .ok()
         .and_then(|s| usize::from_str(&s).ok())
         .filter(|nt| nt > &0)
-        .unwrap_or_else(default_num_threads)
+        .unwrap_or_else(rayon_num_threads)
 }
 
 pub fn get_num_threads() -> usize {
@@ -364,6 +417,108 @@ fn perf_core_count() -> Option<usize> {
     (ret == 0 && count > 0).then_some(count as usize)
 }
 
+#[cfg(target_os = "linux")]
+fn linux_preferred_cpus() -> Option<&'static [usize]> {
+    static CPUS: OnceLock<Option<Vec<usize>>> = OnceLock::new();
+    CPUS.get_or_init(linux_detect_preferred_cpus).as_deref()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_env_cpu_mask() -> Option<&'static [usize]> {
+    static CPUS: OnceLock<Option<Vec<usize>>> = OnceLock::new();
+    CPUS.get_or_init(|| {
+        std::env::var("CANDLE_CPU_MASK")
+            .ok()
+            .and_then(|mask| linux_parse_cpu_list(&mask))
+    })
+    .as_deref()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_affinity_enabled() -> bool {
+    std::env::var("CANDLE_CPU_AFFINITY")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_affinity_cpus() -> Option<&'static [usize]> {
+    linux_env_cpu_mask().or_else(|| {
+        linux_affinity_enabled()
+            .then(linux_preferred_cpus)
+            .flatten()
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_parse_cpu_list(mask: &str) -> Option<Vec<usize>> {
+    let mut cpus = Vec::new();
+    for part in mask
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let (start, end) = if let Some((start, end)) = part.split_once('-') {
+            let start = start.trim().parse::<usize>().ok()?;
+            let end = end.trim().parse::<usize>().ok()?;
+            (start, end)
+        } else {
+            let cpu = part.parse::<usize>().ok()?;
+            (cpu, cpu)
+        };
+        if start > end {
+            return None;
+        }
+        cpus.extend(start..=end);
+    }
+    cpus.sort_unstable();
+    cpus.dedup();
+    (!cpus.is_empty()).then_some(cpus)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_detect_preferred_cpus() -> Option<Vec<usize>> {
+    struct Cpu {
+        idx: usize,
+        capacity: usize,
+    }
+
+    let mut cpus = Vec::new();
+    for entry in std::fs::read_dir("/sys/devices/system/cpu").ok()?.flatten() {
+        let cpu_name = entry.file_name();
+        let cpu_name = cpu_name.to_str()?;
+        let Some(idx) = cpu_name
+            .strip_prefix("cpu")
+            .and_then(|idx| idx.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        let path = entry.path();
+        let capacity = std::fs::read_to_string(path.join("cpu_capacity"))
+            .ok()?
+            .trim()
+            .parse::<usize>()
+            .ok()?;
+        cpus.push(Cpu { idx, capacity });
+    }
+    if cpus.len() < 2 {
+        return None;
+    }
+    let min = cpus.iter().map(|cpu| cpu.capacity).min()?;
+    let max = cpus.iter().map(|cpu| cpu.capacity).max()?;
+    if max == 0 || min * 10 >= max * 9 {
+        return None;
+    }
+    let total_cpus = cpus.len();
+    let mut preferred = cpus
+        .iter()
+        .filter(|cpu| cpu.capacity * 10 >= max * 9)
+        .map(|cpu| cpu.idx)
+        .collect::<Vec<_>>();
+    preferred.sort_unstable();
+    (preferred.len() < total_cpus).then_some(preferred)
+}
+
 static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
 
 pub(crate) fn candle_pool() -> &'static rayon::ThreadPool {
@@ -378,7 +533,7 @@ pub(crate) fn candle_pool() -> &'static rayon::ThreadPool {
 
 #[cfg(target_os = "macos")]
 /// Elevate the thread QoS so macOS prefers running on Performance (P) cores.
-fn set_thread_affinity() {
+pub fn set_thread_affinity() {
     use libc::{pthread_set_qos_class_self_np, qos_class_t::QOS_CLASS_USER_INTERACTIVE};
     unsafe {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
@@ -387,8 +542,22 @@ fn set_thread_affinity() {
 
 #[cfg(not(target_os = "macos"))]
 #[inline(always)]
-fn set_thread_affinity() {
-    // On non‑macOS platforms we currently leave thread affinity untouched.
+pub fn set_thread_affinity() {
+    #[cfg(target_os = "linux")]
+    if let Some(cpus) = linux_affinity_cpus() {
+        unsafe {
+            let mut set: libc::cpu_set_t = std::mem::zeroed();
+            libc::CPU_ZERO(&mut set);
+            for &cpu in cpus {
+                libc::CPU_SET(cpu, &mut set);
+            }
+            let _ = libc::pthread_setaffinity_np(
+                libc::pthread_self(),
+                std::mem::size_of::<libc::cpu_set_t>(),
+                &set,
+            );
+        }
+    }
 }
 
 pub fn has_accelerate() -> bool {
@@ -408,11 +577,11 @@ pub fn metal_is_available() -> bool {
 }
 
 pub fn with_avx() -> bool {
-    cfg!(target_feature = "avx2")
+    crate::cpu::features::get().avx2
 }
 
 pub fn with_neon() -> bool {
-    cfg!(target_feature = "neon")
+    crate::cpu::features::get().neon
 }
 
 pub fn with_simd128() -> bool {
@@ -420,5 +589,26 @@ pub fn with_simd128() -> bool {
 }
 
 pub fn with_f16c() -> bool {
-    cfg!(target_feature = "f16c")
+    crate::cpu::features::get().f16c
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::linux_parse_cpu_list;
+
+    #[test]
+    fn parses_cpu_list() {
+        assert_eq!(
+            linux_parse_cpu_list("5-9,15,17-19"),
+            Some(vec![5, 6, 7, 8, 9, 15, 17, 18, 19])
+        );
+        assert_eq!(linux_parse_cpu_list(" 3 , 1-2,2 "), Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn rejects_invalid_cpu_list() {
+        assert_eq!(linux_parse_cpu_list(""), None);
+        assert_eq!(linux_parse_cpu_list("9-5"), None);
+        assert_eq!(linux_parse_cpu_list("5,a"), None);
+    }
 }
