@@ -16,7 +16,6 @@ const MAX_EXPERTS: usize = 1023;
 mod kernels {
     use candle::cutile;
     use cutile::core::*;
-    use cutile::cutile_compiler;
 
     #[cutile::entry(
         unchecked_accesses = true,
