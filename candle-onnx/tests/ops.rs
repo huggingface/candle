@@ -7344,3 +7344,47 @@ fn test_one_hot() -> Result<()> {
 
     Ok(())
 }
+
+// "Tile"
+#[test]
+fn test_tile() -> Result<()> {
+    let manual_graph = make_graph_helper("Tile", &["data", "repeats"], &["output"], vec![]);
+
+    let data = Tensor::from_vec(vec![1.0f32, 2.0, 3.0, 4.0], (2, 2), &Device::Cpu)?;
+
+    // Basic tiling: np.tile([[1, 2], [3, 4]], (2, 2)).
+    let repeats = Tensor::from_vec(vec![2i64, 2], (2,), &Device::Cpu)?;
+    let inputs = HashMap::from_iter([
+        ("data".to_string(), data.clone()),
+        ("repeats".to_string(), repeats),
+    ]);
+    let result = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let output = result.get("output").expect("Output 'output' not found");
+    assert_eq!(
+        output.to_vec2::<f32>()?,
+        vec![
+            vec![1.0, 2.0, 1.0, 2.0],
+            vec![3.0, 4.0, 3.0, 4.0],
+            vec![1.0, 2.0, 1.0, 2.0],
+            vec![3.0, 4.0, 3.0, 4.0]
+        ]
+    );
+
+    // A zero repeat empties the dimension: np.tile([[1, 2], [3, 4]], (0, 2))
+    // has shape (0, 4), not a copy of the input.
+    let repeats = Tensor::from_vec(vec![0i64, 2], (2,), &Device::Cpu)?;
+    let inputs = HashMap::from_iter([
+        ("data".to_string(), data.clone()),
+        ("repeats".to_string(), repeats),
+    ]);
+    let result = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let output = result.get("output").expect("Output 'output' not found");
+    assert_eq!(output.dims(), &[0, 4]);
+
+    // Negative repeats are invalid per the ONNX spec and must error out.
+    let repeats = Tensor::from_vec(vec![-1i64, 2], (2,), &Device::Cpu)?;
+    let inputs = HashMap::from_iter([("data".to_string(), data), ("repeats".to_string(), repeats)]);
+    assert!(candle_onnx::simple_eval(&manual_graph, inputs).is_err());
+
+    Ok(())
+}
