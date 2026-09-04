@@ -1,4 +1,4 @@
-use cudaforge::{KernelBuilder, Result};
+use cudaforge::{CudaToolkit, KernelBuilder, Result};
 use std::env;
 use std::path::PathBuf;
 
@@ -15,7 +15,7 @@ fn main() -> Result<()> {
     let ptx_path = out_dir.join("ptx.rs");
     let bindings = KernelBuilder::new()
         .source_dir("src") // Scan src/ for .cu files
-        .exclude(&["moe_*.cu", "mmvq_gguf.cu", "mmq_*.cu"]) // Exclude statically compiled kernels from ptx build
+        .exclude(&["moe_*.cu", "mmvq_gguf.cu", "mmq_*.cu", "sort_cub.cu"]) // Exclude statically compiled kernels from ptx build
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
         .arg("-O3")
@@ -72,8 +72,25 @@ fn main() -> Result<()> {
     }
 
     moe_builder.build_lib(out_dir.join("libmoe.a"))?;
+    let ptx_cap = CudaToolkit::detect()?
+        .supported_architectures()
+        .into_iter()
+        .min()
+        .unwrap_or(75);
+    let ptx_gencode = format!("-gencode=arch=compute_{ptx_cap},code=compute_{ptx_cap}");
+    let mut sort_builder = KernelBuilder::default()
+        .source_files(["src/sort_cub.cu"])
+        .arg("--expt-relaxed-constexpr")
+        .arg("-std=c++17")
+        .arg("-O3")
+        .arg(&ptx_gencode);
+    if !is_target_msvc {
+        sort_builder = sort_builder.arg("-Xcompiler").arg("-fPIC");
+    }
+    sort_builder.build_lib(out_dir.join("libsort_cub.a"))?;
     println!("cargo:rustc-link-search={}", out_dir.display());
     println!("cargo:rustc-link-lib=moe");
+    println!("cargo:rustc-link-lib=sort_cub");
     println!("cargo:rustc-link-lib=dylib=cudart");
     if !is_target_msvc {
         println!("cargo:rustc-link-lib=stdc++");
