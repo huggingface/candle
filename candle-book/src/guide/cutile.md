@@ -44,7 +44,6 @@ use cutile::tile_kernel::TileKernel;
 mod kernels {
     use candle_core::cutile;
     use cutile::core::*;
-    use cutile::cutile_compiler;
 
     // Define #[cutile::entry] kernels here.
 }

@@ -16,7 +16,6 @@ static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
 mod kernels {
     use candle_core::cutile;
     use cutile::core::*;
-    use cutile::cutile_compiler;
 
     unsafe fn tensor(ptr: *mut f32, len: i32) -> Tensor<f32, { [-1] }> {
         let shape: Shape<{ [-1] }> = Shape::<{ [-1] }> { dims: &[len] };
