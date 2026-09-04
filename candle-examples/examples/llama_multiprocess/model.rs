@@ -1,5 +1,5 @@
 use candle::backend::BackendStorage;
-use candle::{CpuStorage, CustomOp1, DType, Device, IndexOp, Layout, Result, Shape, Tensor, D};
+use candle::{CpuStorage, CustomOp1, DType, Device, IndexOp, Layout, Result, Shape, Tensor};
 use candle_nn::var_builder::ShardedVarBuilder as VarBuilder;
 use candle_nn::{Embedding, Linear, Module, RmsNorm};
 use cudarc::nccl::safe::{Comm, ReduceOp};
@@ -241,18 +241,6 @@ impl CausalSelfAttention {
         if let Some((cache_k, cache_v)) = &cache[block_idx] {
             k = Tensor::cat(&[cache_k, &k], 2)?.contiguous()?;
             v = Tensor::cat(&[cache_v, &v], 2)?.contiguous()?;
-            let k_seq_len = k.dims()[1];
-            if k_seq_len > MAX_SEQ_LEN {
-                k = k
-                    .narrow(D::Minus1, k_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)?
-                    .contiguous()?
-            }
-            let v_seq_len = v.dims()[1];
-            if v_seq_len > 2 * MAX_SEQ_LEN {
-                v = v
-                    .narrow(D::Minus1, v_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)?
-                    .contiguous()?
-            }
         }
         cache[block_idx] = Some((k.clone(), v.clone()));
 

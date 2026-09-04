@@ -236,7 +236,6 @@ struct CausalSelfAttention {
     use_flash_attn: bool,
     span: tracing::Span,
     span_rot: tracing::Span,
-    max_position_embeddings: usize,
     attention_multiplier: f32,
 }
 
@@ -302,26 +301,6 @@ impl CausalSelfAttention {
             if let Some((cache_k, cache_v)) = &cache.kvs[block_idx] {
                 k = Tensor::cat(&[cache_k, &k], 2)?.contiguous()?;
                 v = Tensor::cat(&[cache_v, &v], 2)?.contiguous()?;
-                let k_seq_len = k.dims()[1];
-                if k_seq_len > self.max_position_embeddings {
-                    k = k
-                        .narrow(
-                            D::Minus1,
-                            k_seq_len - self.max_position_embeddings,
-                            self.max_position_embeddings,
-                        )?
-                        .contiguous()?
-                }
-                let v_seq_len = v.dims()[1];
-                if v_seq_len > 2 * self.max_position_embeddings {
-                    v = v
-                        .narrow(
-                            D::Minus1,
-                            v_seq_len - self.max_position_embeddings,
-                            self.max_position_embeddings,
-                        )?
-                        .contiguous()?
-                }
             }
             cache.kvs[block_idx] = Some((k.clone(), v.clone()))
         }
@@ -383,7 +362,6 @@ impl CausalSelfAttention {
             use_flash_attn: cfg.use_flash_attn,
             span,
             span_rot,
-            max_position_embeddings: cfg.max_position_embeddings,
             attention_multiplier: cfg.attention_multiplier,
         })
     }
