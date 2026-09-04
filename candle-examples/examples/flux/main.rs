@@ -86,13 +86,13 @@ fn run(args: Args) -> Result<()> {
         None
     };
 
-    let api = hf_hub::api::sync::Api::new()?;
+    let api = candle_examples::hub::Api::new()?;
     let bf_repo = {
         let name = match model {
             Model::Dev => "black-forest-labs/FLUX.1-dev",
             Model::Schnell => "black-forest-labs/FLUX.1-schnell",
         };
-        api.repo(hf_hub::Repo::model(name.to_string()))
+        api.model(name)
     };
     let device = candle_examples::device(cpu)?;
     if let Some(seed) = args.seed {
@@ -102,11 +102,7 @@ fn run(args: Args) -> Result<()> {
     let img = match decode_only {
         None => {
             let t5_emb = {
-                let repo = api.repo(hf_hub::Repo::with_revision(
-                    "google/t5-v1_1-xxl".to_string(),
-                    hf_hub::RepoType::Model,
-                    "refs/pr/2".to_string(),
-                ));
+                let repo = api.model("google/t5-v1_1-xxl").with_revision("refs/pr/2");
                 let model_file = repo.get("model.safetensors")?;
                 let vb =
                     unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
@@ -115,7 +111,7 @@ fn run(args: Args) -> Result<()> {
                 let config: t5::Config = serde_json::from_str(&config)?;
                 let mut model = t5::T5EncoderModel::load(vb, &config)?;
                 let tokenizer_filename = api
-                    .model("lmz/mt5-tokenizers".to_string())
+                    .model("lmz/mt5-tokenizers")
                     .get("t5-v1_1-xxl.tokenizer.json")?;
                 let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
                 let mut tokens = tokenizer
@@ -130,9 +126,7 @@ fn run(args: Args) -> Result<()> {
             };
             println!("T5\n{t5_emb}");
             let clip_emb = {
-                let repo = api.repo(hf_hub::Repo::model(
-                    "openai/clip-vit-large-patch14".to_string(),
-                ));
+                let repo = api.model("openai/clip-vit-large-patch14");
                 let model_file = repo.get("model.safetensors")?;
                 let vb =
                     unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
@@ -187,9 +181,7 @@ fn run(args: Args) -> Result<()> {
                 println!("{timesteps:?}");
                 if quantized {
                     let model_file = match model {
-                        Model::Schnell => api
-                            .repo(hf_hub::Repo::model("lmz/candle-flux".to_string()))
-                            .get("flux1-schnell.gguf")?,
+                        Model::Schnell => api.model("lmz/candle-flux").get("flux1-schnell.gguf")?,
                         Model::Dev => todo!(),
                     };
                     let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(

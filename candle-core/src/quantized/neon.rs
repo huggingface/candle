@@ -209,7 +209,8 @@ pub(crate) fn quantize_q8_0(xs: &[f32], ys: &mut [BlockQ8_0]) {
     debug_assert!(xs.len().is_multiple_of(QK8_0));
     debug_assert_eq!(ys.len(), xs.len() / QK8_0);
 
-    for (chunk, y) in xs.chunks_exact(QK8_0).zip(ys.iter_mut()) {
+    let (x_chunks, _) = xs.as_chunks::<QK8_0>();
+    for (chunk, y) in x_chunks.iter().zip(ys.iter_mut()) {
         unsafe {
             let p = chunk.as_ptr();
             let v0 = vld1q_f32(p);
@@ -4003,7 +4004,8 @@ pub(crate) fn quantize_row_q8k(xs: &[f32], ys: &mut [BlockQ8K]) {
         xs.len()
     );
     unsafe {
-        for (chunk, y) in xs.chunks_exact(QK_K).zip(ys.iter_mut()) {
+        let (x_chunks, _) = xs.as_chunks::<QK_K>();
+        for (chunk, y) in x_chunks.iter().zip(ys.iter_mut()) {
             // Find the element with the maximum absolute value, preserving its sign.
             let (mut vabs_max0, mut vsmax0) = (vdupq_n_f32(0.0), vdupq_n_f32(0.0));
             let (mut vabs_max1, mut vsmax1) = (vdupq_n_f32(0.0), vdupq_n_f32(0.0));

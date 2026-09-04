@@ -74,9 +74,9 @@ struct Pipeline {
 }
 
 impl Pipeline {
-    fn apply(self, tokenizer: &mut Tokenizer) {
+    fn apply(self, tokenizer: &mut Tokenizer) -> Result<()> {
         if let Some(norm) = self.normalizer {
-            tokenizer.with_normalizer(Some(norm));
+            tokenizer.with_normalizer(Some(norm)).map_err(Error::wrap)?;
         }
         if let Some(pt) = self.pretokenizer {
             tokenizer.with_pre_tokenizer(Some(pt));
@@ -87,6 +87,7 @@ impl Pipeline {
         if let Some(pp) = self.post_processor {
             tokenizer.with_post_processor(Some(pp));
         }
+        Ok(())
     }
 }
 
@@ -258,7 +259,7 @@ impl TokenizerFromGguf for Tokenizer {
             .and_then(gguf_value_to_u32)
             .ok();
 
-        pipeline.apply(&mut tokenizer);
+        pipeline.apply(&mut tokenizer)?;
 
         // Compose existing post-processor with a template-based one if needed
         let template_pp = template_processor(&tokens, bos_id, eos_id, add_bos, add_eos);
@@ -292,7 +293,9 @@ impl TokenizerFromGguf for Tokenizer {
                 }
             }
             if !specials.is_empty() {
-                tokenizer.add_special_tokens(&specials);
+                tokenizer
+                    .add_special_tokens(specials)
+                    .map_err(Error::wrap)?;
             }
         }
 
@@ -315,10 +318,74 @@ impl TokenizerFromGguf for Tokenizer {
                 .map(|tok| AddedToken::from(tok.clone(), true))
                 .collect();
             if !specials.is_empty() {
-                tokenizer.add_special_tokens(&specials);
+                tokenizer
+                    .add_special_tokens(specials)
+                    .map_err(Error::wrap)?;
             }
         }
 
         Ok(tokenizer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokenizers::tokenizer::{OffsetReferential, OffsetType, PreTokenizedString, PreTokenizer};
+
+    fn splits(pre: &str, input: &str) -> Vec<String> {
+        let pipeline = pipeline_from_pre(pre).unwrap();
+        let mut pre_tokenized = PreTokenizedString::from(input);
+        pipeline
+            .pretokenizer
+            .unwrap()
+            .pre_tokenize(&mut pre_tokenized)
+            .unwrap();
+        pre_tokenized
+            .get_splits(OffsetReferential::Original, OffsetType::Byte)
+            .into_iter()
+            .map(|(s, _, _)| s.to_string())
+            .collect()
+    }
+
+    // Sample made to test negative lookahead like (`\s+(?!\S)`).
+    // If someone changes the backend to one that does not support backtracking regex the tests below will fail.
+    const SAMPLE: &str = "Hello'Ve world 123\n\n  foo";
+
+    #[test]
+    fn qwen2_pretokenizer_splits() {
+        assert_eq!(
+            splits("qwen2", SAMPLE),
+            [
+                "Hello",
+                "'Ve",
+                "\u{120}world",
+                "\u{120}",
+                "1",
+                "2",
+                "3",
+                "\u{10a}\u{10a}",
+                "\u{120}",
+                "\u{120}foo"
+            ]
+        );
+    }
+
+    #[test]
+    fn llama3_pretokenizer_splits() {
+        // Differs from qwen2 only in digit grouping: `\p{N}{1,3}` vs `\p{N}`.
+        assert_eq!(
+            splits("llama3", SAMPLE),
+            [
+                "Hello",
+                "'Ve",
+                "\u{120}world",
+                "\u{120}",
+                "123",
+                "\u{10a}\u{10a}",
+                "\u{120}",
+                "\u{120}foo"
+            ]
+        );
     }
 }

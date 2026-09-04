@@ -77,6 +77,7 @@ pub mod simd128;
 pub mod neon;
 
 #[inline(always)]
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
 unsafe fn scalar_vec_dot_f32(a_row: *const f32, b_row: *const f32, c: *mut f32, k: usize) {
     for i in 0..k {
         *c += *a_row.add(i) * (*b_row.add(i));
@@ -84,6 +85,7 @@ unsafe fn scalar_vec_dot_f32(a_row: *const f32, b_row: *const f32, c: *mut f32, 
 }
 
 #[inline(always)]
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
 unsafe fn scalar_vec_sum(row: *const f32, b: *mut f32, k: usize) {
     *b = 0f32;
     for i in 0..k {
@@ -110,6 +112,7 @@ unsafe fn scalar_vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut f3
 }
 
 #[inline(always)]
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
 unsafe fn scalar_vec_add_f16(a_row: *const f16, b_row: *const f16, c: *mut f16, k: usize) {
     for i in 0..k {
         *c.add(i) = *a_row.add(i) + *b_row.add(i);
@@ -117,6 +120,7 @@ unsafe fn scalar_vec_add_f16(a_row: *const f16, b_row: *const f16, c: *mut f16, 
 }
 
 #[inline(always)]
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
 unsafe fn scalar_vec_add_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut bf16, k: usize) {
     for i in 0..k {
         *c.add(i) = *a_row.add(i) + *b_row.add(i);
@@ -124,6 +128,7 @@ unsafe fn scalar_vec_add_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut bf
 }
 
 #[inline(always)]
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
 unsafe fn scalar_vec_scalar_add_f16(scalar: f16, xs: *const f16, ys: *mut f16, k: usize) {
     for i in 0..k {
         *ys.add(i) = *xs.add(i) + scalar;
@@ -131,6 +136,7 @@ unsafe fn scalar_vec_scalar_add_f16(scalar: f16, xs: *const f16, ys: *mut f16, k
 }
 
 #[inline(always)]
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
 unsafe fn scalar_vec_scalar_add_bf16(scalar: bf16, xs: *const bf16, ys: *mut bf16, k: usize) {
     for i in 0..k {
         *ys.add(i) = *xs.add(i) + scalar;
@@ -192,7 +198,14 @@ pub(crate) unsafe fn vec_dot_f32(a_row: *const f32, b_row: *const f32, c: *mut f
     if use_neon() {
         return neon::vec_dot_f32(a_row, b_row, c, k);
     }
-    scalar_vec_dot_f32(a_row, b_row, c, k)
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        simd128::vec_dot_f32(a_row, b_row, c, k)
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+    {
+        scalar_vec_dot_f32(a_row, b_row, c, k)
+    }
 }
 
 #[inline(always)]
@@ -208,7 +221,14 @@ pub(crate) unsafe fn vec_sum(row: *const f32, b: *mut f32, k: usize) {
     if use_neon() {
         return neon::vec_sum(row, b, k);
     }
-    scalar_vec_sum(row, b, k)
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        simd128::vec_sum(row, b, k)
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+    {
+        scalar_vec_sum(row, b, k)
+    }
 }
 
 #[inline(always)]
@@ -256,7 +276,14 @@ pub(crate) unsafe fn vec_add_f16(a_row: *const f16, b_row: *const f16, c: *mut f
     if use_neon_f16() {
         return neon::vec_add_f16(a_row, b_row, c, k);
     }
-    scalar_vec_add_f16(a_row, b_row, c, k)
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        simd128::vec_add_f16(a_row, b_row, c, k)
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+    {
+        scalar_vec_add_f16(a_row, b_row, c, k)
+    }
 }
 
 #[inline(always)]
@@ -272,7 +299,14 @@ pub(crate) unsafe fn vec_add_bf16(a_row: *const bf16, b_row: *const bf16, c: *mu
     if use_neon_bf16() {
         return neon::vec_add_bf16(a_row, b_row, c, k);
     }
-    scalar_vec_add_bf16(a_row, b_row, c, k)
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        simd128::vec_add_bf16(a_row, b_row, c, k)
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+    {
+        scalar_vec_add_bf16(a_row, b_row, c, k)
+    }
 }
 
 #[inline(always)]
@@ -288,7 +322,14 @@ pub(crate) unsafe fn vec_scalar_add_f16(scalar: f16, xs: *const f16, ys: *mut f1
     if use_neon_f16() {
         return neon::vec_scalar_add_f16(scalar, xs, ys, k);
     }
-    scalar_vec_scalar_add_f16(scalar, xs, ys, k)
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        simd128::vec_scalar_add_f16(scalar, xs, ys, k)
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+    {
+        scalar_vec_scalar_add_f16(scalar, xs, ys, k)
+    }
 }
 
 #[inline(always)]
@@ -318,5 +359,12 @@ pub(crate) unsafe fn vec_scalar_add_bf16(scalar: bf16, xs: *const bf16, ys: *mut
     if use_neon_bf16() {
         return neon::vec_scalar_add_bf16(scalar, xs, ys, k);
     }
-    scalar_vec_scalar_add_bf16(scalar, xs, ys, k)
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        simd128::vec_scalar_add_bf16(scalar, xs, ys, k)
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+    {
+        scalar_vec_scalar_add_bf16(scalar, xs, ys, k)
+    }
 }

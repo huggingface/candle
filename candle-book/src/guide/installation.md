@@ -38,6 +38,19 @@ Add the `candle-core` crate with the cuda feature:
 cargo add --git https://github.com/huggingface/candle.git candle-core --features "cuda"
 ```
 
+### cuTile
+
+The opt-in `cutile` feature enables CUDA and re-exports the cuTile version used by Candle:
+
+```bash
+cargo add --git https://github.com/huggingface/candle.git candle-core --features "cutile"
+```
+
+It requires Rust 1.89 or newer, CUDA 13.2 or newer, NVIDIA driver r580 or newer, clang and libclang
+at build time, and the CUDA `tileiras` compiler at runtime. Set `CUDA_TOOLKIT_PATH` to the toolkit
+root when it is not installed in a standard location. See [Writing cuTile kernels](cutile.md) for
+the API and CUDA architecture requirements.
+
 ### MKL
 
 You can also see the `mkl` feature which can get faster inference on CPU.

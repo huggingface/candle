@@ -6,10 +6,10 @@ extern crate accelerate_src;
 
 use anyhow::Result;
 use candle::{DType, IndexOp, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::models::encodec::{Config, Model};
 use clap::{Parser, ValueEnum};
-use hf_hub::api::sync::Api;
 
 mod audio_io;
 
@@ -47,7 +47,7 @@ fn main() -> Result<()> {
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
         None => Api::new()?
-            .model("facebook/encodec_24khz".to_string())
+            .model("facebook/encodec_24khz")
             .get("model.safetensors")?,
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };

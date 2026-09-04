@@ -77,7 +77,7 @@ pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let model_name = args.which.model_name();
-    let api = hf_hub::api::sync::Api::new()?;
+    let api = candle_examples::hub::Api::new()?;
     let api = api.model(model_name);
     let model_file = if args.use_pth {
         api.get("open_clip_pytorch_model.bin")?
