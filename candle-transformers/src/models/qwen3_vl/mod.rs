@@ -11,6 +11,7 @@ mod text;
 mod vision;
 
 pub use config::Config;
+pub use text::{compute_mrope_position_ids, single_token_position_ids, ImageGrid};
 
 use crate::models::deepseek2::NonZeroOp;
 
@@ -53,25 +54,28 @@ impl Qwen3VLModel {
         .to_dtype(dtype)
     }
 
+    /// `position_ids` has shape `(3, batch, seq_len)` and carries the
+    /// temporal/height/width M-RoPE ids. `cache_position` is the number
+    /// of tokens already present in the KV cache.
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
-        &self,
+        &mut self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         pixel_values_videos: Option<Tensor>,
         image_grid_thw: Option<Tensor>,
         video_grid_thw: Option<Tensor>,
-        seqlens: Vec<usize>,
         continuous_img_pad: Vec<Vec<(usize, usize)>>,
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
-        seqlen_offsets: &[usize],
+        position_ids: &Tensor,
+        cache_position: usize,
     ) -> Result<Tensor> {
         let (bs, seqlen) = input_ids.dims2()?;
-        let attention_mask = if seqlen <= 1 {
+        let attention_mask = if seqlen > 1 {
             Some(self.prepare_decoder_attention_mask(
                 bs,
                 seqlen,
-                seqlen_offsets[0],
+                cache_position,
                 self.text.dtype,
                 input_ids.device(),
             )?)
@@ -249,22 +253,17 @@ impl Qwen3VLModel {
             _ => (None, None),
         };
 
-        let mut ropeidx_attn_mask_bs = Vec::new();
-        let max_seqlens = *seqlens.iter().max().unwrap();
-        for len in &seqlens {
-            ropeidx_attn_mask_bs.push(Tensor::new(
-                [vec![1f32; *len], vec![0f32; max_seqlens - len]].concat(),
-                input_ids.device(),
-            )?);
-        }
-
         let out = self.text.forward_embeds(
             input_embeds,
             attention_mask.as_ref(),
-            seqlen_offsets,
+            position_ids,
             visual_pos_masks.as_ref(),
             deepstack_visual_embeds.as_deref(),
         )?;
         Ok(out)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.text.clear_kv_cache();
     }
 }
