@@ -2,11 +2,15 @@ use crate::quantized::gguf_file;
 use crate::{Context, Error, Result};
 use std::collections::HashSet;
 use tokenizers::{
-    decoders::{byte_level::ByteLevel as ByteLevelDecoder, DecoderWrapper},
+    decoders::{
+        byte_fallback::ByteFallback, byte_level::ByteLevel as ByteLevelDecoder,
+        sequence::Sequence as DecoderSequence, DecoderWrapper,
+    },
     models::bpe::{Vocab, BPE},
     normalizers::{unicode::NFC, NormalizerWrapper},
     pre_tokenizers::{
         byte_level::ByteLevel as ByteLevelPre,
+        metaspace::{Metaspace, PrependScheme},
         sequence::Sequence,
         split::{Split, SplitPattern},
         PreTokenizerWrapper,
@@ -126,6 +130,25 @@ fn pipeline_from_pre(pre: &str) -> Result<Pipeline> {
             decoder: Some(ByteLevelDecoder::new(true, true, true).into()),
             post_processor: Some(ByteLevelProcessor::new(true, false, true).into()),
         },
+        "gemma4" => {
+            let split = Split::new(
+                SplitPattern::Regex("[\n]+".to_string()),
+                SplitDelimiterBehavior::Isolated,
+                false,
+            )
+            .map_err(Error::wrap)?;
+            let metaspace = Metaspace::new('▁', PrependScheme::Never, false);
+            Pipeline {
+                normalizer: None,
+                pretokenizer: Some(
+                    Sequence::new(vec![split.into(), metaspace.clone().into()]).into(),
+                ),
+                decoder: Some(
+                    DecoderSequence::new(vec![ByteFallback::new().into(), metaspace.into()]).into(),
+                ),
+                post_processor: None,
+            }
+        }
         // Default GPT-2 style BPE
         _ => Pipeline {
             normalizer: None,
@@ -204,7 +227,7 @@ impl TokenizerFromGguf for Tokenizer {
         let model_kind = metadata_value(ct, "tokenizer.ggml.model")?
             .to_string()?
             .to_lowercase();
-        if model_kind != "gpt2" {
+        if !matches!(model_kind.as_str(), "gemma4" | "gpt2") {
             crate::bail!("unsupported tokenizer model `{model_kind}`");
         }
 
@@ -221,14 +244,18 @@ impl TokenizerFromGguf for Tokenizer {
 
         let mut builder = BPE::builder().vocab_and_merges(vocab, merges);
 
-        if let Ok(val) = metadata_value(ct, "tokenizer.ggml.unk_token_id") {
+        if let Ok(val) = metadata_value(ct, "tokenizer.ggml.unk_token_id")
+            .or_else(|_| metadata_value(ct, "tokenizer.ggml.unknown_token_id"))
+        {
             let token_id = gguf_value_to_u32(val)?;
             if let Some(token) = tokens.get(token_id as usize) {
                 builder = builder.unk_token(token.clone());
             }
         }
 
-        if let Ok(val) = metadata_value(ct, "tokenizer.ggml.byte_fallback") {
+        if model_kind == "gemma4" {
+            builder = builder.byte_fallback(true);
+        } else if let Ok(val) = metadata_value(ct, "tokenizer.ggml.byte_fallback") {
             builder = builder.byte_fallback(val.to_bool()?);
         }
 
@@ -239,10 +266,14 @@ impl TokenizerFromGguf for Tokenizer {
         let bpe = builder.build().map_err(Error::wrap)?;
         let mut tokenizer = Tokenizer::new(bpe);
 
-        let pre = metadata_value(ct, "tokenizer.ggml.pre")
-            .and_then(|v| v.to_string())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_| "gpt2".to_string());
+        let pre = if model_kind == "gemma4" {
+            "gemma4".to_string()
+        } else {
+            metadata_value(ct, "tokenizer.ggml.pre")
+                .and_then(|v| v.to_string())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|_| "gpt2".to_string())
+        };
         let pipeline = pipeline_from_pre(pre.as_str())?;
         let post_processor_base = pipeline.post_processor.clone();
 
