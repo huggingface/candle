@@ -1485,12 +1485,17 @@ impl Map2 for MatMul {
             Parallelism::None
         };
         let (b, m, n, k) = if b_skip == 0 && a_skip == m * k {
+            // A batch-invariant rhs lets the batches of lhs stack into the rows of a single
+            // (b * m, k) matrix, which the destination already matches row for row.
             // a_skip and c_skip should be updated but step is always 0 so
             // it wouldn't matter.
             (1, b * m, n, k)
-        } else if a_skip == 0 && b_skip == n * k {
-            (1, m, b * n, k)
         } else {
+            // There is deliberately no mirrored fold for a batch-invariant lhs. Stacking the
+            // batches of rhs into the columns of a (k, b * n) matrix would need those columns
+            // to be adjacent, but rhs is batch-major, and the destination rows would still be
+            // n apart while each merged row is b * n wide. Both make the merged gemm write
+            // over itself, so a stride-zero batch on lhs goes through the loop below.
             (b, m, n, k)
         };
         for step in 0..b {
