@@ -500,9 +500,24 @@ impl Model {
         Ok((Some(mask), Some(sliding_mask)))
     }
 
+    /// The token embedding table, so callers can embed text themselves.
+    pub fn embed_tokens(&self) -> &candle_nn::Embedding {
+        &self.embed_tokens
+    }
+
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
-        let (b_size, seq_len) = input_ids.dims2()?;
         let xs = self.embed_tokens.forward(input_ids)?;
+        self.forward_embeds(&xs, seqlen_offset)
+    }
+
+    /// Same as [`Self::forward`], but takes token embeddings rather than token ids.
+    ///
+    /// A multimodal caller builds a mixed sequence - text embeddings from
+    /// [`Self::embed_tokens`] with image embeddings spliced in - which has no
+    /// representation as token ids. `gemma` already exposes the equivalent pair,
+    /// and `paligemma` is built on it.
+    pub fn forward_embeds(&mut self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        let (b_size, seq_len, _) = xs.dims3()?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
 
         let (attention_mask, sliding_attention_mask) =
