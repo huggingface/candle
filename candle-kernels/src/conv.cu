@@ -51,9 +51,14 @@ __device__ void conv1d(
   dst[dst_i] = static_cast<T>(d);
 }
 
+// Writes the slice of the (b_size, l_out, c_in, l_k) im2col matrix that
+// belongs to the `chunk_threads` (b, l_out, c_in) triples starting at
+// `thread_base`, into a buffer holding just that slice. Lets a caller bound
+// the materialized buffer instead of unfolding the whole input at once.
 template <typename T>
-__device__ void im2col1d(
-    const size_t numel,
+__device__ void im2col1d_chunk(
+    const size_t chunk_threads,
+    const size_t thread_base,
     const size_t l_out,
     const size_t l_k,
     const size_t stride,
@@ -63,12 +68,13 @@ __device__ void im2col1d(
     const T *src,
     T *dst
 ) {
-  const size_t thread_i = blockIdx.x * blockDim.x + threadIdx.x;
-  // dst: (b_size, l_out, c_in, l_k)
+  const size_t chunk_i = blockIdx.x * blockDim.x + threadIdx.x;
+  // dst: the (b_size, l_out, c_in, l_k) slice starting at triple `thread_base`
   // src: (b_size, c_in, l_in)
-  if (thread_i >= numel) {
+  if (chunk_i >= chunk_threads) {
     return;
   }
+  const size_t thread_i = chunk_i + thread_base;
   const size_t *src_dims = info;
   const size_t *src_s = info + 3;
   const size_t c_in = src_dims[1];
@@ -85,7 +91,7 @@ __device__ void im2col1d(
   const size_t c_idx = tmp_dst_i;
   for (size_t l_k_idx = 0; l_k_idx < l_k; ++l_k_idx) {
     size_t src_l_idx = l_idx * stride + l_k_idx * dilation;
-    size_t dst_i = thread_i * l_k + l_k_idx;
+    size_t dst_i = chunk_i * l_k + l_k_idx;
     if (src_l_idx < padding || src_l_idx >= l_in + padding) {
       dst[dst_i] = static_cast<T>(0);
     }
@@ -95,6 +101,21 @@ __device__ void im2col1d(
       dst[dst_i] = src[src_i];
     }
   }
+}
+
+template <typename T>
+__device__ void im2col1d(
+    const size_t numel,
+    const size_t l_out,
+    const size_t l_k,
+    const size_t stride,
+    const size_t padding,
+    const size_t dilation,
+    const size_t *info,
+    const T *src,
+    T *dst
+) {
+  im2col1d_chunk<T>(numel, 0, l_out, l_k, stride, padding, dilation, info, src, dst);
 }
 
 template <typename T>
@@ -141,9 +162,14 @@ __device__ void col2im1d(
   }
 }
 
+// Writes the `chunk_numel` elements of the (b_size, h_out, w_out, c_in, h_k,
+// w_k) im2col matrix starting at flat element `dst_base`, into a buffer
+// holding just that slice. Lets a caller bound the materialized buffer
+// instead of unfolding the whole input at once.
 template <typename T>
-__device__ void im2col(
-    const size_t dst_numel,
+__device__ void im2col_chunk(
+    const size_t chunk_numel,
+    const size_t dst_base,
     const size_t h_out,
     const size_t w_out,
     const size_t h_k,
@@ -155,12 +181,13 @@ __device__ void im2col(
     const T *src,
     T *dst
 ) {
-  const size_t dst_i = blockIdx.x * blockDim.x + threadIdx.x;
-  // dst: (b_size, h_out, w_out, c_in, h_k, w_k)
+  const size_t chunk_i = blockIdx.x * blockDim.x + threadIdx.x;
+  // dst: the (b_size, h_out, w_out, c_in, h_k, w_k) slice starting at `dst_base`
   // src: (b_size, c_in, h_in, w_in)
-  if (dst_i >= dst_numel) {
+  if (chunk_i >= chunk_numel) {
     return;
   }
+  const size_t dst_i = chunk_i + dst_base;
   const size_t *src_dims = info;
   const size_t *src_s = info + 4;
   const size_t c_in = src_dims[1];
@@ -188,10 +215,10 @@ __device__ void im2col(
   size_t src_h_idx = h_idx * stride + h_k_idx * dilation;
   size_t src_w_idx = w_idx * stride + w_k_idx * dilation;
   if (src_h_idx < padding || src_h_idx >= h_in + padding) {
-    dst[dst_i] = static_cast<T>(0);
+    dst[chunk_i] = static_cast<T>(0);
   }
   else if (src_w_idx < padding || src_w_idx >= w_in + padding) {
-    dst[dst_i] = static_cast<T>(0);
+    dst[chunk_i] = static_cast<T>(0);
   }
   else {
     src_h_idx -= padding;
@@ -201,8 +228,25 @@ __device__ void im2col(
       + c_idx * src_s[1]
       + src_h_idx * src_s[2]
       + src_w_idx * src_s[3];
-    dst[dst_i] = src[src_i];
+    dst[chunk_i] = src[src_i];
   }
+}
+
+template <typename T>
+__device__ void im2col(
+    const size_t dst_numel,
+    const size_t h_out,
+    const size_t w_out,
+    const size_t h_k,
+    const size_t w_k,
+    const size_t stride,
+    const size_t padding,
+    const size_t dilation,
+    const size_t *info,
+    const T *src,
+    T *dst
+) {
+  im2col_chunk<T>(dst_numel, 0, h_out, w_out, h_k, w_k, stride, padding, dilation, info, src, dst);
 }
 
 // Naive implementation of conv2d.
@@ -679,6 +723,22 @@ extern "C" __global__ void FN_NAME(  \
   im2col1d<TYPENAME>(dst_numel, l_out, l_k, stride, padding, dilation, info, src, dst); \
 } \
 
+#define IM2COL1D_CHUNK_OP(TYPENAME, FN_NAME) \
+extern "C" __global__ void FN_NAME(  \
+    const size_t chunk_threads, \
+    const size_t thread_base, \
+    const size_t l_out, \
+    const size_t l_k, \
+    const size_t stride, \
+    const size_t padding, \
+    const size_t dilation, \
+    const size_t *info, \
+    const TYPENAME *src, \
+    TYPENAME *dst \
+) {  \
+  im2col1d_chunk<TYPENAME>(chunk_threads, thread_base, l_out, l_k, stride, padding, dilation, info, src, dst); \
+} \
+
 #define COL2IM1D_OP(TYPENAME, FN_NAME) \
 extern "C" __global__ void FN_NAME(  \
     const size_t dst_el, \
@@ -708,6 +768,24 @@ extern "C" __global__ void FN_NAME(  \
     TYPENAME *dst \
 ) {  \
   im2col<TYPENAME>(dst_numel, h_out, w_out, h_k, w_k, stride, padding, dilation, info, src, dst); \
+} \
+
+#define IM2COL_CHUNK_OP(TYPENAME, FN_NAME) \
+extern "C" __global__ void FN_NAME(  \
+    const size_t chunk_numel, \
+    const size_t dst_base, \
+    const size_t h_out, \
+    const size_t w_out, \
+    const size_t h_k, \
+    const size_t w_k, \
+    const size_t stride, \
+    const size_t padding, \
+    const size_t dilation, \
+    const size_t *info, \
+    const TYPENAME *src, \
+    TYPENAME *dst \
+) {  \
+  im2col_chunk<TYPENAME>(chunk_numel, dst_base, h_out, w_out, h_k, w_k, stride, padding, dilation, info, src, dst); \
 } \
 
 #define CONVT1D_OP(TYPENAME, TYPEACC, FN_NAME) \
@@ -810,7 +888,9 @@ MAX_POOL2D_OP(__nv_bfloat16, max_pool2d_bf16)
 UPSAMPLE_NEAREST2D_OP(__nv_bfloat16, upsample_nearest2d_bf16)
 UPSAMPLE_BILINEAR2D_OP(__nv_bfloat16, upsample_bilinear2d_bf16)
 IM2COL_OP(__nv_bfloat16, im2col_bf16)
+IM2COL_CHUNK_OP(__nv_bfloat16, im2col_chunk_bf16)
 IM2COL1D_OP(__nv_bfloat16, im2col1d_bf16)
+IM2COL1D_CHUNK_OP(__nv_bfloat16, im2col1d_chunk_bf16)
 COL2IM1D_OP(__nv_bfloat16, col2im1d_bf16)
 
 // NOTE: No conv ops for f8
@@ -836,7 +916,9 @@ MAX_POOL2D_OP(__half, max_pool2d_f16)
 UPSAMPLE_NEAREST2D_OP(__half, upsample_nearest2d_f16)
 UPSAMPLE_BILINEAR2D_OP(__half, upsample_bilinear2d_f16)
 IM2COL_OP(__half, im2col_f16)
+IM2COL_CHUNK_OP(__half, im2col_chunk_f16)
 IM2COL1D_OP(__half, im2col1d_f16)
+IM2COL1D_CHUNK_OP(__half, im2col1d_chunk_f16)
 COL2IM1D_OP(__half, col2im1d_f16)
 #endif
 
@@ -885,10 +967,20 @@ IM2COL_OP(double, im2col_f64)
 IM2COL_OP(uint8_t, im2col_u8)
 IM2COL_OP(uint32_t, im2col_u32)
 
+IM2COL_CHUNK_OP(float, im2col_chunk_f32)
+IM2COL_CHUNK_OP(double, im2col_chunk_f64)
+IM2COL_CHUNK_OP(uint8_t, im2col_chunk_u8)
+IM2COL_CHUNK_OP(uint32_t, im2col_chunk_u32)
+
 IM2COL1D_OP(float, im2col1d_f32)
 IM2COL1D_OP(double, im2col1d_f64)
 IM2COL1D_OP(uint8_t, im2col1d_u8)
 IM2COL1D_OP(uint32_t, im2col1d_u32)
+
+IM2COL1D_CHUNK_OP(float, im2col1d_chunk_f32)
+IM2COL1D_CHUNK_OP(double, im2col1d_chunk_f64)
+IM2COL1D_CHUNK_OP(uint8_t, im2col1d_chunk_u8)
+IM2COL1D_CHUNK_OP(uint32_t, im2col1d_chunk_u32)
 
 COL2IM1D_OP(float, col2im1d_f32)
 COL2IM1D_OP(double, col2im1d_f64)

@@ -94,6 +94,39 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
 }
 
 
+// The MMQ tile geometry comes in one set per architecture. The launchers name
+// their set through `MMQ_ARCH` so the choice lives here rather than ten times
+// over, and so a set that is not selected costs nothing.
+//
+// Only candle-rocm-kernels ever defines RDNA2/RDNA3, and only for an RDNA
+// target; nvcc is given neither, so a CUDA build resolves to AMPERE — the set
+// the launchers used unconditionally before — and is unchanged. RDNA3 reuses
+// the RDNA2 tiles, as upstream llama.cpp does. The RDNA1 sets below stay
+// unreferenced: no candle build targets gfx101x, and their geometry is a third
+// variant nobody here can test.
+#if defined(RDNA2) || defined(RDNA3)
+#define MMQ_ARCH RDNA2
+#else
+#define MMQ_ARCH AMPERE
+#endif
+
+#define MMQ_PASTE_(a, b) a##b
+#define MMQ_PASTE(a, b) MMQ_PASTE_(a, b)
+#define  MMQ_X_OF(dtype) MMQ_PASTE(MMQ_X_##dtype##_, MMQ_ARCH)
+#define  MMQ_Y_OF(dtype) MMQ_PASTE(MMQ_Y_##dtype##_, MMQ_ARCH)
+#define NWARPS_OF(dtype) MMQ_PASTE(NWARPS_##dtype##_, MMQ_ARCH)
+
+// Without a bound the AMD backend budgets registers for the default 1024-thread
+// block — eight times what these launch — which caps them at 192 VGPRs and
+// spills the accumulators to scratch: 1748 bytes per lane for `mul_mat_q3_K` on
+// gfx1101. Expands to nothing off RDNA, so nvcc sees the declarations it always
+// saw.
+#if defined(RDNA2) || defined(RDNA3)
+#define MMQ_LAUNCH_BOUNDS(dtype) __launch_bounds__(WARP_SIZE*NWARPS_OF(dtype), 2)
+#else
+#define MMQ_LAUNCH_BOUNDS(dtype)
+#endif
+
 #define  MMQ_X_Q4_0_RDNA2  64
 #define  MMQ_Y_Q4_0_RDNA2  128
 #define NWARPS_Q4_0_RDNA2  8
@@ -2966,8 +2999,14 @@ static __device__ void mul_mat_vec_q(
         for (int j = 0; j < ncols_y; ++j) {
 #pragma unroll
             for (int i = 0; i < rows_per_cuda_block; ++i) {
+                // The tile is a fixed `rows_per_cuda_block` tall, so the last block
+                // of an odd `nrows_x` dots a row that does not exist. Its result is
+                // dropped by the store guard below, but the load still has to stay
+                // inside the weights; the index is loop-invariant, so the clamp is
+                // hoisted out of the `kbx` loop.
+                const int row = row0 + i < nrows_x ? row0 + i : 0;
                 tmp[j][i] += vec_dot_q_cuda(
-                    &x[kbx + (row0 + i)*blocks_per_row_x], &y[j*blocks_per_col_y + kby], kqs);
+                    &x[kbx + row*blocks_per_row_x], &y[j*blocks_per_col_y + kby], kqs);
             }
         }
     }
@@ -2999,7 +3038,11 @@ static __device__ void mul_mat_vec_q(
             tmp[j][i] = warp_reduce_sum(tmp[j][i]);
         }
 
-        if (threadIdx.x < rows_per_cuda_block) {
+        // The second half of the guard is what keeps an `nrows_dst` that is not a
+        // multiple of `rows_per_cuda_block` from having its last block write one
+        // row past the end of its column — which lands on the *next* column's
+        // first output, i.e. silent corruption rather than a fault.
+        if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || row0 + int(threadIdx.x) < nrows_dst)) {
             dst[j*nrows_dst + row0 + threadIdx.x] = tmp[j][threadIdx.x];
         }
     }
@@ -4512,26 +4555,26 @@ static __device__ __forceinline__ float vec_dot_q4_1_q8_1_mul_mat(
 }
 
 
-extern "C" __global__ void
+extern "C" __global__ void MMQ_LAUNCH_BOUNDS(Q4_0)
     mul_mat_q4_0(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
-    const int mmq_x  =  MMQ_X_Q4_0_AMPERE;
-    const int mmq_y  =  MMQ_Y_Q4_0_AMPERE;
-    const int nwarps = NWARPS_Q4_0_AMPERE;
+    const int mmq_x  =  MMQ_X_OF(Q4_0);
+    const int mmq_y  =  MMQ_Y_OF(Q4_0);
+    const int nwarps = NWARPS_OF(Q4_0);
 
     mul_mat_q<QK4_0, QR4_0, QI4_0, true, block_q4_0, mmq_x, mmq_y, nwarps, allocate_tiles_q4_0<mmq_y>,
         load_tiles_q4_0<mmq_y, nwarps, true>, VDR_Q4_0_Q8_1_MMQ, vec_dot_q4_0_q8_1_mul_mat>
         (vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void
+extern "C" __global__ void MMQ_LAUNCH_BOUNDS(Q4_1)
     mul_mat_q4_1(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
-    const int mmq_x  =  MMQ_X_Q4_1_AMPERE;
-    const int mmq_y  =  MMQ_Y_Q4_1_AMPERE;
-    const int nwarps = NWARPS_Q4_1_AMPERE;
+    const int mmq_x  =  MMQ_X_OF(Q4_1);
+    const int mmq_y  =  MMQ_Y_OF(Q4_1);
+    const int nwarps = NWARPS_OF(Q4_1);
 
     mul_mat_q<QK4_1, QR4_1, QI4_1, true, block_q4_1, mmq_x, mmq_y, nwarps, allocate_tiles_q4_1<mmq_y>,
         load_tiles_q4_1<mmq_y, nwarps, true>, VDR_Q4_1_Q8_1_MMQ, vec_dot_q4_1_q8_1_mul_mat>
@@ -4539,100 +4582,100 @@ extern "C" __global__ void
 }
 
 
-extern "C" __global__ void
+extern "C" __global__ void MMQ_LAUNCH_BOUNDS(Q5_0)
     mul_mat_q5_0(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
-    const int mmq_x  =  MMQ_X_Q5_0_AMPERE;
-    const int mmq_y  =  MMQ_Y_Q5_0_AMPERE;
-    const int nwarps = NWARPS_Q5_0_AMPERE;
+    const int mmq_x  =  MMQ_X_OF(Q5_0);
+    const int mmq_y  =  MMQ_Y_OF(Q5_0);
+    const int nwarps = NWARPS_OF(Q5_0);
 
     mul_mat_q<QK5_0, QR5_0, QI5_0, false, block_q5_0, mmq_x, mmq_y, nwarps, allocate_tiles_q5_0<mmq_y>,
         load_tiles_q5_0<mmq_y, nwarps, true>, VDR_Q5_0_Q8_1_MMQ, vec_dot_q5_0_q8_1_mul_mat>
         (vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void
+extern "C" __global__ void MMQ_LAUNCH_BOUNDS(Q5_1)
 mul_mat_q5_1(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
-    const int mmq_x  =  MMQ_X_Q5_1_AMPERE;
-    const int mmq_y  =  MMQ_Y_Q5_1_AMPERE;
-    const int nwarps = NWARPS_Q5_1_AMPERE;
+    const int mmq_x  =  MMQ_X_OF(Q5_1);
+    const int mmq_y  =  MMQ_Y_OF(Q5_1);
+    const int nwarps = NWARPS_OF(Q5_1);
 
     mul_mat_q<QK5_1, QR5_1, QI5_1, true, block_q5_1, mmq_x, mmq_y, nwarps, allocate_tiles_q5_1<mmq_y>,
         load_tiles_q5_1<mmq_y, nwarps, true>, VDR_Q5_1_Q8_1_MMQ, vec_dot_q5_1_q8_1_mul_mat>
         (vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void
+extern "C" __global__ void MMQ_LAUNCH_BOUNDS(Q8_0)
     mul_mat_q8_0(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
-    const int mmq_x  =  MMQ_X_Q8_0_AMPERE;
-    const int mmq_y  =  MMQ_Y_Q8_0_AMPERE;
-    const int nwarps = NWARPS_Q8_0_AMPERE;
+    const int mmq_x  =  MMQ_X_OF(Q8_0);
+    const int mmq_y  =  MMQ_Y_OF(Q8_0);
+    const int nwarps = NWARPS_OF(Q8_0);
 
     mul_mat_q<QK8_0, QR8_0, QI8_0, false, block_q8_0, mmq_x, mmq_y, nwarps, allocate_tiles_q8_0<mmq_y>,
         load_tiles_q8_0<mmq_y, nwarps, true>, VDR_Q8_0_Q8_1_MMQ, vec_dot_q8_0_q8_1_mul_mat>
         (vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void
+extern "C" __global__ void MMQ_LAUNCH_BOUNDS(Q2_K)
 mul_mat_q2_K(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
-    const int mmq_x  =  MMQ_X_Q2_K_AMPERE;
-    const int mmq_y  =  MMQ_Y_Q2_K_AMPERE;
-    const int nwarps = NWARPS_Q2_K_AMPERE;
+    const int mmq_x  =  MMQ_X_OF(Q2_K);
+    const int mmq_y  =  MMQ_Y_OF(Q2_K);
+    const int nwarps = NWARPS_OF(Q2_K);
     mul_mat_q<QK_K, QR2_K, QI2_K, false, block_q2_K, mmq_x, mmq_y, nwarps, allocate_tiles_q2_K<mmq_y>,
         load_tiles_q2_K<mmq_y, nwarps, true>, VDR_Q2_K_Q8_1_MMQ, vec_dot_q2_K_q8_1_mul_mat>
         (vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void
+extern "C" __global__ void MMQ_LAUNCH_BOUNDS(Q3_K)
     mul_mat_q3_K(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
-    const int mmq_x  =  MMQ_X_Q3_K_AMPERE;
-    const int mmq_y  =  MMQ_Y_Q3_K_AMPERE;
-    const int nwarps = NWARPS_Q3_K_AMPERE;
+    const int mmq_x  =  MMQ_X_OF(Q3_K);
+    const int mmq_y  =  MMQ_Y_OF(Q3_K);
+    const int nwarps = NWARPS_OF(Q3_K);
     mul_mat_q<QK_K, QR3_K, QI3_K, false, block_q3_K, mmq_x, mmq_y, nwarps, allocate_tiles_q3_K<mmq_y>,
         load_tiles_q3_K<mmq_y, nwarps, true>, VDR_Q3_K_Q8_1_MMQ, vec_dot_q3_K_q8_1_mul_mat>
         (vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void
+extern "C" __global__ void MMQ_LAUNCH_BOUNDS(Q4_K)
     mul_mat_q4_K(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
-    const int mmq_x  =  MMQ_X_Q4_K_AMPERE;
-    const int mmq_y  =  MMQ_Y_Q4_K_AMPERE;
-    const int nwarps = NWARPS_Q4_K_AMPERE;
+    const int mmq_x  =  MMQ_X_OF(Q4_K);
+    const int mmq_y  =  MMQ_Y_OF(Q4_K);
+    const int nwarps = NWARPS_OF(Q4_K);
     mul_mat_q<QK_K, QR4_K, QI4_K, true, block_q4_K, mmq_x, mmq_y, nwarps, allocate_tiles_q4_K<mmq_y>,
         load_tiles_q4_K<mmq_y, nwarps, true>, VDR_Q4_K_Q8_1_MMQ, vec_dot_q4_K_q8_1_mul_mat>
         (vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void
+extern "C" __global__ void MMQ_LAUNCH_BOUNDS(Q5_K)
 mul_mat_q5_K(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
-    const int mmq_x  =  MMQ_X_Q5_K_AMPERE;
-    const int mmq_y  =  MMQ_Y_Q5_K_AMPERE;
-    const int nwarps = NWARPS_Q5_K_AMPERE;
+    const int mmq_x  =  MMQ_X_OF(Q5_K);
+    const int mmq_y  =  MMQ_Y_OF(Q5_K);
+    const int nwarps = NWARPS_OF(Q5_K);
     mul_mat_q<QK_K, QR5_K, QI5_K, true, block_q5_K, mmq_x, mmq_y, nwarps, allocate_tiles_q5_K<mmq_y>,
         load_tiles_q5_K<mmq_y, nwarps, true>, VDR_Q5_K_Q8_1_MMQ, vec_dot_q5_K_q8_1_mul_mat>
         (vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void
+extern "C" __global__ void MMQ_LAUNCH_BOUNDS(Q6_K)
     mul_mat_q6_K(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
-    const int mmq_x  =  MMQ_X_Q6_K_AMPERE;
-    const int mmq_y  =  MMQ_Y_Q6_K_AMPERE;
-    const int nwarps = NWARPS_Q6_K_AMPERE;
+    const int mmq_x  =  MMQ_X_OF(Q6_K);
+    const int mmq_y  =  MMQ_Y_OF(Q6_K);
+    const int nwarps = NWARPS_OF(Q6_K);
     mul_mat_q<QK_K, QR6_K, QI6_K, false, block_q6_K, mmq_x, mmq_y, nwarps, allocate_tiles_q6_K<mmq_y>,
         load_tiles_q6_K<mmq_y, nwarps, true>, VDR_Q6_K_Q8_1_MMQ, vec_dot_q6_K_q8_1_mul_mat>
         (vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
@@ -4700,7 +4743,11 @@ __device__ void indexed_moe_forward(
     // Calculate strides
     const size_t weight_block_size = sizeof(block_q_t);
     const size_t input_block_size = sizeof(block_q8_1);
-    const size_t weight_expert_stride_bytes = (size_t)(n * k) / QK_K * weight_block_size;
+    // `qk`, not `QK_K`: the two agree for every K-quant instantiation below
+    // (q2k..q6k all pass `QK_K` as `qk`), but the q8_0 instantiation passes
+    // `QK8_0` = 32, and hard-coding 256 there made the kernel stride between
+    // experts by an eighth of the expert matrix.
+    const size_t weight_expert_stride_bytes = (size_t)(n * k) / qk * weight_block_size;
     const size_t input_task_stride_bytes = (size_t)k_padded / QK8_1 * input_block_size;
     const size_t output_task_stride_elems = n;
 

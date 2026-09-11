@@ -71,12 +71,16 @@ impl PyDType {
 
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 static METAL_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+#[cfg(feature = "rocm")]
+static ROCM_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PyDevice {
     Cpu,
     Cuda,
     Metal,
+    #[cfg(feature = "rocm")]
+    Rocm,
 }
 
 impl PyDevice {
@@ -85,6 +89,8 @@ impl PyDevice {
             Device::Cpu => Self::Cpu,
             Device::Cuda(_) => Self::Cuda,
             Device::Metal(_) => Self::Metal,
+            #[cfg(feature = "rocm")]
+            Device::Rocm(_) => Self::Rocm,
         }
     }
 
@@ -109,6 +115,16 @@ impl PyDevice {
                 *device = Some(d.clone());
                 Ok(d)
             }
+            #[cfg(feature = "rocm")]
+            Self::Rocm => {
+                let mut device = ROCM_DEVICE.lock().unwrap();
+                if let Some(device) = device.as_ref() {
+                    return Ok(device.clone());
+                };
+                let d = Device::new_rocm(0).map_err(wrap_err)?;
+                *device = Some(d.clone());
+                Ok(d)
+            }
         }
     }
 }
@@ -122,6 +138,8 @@ impl FromPyObject<'_, '_> for PyDevice {
             "cpu" => PyDevice::Cpu,
             "cuda" => PyDevice::Cuda,
             "metal" => PyDevice::Metal,
+            #[cfg(feature = "rocm")]
+            "rocm" => PyDevice::Rocm,
             _ => Err(PyTypeError::new_err(format!("invalid device '{device}'")))?,
         };
         Ok(device)
@@ -138,6 +156,8 @@ impl<'py> IntoPyObject<'py> for PyDevice {
             PyDevice::Cpu => "cpu",
             PyDevice::Cuda => "cuda",
             PyDevice::Metal => "metal",
+            #[cfg(feature = "rocm")]
+            PyDevice::Rocm => "rocm",
         };
         Ok(str.into_pyobject(py).unwrap())
     }

@@ -234,7 +234,16 @@ with_dtype!(f16, F16, f16::from_f64, f16::to_f64);
 with_dtype!(bf16, BF16, bf16::from_f64, bf16::to_f64);
 with_dtype!(f32, F32, |v: f64| v as f32, |v: f32| v as f64);
 with_dtype!(f64, F64, |v: f64| v, |v: f64| v);
-with_dtype!(f8e4m3, F8E4M3, f8e4m3::from_f64, |v: f8e4m3| v.to_f64());
+// `f8e4m3::to_f64` and not `|v| v.to_f64()`: the inherent method takes `&self`
+// while `WithDType::to_f64` takes `self`, so a by-value receiver resolves to the
+// trait method the macro is *defining* and recurses until the stack is gone.
+// The other float dtypes pass a path here for the same reason.
+with_dtype!(
+    f8e4m3,
+    F8E4M3,
+    f8e4m3::from_f64,
+    |v: f8e4m3| f8e4m3::to_f64(&v)
+);
 
 pub trait IntDType: WithDType + num_traits::Bounded {
     fn is_true(&self) -> bool;
@@ -293,3 +302,28 @@ impl FloatDType for bf16 {}
 impl FloatDType for f32 {}
 impl FloatDType for f64 {}
 impl FloatDType for f8e4m3 {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `WithDType::to_f64` for F8E4M3 used to call itself: the closure body
+    /// `v.to_f64()` bound to the trait method being defined rather than to the
+    /// inherent one, so every `to_dtype(F64)` on an fp8 tensor aborted the
+    /// process with a stack overflow instead of returning.
+    #[test]
+    fn f8e4m3_to_f64_does_not_recurse() {
+        assert_eq!(WithDType::to_f64(f8e4m3::from_f32(1.5)), 1.5);
+        assert_eq!(WithDType::to_f64(f8e4m3::from_f32(-448.)), -448.);
+        assert_eq!(WithDType::to_f64(f8e4m3::from_f32(0.)), 0.);
+    }
+
+    /// Round trip through the trait, which is what `to_dtype` uses.
+    #[test]
+    fn f8e4m3_round_trips_through_f64() {
+        for v in [0f64, 1., -1., 0.5, 448., -448., 0.001953125] {
+            let encoded = <f8e4m3 as WithDType>::from_f64(v);
+            assert_eq!(WithDType::to_f64(encoded), v, "{v}");
+        }
+    }
+}

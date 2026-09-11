@@ -76,6 +76,8 @@ pub mod npy;
 pub mod op;
 pub mod pickle;
 pub mod quantized;
+#[cfg(feature = "rocm")]
+pub mod rocm_backend;
 pub mod safetensors;
 pub mod scalar;
 pub mod shape;
@@ -117,6 +119,16 @@ pub use cuda_backend as cuda;
 pub use dummy_cuda_backend as cuda;
 
 pub use cuda::{CudaDevice, CudaStorage};
+
+#[cfg(feature = "rocm")]
+pub use rocm_backend::{RocmDevice, RocmStorage};
+
+/// Mirrors `candle::cuda`, so that knobs like
+/// `set_gemm_reduced_precision_f16` are reachable at the same path shape on
+/// either backend. There is no `dummy_rocm_backend` counterpart: unlike `cuda`,
+/// which candle always exposes, this alias exists only under the feature.
+#[cfg(feature = "rocm")]
+pub use rocm_backend as rocm;
 
 #[cfg(feature = "metal")]
 pub use metal_backend::{MetalDevice, MetalError, MetalStorage};

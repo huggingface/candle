@@ -91,6 +91,61 @@ extern "C" __global__ void FN_NAME( \
     } \
 } \
 
+// A batched 2D transpose, staged through shared memory. `ucopy_*` serves this
+// shape too, but strides one of its two sides by a whole row, which measured
+// 20 GB/s on gfx1101 against this kernel's 292-662.
+//
+// Two details are load-bearing, both measured on gfx1101:
+//
+// - The tile is one row wider than tall. Without the pad, a column of it lands
+//   in a single shared-memory bank and the write loop takes a 32-way conflict.
+// - Blocks are walked diagonally rather than in launch order. A row of blocks
+//   writes addresses one row pitch apart, and at a weight matrix's pitches
+//   (a power of two, times 2 or 4 bytes) those hit the same few memory
+//   channels. The reindexing spread the 2048x8192 f32 case from 48 to
+//   292 GB/s and cost nothing elsewhere.
+#define TRANSPOSE_TILE 32
+#define TRANSPOSE_BLOCK_ROWS 8
+
+// `src` is `(batch, rows, cols)`, `dst` is `(batch, cols, rows)`, both
+// contiguous; `gridDim.z` carries the batch.
+#define TRANSPOSE_OP(TYPENAME, FN_NAME) \
+extern "C" __global__ void FN_NAME( \
+    const size_t rows, \
+    const size_t cols, \
+    const TYPENAME *src, \
+    TYPENAME *dst \
+) { \
+    __shared__ TYPENAME tile[TRANSPOSE_TILE][TRANSPOSE_TILE + 1]; \
+    const size_t matrix = rows * cols; \
+    src += (size_t)blockIdx.z * matrix; \
+    dst += (size_t)blockIdx.z * matrix; \
+    /* Diagonal reindexing; see above. A permutation of the grid, so every \
+       tile is still visited exactly once. */ \
+    const unsigned int bid = blockIdx.x + gridDim.x * blockIdx.y; \
+    const unsigned int by = bid % gridDim.y; \
+    const unsigned int bx = (bid / gridDim.y + by) % gridDim.x; \
+    const size_t x = (size_t)bx * TRANSPOSE_TILE + threadIdx.x; \
+    const size_t y0 = (size_t)by * TRANSPOSE_TILE + threadIdx.y; \
+    for (int j = 0; j < TRANSPOSE_TILE; j += TRANSPOSE_BLOCK_ROWS) { \
+        const size_t y = y0 + j; \
+        if (x < cols && y < rows) { \
+            tile[threadIdx.y + j][threadIdx.x] = src[y * cols + x]; \
+        } \
+    } \
+    __syncthreads(); \
+    /* Written back at the transposed block position, so both the read above \
+       and the write below run along a contiguous row. */ \
+    const size_t tx = (size_t)by * TRANSPOSE_TILE + threadIdx.x; \
+    const size_t ty0 = (size_t)bx * TRANSPOSE_TILE + threadIdx.y; \
+    for (int j = 0; j < TRANSPOSE_TILE; j += TRANSPOSE_BLOCK_ROWS) { \
+        const size_t ty = ty0 + j; \
+        if (tx < rows && ty < cols) { \
+            dst[ty * rows + tx] = tile[threadIdx.x][threadIdx.y + j]; \
+        } \
+    } \
+} \
+
 template<typename T>
 __device__ T sign_(T t) {
   return static_cast<T>(t > static_cast<T>(0)) - static_cast<T>(t < static_cast<T>(0));
@@ -99,6 +154,7 @@ __device__ T sign_(T t) {
 
 #if __CUDA_ARCH__ >= 800
 UNARY_OP(__nv_bfloat16, ucopy_bf16, x)
+TRANSPOSE_OP(__nv_bfloat16, transpose2d_bf16)
 UNARY_OP(__nv_bfloat16, uneg_bf16, -x)
 UNARY_OP(__nv_bfloat16, urecip_bf16, recipg(x))
 UNARY_OP(__nv_bfloat16, uexp_bf16, expg(x))
@@ -128,6 +184,7 @@ UNARY_OP(__nv_bfloat16, usigmoid_bf16, sigmoid_fwd(x))
 #define F8E4M3_TO_FLOAT(x) __half2float(__nv_cvt_fp8_to_halfraw(x.__x, __NV_E4M3))
 
 UNARY_OP(__nv_fp8_e4m3, ucopy_f8_e4m3, x)
+TRANSPOSE_OP(__nv_fp8_e4m3, transpose2d_f8_e4m3)
 UNARY_OP(__nv_fp8_e4m3, uneg_fp8_e4m3, __nv_fp8_e4m3(-F8E4M3_TO_FLOAT(x)))
 UNARY_OP(__nv_fp8_e4m3, urecip_fp8_e4m3, recipg(x))
 UNARY_OP(__nv_fp8_e4m3, uexp_fp8_e4m3, expg(x))
@@ -155,6 +212,7 @@ UNARY_OP(__nv_fp8_e4m3, usigmoid_fp8_e4m3, __nv_fp8_e4m3(sigmoid_fwd(F8E4M3_TO_F
 
 #if __CUDA_ARCH__ >= 530
 UNARY_OP(__half, ucopy_f16, x)
+TRANSPOSE_OP(__half, transpose2d_f16)
 UNARY_OP(__half, uneg_f16, -x)
 UNARY_OP(__half, urecip_f16, recipg(x))
 UNARY_OP(__half, uexp_f16, expg(x))
@@ -185,6 +243,13 @@ UNARY_OP(uint32_t, ucopy_u32, x)
 UNARY_OP(int64_t, ucopy_i64, x)
 UNARY_OP(float, ucopy_f32, x)
 UNARY_OP(double, ucopy_f64, x)
+TRANSPOSE_OP(uint8_t, transpose2d_u8)
+TRANSPOSE_OP(uint32_t, transpose2d_u32)
+TRANSPOSE_OP(int16_t, transpose2d_i16)
+TRANSPOSE_OP(int32_t, transpose2d_i32)
+TRANSPOSE_OP(int64_t, transpose2d_i64)
+TRANSPOSE_OP(float, transpose2d_f32)
+TRANSPOSE_OP(double, transpose2d_f64)
 UNARY_OP(float, uneg_f32, -x)
 UNARY_OP(double, uneg_f64, -x)
 UNARY_OP(float, urecip_f32, recipg(x))

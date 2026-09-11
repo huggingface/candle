@@ -171,6 +171,10 @@ pub enum Error {
     #[error(transparent)]
     Cuda(Box<dyn std::error::Error + Send + Sync>),
 
+    #[cfg(feature = "rocm")]
+    #[error(transparent)]
+    Rocm(Box<dyn std::error::Error + Send + Sync>),
+
     #[error("Metal error {0}")]
     Metal(#[from] MetalError),
 

@@ -1,0 +1,15 @@
+// Shadows libcu++'s <cuda/std/limits> for the shared candle-kernels sources.
+//
+// reduce.cu uses cuda::std::numeric_limits<T>::infinity() and ::max() inside
+// __device__ code. libstdc++'s std::numeric_limits members are constexpr, which
+// makes them usable from device code under HIP, so aliasing the namespace is
+// enough.
+#pragma once
+
+#include <limits>
+
+namespace cuda {
+namespace std {
+using namespace ::std;
+}
+} // namespace cuda
