@@ -1,0 +1,13 @@
+[package]
+name = "wax-ir"
+version.workspace = true
+edition = "2024"
+description = "Backend generic tile IR for candle-wax"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+[dependencies]
+pliron = { workspace = true }
+pliron-derive = { workspace = true }

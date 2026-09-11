@@ -9,6 +9,8 @@ members = [
     "candle-wasm-examples/*",
     "candle-wasm-tests",
     "tensor-tools",
+    # Glob (possibly temporary) so that new `wax-*` crates doesn't require workspace edit.
+    "candle-wax/wax-*",
 ]
 exclude = [
     "candle-book",
@@ -92,6 +94,10 @@ serde = { version = "1.0.171", features = ["derive"] }
 serde_plain = "1.0.2"
 serde_json = "1.0.99"
 thiserror = "2"
+# candle-wax: the tile IR is defined as a pliron dialect.
+pliron = "0.17"
+pliron-derive = "0.17"
+wax-ir = { path = "./candle-wax/wax-ir", version = "0.11.0" }
 tokenizers = { version = "0.23.1", default-features = false }
 tracing = "0.1.37"
 tracing-chrome = "0.7.1"
