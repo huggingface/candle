@@ -10,10 +10,10 @@ use clap::Parser;
 use candle_transformers::models::pixtral::{vision_model, Config, Model};
 
 use candle::{DType, Device, Module, Tensor};
+use candle_examples::hub::Api;
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -250,11 +250,7 @@ fn main() -> Result<()> {
         Some(model_id) => model_id.to_string(),
         None => "mistral-community/pixtral-12b".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model(model_id).with_revision(args.revision);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("tokenizer.json")?,

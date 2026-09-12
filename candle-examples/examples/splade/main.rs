@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use anyhow::{Error as E, Result};
 use candle::Tensor;
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{self, BertForMaskedLM, Config};
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{PaddingParams, Tokenizer};
 
 #[derive(Parser, Debug)]
@@ -50,11 +50,7 @@ fn main() -> Result<()> {
         Some(model_id) => model_id.to_string(),
         None => "prithivida/Splade_PP_en_v1".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model(model_id).with_revision(args.revision);
 
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),

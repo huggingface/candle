@@ -2,6 +2,7 @@ pub mod audio;
 pub mod bs1770;
 pub mod chat_template;
 pub mod coco_classes;
+pub mod hub;
 pub mod imagenet;
 pub mod token_output_stream;
 pub mod wav;
@@ -122,8 +123,8 @@ pub fn save_image_resize<P: AsRef<std::path::Path>>(
 }
 
 /// Loads the safetensors files for a model from the hub based on a json index file.
-pub fn hub_load_safetensors(
-    repo: &hf_hub::api::sync::ApiRepo,
+pub fn hub_load_safetensors<T: hf_hub::RepoType>(
+    repo: &crate::hub::Repo<T>,
     json_file: &str,
 ) -> Result<Vec<std::path::PathBuf>> {
     let json_file = repo.get(json_file).map_err(candle::Error::wrap)?;

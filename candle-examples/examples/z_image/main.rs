@@ -34,6 +34,7 @@
 
 use anyhow::{Error as E, Result};
 use candle::{DType, IndexOp, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::models::z_image::{
     calculate_shift, get_noise, postprocess_image, AutoEncoderKL, Config,
@@ -41,7 +42,6 @@ use candle_transformers::models::z_image::{
     ZImageTextEncoder, ZImageTransformer2DModel,
 };
 use clap::Parser;
-use hf_hub::api::sync::Api;
 use tokenizers::Tokenizer;
 
 /// Z-Image scheduler constants
@@ -155,7 +155,7 @@ fn run(args: Args) -> Result<()> {
 
     // Resolve model: use provided path or download from HuggingFace
     let api = Api::new()?;
-    let repo = api.model(args.model.repo().to_string());
+    let repo = api.model(args.model.repo());
     let use_local = args.model_path.is_some();
     let model_path = args.model_path.map(std::path::PathBuf::from);
 
@@ -215,7 +215,7 @@ fn run(args: Args) -> Result<()> {
                 .collect()
         } else {
             (1..=3)
-                .map(|i| repo.get(&format!("text_encoder/model-{:05}-of-00003.safetensors", i)))
+                .map(|i| repo.get(format!("text_encoder/model-{:05}-of-00003.safetensors", i)))
                 .filter_map(|r| r.ok())
                 .collect()
         };
@@ -265,7 +265,7 @@ fn run(args: Args) -> Result<()> {
         } else {
             (1..=3)
                 .map(|i| {
-                    repo.get(&format!(
+                    repo.get(format!(
                         "transformer/diffusion_pytorch_model-{:05}-of-00003.safetensors",
                         i
                     ))

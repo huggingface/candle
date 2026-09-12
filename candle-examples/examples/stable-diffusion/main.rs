@@ -236,7 +236,7 @@ impl ModelFile {
         version: StableDiffusionVersion,
         use_f16: bool,
     ) -> Result<std::path::PathBuf> {
-        use hf_hub::api::sync::Api;
+        use candle_examples::hub::Api;
         match filename {
             Some(filename) => Ok(std::path::PathBuf::from(filename)),
             None => {
@@ -280,7 +280,7 @@ impl ModelFile {
                         }
                     }
                 };
-                let filename = Api::new()?.model(repo.to_string()).get(path)?;
+                let filename = Api::new()?.model(repo).get(path)?;
                 Ok(filename)
             }
         }

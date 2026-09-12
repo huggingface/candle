@@ -125,7 +125,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = hf_hub::api::sync::Api::new()?;
+    let api = candle_examples::hub::Api::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
         None => match args.which {
@@ -137,11 +137,7 @@ fn main() -> anyhow::Result<()> {
         Some(r) => r,
         None => "main".to_string(),
     };
-    let repo = api.repo(hf_hub::Repo::with_revision(
-        model_id,
-        hf_hub::RepoType::Model,
-        revision,
-    ));
+    let repo = api.model(model_id).with_revision(revision);
     let model_files = match args.model_file {
         Some(m) => vec![m.into()],
         None => match args.which {

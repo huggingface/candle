@@ -76,16 +76,14 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
+            let api = candle_examples::hub::Api::new()?;
             if args.quantized {
-                let api = api.model("lmz/candle-blip".to_string());
+                let api = api.model("lmz/candle-blip");
                 api.get("blip-image-captioning-large-q4k.gguf")?
             } else {
-                let api = api.repo(hf_hub::Repo::with_revision(
-                    "Salesforce/blip-image-captioning-large".to_string(),
-                    hf_hub::RepoType::Model,
-                    "refs/pr/18".to_string(),
-                ));
+                let api = api
+                    .model("Salesforce/blip-image-captioning-large")
+                    .with_revision("refs/pr/18");
                 api.get("model.safetensors")?
             }
         }
@@ -93,8 +91,8 @@ pub fn main() -> anyhow::Result<()> {
     };
     let tokenizer = match args.tokenizer {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("Salesforce/blip-image-captioning-large".to_string());
+            let api = candle_examples::hub::Api::new()?;
+            let api = api.model("Salesforce/blip-image-captioning-large");
             api.get("tokenizer.json")?
         }
         Some(file) => file.into(),

@@ -11,10 +11,10 @@ use candle_transformers::models::quantized_recurrent_gemma::Model as QModel;
 use candle_transformers::models::recurrent_gemma::{Config, Model as BModel};
 
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 enum Model {
@@ -250,11 +250,7 @@ fn main() -> Result<()> {
             Which::Instruct2B => "google/recurrentgemma-2b-it".to_string(),
         },
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model(model_id).with_revision(args.revision);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("tokenizer.json")?,
@@ -274,7 +270,7 @@ fn main() -> Result<()> {
                     Which::Base2B => "recurrent-gemma-2b-q4k.gguf",
                     Which::Instruct2B => "recurrent-gemma-7b-q4k.gguf",
                 };
-                let filename = api.model("lmz/candle-gemma".to_string()).get(filename)?;
+                let filename = api.model("lmz/candle-gemma").get(filename)?;
                 vec![filename]
             } else {
                 candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?

@@ -8,10 +8,10 @@ extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 use candle_transformers::models::falcon::{Config, Falcon};
@@ -159,11 +159,7 @@ fn main() -> Result<()> {
     let device = candle_examples::device(args.cpu)?;
     let start = std::time::Instant::now();
     let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        args.model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model(args.model_id).with_revision(args.revision);
     let tokenizer_filename = repo.get("tokenizer.json")?;
     let filenames = candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
     println!("retrieved the files in {:?}", start.elapsed());

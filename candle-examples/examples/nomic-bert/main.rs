@@ -8,9 +8,9 @@ use candle_transformers::models::nomic_bert::{self, Config, NomicBertModel};
 
 use anyhow::{bail, Error as E, Result};
 use candle::{DType, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{PaddingParams, Tokenizer};
 
 #[derive(Parser, Debug)]
@@ -58,10 +58,9 @@ fn main() -> Result<()> {
     };
 
     let device = candle_examples::device(args.cpu)?;
-    let repo = Repo::with_revision(args.model_id.clone(), RepoType::Model, args.revision);
     let (config_filename, tokenizer_filename, weights_filename) = {
         let api = Api::new()?;
-        let api = api.repo(repo);
+        let api = api.model(&args.model_id).with_revision(&args.revision);
         let config = api.get("config.json")?;
         let tokenizer = api.get("tokenizer.json")?;
         let weights = api.get("model.safetensors")?;

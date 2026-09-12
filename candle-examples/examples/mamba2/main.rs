@@ -10,10 +10,10 @@ use clap::{Parser, ValueEnum};
 use candle_transformers::models::mamba2::{Config, Model, State};
 
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -276,7 +276,7 @@ fn main() -> Result<()> {
     let model_id = args
         .model_id
         .unwrap_or_else(|| args.which.model_id().to_string());
-    let repo = api.repo(Repo::new(model_id.clone(), RepoType::Model));
+    let repo = api.model(model_id.clone());
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("tokenizer.json")?,

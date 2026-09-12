@@ -6,10 +6,10 @@ extern crate accelerate_src;
 
 use anyhow::Result;
 use candle::{DType, IndexOp, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::models::mimi::{Config, Model};
 use clap::{Parser, ValueEnum};
-use hf_hub::api::sync::Api;
 
 mod audio_io;
 
@@ -51,9 +51,7 @@ fn main() -> Result<()> {
     let device = candle_examples::device(args.cpu)?;
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
-        None => Api::new()?
-            .model("kyutai/mimi".to_string())
-            .get("model.safetensors")?,
+        None => Api::new()?.model("kyutai/mimi").get("model.safetensors")?,
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
     let config = Config::v0_1(None);

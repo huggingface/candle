@@ -12,9 +12,9 @@ use candle::{DType, Device, Tensor};
 use candle_examples::chat_template::{ChatTemplate, ChatTemplateOptions, Message};
 use candle_examples::token_output_stream::TokenOutputStream;
 
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 // Import both model implementations
@@ -228,7 +228,7 @@ impl Args {
             Some(path) => std::path::PathBuf::from(path),
             None => {
                 let api = Api::new()?;
-                let api = api.model("HuggingFaceTB/SmolLM3-3B".to_string());
+                let api = api.model("HuggingFaceTB/SmolLM3-3B");
                 api.get("tokenizer.json")?
             }
         };
@@ -255,12 +255,7 @@ fn load_quantized_model(args: &Args, device: &Device) -> Result<SmolLM3Model> {
                 repo_id,
                 args.quantization.size_gb()
             );
-            api.repo(Repo::with_revision(
-                repo_id.to_string(),
-                RepoType::Model,
-                "main".to_string(),
-            ))
-            .get(filename)?
+            api.model(repo_id).with_revision("main").get(filename)?
         }
     };
 
@@ -277,11 +272,7 @@ fn load_full_model(args: &Args, device: &Device) -> Result<SmolLM3Model> {
     };
 
     println!("Loading full model from: {}", model_id);
-    let repo = api.repo(Repo::with_revision(
-        model_id.to_string(),
-        RepoType::Model,
-        "main".to_string(),
-    ));
+    let repo = api.model(model_id).with_revision("main");
 
     let filenames = match &args.model_path {
         Some(path) => vec![std::path::PathBuf::from(path)],

@@ -12,10 +12,10 @@ use candle_transformers::models::gemma2::{Config as Config2, Model as Model2};
 use candle_transformers::models::gemma3::{Config as Config3, Model as Model3};
 
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -288,11 +288,7 @@ fn main() -> Result<()> {
             Which::InstructV3_1B => "google/gemma-3-1b-it".to_string(),
         },
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model(model_id).with_revision(args.revision);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("tokenizer.json")?,

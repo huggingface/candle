@@ -4,7 +4,8 @@ use js_sys::Date;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use yew::{html, Component, Context, Html};
-use yew_agent::{Bridge, Bridged};
+use yew_agent::worker::WorkerBridge;
+use yew_agent::Spawnable;
 
 const SAMPLE_NAMES: [&str; 6] = [
     "audios/samples_jfk.wav",
@@ -53,7 +54,7 @@ pub struct App {
     loaded: bool,
     segments: Vec<Segment>,
     current_decode: Option<CurrentDecode>,
-    worker: Box<dyn Bridge<Worker>>,
+    worker: WorkerBridge<Worker>,
 }
 
 async fn model_data_load() -> Result<ModelData, JsValue> {
@@ -116,7 +117,7 @@ impl Component for App {
             let link = ctx.link().clone();
             move |e| link.send_message(Self::Message::WorkerOut(e))
         };
-        let worker = Worker::bridge(std::rc::Rc::new(cb));
+        let worker = Worker::spawner().callback(cb).spawn("./worker.js");
         Self {
             status,
             segments: vec![],

@@ -30,18 +30,21 @@ pub fn normalize_loudness(
 
 #[cfg(feature = "symphonia")]
 pub fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> Result<(Vec<f32>, u32)> {
-    use symphonia::core::audio::{AudioBufferRef, Signal};
-    use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
-    use symphonia::core::conv::FromSample;
+    use symphonia::core::audio::conv::FromSample;
+    use symphonia::core::audio::sample::Sample;
+    use symphonia::core::audio::{Audio, AudioBuffer, GenericAudioBufferRef};
+    use symphonia::core::codecs::audio::AudioDecoderOptions;
+    use symphonia::core::formats::probe::Hint;
+    use symphonia::core::formats::TrackType;
 
-    fn conv<T>(
-        samples: &mut Vec<f32>,
-        data: std::borrow::Cow<symphonia::core::audio::AudioBuffer<T>>,
-    ) where
-        T: symphonia::core::sample::Sample,
-        f32: symphonia::core::conv::FromSample<T>,
+    fn conv<T>(samples: &mut Vec<f32>, data: &AudioBuffer<T>)
+    where
+        T: Sample,
+        f32: FromSample<T>,
     {
-        samples.extend(data.chan(0).iter().map(|v| f32::from_sample(*v)))
+        if let Some(plane) = data.plane(0) {
+            samples.extend(plane.iter().map(|v| f32::from_sample(*v)))
+        }
     }
 
     // Open the media source.
@@ -51,58 +54,65 @@ pub fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> Result<(Vec<f32>, u32)>
     let mss = symphonia::core::io::MediaSourceStream::new(Box::new(src), Default::default());
 
     // Create a probe hint using the file's extension. [Optional]
-    let hint = symphonia::core::probe::Hint::new();
+    let hint = Hint::new();
 
     // Use the default options for metadata and format readers.
     let meta_opts: symphonia::core::meta::MetadataOptions = Default::default();
     let fmt_opts: symphonia::core::formats::FormatOptions = Default::default();
 
-    // Probe the media source.
-    let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &fmt_opts, &meta_opts)
+    // Probe the media source and get the instantiated format reader.
+    let mut format = symphonia::default::get_probe()
+        .probe(&hint, mss, fmt_opts, meta_opts)
         .map_err(candle::Error::wrap)?;
-    // Get the instantiated format reader.
-    let mut format = probed.format;
 
-    // Find the first audio track with a known (decodable) codec.
-    let track = format
-        .tracks()
-        .iter()
-        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-        .ok_or_else(|| candle::Error::Msg("no supported audio tracks".to_string()))?;
+    // Find the first audio track with a known (decodable) codec, and create a decoder for it.
+    // The borrow on `format` is scoped so that the decode loop below can borrow it mutably.
+    let (track_id, sample_rate, mut decoder) = {
+        let track = format
+            .first_track_known_codec(TrackType::Audio)
+            .ok_or_else(|| candle::Error::Msg("no supported audio tracks".to_string()))?;
+        let codec_params = track
+            .codec_params
+            .as_ref()
+            .and_then(|params| params.audio())
+            .ok_or_else(|| candle::Error::Msg("no supported audio tracks".to_string()))?;
 
-    // Use the default options for the decoder.
-    let dec_opts: DecoderOptions = Default::default();
+        // Use the default options for the decoder.
+        let dec_opts: AudioDecoderOptions = Default::default();
 
-    // Create a decoder for the track.
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &dec_opts)
-        .map_err(|_| candle::Error::Msg("unsupported codec".to_string()))?;
-    let track_id = track.id;
-    let sample_rate = track.codec_params.sample_rate.unwrap_or(0);
+        let decoder = symphonia::default::get_codecs()
+            .make_audio_decoder(codec_params, &dec_opts)
+            .map_err(|_| candle::Error::Msg("unsupported codec".to_string()))?;
+        (track.id, codec_params.sample_rate.unwrap_or(0), decoder)
+    };
+
     let mut pcm_data = Vec::new();
     // The decode loop.
-    while let Ok(packet) = format.next_packet() {
+    while let Ok(Some(packet)) = format.next_packet() {
         // Consume any new metadata that has been read since the last packet.
         while !format.metadata().is_latest() {
             format.metadata().pop();
         }
 
         // If the packet does not belong to the selected track, skip over it.
-        if packet.track_id() != track_id {
+        if packet.track_id != track_id {
             continue;
         }
         match decoder.decode(&packet).map_err(candle::Error::wrap)? {
-            AudioBufferRef::F32(buf) => pcm_data.extend(buf.chan(0)),
-            AudioBufferRef::U8(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::U16(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::U24(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::U32(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::S8(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::S16(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::S24(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::S32(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::F64(data) => conv(&mut pcm_data, data),
+            GenericAudioBufferRef::F32(buf) => {
+                if let Some(plane) = buf.plane(0) {
+                    pcm_data.extend(plane)
+                }
+            }
+            GenericAudioBufferRef::U8(data) => conv(&mut pcm_data, data),
+            GenericAudioBufferRef::U16(data) => conv(&mut pcm_data, data),
+            GenericAudioBufferRef::U24(data) => conv(&mut pcm_data, data),
+            GenericAudioBufferRef::U32(data) => conv(&mut pcm_data, data),
+            GenericAudioBufferRef::S8(data) => conv(&mut pcm_data, data),
+            GenericAudioBufferRef::S16(data) => conv(&mut pcm_data, data),
+            GenericAudioBufferRef::S24(data) => conv(&mut pcm_data, data),
+            GenericAudioBufferRef::S32(data) => conv(&mut pcm_data, data),
+            GenericAudioBufferRef::F64(data) => conv(&mut pcm_data, data),
         }
     }
     Ok((pcm_data, sample_rate))
@@ -110,29 +120,21 @@ pub fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> Result<(Vec<f32>, u32)>
 
 #[cfg(feature = "rubato")]
 pub fn resample(pcm_in: &[f32], sr_in: u32, sr_out: u32) -> Result<Vec<f32>> {
+    use rubato::audioadapter_buffers::direct::SequentialSlice;
     use rubato::Resampler;
 
-    let mut pcm_out =
-        Vec::with_capacity((pcm_in.len() as f64 * sr_out as f64 / sr_in as f64) as usize + 1024);
-
-    let mut resampler = rubato::FftFixedInOut::<f32>::new(sr_in as usize, sr_out as usize, 1024, 1)
+    let mut resampler = rubato::Fft::<f32>::new(
+        sr_in as usize,
+        sr_out as usize,
+        1024,
+        1,
+        rubato::FixedSync::Both,
+    )
+    .map_err(candle::Error::wrap)?;
+    // Mono, so the interleaved and sequential layouts are the same.
+    let buffer_in = SequentialSlice::new(pcm_in, 1, pcm_in.len()).map_err(candle::Error::wrap)?;
+    let pcm_out = resampler
+        .process_all(&buffer_in, pcm_in.len(), None)
         .map_err(candle::Error::wrap)?;
-    let mut output_buffer = resampler.output_buffer_allocate(true);
-    let mut pos_in = 0;
-    while pos_in + resampler.input_frames_next() < pcm_in.len() {
-        let (in_len, out_len) = resampler
-            .process_into_buffer(&[&pcm_in[pos_in..]], &mut output_buffer, None)
-            .map_err(candle::Error::wrap)?;
-        pos_in += in_len;
-        pcm_out.extend_from_slice(&output_buffer[0][..out_len]);
-    }
-
-    if pos_in < pcm_in.len() {
-        let (_in_len, out_len) = resampler
-            .process_partial_into_buffer(Some(&[&pcm_in[pos_in..]]), &mut output_buffer, None)
-            .map_err(candle::Error::wrap)?;
-        pcm_out.extend_from_slice(&output_buffer[0][..out_len]);
-    }
-
-    Ok(pcm_out)
+    Ok(pcm_out.take_data())
 }

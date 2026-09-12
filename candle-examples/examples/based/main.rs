@@ -10,10 +10,10 @@ use clap::{Parser, ValueEnum};
 use candle_transformers::models::based::Model;
 
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -216,11 +216,7 @@ fn main() -> Result<()> {
             Which::W1b50b => "hazyresearch/based-1b-50b".to_string(),
         },
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model(model_id).with_revision(args.revision);
     let config_file = match args.config_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("config.json")?,
@@ -233,7 +229,7 @@ fn main() -> Result<()> {
         None => vec![repo.get("model.safetensors")?],
     };
 
-    let repo = api.model("openai-community/gpt2".to_string());
+    let repo = api.model("openai-community/gpt2");
     let tokenizer_file = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("tokenizer.json")?,

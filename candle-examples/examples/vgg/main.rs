@@ -37,13 +37,13 @@ pub fn main() -> anyhow::Result<()> {
 
     println!("loaded image {image:?}");
 
-    let api = hf_hub::api::sync::Api::new()?;
+    let api = candle_examples::hub::Api::new()?;
     let repo = match args.which {
         Which::Vgg13 => "timm/vgg13.tv_in1k",
         Which::Vgg16 => "timm/vgg16.tv_in1k",
         Which::Vgg19 => "timm/vgg19.tv_in1k",
     };
-    let api = api.model(repo.into());
+    let api = api.model(repo);
     let filename = "model.safetensors";
     let model_file = api.get(filename)?;
 

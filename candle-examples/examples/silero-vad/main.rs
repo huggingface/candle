@@ -124,12 +124,12 @@ fn main() -> Result<()> {
     let model_id = match &args.model_id {
         Some(model_id) => std::path::PathBuf::from(model_id),
         None => match args.which {
-            Which::Silero => hf_hub::api::sync::Api::new()?
-                .model("onnx-community/silero-vad".into())
+            Which::Silero => candle_examples::hub::Api::new()?
+                .model("onnx-community/silero-vad")
                 .get("onnx/model.onnx")?,
             // TODO: candle-onnx doesn't support Int8 dtype
-            // Which::SileroQuantized => hf_hub::api::sync::Api::new()?
-            //     .model("onnx-community/silero-vad".into())
+            // Which::SileroQuantized => candle_examples::hub::Api::new()?
+            //     .model("onnx-community/silero-vad")
             //     .get("onnx/model_quantized.onnx")?,
         },
     };
