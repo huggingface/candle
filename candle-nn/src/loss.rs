@@ -102,3 +102,22 @@ pub fn huber(inp: &Tensor, target: &Tensor, delta: f64) -> Result<Tensor> {
     let loss = mask.where_cond(&squared_loss, &linear_loss)?;
     loss.mean_all()
 }
+
+/// The margin ranking loss.
+///
+/// Measures the loss for ranking two inputs, matching `torch.nn.MarginRankingLoss`.
+///
+/// Arguments
+///
+/// * [x1], [x2]: The two input score tensors of the same shape.
+/// * [target]: A tensor whose elements are `+1` or `-1`. `+1` means `x1` should be
+///   ranked higher than `x2`, `-1` the reverse.
+/// * [margin]: A non-negative margin by which the ranking should hold.
+///
+/// The per-element loss is `max(0, -target * (x1 - x2) + margin)`, and the resulting
+/// tensor is a scalar containing the mean over all elements.
+pub fn margin_ranking(x1: &Tensor, x2: &Tensor, target: &Tensor, margin: f64) -> Result<Tensor> {
+    let diff = (x1 - x2)?;
+    let scaled = (target * &diff)?.neg()?.affine(1.0, margin)?;
+    scaled.relu()?.mean_all()
+}
