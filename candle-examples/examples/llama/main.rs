@@ -43,17 +43,17 @@ enum Which {
     Solar10_7B,
     #[value(name = "tiny-llama-1.1b-chat")]
     TinyLlama1_1BChat,
-    #[value(name = "SmoLM2-1.7B")]
+    #[value(name = "SmolLM2-1.7B")]
     SmolLM2_1B,
-    #[value(name = "SmoLM2-1.7B-Instruct")]
+    #[value(name = "SmolLM2-1.7B-Instruct")]
     SmolLM2_1BInstruct,
-    #[value(name = "SmoLM2-360M")]
+    #[value(name = "SmolLM2-360M")]
     SmolLM2_360M,
-    #[value(name = "SmoLM2-360M-Instruct")]
+    #[value(name = "SmolLM2-360M-Instruct")]
     SmolLM2_360MInstruct,
-    #[value(name = "SmoLM2-135M")]
+    #[value(name = "SmolLM2-135M")]
     SmolLM2_135M,
-    #[value(name = "SmoLM2-135M-Instruct")]
+    #[value(name = "SmolLM2-135M-Instruct")]
     SmolLM2_135MInstruct,
 }
 
