@@ -119,10 +119,12 @@ impl VecOps for half::f16 {
         Self::max(self, other)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn vec_add(lhs: &[Self], rhs: &[Self], res: &mut [Self]) {
         unsafe { super::vec_add_f16(lhs.as_ptr(), rhs.as_ptr(), res.as_mut_ptr(), lhs.len()) }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[inline(always)]
     fn scalar_add(scalar: Self, xs: &[Self], ys: &mut [Self]) {
         unsafe { super::vec_scalar_add_f16(scalar, xs.as_ptr(), ys.as_mut_ptr(), xs.len()) }
@@ -171,11 +173,13 @@ impl VecOps for half::bf16 {
         Self::max(self, other)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[inline(always)]
     fn vec_add(lhs: &[Self], rhs: &[Self], res: &mut [Self]) {
         unsafe { super::vec_add_bf16(lhs.as_ptr(), rhs.as_ptr(), res.as_mut_ptr(), lhs.len()) }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[inline(always)]
     fn scalar_add(scalar: Self, xs: &[Self], ys: &mut [Self]) {
         unsafe { super::vec_scalar_add_bf16(scalar, xs.as_ptr(), ys.as_mut_ptr(), xs.len()) }
