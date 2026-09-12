@@ -1,51 +1,7 @@
 #include <metal_stdlib>
 #include <metal_limits>
+#include "utils.metal"
 using namespace metal;
-
-template<uint Y>
-constexpr uint div_ceil(uint x) {
-    return x / Y + (x % Y > 0);
-}
-
-template<uint X, uint Y>
-constexpr uint div_ceil() {
-    return X / Y + (X % Y > 0);
-}
-
-template<typename T>
-constexpr uint work_per_thread() {
-    return div_ceil<8, sizeof(T)>();
-}
-
-METAL_FUNC uint nonzero(uint n) {
-    return n == 0 ? 1 : n;
-}
-
-template<uint N>
-constexpr uint nonzero() {
-    return N == 0 ? 1 : N;
-}
-
-template<typename T>
-constexpr ushort granularity() {
-    return nonzero<vec_elements<T>::value>();
-}
-
-METAL_FUNC uint next_p2(uint x) {
-    return 1 << (32 - clz(x - 1));
-}
-
-METAL_FUNC uint prev_p2(uint x) {
-    return 1 << (31 - clz(x));
-}
-
-constant uint MAX_SHARED_MEM = 32767;
-
-template<typename T>
-METAL_FUNC uint max_shared_mem(uint n) {
-    return min(n, div_ceil<MAX_SHARED_MEM, sizeof(T)>());
-}
-
 
 template<ushort D, typename IndexT>
 struct strided_indexer {

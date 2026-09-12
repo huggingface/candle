@@ -2,6 +2,21 @@
 #include <metal_stdlib>
 using namespace metal;
 
+template<uint Y>
+constexpr uint div_ceil(uint x) {
+    return x / Y + (x % Y > 0);
+}
+
+template<uint X, uint Y>
+constexpr uint div_ceil() {
+    return X / Y + (X % Y > 0);
+}
+
+template<typename T>
+constexpr uint work_per_thread() {
+    return div_ceil<8, sizeof(T)>();
+}
+
 METAL_FUNC uint nonzero(uint n) {
     return n == 0 ? 1 : n;
 }
@@ -28,7 +43,7 @@ constant uint MAX_SHARED_MEM = 32767;
 
 template<typename T>
 METAL_FUNC uint max_shared_mem(uint n) {
-    return min(n, prev_p2(MAX_SHARED_MEM / sizeof(T)));
+    return min(n, div_ceil<MAX_SHARED_MEM, sizeof(T)>());
 }
 
 METAL_FUNC uint get_strided_index(
