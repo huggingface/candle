@@ -385,7 +385,7 @@ impl Tensor {
                         let kernel = Tensor::ones((c, 1, scale), arg.dtype(), arg.device())?;
                         let conv_sum = grad.conv1d(&kernel, 0, scale, 1, c)?;
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = conv_sum;
+                        *sum_grad = sum_grad.add(&conv_sum)?;
                     }
                     Op::UpsampleNearest2D {
                         arg,
@@ -406,7 +406,7 @@ impl Tensor {
                             Tensor::ones((c, 1, scale_h, scale_w), arg.dtype(), arg.device())?;
                         let conv_sum = grad.conv2d(&kernel, 0, scale_h, 1, c)?;
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = conv_sum;
+                        *sum_grad = sum_grad.add(&conv_sum)?;
                     }
                     Op::UpsampleBilinear2D { .. } => {
                         crate::bail!("backward not supported for upsample_bilinear2d")
