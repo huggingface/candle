@@ -260,7 +260,13 @@ impl LayerWeights {
             att.matmul(&v.contiguous()?)?
         };
 
-        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
+        // The attention output width is n_head * head_dim, which is not
+        // always n_embd — they differ when head_dim * n_head != n_embd
+        // (MiniCPM5-1B: 16*128=2048 vs hidden 1536).  attention_wo projects
+        // back to n_embd below.
+        let y = y
+            .transpose(1, 2)?
+            .reshape(&[b_sz, seq_len, self.n_head * self.head_dim])?;
         let y = self.attention_wo.forward(&y)?;
         Ok(y)
     }
@@ -283,6 +289,7 @@ pub struct ModelWeights {
 fn precomput_freqs_cis(
     head_dim: usize,
     freq_base: f32,
+    context_length: usize,
     device: &Device,
 ) -> Result<(Tensor, Tensor)> {
     let theta: Vec<_> = (0..head_dim)
@@ -290,9 +297,9 @@ fn precomput_freqs_cis(
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
         .collect();
     let theta = Tensor::new(theta.as_slice(), device)?;
-    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
+    let idx_theta = Tensor::arange(0, context_length as u32, device)?
         .to_dtype(DType::F32)?
-        .reshape((MAX_SEQ_LEN, 1))?
+        .reshape((context_length, 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
     let cos = idx_theta.cos()?;
     let sin = idx_theta.sin()?;
@@ -302,7 +309,7 @@ fn precomput_freqs_cis(
 impl ModelWeights {
     pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let (cos, sin) = precomput_freqs_cis(head_dim, 10000., &ct.device)?;
+        let (cos, sin) = precomput_freqs_cis(head_dim, 10000., MAX_SEQ_LEN, &ct.device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, &ct.device)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
@@ -386,12 +393,30 @@ impl ModelWeights {
         let block_count = md_get("llama.block_count")?.to_u32()? as usize;
         let embedding_length = md_get("llama.embedding_length")?.to_u32()? as usize;
         let rope_dim = md_get("llama.rope.dimension_count")?.to_u32()? as usize;
+        // head_dim is not always n_embd / n_head — MiniCPM5-1B uses
+        // hidden_size 1536 with head_dim 128 (16 heads), where the classic
+        // derivation gives 96 and would break the attention reshape.  Prefer
+        // the explicit `llama.attention.key_length` written by llama.cpp's
+        // converters, falling back to the rotary dimension, which equals
+        // n_embd / n_head for every standard llama-family model.
+        let head_dim = md_get("llama.attention.key_length")
+            .ok()
+            .and_then(|v| v.to_u32().ok())
+            .map(|v| v as usize)
+            .unwrap_or(rope_dim);
         // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
         let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
 
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
+
+        // Size the precomputed RoPE tables from the model's own context
+        // length (matching quantized_qwen2) instead of a fixed cap, so
+        // long-context models (e.g. MiniCPM5-1B with 128K) work.
+        let context_length = md_get("llama.context_length")
+            .and_then(|m| m.to_u32())
+            .unwrap_or(MAX_SEQ_LEN as u32) as usize;
 
         // Determine RoPE convention from model architecture (matching llama.cpp).
         // NEOX (non-interleaved): pairs (i, i+d/2) — Qwen, Qwen2, Falcon, Phi, etc.
@@ -427,7 +452,7 @@ impl ModelWeights {
                 | "plamo"
         );
 
-        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
+        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, context_length, device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings_q = ct.tensor(reader, "token_embd.weight", device)?;
@@ -499,7 +524,7 @@ impl ModelWeights {
                 ffn_norm: RmsNorm::from_qtensor(ffn_norm, rms_norm_eps)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
-                head_dim: embedding_length / head_count,
+                head_dim,
                 rope_is_neox,
                 cos: cos.clone(),
                 sin: sin.clone(),
