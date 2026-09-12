@@ -47,7 +47,7 @@ pub enum ClassifierPooling {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ClassifierConfig {
     pub id2label: HashMap<String, String>,
-    pub label2id: HashMap<String, String>,
+    pub label2id: HashMap<String, u32>,
     pub classifier_pooling: ClassifierPooling,
 }
 
@@ -455,8 +455,7 @@ impl ModernBertClassifier {
 
 impl Module for ModernBertClassifier {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = xs.apply(&self.classifier)?;
-        softmax(&xs, D::Minus1)
+        xs.apply(&self.classifier)
     }
 }
 
