@@ -17,4 +17,5 @@ criterion_main!(
     benchmarks::reduce::benches,
     benchmarks::unary::benches,
     benchmarks::where_cond::benches,
+    benchmarks::backward::benches,
 );
