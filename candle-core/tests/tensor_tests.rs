@@ -2014,6 +2014,31 @@ fn cumsum() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn chunk() -> Result<()> {
+    let device = &Device::Cpu;
+    let t = Tensor::arange(0f32, 5f32, device)?;
+
+    // chunks == 0 must return an error, not panic with a divide-by-zero.
+    assert!(t.chunk(0, 0).is_err());
+
+    // Uneven split: length 5 into 2 chunks -> sizes [3, 2].
+    let parts = t.chunk(2, 0)?;
+    let sizes: Vec<usize> = parts.iter().map(|p| p.dims1().unwrap()).collect();
+    assert_eq!(sizes, [3, 2]);
+    assert_eq!(parts[0].to_vec1::<f32>()?, [0., 1., 2.]);
+    assert_eq!(parts[1].to_vec1::<f32>()?, [3., 4.]);
+
+    // length 5 into 3 chunks -> sizes [2, 2, 1].
+    let sizes: Vec<usize> = t.chunk(3, 0)?.iter().map(|p| p.dims1().unwrap()).collect();
+    assert_eq!(sizes, [2, 2, 1]);
+
+    // chunks > size -> `size` single-element chunks.
+    assert_eq!(t.chunk(9, 0)?.len(), 5);
+
+    Ok(())
+}
+
 /// A helper function for floating point comparison. Both a and b must be 1D Tensor and contains the same amount of data.
 /// Assertion passes if the difference of all pairs of a and b is smaller than epsilon.
 fn assert_close(a: &Tensor, b: &Tensor, epsilon: f64) -> Result<()> {
