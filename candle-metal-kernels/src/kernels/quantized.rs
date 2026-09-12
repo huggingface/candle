@@ -43,18 +43,10 @@ pub fn call_quantized_matmul_mv_t(
     let ne02 = b as i64;
     let ne03 = 1i64;
 
-    let nb00 = 0i64;
-    let nb01 = 0i64;
-    let nb02 = 0i64;
-
     let ne10 = k as i64;
     let ne11 = m as i64;
     let ne12 = b as i64;
     let ne13 = 1i64;
-
-    let nb10 = 0i64;
-    let nb11 = 0i64;
-    let nb12 = 0i64;
 
     let ne0 = n as i64;
     let ne1 = m as i64;
@@ -100,22 +92,42 @@ pub fn call_quantized_matmul_mv_t(
             (nth0, nth1, align)
         }
         GgmlDType::F16 | GgmlDType::BF16 | GgmlDType::Q8K => {
-            // Original implem uses rows
+            // The dense kernel covers one dst row per threadgroup.
             let nth0 = 32;
             let nth1 = 1;
-            let align = 8;
+            let align = 1;
             (nth0, nth1, align)
         }
         GgmlDType::F32 => {
             let nth0 = 32;
             let nth1 = 1;
-            let align = 8;
+            let align = 1;
             (nth0, nth1, align)
         }
     };
+
+    // The dense f16/f32 kernel addresses src0/src1 through these byte strides;
+    // the quantized kernels derive theirs from ne00/ne01 and ignore nb00..nb02.
+    let src0_elem_size = match dtype {
+        GgmlDType::F32 => 4i64,
+        GgmlDType::F16 | GgmlDType::BF16 => 2i64,
+        _ => 0i64,
+    };
+    let nb00 = src0_elem_size;
+    let nb01 = src0_elem_size * ne00;
+    let nb02 = src0_elem_size * ne00 * ne01;
+    let nb10 = 4i64;
+    let nb11 = nb10 * ne10;
+    let nb12 = nb11 * ne11;
+
+    // Number of src1 rows the kernel covers per threadgroup in grid y.
+    let ny = match dtype {
+        GgmlDType::F16 | GgmlDType::BF16 | GgmlDType::F32 => 4,
+        _ => 1,
+    };
     let thread_groups_count = MTLSize {
         width: divide(ne01 as usize, align),
-        height: ne11 as usize,
+        height: divide(ne11 as usize, ny),
         depth: (ne12 * ne13) as usize,
     };
     let threads_per_threadgroup = MTLSize {
@@ -129,16 +141,21 @@ pub fn call_quantized_matmul_mv_t(
         GgmlDType::Q5_0 => "kernel_mul_mv_q5_0_f32",
         GgmlDType::Q5_1 => "kernel_mul_mv_q5_1_f32",
         GgmlDType::Q8_0 => "kernel_mul_mv_q8_0_f32",
-        GgmlDType::Q8_1 => "kernel_mul_mv_q8_1_f32",
         GgmlDType::Q2K => "kernel_mul_mv_q2_K_f32",
         GgmlDType::Q3K => "kernel_mul_mv_q3_K_f32",
         GgmlDType::Q4K => "kernel_mul_mv_q4_K_f32",
         GgmlDType::Q5K => "kernel_mul_mv_q5_K_f32",
         GgmlDType::Q6K => "kernel_mul_mv_q6_K_f32",
-        GgmlDType::Q8K => "kernel_mul_mv_q8_K_f32",
         GgmlDType::F16 => "kernel_mul_mv_f16_f32",
         GgmlDType::BF16 => "kernel_mul_mv_bf16_f32",
         GgmlDType::F32 => "kernel_mul_mv_f32_f32",
+        // Activation-side formats in ggml, never weights: nothing in the shader
+        // references block_q8_1 or block_q8_K. mm_t and get_rows reject them too.
+        GgmlDType::Q8_1 => Err(MetalKernelError::UnsupportedDTypeForOp(
+            "Q8_1",
+            "qmatmul_mv",
+        ))?,
+        GgmlDType::Q8K => Err(MetalKernelError::UnsupportedDTypeForOp("Q8K", "qmatmul_mv"))?,
     };
 
     let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
