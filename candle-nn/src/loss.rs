@@ -102,3 +102,24 @@ pub fn huber(inp: &Tensor, target: &Tensor, delta: f64) -> Result<Tensor> {
     let loss = mask.where_cond(&squared_loss, &linear_loss)?;
     loss.mean_all()
 }
+
+/// The Kullback-Leibler divergence loss.
+///
+/// Matches `torch.nn.functional.kl_div` with the default `mean` reduction and
+/// `log_target = false`.
+///
+/// Arguments
+///
+/// * [inp]: The input tensor, expected to contain **log-probabilities**.
+/// * [target]: The target tensor, expected to contain **probabilities**.
+///
+/// The per-element loss is `target * (log(target) - inp)`, using the convention
+/// that elements where `target == 0` contribute `0` (matching PyTorch). The
+/// resulting tensor is a scalar containing the mean over all elements.
+pub fn kl_div(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
+    let pointwise = (target * (target.log()? - inp)?)?;
+    let zeros = pointwise.zeros_like()?;
+    let mask = target.gt(0f64)?;
+    let pointwise = mask.where_cond(&pointwise, &zeros)?;
+    pointwise.mean_all()
+}

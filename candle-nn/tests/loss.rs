@@ -132,3 +132,38 @@ fn huber_loss() -> Result<()> {
     assert_eq!(to_vec0_round(&loss, 4)?, 0.4483);
     Ok(())
 }
+
+/* Equivalent python code:
+import torch
+import torch.nn.functional as F
+logits = torch.tensor([
+    [1.1050,  0.3013, -1.5394],
+    [1.0730, -0.9419, -0.1670],
+    [0.8318,  1.1154, -0.3610]])
+inp = F.log_softmax(logits, dim=1)
+target = torch.tensor([
+    [0.2, 0.5, 0.3],
+    [0.1, 0.6, 0.3],
+    [0.4, 0.4, 0.2]])
+print(F.kl_div(inp, target, reduction="mean"))  # tensor(0.1841)
+*/
+#[test]
+fn kl_div_loss() -> Result<()> {
+    let cpu = Device::Cpu;
+    let logits = Tensor::new(
+        &[
+            [1.1050f32, 0.3013, -1.5394],
+            [1.0730, -0.9419, -0.1670],
+            [0.8318, 1.1154, -0.3610],
+        ],
+        &cpu,
+    )?;
+    let inp = candle_nn::ops::log_softmax(&logits, 1)?;
+    let target = Tensor::new(
+        &[[0.2f32, 0.5, 0.3], [0.1, 0.6, 0.3], [0.4, 0.4, 0.2]],
+        &cpu,
+    )?;
+    let loss = candle_nn::loss::kl_div(&inp, &target)?;
+    assert_eq!(to_vec0_round(&loss, 4)?, 0.1841);
+    Ok(())
+}
