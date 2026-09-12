@@ -42,6 +42,34 @@ fn nms_basic() -> Result<()> {
 }
 
 #[test]
+fn nms_handles_nan_confidence_without_panicking() {
+    let mut bboxes = vec![vec![
+        Bbox {
+            xmin: 0.0,
+            ymin: 0.0,
+            xmax: 1.0,
+            ymax: 1.0,
+            confidence: 0.9,
+            data: (),
+        },
+        Bbox {
+            xmin: 2.0,
+            ymin: 2.0,
+            xmax: 3.0,
+            ymax: 3.0,
+            confidence: f32::NAN,
+            data: (),
+        },
+    ]];
+
+    non_maximum_suppression(&mut bboxes, 0.5);
+
+    assert_eq!(bboxes[0].len(), 2);
+    assert!(bboxes[0].iter().any(|bbox| bbox.confidence == 0.9));
+    assert!(bboxes[0].iter().any(|bbox| bbox.confidence.is_nan()));
+}
+
+#[test]
 fn softnms_basic_functionality() -> Result<()> {
     let mut bboxes = vec![vec![
         Bbox {
@@ -77,6 +105,34 @@ fn softnms_basic_functionality() -> Result<()> {
     assert!(bboxes[0][1].confidence < 0.5);
     assert!(bboxes[0][2].confidence < 0.6);
     Ok(())
+}
+
+#[test]
+fn softnms_handles_nan_confidence_without_panicking() {
+    let mut bboxes = vec![vec![
+        Bbox {
+            xmin: 0.0,
+            ymin: 0.0,
+            xmax: 1.0,
+            ymax: 1.0,
+            confidence: 0.9,
+            data: (),
+        },
+        Bbox {
+            xmin: 2.0,
+            ymin: 2.0,
+            xmax: 3.0,
+            ymax: 3.0,
+            confidence: f32::NAN,
+            data: (),
+        },
+    ]];
+
+    soft_non_maximum_suppression(&mut bboxes, Some(0.5), Some(0.1), Some(0.5));
+
+    assert_eq!(bboxes[0].len(), 2);
+    assert!(bboxes[0].iter().any(|bbox| bbox.confidence == 0.9));
+    assert!(bboxes[0].iter().any(|bbox| bbox.confidence.is_nan()));
 }
 
 #[test]
