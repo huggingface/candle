@@ -28,7 +28,7 @@ maintaining fast inference speeds.
 | `--revision` | Model revision | `main` |
 | `--max-length` | Maximum generation length | `1024` |
 | `--cpu` | Run on CPU | `false` |
-| `--bf16` | Use bfloat16 precision | `false` |
+| `--dtype` | Model precision: `f32`, `f16`, or `bf16` | `bf16` |
 | `--seed` | Random seed | `299792458` |
 
 \* Either `--image` or `--video` is required (mutually exclusive).
