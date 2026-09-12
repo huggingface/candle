@@ -975,6 +975,34 @@ fn conv2d_grad_noncontiguous_kernel(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+// A non-contiguous input view and its contiguous copy must produce identical
+// results through the general tiled conv2d path.
+fn conv2d_noncontiguous_input(dev: &Device) -> Result<()> {
+    let input_data: Vec<f32> = (0..2 * 5 * 6).map(|v| (v as f32 - 17.0) / 11.0).collect();
+    let kernel_data: Vec<f32> = (0..3 * 2 * 3 * 3)
+        .map(|v| (v as f32 - 13.0) / 7.0)
+        .collect();
+
+    let input_base = Tensor::from_vec(input_data, (1, 2, 5, 6), dev)?;
+    let input = input_base.i((.., .., .., 1..6))?;
+    let input_ref = input.contiguous()?;
+    let kernel = Tensor::from_vec(kernel_data, (3, 2, 3, 3), dev)?;
+
+    let actual = input.conv2d(&kernel, 1, 1, 1, 1)?;
+    let expected = input_ref.conv2d(&kernel, 1, 1, 1, 1)?;
+    let diff = actual
+        .sub(&expected)?
+        .abs()?
+        .flatten_all()?
+        .max(0)?
+        .to_scalar::<f32>()?;
+    assert!(
+        diff < 1e-6,
+        "conv2d non-contiguous input should match contiguous copy, got diff={diff}"
+    );
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
@@ -1018,4 +1046,10 @@ test_device!(
     conv2d_grad_noncontiguous_kernel_cpu,
     conv2d_grad_noncontiguous_kernel_gpu,
     conv2d_grad_noncontiguous_kernel_metal
+);
+test_device!(
+    conv2d_noncontiguous_input,
+    conv2d_noncontiguous_input_cpu,
+    conv2d_noncontiguous_input_gpu,
+    conv2d_noncontiguous_input_metal
 );
