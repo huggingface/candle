@@ -5,8 +5,9 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::Result;
-use candle::{test_utils, Device, Tensor};
-use candle_nn::{LayerNorm, Module};
+use candle::{test_utils, DType, Device, Tensor};
+use candle_nn::{LayerNorm, Module, VarBuilder, VarMap};
+use std::collections::HashMap;
 
 #[test]
 fn layer_norm() -> Result<()> {
@@ -59,5 +60,54 @@ fn layer_norm() -> Result<()> {
     assert_eq!(rms.eps(), 1e-5);
     assert!(!rms.remove_mean());
 
+    Ok(())
+}
+
+
+#[test]
+fn rms_norm_from_varmap() -> Result<()> {
+    // Regression for #3972: fresh VarMap must allow lazy Init, and affine=false
+    // must not probe bias/beta names.
+    let device = Device::Cpu;
+    let varmap = VarMap::new();
+    let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    let rms = candle_nn::rms_norm(8, 1e-6, vb.pp("norm"))?;
+    assert_eq!(rms.weight().dims(), &[8]);
+    assert!(varmap.data().lock().unwrap().contains_key("norm.weight"));
+    assert!(!varmap.data().lock().unwrap().contains_key("norm.bias"));
+    Ok(())
+}
+
+#[test]
+fn layer_norm_from_varmap() -> Result<()> {
+    let device = Device::Cpu;
+    let varmap = VarMap::new();
+    let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    let ln = candle_nn::layer_norm(4, 1e-5, vb.pp("ln"))?;
+    assert_eq!(ln.weight().dims(), &[4]);
+    assert!(ln.bias().is_some());
+    assert_eq!(ln.bias().unwrap().dims(), &[4]);
+    let data = varmap.data().lock().unwrap();
+    assert!(data.contains_key("ln.weight"));
+    assert!(data.contains_key("ln.bias"));
+    Ok(())
+}
+
+#[test]
+fn layer_norm_gamma_beta_aliases() -> Result<()> {
+    let device = &Device::Cpu;
+    let gamma = Tensor::new(&[1f32, 1., 1., 1.], device)?;
+    let beta = Tensor::new(&[0f32, 0., 0., 0.], device)?;
+    let tensors: HashMap<String, Tensor> = [
+        ("ln.gamma".to_string(), gamma),
+        ("ln.beta".to_string(), beta),
+    ]
+    .into_iter()
+    .collect();
+    let vb = VarBuilder::from_tensors(tensors, DType::F32, device);
+    let ln = candle_nn::layer_norm(4, 1e-5, vb.pp("ln"))?;
+    assert_eq!(ln.weight().dims(), &[4]);
+    assert!(ln.bias().is_some());
+    assert_eq!(ln.bias().unwrap().dims(), &[4]);
     Ok(())
 }
