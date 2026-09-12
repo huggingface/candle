@@ -532,7 +532,21 @@ fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
 impl QTensor {
     pub fn new<S: Into<Shape>>(storage: QStorage, shape: S) -> Result<Self> {
         let shape = shape.into();
-        check_shape(&shape, storage.block_size())?;
+        let block_size = storage.block_size();
+        check_shape(&shape, block_size)?;
+        // `check_shape` only validates the last dim. Also ensure the storage
+        // actually holds as many blocks as the full shape requires, so a
+        // mismatched (storage, shape) pair is rejected here instead of reading
+        // out of bounds (legacy quants) or silently truncating (k-quants) later
+        // in `dequantize`.
+        let storage_blocks = storage.size_in_bytes() / storage.dtype().type_size();
+        let expected_blocks = shape.elem_count() / block_size;
+        if storage_blocks != expected_blocks {
+            crate::bail!(
+                "quantized storage holds {storage_blocks} blocks but shape {shape:?} requires {expected_blocks} for dtype {:?}",
+                storage.dtype()
+            )
+        }
         Ok(Self {
             storage,
             shape,
