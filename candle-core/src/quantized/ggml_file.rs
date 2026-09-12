@@ -184,6 +184,34 @@ pub fn qtensor_from_ggml(
         GgmlDType::Q6K => {
             from_raw_data::<k_quants::BlockQ6K>(raw_data, size_in_bytes, dims, device)
         }
+        GgmlDType::Q6Kx8 => {
+            // Pre-packed Q6_K, owned copy from raw bytes (n = dims[0]); CPU only.
+            if !matches!(device, Device::Cpu) {
+                crate::bail!("Q6Kx8 is CPU-only");
+            }
+            let n = match dims.first() {
+                Some(n) => *n,
+                None => crate::bail!("Q6Kx8 tensor has no dims"),
+            };
+            // Q6Kx8 packs 8 output rows per block, so n must be whole 8-row groups
+            // and the bytes must be exactly (n/8)*(k/QK_K) blocks - else from_bytes
+            // panics or the matmul runs with groups == 0 and emits zeros.
+            if n == 0 || n % 8 != 0 {
+                crate::bail!("Q6Kx8 tensor {dims:?}: n must be a positive multiple of 8");
+            }
+            let k = tensor_elems / n;
+            let block_bytes = std::mem::size_of::<super::repack::BlockQ6Kx8>();
+            if k % k_quants::QK_K != 0
+                || size_in_bytes != (n / 8) * (k / k_quants::QK_K) * block_bytes
+            {
+                crate::bail!(
+                    "Q6Kx8 tensor {dims:?}: byte count must equal (n/8)*(k/QK_K) packed blocks"
+                );
+            }
+            let packed = super::repack::PackedQ6Kx8::from_bytes(&raw_data[..size_in_bytes], n);
+            let storage = QStorage::Cpu(Box::new(packed));
+            super::QTensor::new(storage, dims)
+        }
         _ => crate::bail!("quantized type {ggml_dtype:?} is not supported yet"),
     }
 }
@@ -262,5 +290,25 @@ impl Content {
             None => crate::bail!("cannot find tensor with name '{name}'"),
             Some(tensor) => Ok(tensor),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Q6Kx8 dims that aren't whole 8-row groups must bail, not panic or zero-load.
+    #[test]
+    fn q6kx8_rejects_misaligned_rows() {
+        let dev = Device::Cpu;
+        let raw = vec![0u8; 1 << 16];
+        // n=4 previously panicked in from_bytes; n=1 loaded then ran with groups==0.
+        for dims in [vec![4usize, 256], vec![1, 2048]] {
+            assert!(qtensor_from_ggml(GgmlDType::Q6Kx8, &raw, dims, &dev).is_err());
+        }
+        // A whole 8-row group with one super-block loads.
+        let bs = std::mem::size_of::<crate::quantized::repack::BlockQ6Kx8>();
+        let ok = vec![0u8; bs];
+        assert!(qtensor_from_ggml(GgmlDType::Q6Kx8, &ok, vec![8, 256], &dev).is_ok());
     }
 }
