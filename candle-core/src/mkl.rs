@@ -16,6 +16,12 @@ mod ffi {
         pub fn vdCos(n: c_int, a: *const c_double, y: *mut c_double);
         pub fn vsSqrt(n: c_int, a: *const c_float, y: *mut c_float);
         pub fn vdSqrt(n: c_int, a: *const c_double, y: *mut c_double);
+        pub fn vsAsin(n: c_int, a: *const c_float, y: *mut c_float);
+        pub fn vdAsin(n: c_int, a: *const c_double, y: *mut c_double);
+        pub fn vsAcos(n: c_int, a: *const c_float, y: *mut c_float);
+        pub fn vdAcos(n: c_int, a: *const c_double, y: *mut c_double);
+        pub fn vsAtan(n: c_int, a: *const c_float, y: *mut c_float);
+        pub fn vdAtan(n: c_int, a: *const c_double, y: *mut c_double);
 
         pub fn vsAdd(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
         pub fn vdAdd(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
@@ -404,6 +410,66 @@ macro_rules! binary_op {
         }
     };
 }
+#[inline]
+pub fn vs_asin(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vsAsin(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vd_asin(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vdAsin(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vs_acos(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vsAcos(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vd_acos(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vdAcos(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vs_atan(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vsAtan(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vd_atan(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vdAtan(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
 binary_op!(vs_add, f32, vsAdd);
 binary_op!(vd_add, f64, vdAdd);
 binary_op!(vs_sub, f32, vsSub);
