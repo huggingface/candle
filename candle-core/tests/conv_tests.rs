@@ -975,6 +975,263 @@ fn conv2d_grad_noncontiguous_kernel(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn conv3d_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    let t = Tensor::new((0..27).map(|v| v as f32).collect::<Vec<_>>(), dev)?
+        .reshape((1, 1, 3, 3, 3))?;
+    let w = Tensor::ones((1, 1, 2, 2, 2), candle_core::DType::F32, dev)?;
+
+    let res = t.conv3d(&w, 0, 1, 1, 1)?;
+    assert_eq!(
+        test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+        &[52., 60., 76., 84., 124., 132., 148., 156.]
+    );
+    assert_eq!(res.dims(), &[1, 1, 2, 2, 2]);
+
+    let res = t.conv3d(&w, 1, 2, 1, 1)?;
+    assert_eq!(
+        test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+        &[0., 3., 9., 24., 27., 60., 72., 156.]
+    );
+    assert_eq!(res.dims(), &[1, 1, 2, 2, 2]);
+
+    Ok(())
+}
+
+fn conv3d_reference(
+    input: &[f32],
+    kernel: &[f32],
+    shape: (usize, usize, usize, usize, usize),
+    kernel_shape: (usize, usize, usize, usize, usize),
+    padding: [usize; 3],
+    stride: [usize; 3],
+    dilation: [usize; 3],
+) -> Vec<f32> {
+    let (b_size, c_in, i_d, i_h, i_w) = shape;
+    let (c_out, c_in_k, k_d, k_h, k_w) = kernel_shape;
+    assert_eq!(c_in, c_in_k);
+    let out_d = (i_d + 2 * padding[0] - dilation[0] * (k_d - 1) - 1) / stride[0] + 1;
+    let out_h = (i_h + 2 * padding[1] - dilation[1] * (k_h - 1) - 1) / stride[1] + 1;
+    let out_w = (i_w + 2 * padding[2] - dilation[2] * (k_w - 1) - 1) / stride[2] + 1;
+    let mut out = vec![0.; b_size * c_out * out_d * out_h * out_w];
+
+    for b in 0..b_size {
+        for oc in 0..c_out {
+            for od in 0..out_d {
+                for oh in 0..out_h {
+                    for ow in 0..out_w {
+                        let mut sum = 0.;
+                        for ic in 0..c_in {
+                            for kd in 0..k_d {
+                                let id = od * stride[0] + kd * dilation[0];
+                                if id < padding[0] || id >= i_d + padding[0] {
+                                    continue;
+                                }
+                                let id = id - padding[0];
+                                for kh in 0..k_h {
+                                    let ih = oh * stride[1] + kh * dilation[1];
+                                    if ih < padding[1] || ih >= i_h + padding[1] {
+                                        continue;
+                                    }
+                                    let ih = ih - padding[1];
+                                    for kw in 0..k_w {
+                                        let iw = ow * stride[2] + kw * dilation[2];
+                                        if iw < padding[2] || iw >= i_w + padding[2] {
+                                            continue;
+                                        }
+                                        let iw = iw - padding[2];
+                                        let input_idx =
+                                            ((((b * c_in + ic) * i_d + id) * i_h + ih) * i_w) + iw;
+                                        let kernel_idx =
+                                            ((((oc * c_in + ic) * k_d + kd) * k_h + kh) * k_w) + kw;
+                                        sum += input[input_idx] * kernel[kernel_idx];
+                                    }
+                                }
+                            }
+                        }
+                        let out_idx = ((((b * c_out + oc) * out_d + od) * out_h + oh) * out_w) + ow;
+                        out[out_idx] = sum;
+                    }
+                }
+            }
+        }
+    }
+
+    out
+}
+
+fn assert_vec_close(left: &[f32], right: &[f32], max_abs: f32) {
+    assert_eq!(left.len(), right.len());
+    let diff = left
+        .iter()
+        .zip(right.iter())
+        .map(|(left, right)| (left - right).abs())
+        .fold(0.0f32, f32::max);
+    assert!(diff <= max_abs, "max_abs={diff} > {max_abs}");
+}
+
+#[test]
+fn conv3d_cpu_plan_cases() -> Result<()> {
+    let dev = &Device::Cpu;
+
+    let input = (0..8).map(|v| v as f32).collect::<Vec<_>>();
+    let kernel = vec![2.];
+    let res = Tensor::new(input.clone(), dev)?
+        .reshape((1, 1, 2, 2, 2))?
+        .conv3d(
+            &Tensor::new(kernel.clone(), dev)?.reshape((1, 1, 1, 1, 1))?,
+            0,
+            1,
+            1,
+            1,
+        )?;
+    assert_eq!(res.dims(), &[1, 1, 2, 2, 2]);
+    assert_vec_close(
+        &res.flatten_all()?.to_vec1::<f32>()?,
+        &conv3d_reference(
+            &input,
+            &kernel,
+            (1, 1, 2, 2, 2),
+            (1, 1, 1, 1, 1),
+            [0; 3],
+            [1; 3],
+            [1; 3],
+        ),
+        1e-5,
+    );
+
+    let input = (0..27).map(|v| v as f32).collect::<Vec<_>>();
+    let kernel = vec![1.; 27];
+    let res = Tensor::new(input.clone(), dev)?
+        .reshape((1, 1, 3, 3, 3))?
+        .conv3d(
+            &Tensor::new(kernel.clone(), dev)?.reshape((1, 1, 3, 3, 3))?,
+            1,
+            1,
+            1,
+            1,
+        )?;
+    assert_eq!(res.dims(), &[1, 1, 3, 3, 3]);
+    assert_vec_close(
+        &res.flatten_all()?.to_vec1::<f32>()?,
+        &conv3d_reference(
+            &input,
+            &kernel,
+            (1, 1, 3, 3, 3),
+            (1, 1, 3, 3, 3),
+            [1; 3],
+            [1; 3],
+            [1; 3],
+        ),
+        1e-5,
+    );
+
+    let input = (0..125).map(|v| v as f32).collect::<Vec<_>>();
+    let kernel = vec![1.; 27];
+    let res = Tensor::new(input.clone(), dev)?
+        .reshape((1, 1, 5, 5, 5))?
+        .conv3d(
+            &Tensor::new(kernel.clone(), dev)?.reshape((1, 1, 3, 3, 3))?,
+            0,
+            2,
+            1,
+            1,
+        )?;
+    assert_eq!(res.dims(), &[1, 1, 2, 2, 2]);
+    assert_vec_close(
+        &res.flatten_all()?.to_vec1::<f32>()?,
+        &conv3d_reference(
+            &input,
+            &kernel,
+            (1, 1, 5, 5, 5),
+            (1, 1, 3, 3, 3),
+            [0; 3],
+            [2; 3],
+            [1; 3],
+        ),
+        1e-5,
+    );
+
+    let input = (0..108).map(|v| (v % 17) as f32 - 8.).collect::<Vec<_>>();
+    let kernel = (0..32).map(|v| (v % 7) as f32 - 3.).collect::<Vec<_>>();
+    let res = Tensor::new(input.clone(), dev)?
+        .reshape((2, 2, 3, 3, 3))?
+        .conv3d(
+            &Tensor::new(kernel.clone(), dev)?.reshape((2, 2, 2, 2, 2))?,
+            0,
+            1,
+            1,
+            1,
+        )?;
+    assert_eq!(res.dims(), &[2, 2, 2, 2, 2]);
+    assert_vec_close(
+        &res.flatten_all()?.to_vec1::<f32>()?,
+        &conv3d_reference(
+            &input,
+            &kernel,
+            (2, 2, 3, 3, 3),
+            (2, 2, 2, 2, 2),
+            [0; 3],
+            [1; 3],
+            [1; 3],
+        ),
+        1e-5,
+    );
+
+    let input = (0..16).map(|v| v as f32).collect::<Vec<_>>();
+    let kernel = vec![2f32, -1.];
+    let res = Tensor::new(input.clone(), dev)?
+        .reshape((1, 2, 2, 2, 2))?
+        .conv3d(
+            &Tensor::new(kernel, dev)?.reshape((2, 1, 1, 1, 1))?,
+            0,
+            1,
+            1,
+            2,
+        )?;
+    let expected = input[..8]
+        .iter()
+        .map(|v| v * 2.)
+        .chain(input[8..].iter().map(|v| -v))
+        .collect::<Vec<_>>();
+    assert_eq!(res.dims(), &[1, 2, 2, 2, 2]);
+    assert_vec_close(&res.flatten_all()?.to_vec1::<f32>()?, &expected, 1e-5);
+
+    let input = (0..2 * 4 * 6 * 6)
+        .map(|v| (v % 19) as f32 / 9. - 1.)
+        .collect::<Vec<_>>();
+    let kernel = (0..3 * 2 * 3 * 3 * 3)
+        .map(|v| (v % 13) as f32 / 6. - 1.)
+        .collect::<Vec<_>>();
+    let res = Tensor::new(input.clone(), dev)?
+        .reshape((1, 2, 4, 6, 6))?
+        .conv3d_with_algo(
+            &Tensor::new(kernel.clone(), dev)?.reshape((3, 2, 3, 3, 3))?,
+            [1, 1, 1],
+            [1, 2, 2],
+            [1, 1, 1],
+            1,
+            None,
+        )?;
+    assert_eq!(res.dims(), &[1, 3, 4, 3, 3]);
+    assert_vec_close(
+        &res.flatten_all()?.to_vec1::<f32>()?,
+        &conv3d_reference(
+            &input,
+            &kernel,
+            (1, 2, 4, 6, 6),
+            (3, 2, 3, 3, 3),
+            [1, 1, 1],
+            [1, 2, 2],
+            [1, 1, 1],
+        ),
+        1e-5,
+    );
+
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
