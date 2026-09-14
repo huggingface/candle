@@ -128,6 +128,11 @@ fn a_structured_loop_builds_and_verifies() {
         .deref(ctx)
         .verify(ctx)
         .expect("must verify");
+
+    // Full IR verification
+    pliron::operation::verify_operation(func.get_operation(), ctx)
+        .expect("a structured loop must satisfy value dominance");
+
     println!("{}", func.get_operation().disp(ctx));
     let _ = f32t;
 }

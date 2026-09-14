@@ -8,6 +8,7 @@
 //! it here would throw away the structure before any pass could use it.
 //! By keeping the structure an optimization pass can reason about a loop immediately rather than having
 //! to infer it from branches.
+use super::attrs::{BinaryAttr, CastAttr, CmpKindAttr, UnaryAttr};
 use pliron::builtin::attributes::{IntegerAttr, StringAttr};
 use pliron::builtin::op_interfaces::{
     IsTerminatorInterface, NResultsInterface, OneOpdInterface, OneResultInterface,
@@ -22,8 +23,6 @@ use pliron::r#type::TypeHandle;
 use pliron::utils::apint::APInt;
 use pliron::value::Value;
 
-use super::attrs::{BinaryAttr, CastAttr, CmpKindAttr, UnaryAttr};
-
 /// Key for the operator/predicate an op carries.
 pub static ATTR_KEY_WAX_OP: &str = "wax_op";
 /// Key for a cmp predicate code, as `cutile_ir` numbers it.
@@ -32,9 +31,6 @@ pub static ATTR_KEY_WAX_PRED: &str = "wax_pred";
 pub static ATTR_KEY_WAX_VALUE: &str = "wax_value";
 /// Key for a dimension index (reduce, scan, iota, shape queries).
 pub static ATTR_KEY_WAX_DIM: &str = "wax_dim";
-/// Key under which an op carries its `cutile_ir` attributes verbatim. Ensures the dialect
-/// is a lossless source. See `attr_mirror`.
-pub static ATTR_KEY_WAX_ATTRS: &str = "wax_attrs";
 
 macro_rules! op_new {
     ($ty:ident, $($opd:ident),*) => {

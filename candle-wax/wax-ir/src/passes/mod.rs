@@ -8,9 +8,9 @@ pub use pliron::pass::{Analysis, AnalysisManager, Pass, PassResult};
 
 // On attribute naming
 //
-// Currently passes record their conclusions on the IR by writing in `WaxAttrs`, which is then
-// stored as a pliron attribute with the name `wax_attrs`. The plan is to flatten this to only
-// use pliron attributes directly.
+// Passes record their conclusions on the IR as pliron attributes.
+// The `WaxAttr` newtype wraps a single value of our `Attribute` and is placed in pliron's attribute
+// dictionary.
 //
 // Pliron attribute names must satisfy the regex `[a-zA-Z_][a-zA-Z0-9_]*`.
 //

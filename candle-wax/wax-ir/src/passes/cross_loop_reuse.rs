@@ -479,24 +479,16 @@ fn is_scalarlike_i32(t: &Type) -> bool {
     }
 }
 
-/// Set an integer attribute on the operation.
+/// Set an integer attribute on the operation. Overrides previous value if present.
+///
+/// Panics if `key` is not a valid pliron `Identifier` (`[a-zA-Z_][a-zA-Z0-9_]*`).
 fn set_int_attr(ctx: &Context, op: Ptr<Operation>, key: &str, v: i64) {
-    use crate::dialect::attr_mirror::WaxAttrs;
-    use crate::dialect::ops::ATTR_KEY_WAX_ATTRS;
-    let mut attrs = op
-        .deref(ctx)
-        .attributes
-        .get::<WaxAttrs>(&ATTR_KEY_WAX_ATTRS.try_into().unwrap())
-        .map(|a| a.0.clone())
-        .unwrap_or_default();
-    attrs.retain(|(k, _)| k != key);
-    attrs.push((
-        key.to_string(),
-        Attribute::Integer(v, Type::Scalar(ScalarType::I32)),
-    ));
-    op.deref_mut(ctx)
-        .attributes
-        .set(ATTR_KEY_WAX_ATTRS.try_into().unwrap(), WaxAttrs(attrs));
+    use crate::dialect::attr_mirror::WaxAttr;
+    let ident = key
+        .try_into()
+        .unwrap_or_else(|_| panic!("attribute key `{key}` is not a valid pliron Identifier"));
+    let value = WaxAttr(Attribute::Integer(v, Type::Scalar(ScalarType::I32)));
+    op.deref_mut(ctx).attributes.set(ident, value);
 }
 
 /// Dialect read through [`WaxSource`] so the pass sees ops the same way lowering does.
@@ -526,13 +518,16 @@ impl WaxSource for DialectView<'_> {
             .collect()
     }
     fn attributes(&self, op: Self::Op) -> Vec<(String, Attribute)> {
-        use crate::dialect::attr_mirror::WaxAttrs;
-        use crate::dialect::ops::ATTR_KEY_WAX_ATTRS;
+        use crate::dialect::attr_mirror::WaxAttr;
         op.deref(self.ctx)
             .attributes
-            .get::<WaxAttrs>(&ATTR_KEY_WAX_ATTRS.try_into().unwrap())
-            .map(|a| a.0.clone())
-            .unwrap_or_default()
+            .0
+            .iter()
+            .filter_map(|(k, v)| {
+                v.downcast_ref::<WaxAttr>()
+                    .map(|a| (k.to_string(), a.0.clone()))
+            })
+            .collect()
     }
     fn regions(&self, op: Self::Op) -> Vec<Self::Region> {
         op.deref(self.ctx).regions().collect()

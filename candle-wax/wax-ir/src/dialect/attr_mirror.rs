@@ -4,12 +4,13 @@ use pliron::context::Context;
 use pliron::parsable::{Parsable, ParseResult, StateStream};
 use pliron::printable::{self, Printable};
 
-// TODO: This just nests wax attributes inside pliron attributes for no reason. Flatten.
-#[pliron::derive::pliron_attr(name = "wax.attrs", verifier = "succ")]
+/// Newtype that lets us insert our attributes into pliron's `AttibuteDict`.
+/// Lookup as `dict.get::<WaxAttr>(&key)`.
+#[pliron::derive::pliron_attr(name = "wax.attr", verifier = "succ")]
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct WaxAttrs(pub Vec<(String, Attribute)>);
+pub struct WaxAttr(pub Attribute);
 
-impl Printable for WaxAttrs {
+impl Printable for WaxAttr {
     fn fmt(
         &self,
         _ctx: &Context,
@@ -20,7 +21,7 @@ impl Printable for WaxAttrs {
     }
 }
 
-impl Parsable for WaxAttrs {
+impl Parsable for WaxAttr {
     type Arg = ();
     type Parsed = Self;
     fn parse<'a>(

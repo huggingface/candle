@@ -89,7 +89,9 @@ impl OpBuilder {
             }
         }
 
-        m.set_op_attrs(op, self.attributes);
+        for (k, v) in self.attributes {
+            m.set_op_attr(op, &k, v);
+        }
 
         let n = op.deref(&m.ctx).get_num_results();
         let results: Vec<Value> = (0..n).map(|i| op.deref(&m.ctx).get_result(i)).collect();

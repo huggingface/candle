@@ -18,8 +18,7 @@
 //! *This is also a limitation if we ever want to support multiple functions.
 
 use crate::attr::Attribute;
-use crate::dialect::attr_mirror::WaxAttrs;
-use crate::dialect::ops::ATTR_KEY_WAX_ATTRS;
+use crate::dialect::attr_mirror::WaxAttr;
 use crate::dialect::types::{from_pliron, to_pliron};
 use crate::opcode::Opcode;
 use crate::source::WaxSource;
@@ -93,6 +92,15 @@ impl Module {
         s
     }
 
+    /// Verifies the module and all its nested regions and blocks.
+    pub fn verify(&self) -> Result<(), String> {
+        for (i, f) in self.functions.iter().enumerate() {
+            pliron::operation::verify_operation(*f, &self.ctx)
+                .map_err(|e| format!("{}: function {i}: {e}", self.name))?;
+        }
+        Ok(())
+    }
+
     /// Create a function and hand back the block to emit its body into.
     ///
     /// Created first, because pliron's `FuncOp` owns its block and arguments rather than adopting
@@ -141,26 +149,38 @@ impl Module {
         self.value_types.insert(v, t);
     }
 
-    /// Retrieve the attributes of an op.
+    /// All wax attributes.
     pub fn op_attrs(&self, op: OpId) -> Vec<(String, Attribute)> {
         op.deref(&self.ctx)
             .attributes
-            .get::<WaxAttrs>(&ATTR_KEY_WAX_ATTRS.try_into().unwrap())
+            .0
+            .iter()
+            .filter_map(|(k, v)| {
+                v.downcast_ref::<WaxAttr>()
+                    .map(|a| (k.to_string(), a.0.clone()))
+            })
+            .collect()
+    }
+
+    /// One wax attribute by key.
+    pub fn op_attr(&self, op: OpId, key: &str) -> Option<Attribute> {
+        let key = key.try_into().ok()?;
+        op.deref(&self.ctx)
+            .attributes
+            .get::<WaxAttr>(&key)
             .map(|a| a.0.clone())
-            .unwrap_or_default()
     }
 
-    /// Add an attribute to an op.
-    pub fn push_op_attr(&mut self, op: OpId, key: &str, value: Attribute) {
-        let mut attrs = self.op_attrs(op);
-        attrs.push((key.to_string(), value));
-        self.set_op_attrs(op, attrs);
-    }
-
-    pub(crate) fn set_op_attrs(&self, op: OpId, attrs: Vec<(String, Attribute)>) {
+    /// Set an attribute on an op. Overrides previous value if present.
+    ///
+    /// Panics if `key` is not a valid pliron `Identifier` (`[a-zA-Z_][a-zA-Z0-9_]*`).
+    pub fn set_op_attr(&self, op: OpId, key: &str, value: Attribute) {
+        let ident = key
+            .try_into()
+            .unwrap_or_else(|_| panic!("attribute key `{key}` is not a valid pliron Identifier"));
         op.deref_mut(&self.ctx)
             .attributes
-            .set(ATTR_KEY_WAX_ATTRS.try_into().unwrap(), WaxAttrs(attrs));
+            .set(ident, WaxAttr(value));
     }
 
     pub fn alloc_region(&mut self, r: Region) -> RegionId {
