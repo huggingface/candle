@@ -1,4 +1,4 @@
-use candle::test_utils::to_vec2_round;
+use candle::test_utils::{to_vec1_round, to_vec2_round};
 use candle::{DType, Device, NdArray, Result, Tensor};
 use candle_onnx::onnx::attribute_proto::AttributeType;
 use candle_onnx::onnx::tensor_proto::DataType;
@@ -1919,6 +1919,83 @@ fn test_gelu_operation() -> Result<()> {
         vec![vec![0.0, 0.8413448], vec![1.9544997, 2.9959502]]
     );
 
+    Ok(())
+}
+
+// "Gelu" with approximate="tanh" uses the tanh approximation, the default "none" uses erf.
+#[test]
+fn test_gelu_approximate() -> Result<()> {
+    let x = Tensor::from_vec(vec![-1f32, 0., 1., 2.], (4,), &Device::Cpu)?;
+    let run = |approximate: Option<&str>| {
+        let attribs = approximate
+            .map(|s| AttributeProto {
+                name: "approximate".to_string(),
+                r#type: AttributeType::String.into(),
+                s: s.as_bytes().to_vec(),
+                ..AttributeProto::default()
+            })
+            .into_iter()
+            .collect();
+        let manual_graph = make_graph_helper("Gelu", &[INPUT_X], &[OUTPUT_Z], attribs);
+        let inputs = HashMap::from_iter([(INPUT_X.to_string(), x.clone())]);
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        to_vec1_round(eval.get(OUTPUT_Z).expect("Output 'z' not found"), 4)
+    };
+
+    assert_eq!(run(None)?, vec![-0.1587, 0.0, 0.8413, 1.9545]);
+    assert_eq!(run(Some("none"))?, vec![-0.1587, 0.0, 0.8413, 1.9545]);
+    assert_eq!(run(Some("tanh"))?, vec![-0.1588, 0.0, 0.8412, 1.9546]);
+    assert!(run(Some("sigmoid")).is_err());
+    Ok(())
+}
+
+// "Gemm": transA/transB apply before the product, and C is optional.
+#[test]
+fn test_gemm_operation() -> Result<()> {
+    // A is [3, 2] but given transposed, as [2, 3].
+    let a = Tensor::from_vec(vec![1f32, 2., 3., 4., 5., 6.], (2, 3), &Device::Cpu)?;
+    let b = Tensor::from_vec(vec![1f32, 2., 3., 4.], (2, 2), &Device::Cpu)?;
+    let c = Tensor::from_vec(vec![1f32, 2.], (2,), &Device::Cpu)?;
+    let attribs = vec![
+        AttributeProto {
+            name: "transA".to_string(),
+            r#type: AttributeType::Int.into(),
+            i: 1,
+            ..AttributeProto::default()
+        },
+        AttributeProto {
+            name: "alpha".to_string(),
+            r#type: AttributeType::Float.into(),
+            f: 0.5,
+            ..AttributeProto::default()
+        },
+        AttributeProto {
+            name: "beta".to_string(),
+            r#type: AttributeType::Float.into(),
+            f: 2.0,
+            ..AttributeProto::default()
+        },
+    ];
+
+    let manual_graph = make_graph_helper("Gemm", &["a", "b", "c"], &["y"], attribs.clone());
+    let inputs = HashMap::from_iter([
+        ("a".to_string(), a.clone()),
+        ("b".to_string(), b.clone()),
+        ("c".to_string(), c),
+    ]);
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    assert_eq!(
+        eval["y"].to_vec2::<f32>()?,
+        vec![vec![8.5, 13.0], vec![10.5, 16.0], vec![12.5, 19.0]]
+    );
+
+    let manual_graph = make_graph_helper("Gemm", &["a", "b"], &["y"], attribs);
+    let inputs = HashMap::from_iter([("a".to_string(), a), ("b".to_string(), b)]);
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    assert_eq!(
+        eval["y"].to_vec2::<f32>()?,
+        vec![vec![6.5, 9.0], vec![8.5, 12.0], vec![10.5, 15.0]]
+    );
     Ok(())
 }
 
