@@ -2,7 +2,7 @@ use pliron::context::Context;
 use wax_ir::Opcode;
 use wax_ir::dialect::ops::{simple_from_opcode, simple_to_opcode};
 
-/// Opcodes the `wax` dialect does not support  yet.
+/// Opcodes the `wax` dialect does not support yet.
 const NO_DIALECT_OP: &[Opcode] = &[
     Opcode::Module,
     Opcode::Global,
