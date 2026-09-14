@@ -942,6 +942,30 @@ fn test_flatten_operation() -> Result<()> {
     Ok(())
 }
 
+// "Flatten" accepts an axis in [-r, r], a negative one counts from the back.
+#[test]
+fn test_flatten_negative_axis() -> Result<()> {
+    let x = Tensor::arange(0f32, 24., &Device::Cpu)?.reshape((2, 3, 4))?;
+    for (axis, expected) in [(-1, (6, 4)), (-2, (2, 12)), (-3, (1, 24))] {
+        let attribs = vec![AttributeProto {
+            name: "axis".to_string(),
+            r#type: AttributeType::Int.into(),
+            i: axis,
+            ..AttributeProto::default()
+        }];
+        let manual_graph = make_graph_helper("Flatten", &[INPUT_X], &[OUTPUT_Z], attribs);
+        let inputs = HashMap::from_iter([(INPUT_X.to_string(), x.clone())]);
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        assert_eq!(z.dims2()?, expected);
+        assert_eq!(
+            z.flatten_all()?.to_vec1::<f32>()?,
+            x.flatten_all()?.to_vec1::<f32>()?
+        );
+    }
+    Ok(())
+}
+
 // Below are ops that are implemented but not tested yet
 
 // "MaxPool"
@@ -3072,6 +3096,58 @@ fn test_reduce_min() -> Result<()> {
 
         Ok(())
     }
+    Ok(())
+}
+
+// Since opset 18 "ReduceMean" takes the axes as an optional second input.
+#[test]
+fn test_reduce_mean_axes_input_opset18() -> Result<()> {
+    let x = Tensor::from_vec(vec![1f32, 2., 3., 4., 5., 6.], (2, 3), &Device::Cpu)?;
+    let run = |axes: Option<Vec<i64>>, keepdims: i64, noop_with_empty_axes: i64| {
+        let attribs = vec![
+            AttributeProto {
+                name: "keepdims".to_string(),
+                r#type: AttributeType::Int.into(),
+                i: keepdims,
+                ..AttributeProto::default()
+            },
+            AttributeProto {
+                name: "noop_with_empty_axes".to_string(),
+                r#type: AttributeType::Int.into(),
+                i: noop_with_empty_axes,
+                ..AttributeProto::default()
+            },
+        ];
+        let mut inputs = HashMap::from_iter([(INPUT_X.to_string(), x.clone())]);
+        let mut names = vec![INPUT_X];
+        if let Some(axes) = axes {
+            let len = axes.len();
+            inputs.insert(
+                INPUT_A.to_string(),
+                Tensor::from_vec(axes, (len,), &Device::Cpu)?,
+            );
+            names.push(INPUT_A);
+        }
+        let manual_graph = make_graph_helper("ReduceMean", &names, &[OUTPUT_Z], attribs);
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        Ok::<_, candle::Error>(eval.get(OUTPUT_Z).expect("Output 'z' not found").clone())
+    };
+
+    assert_eq!(
+        run(Some(vec![-1]), 1, 0)?.to_vec2::<f32>()?,
+        vec![vec![2.0], vec![5.0]]
+    );
+    assert_eq!(
+        run(Some(vec![0]), 0, 0)?.to_vec1::<f32>()?,
+        vec![2.5, 3.5, 4.5]
+    );
+    // Without axes everything is reduced, unless noop_with_empty_axes is set.
+    assert_eq!(run(None, 0, 0)?.to_vec0::<f32>()?, 3.5);
+    assert_eq!(run(Some(vec![]), 0, 0)?.to_vec0::<f32>()?, 3.5);
+    assert_eq!(
+        run(Some(vec![]), 0, 1)?.to_vec2::<f32>()?,
+        x.to_vec2::<f32>()?
+    );
     Ok(())
 }
 
@@ -5809,6 +5885,70 @@ fn test_split_equal_parts_1d_opset13() -> Result<()> {
         assert_eq!(out1.to_vec1::<f32>()?, vec![1.0f32, 2.0f32]);
         assert_eq!(out2.to_vec1::<f32>()?, vec![3.0f32, 4.0f32, 5.0f32, 6.0f32]);
     }
+    Ok(())
+}
+
+// Before opset 13 the split sizes were given by the `split` attribute.
+#[test]
+fn test_split_attribute_opset11() -> Result<()> {
+    let input = Tensor::arange(1f32, 7., &Device::Cpu)?;
+    let attribs = vec![
+        AttributeProto {
+            name: "axis".to_string(),
+            r#type: AttributeType::Int.into(),
+            i: 0,
+            ..AttributeProto::default()
+        },
+        AttributeProto {
+            name: "split".to_string(),
+            r#type: AttributeType::Ints.into(),
+            ints: vec![2, 4],
+            ..AttributeProto::default()
+        },
+    ];
+    let manual_graph = make_graph_helper("Split", &["input"], &["output_1", "output_2"], attribs);
+    let inputs = HashMap::from_iter([("input".to_string(), input)]);
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+
+    assert_eq!(eval["output_1"].to_vec1::<f32>()?, vec![1.0f32, 2.0]);
+    assert_eq!(
+        eval["output_2"].to_vec1::<f32>()?,
+        vec![3.0f32, 4.0, 5.0, 6.0]
+    );
+    Ok(())
+}
+
+// When the dimension does not split evenly into `num_outputs` chunks, every chunk has
+// ceil(dim / num_outputs) elements and only the last one is smaller.
+#[test]
+fn test_split_uneven_num_outputs_opset18() -> Result<()> {
+    let input = Tensor::arange(1f32, 8., &Device::Cpu)?;
+    let attribs = vec![
+        AttributeProto {
+            name: "axis".to_string(),
+            r#type: AttributeType::Int.into(),
+            i: 0,
+            ..AttributeProto::default()
+        },
+        AttributeProto {
+            name: "num_outputs".to_string(),
+            r#type: AttributeType::Int.into(),
+            i: 3,
+            ..AttributeProto::default()
+        },
+    ];
+    let manual_graph = make_graph_helper(
+        "Split",
+        &["input"],
+        &["output_1", "output_2", "output_3"],
+        attribs,
+    );
+    let inputs = HashMap::from_iter([("input".to_string(), input)]);
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+
+    assert_eq!(eval["output_1"].to_vec1::<f32>()?, vec![1.0f32, 2.0, 3.0]);
+    assert_eq!(eval["output_2"].to_vec1::<f32>()?, vec![4.0f32, 5.0, 6.0]);
+    assert_eq!(eval["output_3"].to_vec1::<f32>()?, vec![7.0f32]);
     Ok(())
 }
 
