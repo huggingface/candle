@@ -324,6 +324,20 @@ fn unary_op(device: &Device) -> Result<()> {
         test_utils::to_vec1_round(&y, 4)?,
         [-1.2642, -1.7293, 0.0000, 3.0000]
     );
+    if !device.is_metal() {
+        let tensor = Tensor::new(
+            &[-20f64, -6., -3., -0.1, 0.5, 1.8, 2.8, 4., 6., 20.],
+            device,
+        )?;
+        assert_eq!(
+            test_utils::to_vec1_round(&tensor.gelu_erf()?.to_dtype(DType::F32)?, 4)?,
+            [0.0, 0.0, -0.004, -0.046, 0.3457, 1.7353, 2.7928, 3.9999, 6.0, 20.0]
+        );
+        assert_eq!(
+            test_utils::to_vec1_round(&tensor.erf()?.to_dtype(DType::F32)?, 4)?,
+            [-1.0, -1.0, -1.0, -0.1125, 0.5205, 0.9891, 0.9999, 1.0, 1.0, 1.0]
+        );
+    }
     Ok(())
 }
 
