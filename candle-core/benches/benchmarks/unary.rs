@@ -8,7 +8,21 @@ fn run_sqrt(a: &Tensor) {
     a.sqrt().unwrap();
 }
 
-fn run_unary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
+fn run_erf(a: &Tensor) {
+    a.erf().unwrap();
+}
+
+fn run_gelu_erf(a: &Tensor) {
+    a.gelu_erf().unwrap();
+}
+
+fn run_unary_benchmark(
+    c: &mut Criterion,
+    device: &Device,
+    dtype: DType,
+    name: &str,
+    run: fn(&Tensor),
+) {
     let b = 1;
     let m = 1024;
     let k = 1024;
@@ -28,7 +42,7 @@ fn run_unary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &
         b.iter_custom(|iters| {
             let start = Instant::now();
             for _i in 0..iters {
-                run_sqrt(black_box(&tensor));
+                run(black_box(&tensor));
             }
             device.sync().unwrap();
             start.elapsed()
@@ -90,7 +104,13 @@ fn criterion_benchmark(c: &mut Criterion) {
         }
         for dtype in [DType::F32, DType::BF16, DType::F16] {
             let name = format!("sqrt_{dtype:?}");
-            run_unary_benchmark(c, &device, dtype, &name);
+            run_unary_benchmark(c, &device, dtype, &name, run_sqrt);
+        }
+        for dtype in [DType::F32, DType::F64] {
+            let name = format!("erf_{dtype:?}");
+            run_unary_benchmark(c, &device, dtype, &name, run_erf);
+            let name = format!("gelu_erf_{dtype:?}");
+            run_unary_benchmark(c, &device, dtype, &name, run_gelu_erf);
         }
     }
 }
