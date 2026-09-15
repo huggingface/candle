@@ -738,6 +738,18 @@ impl UnaryOpT for Erf {
     fn f8e4m3(v: f8e4m3) -> f8e4m3 {
         f8e4m3::from_f64(Self::f64(v.to_f64()))
     }
+
+    #[cfg(feature = "mkl")]
+    #[inline(always)]
+    fn f32_vec(xs: &[f32], ys: &mut [f32]) {
+        crate::mkl::vs_erf(xs, ys)
+    }
+
+    #[cfg(feature = "mkl")]
+    #[inline(always)]
+    fn f64_vec(xs: &[f64], ys: &mut [f64]) {
+        crate::mkl::vd_erf(xs, ys)
+    }
 }
 
 /// Silu operation
@@ -1038,6 +1050,18 @@ impl UnaryOpT for GeluErf {
     #[inline(always)]
     fn f8e4m3(v: f8e4m3) -> f8e4m3 {
         f8e4m3::from_f32(Self::f32(v.to_f32()))
+    }
+
+    #[cfg(feature = "mkl")]
+    #[inline(always)]
+    fn f32_vec(xs: &[f32], ys: &mut [f32]) {
+        crate::mkl::vs_gelu_erf(xs, ys)
+    }
+
+    #[cfg(feature = "mkl")]
+    #[inline(always)]
+    fn f64_vec(xs: &[f64], ys: &mut [f64]) {
+        crate::mkl::vd_gelu_erf(xs, ys)
     }
 }
 
