@@ -80,6 +80,9 @@ impl Device {
                 let storage = metal::QMetalStorage::zeros(metal, elem_count, dtype)?;
                 Ok(QStorage::Metal(storage))
             }
+            Device::Vulkan(_) => {
+                Err(crate::Error::Msg("vulkan: quantized zeros not implemented (scaffold)".into()))
+            }
             Device::Cuda(cuda) => {
                 let storage = cuda::QCudaStorage::zeros(cuda, elem_count, dtype)?;
                 Ok(QStorage::Cuda(storage))
@@ -116,6 +119,9 @@ impl QStorage {
                 GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
             },
+            Device::Vulkan(_) => {
+                return Err(crate::Error::Msg("vulkan: quantized load not implemented (scaffold)".into()))
+            }
             Device::Cuda(d) => match dtype {
                 GgmlDType::F32 => cuda::load_quantized(d, as_t_slice::<f32>(data)),
                 GgmlDType::F16 => cuda::load_quantized(d, as_t_slice::<f16>(data)),

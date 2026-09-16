@@ -279,20 +279,8 @@ impl Tensor {
                         return Err(Error::Msg("Metal support not compiled".to_string()));
                     }
                     #[cfg(feature = "vulkan")]
-                    Device::Vulkan(device) => {
-                        let buffer = device
-                            .new_buffer_builder()
-                            .with_data(data)
-                            .with_label("safetensors_view")
-                            .build()?;
-
-                        let storage = crate::vulkan_backend::VulkanStorage::new(
-                            buffer,
-                            device.clone(),
-                            data.len(),
-                            dtype,
-                        );
-                        Storage::Vulkan(storage)
+                    Device::Vulkan(_) => {
+                        return Err(Error::Msg("vulkan: safetensors not implemented (scaffold)".to_string()));
                     }
                     #[cfg(not(feature = "vulkan"))]
                     Device::Vulkan(_) => {
@@ -399,16 +387,8 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
             return Err(Error::Msg("Metal support not compiled".to_string()));
         }
         #[cfg(feature = "vulkan")]
-        Device::Vulkan(device) => {
-            let buffer = device
-                .new_buffer_builder()
-                .with_data(data)
-                .with_label("safetensors_load")
-                .build()?;
-
-            let storage =
-                crate::vulkan_backend::VulkanStorage::new(buffer, device.clone(), data.len(), dtype);
-            Storage::Vulkan(storage)
+        Device::Vulkan(_) => {
+            return Err(Error::Msg("vulkan: safetensors not implemented (scaffold)".to_string()));
         }
         #[cfg(not(feature = "vulkan"))]
         Device::Vulkan(_) => {

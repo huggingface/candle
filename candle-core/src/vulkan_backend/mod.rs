@@ -70,14 +70,15 @@ impl BackendStorage for VulkanStorage {
         if self.dtype != DType::F32 {
             return Err(not_impl("affine (dtype)"));
         }
-        let size = layout.dim().map_err(|_| not_impl("affine (layout)"))?;
+        let size = layout.dims().iter().product::<usize>();
         let out = self.device.new_f32_buffer(size)?;
+        let out_arg = out.clone();
         let input = self.buffer.clone();
         let device = self.device.clone();
         let kernels = device.kernels();
         self.device
             .execute(move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
-                call_affine_f32(cbb, kernels, &input, &out, mul as f32, add as f32)
+                call_affine_f32(cbb, kernels, &input, &out_arg, mul as f32, add as f32)
                     .map_err(|e| e.to_string())
             })?;
         Ok(Self::new(out, &self.device, size, DType::F32))
@@ -95,25 +96,25 @@ impl BackendStorage for VulkanStorage {
         let ReduceOp::Sum = ro else {
             return Err(not_impl("reduce_op (op)"));
         };
-        let ndim = layout.ndim();
+        let ndim = layout.dims().len();
         let last_axis = ndim - 1;
         if axes.len() != 1 || axes[0] != last_axis {
             return Err(not_impl("reduce_op (axes)"));
         }
-        let cols = layout
-            .contiguous_last_dim()
-            .map_err(|_| not_impl("reduce_op (layout)"))?;
-        let total = layout
-            .dim()
-            .map_err(|_| not_impl("reduce_op (layout)"))?;
+        if layout.stride()[last_axis] != 1 {
+            return Err(not_impl("reduce_op (layout)"));
+        }
+        let cols = layout.dims()[last_axis];
+        let total: usize = layout.dims().iter().product();
         let rows = total / cols;
         let out = self.device.new_f32_buffer(rows)?;
+        let out_arg = out.clone();
         let input = self.buffer.clone();
         let kernels = self.device.kernels();
         self.device.execute(move |
             cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
         | {
-            call_reduce_sum_f32(cbb, kernels, &input, &out, rows, cols)
+            call_reduce_sum_f32(cbb, kernels, &input, &out_arg, rows, cols)
                 .map_err(|e| e.to_string())
         })?;
         Ok(Self::new(out, &self.device, rows, DType::F32))
@@ -326,28 +327,24 @@ impl BackendDevice for VulkanDevice {
     }
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
-        let dim = shape.elem_count()?;
+        let dim = shape.elem_count();
         let buffer = self.new_f32_buffer(dim)?;
         Ok(VulkanStorage::new(buffer, self, dim, dtype))
     }
 
     unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
-        let dim = shape.elem_count()?;
+        let dim = shape.elem_count();
         let buffer = self.new_f32_buffer(dim)?;
         Ok(VulkanStorage::new(buffer, self, dim, dtype))
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, slice: &[T]) -> Result<Self::Storage> {
-        let dtype = T::dtype();
+        let dtype = T::DTYPE;
         let dim = slice.len();
         if dtype != DType::F32 {
             return Err(not_impl("storage_from_slice (dtype)"));
         }
-        let data: Vec<f32> =
-            slice
-                .iter()
-                .map(|t| t.to_dtype::<f32>().expect("f32 dtype"))
-                .collect();
+        let data: Vec<f32> = slice.iter().map(|t| t.to_f64() as f32).collect();
         let buffer = self.upload_f32(&data)?;
         Ok(VulkanStorage::new(buffer, self, dim, dtype))
     }
@@ -370,8 +367,8 @@ impl BackendDevice for VulkanDevice {
 
     fn rand_uniform(&self, shape: &Shape, dtype: DType, low: f64, upper: f64) -> Result<Self::Storage> {
         use rand::Rng;
-        let dim = shape.elem_count()?;
-        let mut rng = rand::thread_rng();
+        let dim = shape.elem_count();
+        let mut rng = rand::rng();
         let data: Vec<f32> = (0..dim)
             .map(|_| rng.gen_range(low as f32..upper as f32))
             .collect();
@@ -382,8 +379,8 @@ impl BackendDevice for VulkanDevice {
     fn rand_normal(&self, shape: &Shape, dtype: DType, mean: f64, std: f64) -> Result<Self::Storage> {
         use rand::Rng;
         use rand_distr::{Distribution, Normal};
-        let dim = shape.elem_count()?;
-        let mut rng = rand::thread_rng();
+        let dim = shape.elem_count();
+        let mut rng = rand::rng();
         let normal = Normal::new(mean as f64, std as f64).expect("std > 0");
         let data: Vec<f32> = (0..dim).map(|_| normal.sample(&mut rng) as f32).collect();
         let buffer = self.upload_f32(&data)?;
@@ -391,6 +388,6 @@ impl BackendDevice for VulkanDevice {
     }
 
     fn synchronize(&self) -> Result<()> {
-        self.synchronize()
+        VulkanDevice::synchronize(self)
     }
 }

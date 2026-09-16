@@ -15,7 +15,7 @@ use vulkano::pipeline::layout::{
     PipelineLayoutCreateInfo, PushConstantRange,
 };
 use vulkano::pipeline::{ComputePipeline, PipelineLayout, PipelineShaderStageCreateInfo};
-use vulkano::shader::{ShaderModule, ShaderStages};
+use vulkano::shader::ShaderStages;
 
 use crate::err::VulkanKernelError;
 use crate::source::Source;
@@ -50,7 +50,6 @@ pub struct PipelineEntry {
 
 pub type Pipelines = HashMap<(Source, KernelName), PipelineEntry>;
 
-#[derive(Debug)]
 pub struct Kernels {
     device: Arc<Device>,
     dss_alloc: Arc<StandardDescriptorSetAllocator>,
@@ -108,11 +107,13 @@ impl Kernels {
             .entry_point(name.as_ref())
             .ok_or(VulkanKernelError::EntryPoint)?;
 
-        let binding = {
-            let mut b = DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageBuffer);
-            b.stages = ShaderStages::COMPUTE;
-            b
-        };
+        let bindings = (0..DESCRIPTOR_BINDINGS)
+            .map(|i| {
+                let mut b = DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageBuffer);
+                b.stages = ShaderStages::COMPUTE;
+                (i, b)
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
         let set_layout = DescriptorSetLayout::new(
             self.device.clone(),
             DescriptorSetLayoutCreateInfo {

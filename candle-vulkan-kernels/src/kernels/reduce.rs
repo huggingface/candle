@@ -33,7 +33,7 @@ pub fn call_reduce_sum_f32(
 
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
-    cbb.bind_descriptor_sets(PipelineBindPoint::COMPUTE, entry.layout.clone(), 0, [set])
+    cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.push_constants(entry.layout.clone(), 0, [rows as u32, cols as u32])
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
