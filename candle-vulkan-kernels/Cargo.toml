@@ -1,0 +1,27 @@
+[package]
+name = "candle-vulkan-kernels"
+version = "0.11.0"
+edition = "2021"
+build = "build.rs"
+
+description = "Vulkan compute kernels for Candle"
+repository = "https://github.com/huggingface/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+
+[dependencies]
+thiserror = "2"
+vulkano = "0.35.2"
+parking_lot = "0.12"
+
+[build-dependencies]
+naga = { version = "30.0.1", features = ["glsl-in", "spv-out", "wgsl-in"] }
+spirv = "0.3"
+
+[profile.profiling]
+inherits = "release"
+debug = 2

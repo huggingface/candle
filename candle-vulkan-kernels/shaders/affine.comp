@@ -1,0 +1,24 @@
+#version 460
+
+layout(local_size_x = 256) in;
+
+layout(binding = 0) buffer Input {
+    float data[];
+} in_buf;
+
+layout(binding = 1) buffer Output {
+    float data[];
+} out_buf;
+
+layout(push_constant) uniform Params {
+    uint size;
+    float mul;
+    float add;
+} params;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i < params.size) {
+        out_buf.data[i] = in_buf.data[i] * params.mul + params.add;
+    }
+}

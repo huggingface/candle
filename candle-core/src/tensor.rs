@@ -678,6 +678,7 @@ impl Tensor {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Vulkan(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1976,6 +1977,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Vulkan(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -2007,6 +2009,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Vulkan(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -2048,6 +2051,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Vulkan(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -2402,7 +2406,8 @@ impl Tensor {
                     Storage::Cuda(cuda.storage_from_cpu_storage(storage)?)
                 }
                 (Storage::Cpu(storage), Device::Metal(metal)) => {
-                    Storage::Metal(metal.storage_from_cpu_storage(storage)?)
+                (Storage::Cpu(storage), Device::Vulkan(metal)) => {
+                    Storage::Vulkan(metal.storage_from_cpu_storage(storage)?)
                 }
                 (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
