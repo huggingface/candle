@@ -76,20 +76,16 @@ impl BackendStorage for VulkanStorage {
         let input = self.buffer.clone();
         let device = self.device.clone();
         let kernels = device.kernels();
-        self.device
-            .execute(move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
+        self.device.execute(
+            move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
                 call_affine_f32(cbb, kernels, &input, &out_arg, mul as f32, add as f32)
                     .map_err(|e| e.to_string())
-            })?;
+            },
+        )?;
         Ok(Self::new(out, &self.device, size, DType::F32))
     }
 
-    fn reduce_op(
-        &self,
-        ro: ReduceOp,
-        layout: &Layout,
-        axes: &[usize],
-    ) -> Result<Self> {
+    fn reduce_op(&self, ro: ReduceOp, layout: &Layout, axes: &[usize]) -> Result<Self> {
         if self.dtype != DType::F32 {
             return Err(not_impl("reduce_op (dtype)"));
         }
@@ -111,12 +107,12 @@ impl BackendStorage for VulkanStorage {
         let out_arg = out.clone();
         let input = self.buffer.clone();
         let kernels = self.device.kernels();
-        self.device.execute(move |
-            cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        | {
-            call_reduce_sum_f32(cbb, kernels, &input, &out_arg, rows, cols)
-                .map_err(|e| e.to_string())
-        })?;
+        self.device.execute(
+            move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
+                call_reduce_sum_f32(cbb, kernels, &input, &out_arg, rows, cols)
+                    .map_err(|e| e.to_string())
+            },
+        )?;
         Ok(Self::new(out, &self.device, rows, DType::F32))
     }
 
@@ -140,23 +136,11 @@ impl BackendStorage for VulkanStorage {
         Err(not_impl("unary_impl"))
     }
 
-    fn binary_impl<B: BinaryOpT>(
-        &self,
-        _: &Self,
-        _: &Layout,
-        _: &Layout,
-    ) -> Result<Self> {
+    fn binary_impl<B: BinaryOpT>(&self, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
         Err(not_impl("binary_impl"))
     }
 
-    fn where_cond(
-        &self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-    ) -> Result<Self> {
+    fn where_cond(&self, _: &Layout, _: &Self, _: &Layout, _: &Self, _: &Layout) -> Result<Self> {
         Err(not_impl("where_cond"))
     }
 
@@ -365,23 +349,34 @@ impl BackendDevice for VulkanDevice {
         self.storage_from_cpu_storage(&storage)
     }
 
-    fn rand_uniform(&self, shape: &Shape, dtype: DType, low: f64, upper: f64) -> Result<Self::Storage> {
+    fn rand_uniform(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        low: f64,
+        upper: f64,
+    ) -> Result<Self::Storage> {
         use rand::Rng;
         let dim = shape.elem_count();
         let mut rng = rand::rng();
         let data: Vec<f32> = (0..dim)
-            .map(|_| rng.gen_range(low as f32..upper as f32))
+            .map(|_| rng.random_range(low as f32..upper as f32))
             .collect();
         let buffer = self.upload_f32(&data)?;
         Ok(VulkanStorage::new(buffer, self, dim, dtype))
     }
 
-    fn rand_normal(&self, shape: &Shape, dtype: DType, mean: f64, std: f64) -> Result<Self::Storage> {
-        use rand::Rng;
+    fn rand_normal(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        mean: f64,
+        std: f64,
+    ) -> Result<Self::Storage> {
         use rand_distr::{Distribution, Normal};
         let dim = shape.elem_count();
         let mut rng = rand::rng();
-        let normal = Normal::new(mean as f64, std as f64).expect("std > 0");
+        let normal = Normal::new(mean, std).expect("std > 0");
         let data: Vec<f32> = (0..dim).map(|_| normal.sample(&mut rng) as f32).collect();
         let buffer = self.upload_f32(&data)?;
         Ok(VulkanStorage::new(buffer, self, dim, dtype))

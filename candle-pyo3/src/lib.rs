@@ -77,6 +77,7 @@ enum PyDevice {
     Cpu,
     Cuda,
     Metal,
+    Vulkan,
 }
 
 impl PyDevice {
@@ -85,6 +86,7 @@ impl PyDevice {
             Device::Cpu => Self::Cpu,
             Device::Cuda(_) => Self::Cuda,
             Device::Metal(_) => Self::Metal,
+            Device::Vulkan(_) => Self::Vulkan,
         }
     }
 
@@ -109,6 +111,9 @@ impl PyDevice {
                 *device = Some(d.clone());
                 Ok(d)
             }
+            Self::Vulkan => Err(PyValueError::new_err(
+                "vulkan devices are not supported by the candle Python bindings",
+            )),
         }
     }
 }
@@ -138,6 +143,7 @@ impl<'py> IntoPyObject<'py> for PyDevice {
             PyDevice::Cpu => "cpu",
             PyDevice::Cuda => "cuda",
             PyDevice::Metal => "metal",
+            PyDevice::Vulkan => "vulkan",
         };
         Ok(str.into_pyobject(py).unwrap())
     }

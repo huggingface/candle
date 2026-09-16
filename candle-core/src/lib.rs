@@ -70,8 +70,6 @@ mod indexer;
 pub mod layout;
 #[cfg(feature = "metal")]
 pub mod metal_backend;
-#[cfg(feature = "vulkan")]
-pub mod vulkan_backend;
 #[cfg(feature = "mkl")]
 mod mkl;
 pub mod nditer;
@@ -91,6 +89,8 @@ mod tensor_cat;
 pub mod test_utils;
 pub mod utils;
 mod variable;
+#[cfg(feature = "vulkan")]
+pub mod vulkan_backend;
 
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;

@@ -11,12 +11,11 @@ use vulkano::command_buffer::{
     PrimaryAutoCommandBuffer, SubmitInfo,
 };
 use vulkano::descriptor_set::allocator::{
-    StandardDescriptorSetAllocator,
-    StandardDescriptorSetAllocatorCreateInfo,
+    StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo,
 };
 use vulkano::device::{Device, DeviceCreateInfo, QueueCreateInfo, QueueFlags};
 use vulkano::instance::{Instance, InstanceCreateInfo};
-use vulkano::memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::VulkanLibrary;
 
 use candle_vulkan_kernels::Kernels;
@@ -64,8 +63,7 @@ impl std::fmt::Debug for VulkanDevice {
 
 impl VulkanDevice {
     pub fn new(gpu_id: usize) -> Result<Self> {
-        let library = unsafe { VulkanLibrary::new() }
-            .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let library = VulkanLibrary::new().map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let instance = Instance::new(
             library,
             InstanceCreateInfo {
@@ -125,6 +123,18 @@ impl VulkanDevice {
         })
     }
 
+    /// Allocation for the compute buffers: host-mapped (so that
+    /// `Buffer::from_iter` can initialize them and `read()` can read
+    /// them back) but device-preferred, so on RDNA the allocation
+    /// still lands in VRAM.
+    fn storage_alloc_info() -> AllocationCreateInfo {
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS
+                | MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        }
+    }
+
     /// Uploads `data` into a device f32 storage buffer.
     pub fn upload_f32(&self, data: &[f32]) -> Result<Subbuffer<[f32]>> {
         Buffer::from_iter(
@@ -133,7 +143,7 @@ impl VulkanDevice {
                 usage: BufferUsage::STORAGE_BUFFER,
                 ..Default::default()
             },
-            AllocationCreateInfo::default(),
+            Self::storage_alloc_info(),
             data.iter().copied(),
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))
@@ -147,8 +157,8 @@ impl VulkanDevice {
                 usage: BufferUsage::STORAGE_BUFFER,
                 ..Default::default()
             },
-            AllocationCreateInfo::default(),
-            std::iter::repeat(0f32).take(len),
+            Self::storage_alloc_info(),
+            std::iter::repeat_n(0f32, len),
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))
     }
@@ -173,18 +183,16 @@ impl VulkanDevice {
             .build()
             .map_err(|e| Error::Vulkan(format!("command buffer build: {e}").into()))?;
         self.queue
-            .with(|mut q| {
-                unsafe {
-                    q.submit(
-                        &[SubmitInfo {
-                            wait_semaphores: Vec::new(),
-                            command_buffers: vec![CommandBufferSubmitInfo::new(cbb)],
-                            signal_semaphores: Vec::new(),
-                            ..Default::default()
-                        }],
-                        None,
-                    )
-                }
+            .with(|mut q| unsafe {
+                q.submit(
+                    &[SubmitInfo {
+                        wait_semaphores: Vec::new(),
+                        command_buffers: vec![CommandBufferSubmitInfo::new(cbb)],
+                        signal_semaphores: Vec::new(),
+                        ..Default::default()
+                    }],
+                    None,
+                )
             })
             .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         self.queue
@@ -201,7 +209,8 @@ impl VulkanDevice {
         Ok(())
     }
 
-    /// Copies a device f32 buffer back to the host.
+    /// Copies a device f32 buffer back to the host (the buffers are
+    /// allocated host-mapped, see `storage_alloc_info`).
     pub fn download_f32(&self, buffer: &Subbuffer<[f32]>) -> Result<Vec<f32>> {
         self.synchronize()?;
         let guard = buffer
@@ -209,7 +218,6 @@ impl VulkanDevice {
             .map_err(|e| Error::Vulkan(format!("buffer read: {e}").into()))?;
         Ok((*guard).to_vec())
     }
-
     pub fn seed_atomic(&self) -> &AtomicU64 {
         &self.seed
     }

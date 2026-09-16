@@ -1,7 +1,10 @@
 use crate::layout::LayoutRelation;
 use crate::op::{BackpropOp, Op};
 use crate::tensor::from_storage;
-use crate::{bail, CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Storage, Tensor, VulkanStorage};
+use crate::{
+    bail, CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Storage, Tensor,
+    VulkanStorage,
+};
 use std::sync::Arc;
 
 /// Unary ops that can be defined in user-land.

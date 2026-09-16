@@ -280,7 +280,9 @@ impl Tensor {
                     }
                     #[cfg(feature = "vulkan")]
                     Device::Vulkan(_) => {
-                        return Err(Error::Msg("vulkan: safetensors not implemented (scaffold)".to_string()));
+                        return Err(Error::Msg(
+                            "vulkan: safetensors not implemented (scaffold)".to_string(),
+                        ));
                     }
                     #[cfg(not(feature = "vulkan"))]
                     Device::Vulkan(_) => {
@@ -388,7 +390,9 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
         }
         #[cfg(feature = "vulkan")]
         Device::Vulkan(_) => {
-            return Err(Error::Msg("vulkan: safetensors not implemented (scaffold)".to_string()));
+            return Err(Error::Msg(
+                "vulkan: safetensors not implemented (scaffold)".to_string(),
+            ));
         }
         #[cfg(not(feature = "vulkan"))]
         Device::Vulkan(_) => {

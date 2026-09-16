@@ -11,6 +11,16 @@ pub enum Source {
 }
 
 impl Source {
+    /// Size of the push constant block for this shader. The pipeline
+    /// layout must declare exactly the bytes the shader accesses,
+    /// otherwise dispatch fails validation.
+    pub fn push_constant_size(self) -> u32 {
+        match self {
+            Self::Affine => 12,
+            Self::Reduce => 8,
+        }
+    }
+
     /// Raw SPIR-V words (little-endian u32) for this shader.
     pub fn spv_words(self) -> Vec<u32> {
         let bytes: &[u8] = match self {

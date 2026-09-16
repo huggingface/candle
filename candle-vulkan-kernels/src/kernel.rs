@@ -22,8 +22,6 @@ use crate::source::Source;
 
 /// Number of storage-buffer bindings shared by the scaffold kernels (input + output).
 const DESCRIPTOR_BINDINGS: u32 = 2;
-/// Bytes of push constants shared by the scaffold kernels (`uint + 2 * float`).
-const PUSH_CONSTANT_SIZE: u32 = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KernelName {
@@ -130,7 +128,7 @@ impl Kernels {
                 push_constant_ranges: vec![PushConstantRange {
                     stages: ShaderStages::COMPUTE,
                     offset: 0,
-                    size: PUSH_CONSTANT_SIZE,
+                    size: source.push_constant_size(),
                 }],
                 ..Default::default()
             },

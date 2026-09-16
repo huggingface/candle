@@ -2,7 +2,10 @@ use crate::backend::BackendStorage;
 use crate::custom_op::{all_distinct, InplaceOpN, Src};
 use crate::op::{self, CmpOp, ReduceOp};
 use crate::scalar::Scalar;
-use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape, VulkanStorage};
+use crate::{
+    CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape,
+    VulkanStorage,
+};
 use crate::{CustomOp1, CustomOp2, CustomOp3};
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 
