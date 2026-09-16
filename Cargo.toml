@@ -98,6 +98,12 @@ thiserror = "2"
 pliron = "0.17"
 pliron-derive = "0.17"
 wax-ir = { path = "./candle-wax/wax-ir", version = "0.11.0" }
+wax-macro = { path = "./candle-wax/wax-macro", version = "0.11.0" }
+# candle-wax: `#[wax::module]` captures its module's source text, so it needs the span
+# locations feature to map a captured span back to a file and line.
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1.0"
 tokenizers = { version = "0.23.1", default-features = false }
 tracing = "0.1.37"
 tracing-chrome = "0.7.1"
