@@ -1,0 +1,16 @@
+[package]
+name = "wax-frontend"
+version.workspace = true
+edition = "2024"
+description = "Compiles the cuTile DSL into wax IR, on top of NVIDIA's cutile-frontend"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+[dependencies]
+cutile-frontend = { git = "https://github.com/ivarflakstad/cutile-rs", branch = "main" }
+cutile-ir = { git = "https://github.com/ivarflakstad/cutile-rs", branch = "main" }
+cutile-dsl = { git = "https://github.com/ivarflakstad/cutile-rs", branch = "main" }
+wax-ir = { path = "../wax-ir" }
+syn = { workspace = true }

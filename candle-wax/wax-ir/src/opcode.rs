@@ -240,3 +240,15 @@ impl Opcode {
     //    self.as_u16() >= 0x1000
     //}
 }
+
+impl TryFrom<u16> for Opcode {
+    type Error = ();
+
+    fn try_from(op: u16) -> Result<Self, Self::Error> {
+        // TODO: Either type out the match arm properly or use a crate like num_derive or strum.
+        match op {
+            0x00..0x75 => Ok(unsafe { std::mem::transmute(op) }),
+            _ => Err(()),
+        }
+    }
+}
