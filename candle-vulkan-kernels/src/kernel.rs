@@ -18,6 +18,9 @@ use vulkano::shader::ShaderStages;
 use crate::err::VulkanKernelError;
 use crate::source::Source;
 
+/// Rows of `w` handled per workgroup by the `gemv_t` shader; the
+/// dispatch grid must divide by this.
+pub const GEMV_T_TILE_N: usize = 4;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KernelName {
     AffineF32,
@@ -37,6 +40,11 @@ pub enum KernelName {
     ElemCosF32,
     ElemNegF32,
     GemmF32,
+    GemvTF32,
+    RmsNormF32,
+    SoftmaxLastDimF32,
+    RopeF32,
+    GemvF32,
 }
 
 impl AsRef<str> for KernelName {
@@ -59,6 +67,11 @@ impl AsRef<str> for KernelName {
             Self::ElemCosF32 => "main_cos",
             Self::ElemNegF32 => "main_neg",
             Self::GemmF32 => "main_gemm",
+            Self::RmsNormF32 => "main",
+            Self::SoftmaxLastDimF32 => "main",
+            Self::RopeF32 => "main",
+            Self::GemvF32 => "main",
+            Self::GemvTF32 => "main",
         }
     }
 }
@@ -94,6 +107,18 @@ impl Kernels {
 
     /// The full pipeline entry (pipeline + layouts), building on first use.
     pub fn load_entry(
+        &self,
+        source: Source,
+        name: KernelName,
+    ) -> Result<PipelineEntry, VulkanKernelError> {
+        if std::env::var("CANDLE_VULKAN_TRACE").is_ok() {
+            trace_count(source, name);
+        }
+        self.load_entry_inner(source, name)
+    }
+
+    /// The full pipeline entry (pipeline + layouts), building on first use.
+    fn load_entry_inner(
         &self,
         source: Source,
         name: KernelName,
@@ -186,7 +211,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         KernelName::AffineF32
         | KernelName::ReduceSumF32
         | KernelName::ReduceMaxF32
-        | KernelName::CopyF32 => 2,
+        | KernelName::CopyF32
+        | KernelName::SoftmaxLastDimF32 => 2,
         KernelName::GatherF32
         | KernelName::ElemAddF32
         | KernelName::ElemSubF32
@@ -199,6 +225,27 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::ElemSinF32
         | KernelName::ElemCosF32
         | KernelName::ElemNegF32
-        | KernelName::GemmF32 => 3,
+        | KernelName::GemmF32
+        | KernelName::RmsNormF32 => 3,
+        KernelName::RopeF32 => 4,
+        KernelName::GemvF32 | KernelName::GemvTF32 => 3,
     }
+}
+
+use std::sync::Mutex;
+static TRACE: Mutex<Option<std::collections::HashMap<(Source, KernelName), u64>>> =
+    Mutex::new(None);
+fn trace_count(source: Source, name: KernelName) {
+    let mut g = TRACE.lock().unwrap();
+    let m = g.get_or_insert_with(std::collections::HashMap::new);
+    *m.entry((source, name)).or_insert(0) += 1;
+}
+/// Drain the per-kernel dispatch counters (CANDLE_VULKAN_TRACE only).
+pub fn trace_counts() -> Vec<((Source, KernelName), u64)> {
+    let mut g = TRACE.lock().unwrap();
+    let m = g.take().unwrap_or_default();
+    m.into_iter().collect()
+}
+pub fn trace_reset() {
+    *TRACE.lock().unwrap() = None;
 }

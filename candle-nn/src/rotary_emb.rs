@@ -316,6 +316,19 @@ impl candle::CustomOp3 for RotaryEmb {
         "rotary-emb"
     }
 
+    #[cfg(feature = "vulkan")]
+    fn vulkan_fwd(
+        &self,
+        s1: &candle::VulkanStorage,
+        l1: &Layout,
+        s2: &candle::VulkanStorage,
+        l2: &Layout,
+        s3: &candle::VulkanStorage,
+        l3: &Layout,
+    ) -> Result<(candle::VulkanStorage, Shape)> {
+        candle::vulkan_backend::rope_f32(s1, l1, s2, l2, s3, l3)
+    }
+
     fn cpu_fwd(
         &self,
         s1: &CpuStorage,

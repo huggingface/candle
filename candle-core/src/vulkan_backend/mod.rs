@@ -11,7 +11,10 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer
 
 use candle_vulkan_kernels::{
     call_affine_f32, call_copy_f32, call_elem_binary_f32, call_elem_unary_f32, call_gather_f32,
-    call_gemm_f32, call_reduce_max_f32, call_reduce_sum_f32, KernelName,
+    call_gemm_f32, call_gemv_f32, call_gemv_t_f32, call_reduce_max_f32,
+    call_reduce_sum_f32,
+    call_rms_norm_f32,
+    call_rope_f32, call_softmax_last_dim_f32, KernelName,
 };
 
 pub use crate::vulkan_backend::device::{VBuf, VulkanDevice, VulkanStorage};
@@ -53,7 +56,7 @@ fn contig_strides(dims: &[usize]) -> Vec<usize> {
 /// The effective broadcast shape of a (possibly broadcasted) rhs layout:
 /// a dim with a zero stride (or size 1) collapses to 1, the remaining
 /// dims must form a row-major contiguous block over their own shape.
-fn gemm_rhs_transposed(l: &Layout, k: usize, n: usize) -> Result<bool> {
+fn gemm_rhs_transposed(l: &Layout, k: usize) -> Result<bool> {
     let dims = l.dims();
     let strides = l.stride();
     if l.start_offset() != 0 {
@@ -63,7 +66,6 @@ fn gemm_rhs_transposed(l: &Layout, k: usize, n: usize) -> Result<bool> {
     if ndim < 2 {
         return Err(not_impl("matmul (rhs rank)"));
     }
-    let (d2, d1) = (dims[ndim - 2], dims[ndim - 1]);
     let nk = contig_strides(dims);
     let kn_swapped = {
         let mut kn = contig_strides(dims);
@@ -78,26 +80,16 @@ fn gemm_rhs_transposed(l: &Layout, k: usize, n: usize) -> Result<bool> {
             .zip(dims)
             .all(|((&e, &s), &d)| d == 1 || s == e)
     };
-    if d2 == n && d1 == k {
-        // Stored (b, n, k): either n-major contiguous or a transposed
-        // view of a contiguous (b, k, n) (strides [..., 1, k]).
-        if matches(&nk) || matches(&kn_swapped) {
-            Ok(true)
-        } else {
-            Err(not_impl("matmul (rhs layout)"))
-        }
-    } else if d2 == k && d1 == n {
-        // Stored (b, k, n): either k-major contiguous or a transposed
-        // view of a contiguous (b, n, k) (strides [..., 1, k]).
-        if matches(&nk) {
-            Ok(false)
-        } else if matches(&kn_swapped) {
-            Ok(true)
-        } else {
-            Err(not_impl("matmul (rhs layout)"))
-        }
+    // Dispatch on the physical strides, not the dims: when k == n the
+    // last two dims coincide and only the strides tell a row-major (k, n)
+    // storage (transposed = false) from a transposed view of a row-major
+    // (n, k) buffer (strides [..., 1, k], transposed = true).
+    if matches(&nk) {
+        Ok(false)
+    } else if matches(&kn_swapped) {
+        Ok(true)
     } else {
-        Err(not_impl("matmul (rhs dims)"))
+        Err(not_impl("matmul (rhs layout)"))
     }
 }
 
@@ -124,12 +116,132 @@ fn materialize(
     device.execute(
         move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
             call_copy_f32(
-                cbb, kernels, &src, &dst, total, &dims, &sstr, &dstr, soff, 0,
+                cbb, kernels.as_ref(), &src, &dst, total, &dims, &sstr, &dstr, soff, 0,
             )
             .map_err(|e| e.to_string())
         },
     )?;
     Ok(buf)
+}
+
+/// Fused RMSNorm over the last (contiguous) axis for f32:
+/// `x * inversesqrt(mean(x^2) + eps) * weight`. `input` may be
+/// non-contiguous (it is materialized first); `weight` must be contiguous
+/// and have `cols` elements. The result is a fresh contiguous storage with
+/// shape `layout.shape()`.
+pub fn rms_norm_f32(
+    input: &VulkanStorage,
+    layout: &Layout,
+    weight: &VulkanStorage,
+    eps: f32,
+) -> Result<(VulkanStorage, Shape)> {
+    let dims = layout.dims().to_vec();
+    if dims.is_empty() {
+        return Err(not_impl("rms_norm (rank)"));
+    }
+    let cols = dims[dims.len() - 1];
+    let total: usize = dims.iter().product();
+    let rows = total / cols;
+    let in_buf = materialize(&input.device, input, layout)?;
+    let w_buf = weight
+        .as_f32()
+        .ok_or_else(|| Error::Vulkan("rms_norm: weight is not f32".to_string().into()))?
+        .clone();
+    let out = input.device.new_f32_buffer(total)?;
+    let out_arg = out.clone();
+    let kernels = input.device.kernels();
+    input.device.execute(
+        move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
+            call_rms_norm_f32(cbb, kernels.as_ref(), &in_buf, &w_buf, &out_arg, rows, cols, eps)
+                .map_err(|e| e.to_string())
+        },
+    )?;
+    Ok((
+        VulkanStorage::new(VBuf::F32(out), &input.device, total, DType::F32),
+        layout.shape().clone(),
+    ))
+}
+
+/// Numerically stable softmax over the last (contiguous) axis for f32.
+/// `input` may be non-contiguous (it is materialized first). The result is
+/// a fresh contiguous storage with shape `layout.shape()`.
+/// Non-interleaved rotary embeddings for a contiguous f32 `(b, h, t, d)`
+/// tensor; `cos`/`sin` are `(t, d/2)` or `(b, t, d/2)` (any dtype is
+/// rejected, the CPU fallback in `CustomOp3::vulkan_fwd` is not reachable
+/// for other dtypes because this function requires f32 everywhere). The
+/// result is a fresh contiguous storage with the input shape.
+pub fn rope_f32(
+    input: &VulkanStorage,
+    layout: &Layout,
+    cos: &VulkanStorage,
+    cos_layout: &Layout,
+    sin: &VulkanStorage,
+    sin_layout: &Layout,
+) -> Result<(VulkanStorage, Shape)> {
+    let dims = layout.dims().to_vec();
+    if dims.len() != 4 {
+        return Err(not_impl("rope (rank)"));
+    }
+    let (b, h, t, d) = (dims[0], dims[1], dims[2], dims[3]);
+    if d % 2 != 0 || d == 0 {
+        return Err(not_impl("rope (head dim)"));
+    }
+    let unbatched = cos_layout.dims().len() == 3;
+    let in_buf = materialize(&input.device, input, layout)?;
+    let cos_buf = materialize(&input.device, cos, cos_layout)?;
+    let sin_buf = materialize(&input.device, sin, sin_layout)?;
+    let total: usize = b * h * t * d;
+    let out = input.device.new_f32_buffer(total)?;
+    let out_arg = out.clone();
+    let kernels = input.device.kernels();
+    input.device.execute(
+        move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
+            call_rope_f32(
+                cbb,
+                kernels.as_ref(),
+                &in_buf,
+                &cos_buf,
+                &sin_buf,
+                &out_arg,
+                b,
+                h,
+                t,
+                d,
+                unbatched,
+            )
+            .map_err(|e| e.to_string())
+        },
+    )?;
+    Ok((
+        VulkanStorage::new(VBuf::F32(out), &input.device, total, DType::F32),
+        layout.shape().clone(),
+    ))
+}
+pub fn softmax_last_dim_f32(
+    input: &VulkanStorage,
+    layout: &Layout,
+) -> Result<(VulkanStorage, Shape)> {
+    let dims = layout.dims().to_vec();
+    if dims.is_empty() {
+        return Err(not_impl("softmax_last_dim (rank)"));
+    }
+    let cols = dims[dims.len() - 1];
+    let total: usize = dims.iter().product();
+    let rows = total / cols;
+    let in_buf = materialize(&input.device, input, layout)?;
+    let out = input.device.new_f32_buffer(total)?;
+    let out_arg = out.clone();
+    let kernels = input.device.kernels();
+    input.device.execute(
+        move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
+            call_softmax_last_dim_f32(cbb, kernels.as_ref(), &in_buf, &out_arg, rows, cols)
+                .map_err(|e| e.to_string())
+        },
+    )?;
+    Ok((
+        VulkanStorage::new(VBuf::F32(out), &input.device, total, DType::F32),
+        layout.shape().clone(),
+    ))
 }
 
 impl BackendStorage for VulkanStorage {
@@ -195,7 +307,7 @@ impl BackendStorage for VulkanStorage {
         let kernels = device.kernels();
         self.device.execute(
             move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
-                call_affine_f32(cbb, kernels, &input, &out_arg, mul as f32, add as f32)
+                call_affine_f32(cbb, kernels.as_ref(), &input, &out_arg, mul as f32, add as f32)
                     .map_err(|e| e.to_string())
             },
         )?;
@@ -229,9 +341,9 @@ impl BackendStorage for VulkanStorage {
         self.device.execute(
             move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
                 if is_max {
-                    call_reduce_max_f32(cbb, kernels, &input, &out_arg, rows, cols)
+                    call_reduce_max_f32(cbb, kernels.as_ref(), &input, &out_arg, rows, cols)
                 } else {
-                    call_reduce_sum_f32(cbb, kernels, &input, &out_arg, rows, cols)
+                    call_reduce_sum_f32(cbb, kernels.as_ref(), &input, &out_arg, rows, cols)
                 }
                 .map_err(|e| e.to_string())
             },
@@ -296,7 +408,7 @@ impl BackendStorage for VulkanStorage {
         let kernels = self.device.kernels();
         self.device.execute(
             move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
-                call_elem_unary_f32(cbb, kernels, name, &input, &out_arg).map_err(|e| e.to_string())
+                call_elem_unary_f32(cbb, kernels.as_ref(), name, &input, &out_arg).map_err(|e| e.to_string())
             },
         )?;
         Ok(Self::new(VBuf::F32(out), &self.device, total, DType::F32))
@@ -338,7 +450,14 @@ impl BackendStorage for VulkanStorage {
         self.device.execute(
             move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
                 call_elem_binary_f32(
-                    cbb, kernels, name, &input, &rbuf, &out_arg, &ldims, &rhs_dims,
+                    cbb,
+                    kernels.as_ref(),
+                    name,
+                    &input,
+                    &rbuf,
+                    &out_arg,
+                    &ldims,
+                    &rhs_dims,
                 )
                 .map_err(|e| e.to_string())
             },
@@ -419,7 +538,7 @@ impl BackendStorage for VulkanStorage {
         let kernels = self.device.kernels();
         self.device.execute(
             move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
-                call_gather_f32(cbb, kernels, &ids, &emb, &out_arg, rows, dim)
+                call_gather_f32(cbb, kernels.as_ref(), &ids, &emb, &out_arg, rows, dim)
                     .map_err(|e| e.to_string())
             },
         )?;
@@ -482,18 +601,32 @@ impl BackendStorage for VulkanStorage {
             return Err(not_impl("matmul (dtype)"));
         }
         let (b, m, n, k) = bmnk;
-        let transposed = gemm_rhs_transposed(rhs_l, k, n)?;
+        let transposed = gemm_rhs_transposed(rhs_l, k)?;
         let total = b * m * n;
         let out = self.device.new_f32_buffer(total)?;
         let out_arg = out.clone();
         let input = materialize(&self.device, self, lhs_l)?;
         let rbuf = rhs.as_f32().expect("matmul rhs is f32").clone();
         let kernels = self.device.kernels();
+        let use_gemv = b == 1 && m == 1 && !transposed;
+        let w_stride = rhs_l.stride()[rhs_l.dims().len() - 1];
+        let gemv_t_ok = transposed && k <= 3072;
+        let use_gemv_t =
+            b == 1 && m == 1 && gemv_t_ok && std::env::var("CANDLE_VULKAN_NO_GEMVT").is_err();
+        if std::env::var("CANDLE_VULKAN_TRACE").is_ok() {
+            eprintln!("matmul b={b} m={m} n={n} k={k} transposed={transposed} gemv={use_gemv} gemv_t={use_gemv_t}");
+        }
         self.device.execute(
             move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
-                call_gemm_f32(
-                    cbb, kernels, &input, &rbuf, &out_arg, b, m, n, k, transposed,
-                )
+                if use_gemv {
+                    call_gemv_f32(cbb, kernels.as_ref(), &input, &rbuf, &out_arg, k, n)
+                } else if use_gemv_t {
+                    call_gemv_t_f32(cbb, kernels.as_ref(), &input, &rbuf, &out_arg, n, k, w_stride)
+                } else {
+                    call_gemm_f32(
+                        cbb, kernels.as_ref(), &input, &rbuf, &out_arg, b, m, n, k, transposed,
+                    )
+                }
                 .map_err(|e| e.to_string())
             },
         )?;
@@ -516,7 +649,7 @@ impl BackendStorage for VulkanStorage {
             move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
                 call_copy_f32(
                     cbb,
-                    kernels,
+                    kernels.as_ref(),
                     &src,
                     &dst_buf,
                     total,
@@ -556,7 +689,7 @@ impl BackendStorage for VulkanStorage {
             move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
                 call_copy_f32(
                     cbb,
-                    kernels,
+                    kernels.as_ref(),
                     &src,
                     &dst_buf,
                     total,

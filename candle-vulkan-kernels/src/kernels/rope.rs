@@ -1,0 +1,51 @@
+//! Non-interleaved rotary embeddings for f32 `(b, h, t, d)` tensors.
+use vulkano::buffer::Subbuffer;
+use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
+use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::pipeline::PipelineBindPoint;
+use crate::err::VulkanKernelError;
+use crate::kernel::{KernelName, Kernels};
+use crate::source::Source;
+/// Records a `rope_f32` dispatch over `(b, h, t, d)`; `cos`/`sin` have
+/// `d / 2` elements per (batch,) position and `unbatched` says whether the
+/// cos/sin tensors carry the batch dimension.
+pub fn call_rope_f32(
+    cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    kernels: &Kernels,
+    input: &Subbuffer<[f32]>,
+    cos: &Subbuffer<[f32]>,
+    sin: &Subbuffer<[f32]>,
+    output: &Subbuffer<[f32]>,
+    b: usize,
+    h: usize,
+    t: usize,
+    d: usize,
+    unbatched: bool,
+) -> Result<(), VulkanKernelError> {
+    let entry = kernels.load_entry(Source::Rope, KernelName::RopeF32)?;
+    let writes = vec![
+        WriteDescriptorSet::buffer(0, input.clone()),
+        WriteDescriptorSet::buffer(1, cos.clone()),
+        WriteDescriptorSet::buffer(2, sin.clone()),
+        WriteDescriptorSet::buffer(3, output.clone()),
+    ];
+    let set = DescriptorSet::new(
+        kernels.dss_alloc().clone(),
+        entry.set_layout.clone(),
+        writes,
+        Vec::new(),
+    )
+    .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
+    cbb.bind_pipeline_compute(entry.pipeline.clone())
+        .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
+    cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)
+        .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
+    let rows = (b * h * t) as u32;
+    cbb.push_constants(entry.layout.clone(), 0, [rows, h as u32, t as u32, d as u32, u32::from(unbatched)])
+        .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
+    let workgroups = rows;
+    let cols = (d / 2) as u32;
+    unsafe { cbb.dispatch([workgroups, cols, 1]) }
+        .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
+    Ok(())
+}

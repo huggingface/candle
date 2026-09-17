@@ -1,0 +1,46 @@
+// Fused RMSNorm over the last (contiguous) axis:
+//   out[r, c] = in[r, c] * inverseSqrt(sum_c' in[r, c']^2 / cols + eps) * weight[c]
+// One workgroup per row; workgroup reduction over the row.
+// WGSL (rather than GLSL) because naga's GLSL frontend rejects the
+// `shared` layout qualifier.
+@group(0) @binding(0)
+var<storage, read> in_buf: array<f32>;
+@group(0) @binding(1)
+var<storage, read> w_buf: array<f32>;
+@group(0) @binding(2)
+var<storage, read_write> out_buf: array<f32>;
+struct Params {
+    rows: u32,
+    cols: u32,
+    eps: f32,
+};
+var<immediate> params: Params;
+var<workgroup> partial: array<f32, 256>;
+@compute @workgroup_size(256)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let row = wid.x;
+    if (row >= params.rows) {
+        return;
+    }
+    let lane = lid.x;
+    let cols = params.cols;
+    var acc = 0.0;
+    for (var c = lane; c < cols; c += 256u) {
+        let v = in_buf[row * cols + c];
+        acc += v * v;
+    }
+    partial[lane] = acc;
+    workgroupBarrier();
+    if (lane == 0u) {
+        var s = 0.0;
+        for (var i = 0u; i < 256u; i++) {
+            s += partial[i];
+        }
+        partial[0] = s;
+    }
+    workgroupBarrier();
+    let rstd = inverseSqrt(partial[0] / f32(cols) + params.eps);
+    for (var c = lane; c < cols; c += 256u) {
+        out_buf[row * cols + c] = in_buf[row * cols + c] * rstd * w_buf[c];
+    }
+}

@@ -1,0 +1,52 @@
+// Transposed GEMV for the m=1 matmul case: out[n] = sum_k a[k] * w[n *
+// w_stride + k], with `w` stored row-major as (n, k) (the gguf/HF layout).
+//
+// One workgroup owns TILE_N output rows. The row of `a` is staged into
+// workgroup memory once (one barrier), so the rows share it instead of
+// each re-reading it from global. Each of the 256 / TILE_N threads of a
+// row walks k in (256 / TILE_N)-wide steps (one element per thread per
+// step) accumulating in registers; the wavefront covers whole rows, so
+// every step loads consecutive floats of the row of `w`. A final fold
+// reduces the lane partials per row. Requires k <= 4096.
+const TILE_N: u32 = 4u;
+const LANES: u32 = 256u / TILE_N;
+@group(0) @binding(0)
+var<storage, read> a_buf: array<f32>;
+@group(0) @binding(1)
+var<storage, read> w_buf: array<f32>;
+@group(0) @binding(2)
+var<storage, read_write> out_buf: array<f32>;
+var<workgroup> partials: array<f32, TILE_N * LANES>;
+struct Params {
+    n: u32,
+    k: u32,
+    w_stride: u32,
+};
+var<immediate> params: Params;
+@compute @workgroup_size(256)
+fn main(
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+    let n_row0 = wid.x * TILE_N;
+    let row = lid.x / LANES;
+    let lane = lid.x % LANES;
+    let r = n_row0 + row;
+    let k = params.k;
+    var acc = 0.0;
+    for (var kk = 0u; kk < k; kk += LANES) {
+        let c = kk + lane;
+        if (c < k) {
+            acc += a_buf[c] * w_buf[r * params.w_stride + c];
+        }
+    }
+    partials[row * LANES + lane] = acc;
+    workgroupBarrier();
+    if (lid.x < TILE_N && n_row0 + lid.x < params.n) {
+        var s = 0.0;
+        for (var j = 0u; j < LANES; j += 1u) {
+            s += partials[lid.x * LANES + j];
+        }
+        out_buf[n_row0 + lid.x] = s;
+    }
+}

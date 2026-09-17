@@ -9,6 +9,11 @@ const REDUCE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce.spv")
 const REDUCE_MAX_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_max.spv"));
 const GATHER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather.spv"));
 const COPY_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy.spv"));
+const RMS_NORM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rms_norm.spv"));
+const SOFTMAX_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/softmax.spv"));
+const ROPE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rope.spv"));
+const GEMV_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv.spv"));
+const GEMV_T_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv_t.spv"));
 
 /// The set of compiled compute shaders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -20,6 +25,11 @@ pub enum Source {
     ReduceMax,
     Gather,
     Copy,
+    RmsNorm,
+    Softmax,
+    Rope,
+    Gemv,
+    GemvT,
 }
 
 impl Source {
@@ -45,6 +55,11 @@ impl Source {
             | KernelName::ElemCosF32
             | KernelName::ElemNegF32 => 44,
             KernelName::GemmF32 => 20,
+            KernelName::RmsNormF32 => 12,
+            KernelName::SoftmaxLastDimF32 => 8,
+            KernelName::RopeF32 => 20,
+            KernelName::GemvF32 => 8,
+            KernelName::GemvTF32 => 12,
         }
     }
 
@@ -58,10 +73,34 @@ impl Source {
             Self::ReduceMax => REDUCE_MAX_SPV,
             Self::Gather => GATHER_SPV,
             Self::Copy => COPY_SPV,
+            Self::RmsNorm => RMS_NORM_SPV,
+            Self::Softmax => SOFTMAX_SPV,
+            Self::Rope => ROPE_SPV,
+            Self::Gemv => GEMV_SPV,
+            Self::GemvT => GEMV_T_SPV,
         };
         bytes
             .chunks_exact(4)
             .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
             .collect()
+    }
+}
+
+impl AsRef<str> for Source {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Affine => "affine",
+            Self::Elementwise => "elementwise",
+            Self::Gemm => "gemm",
+            Self::Gemv => "gemv",
+            Self::GemvT => "gemv_t",
+            Self::Reduce => "reduce",
+            Self::ReduceMax => "reduce_max",
+            Self::Gather => "gather",
+            Self::Copy => "copy",
+            Self::RmsNorm => "rms_norm",
+            Self::Softmax => "softmax",
+            Self::Rope => "rope",
+        }
     }
 }

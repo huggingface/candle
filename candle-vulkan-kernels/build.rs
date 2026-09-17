@@ -13,6 +13,11 @@ fn main() {
         ("reduce_max", "glsl"),
         ("gather", "glsl"),
         ("copy", "glsl"),
+        ("rms_norm", "wgsl"),
+        ("softmax", "wgsl"),
+        ("rope", "wgsl"),
+        ("gemv", "wgsl"),
+        ("gemv_t", "wgsl"),
         ("elementwise", "wgsl"),
         ("gemm", "wgsl"),
     ] {

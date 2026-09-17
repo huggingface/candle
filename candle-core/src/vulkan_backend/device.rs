@@ -1,5 +1,5 @@
 //! The Vulkan device: a lazily initialized vulkano instance + compute device.
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::Arc;
 
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
@@ -16,6 +16,7 @@ use vulkano::descriptor_set::allocator::{
 use vulkano::device::{Device, DeviceCreateInfo, QueueCreateInfo, QueueFlags};
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::sync::fence::{Fence, FenceCreateInfo};
 use vulkano::VulkanLibrary;
 
 use candle_vulkan_kernels::Kernels;
@@ -32,8 +33,33 @@ pub struct VulkanDevice {
     dss_alloc: Arc<StandardDescriptorSetAllocator>,
     kernels: Arc<Kernels>,
     seed: AtomicU64,
+    /// Fence ring bounding in-flight submissions (see `execute`); shared
+    /// by all `VulkanDevice` clones since they submit to the same queue.
+    fence_ring: Arc<std::sync::Mutex<Vec<InFlight>>>,
+    fence_next: Arc<AtomicUsize>,
+    /// Encodes recorded by `execute`, deferred until `synchronize` records
+    /// them all onto a single command buffer and submits it. Shared by all
+    /// `VulkanDevice` clones since they submit to the same queue.
+    pending: Arc<std::sync::Mutex<Vec<Encode>>>,
     _gpu_id: usize,
 }
+
+/// A deferred kernel record: `execute` appends these, `synchronize` plays
+/// them back onto one command buffer in order.
+type Encode = Box<dyn FnOnce(&mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>) -> std::result::Result<(), String> + Send>;
+
+/// One slot of the fence ring: the command buffer of the last submission
+/// that used this slot (kept alive until the fence signals, because the
+/// command buffer allocator recycles dropped command buffers) and the
+/// fence the submission signals.
+struct InFlight {
+    cbb: Option<Arc<PrimaryAutoCommandBuffer>>,
+    fence: Arc<Fence>,
+}
+
+/// Number of in-flight submissions allowed before `execute` waits for the
+/// GPU to catch up.
+const FENCE_RING_SIZE: usize = 128;
 
 impl Clone for VulkanDevice {
     fn clone(&self) -> Self {
@@ -48,6 +74,9 @@ impl Clone for VulkanDevice {
             seed: std::sync::atomic::AtomicU64::new(
                 self.seed.load(std::sync::atomic::Ordering::Relaxed),
             ),
+            fence_ring: self.fence_ring.clone(),
+            fence_next: self.fence_next.clone(),
+            pending: self.pending.clone(),
             _gpu_id: self._gpu_id,
         }
     }
@@ -110,6 +139,12 @@ impl VulkanDevice {
             StandardDescriptorSetAllocatorCreateInfo::default(),
         ));
         let kernels = Arc::new(Kernels::new(device.clone(), dss_alloc.clone()));
+        let mut fence_ring = Vec::with_capacity(FENCE_RING_SIZE);
+        for _ in 0..FENCE_RING_SIZE {
+            let fence = Fence::new(device.clone(), FenceCreateInfo::default())
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            fence_ring.push(InFlight { cbb: None, fence: Arc::new(fence) });
+        }
         Ok(Self {
             instance,
             device,
@@ -119,6 +154,9 @@ impl VulkanDevice {
             dss_alloc,
             kernels,
             seed: AtomicU64::new(0),
+            fence_ring: Arc::new(std::sync::Mutex::new(fence_ring)),
+            fence_next: Arc::new(AtomicUsize::new(0)),
+            pending: Arc::new(std::sync::Mutex::new(Vec::new())),
             _gpu_id: gpu_id,
         })
     }
@@ -163,49 +201,104 @@ impl VulkanDevice {
         .map_err(|e| Error::Vulkan(e.to_string().into()))
     }
 
-    /// Records `encode` onto a new command buffer, submits it and waits for
-    /// completion. v0 syncs per submission; a fence ring replaces this once
-    /// the backend is functional.
+    /// Defers `encode` onto the pending batch. All pending encodes are
+    /// recorded onto a single command buffer and submitted by the next
+    /// `synchronize()`, which also drains the GPU. Callers that read back
+    /// results must call `synchronize()` first (the readback paths do).
+    /// Batching keeps the per-operation submission cost (command buffer +
+    /// descriptor set allocation, `vkQueueSubmit`) off the hot path: a
+    /// decode step is one submission instead of one per op.
     pub fn execute<F>(&self, encode: F) -> Result<()>
     where
         F: FnOnce(
             &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        ) -> std::result::Result<(), String>,
+        ) -> std::result::Result<(), String> + Send + 'static,
     {
-        let mut cbb = AutoCommandBufferBuilder::primary(
-            self.cbb_alloc.clone(),
-            self.queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        encode(&mut cbb).map_err(|e| Error::Vulkan(e.into()))?;
-        let cbb = cbb
-            .build()
-            .map_err(|e| Error::Vulkan(format!("command buffer build: {e}").into()))?;
-        self.queue
-            .with(|mut q| unsafe {
-                q.submit(
-                    &[SubmitInfo {
-                        wait_semaphores: Vec::new(),
-                        command_buffers: vec![CommandBufferSubmitInfo::new(cbb)],
-                        signal_semaphores: Vec::new(),
-                        ..Default::default()
-                    }],
-                    None,
-                )
-            })
-            .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        self.queue
-            .with(|mut q| q.wait_idle())
-            .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        self.pending.lock().unwrap().push(Box::new(encode));
         Ok(())
     }
 
-    /// Waits for all pending GPU work to complete.
+    /// Records all pending encodes onto a single command buffer, submits it
+    /// (bounded by the fence ring, which also keeps the command buffer and
+    /// the buffers it uses alive until the work completes, since the
+    /// allocators recycle dropped resources), and waits for completion.
     pub fn synchronize(&self) -> Result<()> {
-        self.queue
-            .with(|mut q| q.wait_idle())
+        let encodes = std::mem::take(&mut *self.pending.lock().unwrap());
+        if std::env::var("CANDLE_VULKAN_TRACE").is_ok() && !encodes.is_empty() {
+            let counts = candle_vulkan_kernels::trace_counts();
+            let total: u64 = counts.iter().map(|(_, c)| c).sum();
+            eprintln!(
+                "vulkan: drain {} dispatches ({})",
+                encodes.len(),
+                counts
+                    .iter()
+                    .map(|((src, name), c)| format!("{}::{}={}", src.as_ref(), name.as_ref(), c))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+            let _ = total;
+        }
+        if !encodes.is_empty() {
+            let n_encodes = encodes.len();
+            let t0 = std::time::Instant::now();
+            let mut cbb = AutoCommandBufferBuilder::primary(
+                self.cbb_alloc.clone(),
+                self.queue.queue_family_index(),
+                CommandBufferUsage::OneTimeSubmit,
+            )
             .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            for encode in encodes {
+                encode(&mut cbb).map_err(|e| Error::Vulkan(e.into()))?;
+            }
+            let t_build = t0.elapsed();
+            let cbb = cbb.build().map_err(|e| {
+                Error::Vulkan(format!("command buffer build: {e}").into())
+            })?;
+            let idx = self
+                .fence_next
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                % FENCE_RING_SIZE;
+            let cbb_submit = cbb.clone();
+            let fence = {
+                let mut ring = self.fence_ring.lock().unwrap();
+                let slot = ring.get_mut(idx).expect("fence ring index in range");
+                if slot.cbb.is_some() {
+                    slot.fence
+                        .wait(None)
+                        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                }
+                unsafe { slot.fence.reset() }
+                    .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                slot.cbb = Some(cbb);
+                slot.fence.clone()
+            };
+            self.queue
+                .with(|mut q| unsafe {
+                    q.submit(
+                        &[SubmitInfo {
+                            wait_semaphores: Vec::new(),
+                            command_buffers: vec![CommandBufferSubmitInfo::new(cbb_submit)],
+                            signal_semaphores: Vec::new(),
+                            ..Default::default()
+                        }],
+                        Some(&fence),
+                    )
+                })
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            let t_wait = std::time::Instant::now();
+            self.queue
+                .with(|mut q| q.wait_idle())
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            if std::env::var("CANDLE_VULKAN_PROFILE").is_ok() {
+                eprintln!(
+                    "vulkan profile: {} encodes, encode+build {:?}, submit+wait {:?}",
+                    n_encodes,
+                    t_build,
+                    t_wait.elapsed()
+                );
+            }
+            return Ok(());
+        }
         Ok(())
     }
 
@@ -250,8 +343,8 @@ impl VulkanDevice {
         self._gpu_id
     }
 
-    pub fn kernels(&self) -> &Kernels {
-        &self.kernels
+    pub fn kernels(&self) -> Arc<Kernels> {
+        self.kernels.clone()
     }
 }
 

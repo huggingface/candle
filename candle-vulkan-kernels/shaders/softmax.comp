@@ -1,0 +1,59 @@
+// Numerically stable softmax over the last (contiguous) axis:
+//   out[r, c] = exp(in[r, c] - rowmax) / sum_c' exp(in[r, c'] - rowmax)
+// One workgroup per row; two workgroup reductions (max, then sum).
+// WGSL (rather than GLSL) because naga's GLSL frontend rejects the
+// `shared` layout qualifier.
+@group(0) @binding(0)
+var<storage, read> in_buf: array<f32>;
+@group(0) @binding(1)
+var<storage, read_write> out_buf: array<f32>;
+struct Params {
+    rows: u32,
+    cols: u32,
+};
+var<immediate> params: Params;
+var<workgroup> partial: array<f32, 256>;
+@compute @workgroup_size(256)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+    let row = wid.x;
+    if (row >= params.rows) {
+        return;
+    }
+    let lane = lid.x;
+    let cols = params.cols;
+    // Row maximum.
+    var m = -1.0e30;
+    for (var c = lane; c < cols; c += 256u) {
+        m = max(m, in_buf[row * cols + c]);
+    }
+    partial[lane] = m;
+    workgroupBarrier();
+    if (lane == 0u) {
+        var s = -1.0e30;
+        for (var i = 0u; i < 256u; i++) {
+            s = max(s, partial[i]);
+        }
+        partial[0] = s;
+    }
+    workgroupBarrier();
+    let rmax = partial[0];
+    // Sum of exp(x - max).
+    var acc = 0.0;
+    for (var c = lane; c < cols; c += 256u) {
+        acc += exp(in_buf[row * cols + c] - rmax);
+    }
+    partial[lane] = acc;
+    workgroupBarrier();
+    if (lane == 0u) {
+        var s = 0.0;
+        for (var i = 0u; i < 256u; i++) {
+            s += partial[i];
+        }
+        partial[0] = s;
+    }
+    workgroupBarrier();
+    let inv = 1.0 / partial[0];
+    for (var c = lane; c < cols; c += 256u) {
+        out_buf[row * cols + c] = exp(in_buf[row * cols + c] - rmax) * inv;
+    }
+}

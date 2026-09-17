@@ -1,0 +1,26 @@
+// GEMV for the m=1 matmul case: out[n] = sum_k a[k] * w[k * n + n],
+// w row-major (k, n). One thread per output column; the loop over k is
+// memory-bound (w read once, a broadcast from L1).
+@group(0) @binding(0)
+var<storage, read> a_buf: array<f32>;
+@group(0) @binding(1)
+var<storage, read> w_buf: array<f32>;
+@group(0) @binding(2)
+var<storage, read_write> out_buf: array<f32>;
+struct Params {
+    k: u32,
+    n: u32,
+};
+var<immediate> params: Params;
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let col = gid.x; // 1-D dispatch: global thread id
+    if (col >= params.n) {
+        return;
+    }
+    var acc = 0.0;
+    for (var i = 0u; i < params.k; i++) {
+        acc += a_buf[i] * w_buf[i * params.n + col];
+    }
+    out_buf[col] = acc;
+}
