@@ -112,7 +112,8 @@ int candle_sycl_affine(CandleSyclQueue *q, CandleSyclDType dt, const CandleSyclL
         int64_t si = strided_index(i, L);
         o[i] = static_cast<T>(to_acc(in[si]) * m + a);
       });
-      q->q.wait_and_throw();
+      // Enqueue only, as every other kernel here does: waiting per call
+      // stalls the host behind the whole queued forward pass.
       return CANDLE_SYCL_OK;
     } catch (const sycl::exception &e) {
       fprintf(stderr, "[candle_sycl_affine] sycl::exception: %s (code=%d)\n", e.what(),

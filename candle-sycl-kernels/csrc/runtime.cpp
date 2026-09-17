@@ -1,5 +1,6 @@
 // Host-side SYCL runtime: queue, USM, memcpy, device info.
 #include "common.hpp"
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -69,6 +70,18 @@ int candle_sycl_device_info(CandleSyclQueue *q, CandleSyclDeviceInfo *out) {
     return CANDLE_SYCL_ERR_EXCEPTION;
   }
 }
+
+namespace {
+// oneAPI 2026.x defaults to the Level-Zero V2 adapter, which fails the first
+// kernel submission from an in-order USM queue on Xe2 with
+// UR_RESULT_ERROR_UNSUPPORTED_FEATURE. The UR loader reads this when it first
+// loads adapters, so it must be set before any SYCL call; a static initialiser
+// runs early enough, and `overwrite = 0` leaves a caller's setting alone.
+struct UrLoaderDefaults {
+  UrLoaderDefaults() { setenv("UR_LOADER_USE_LEVEL_ZERO_V2", "0", 0); }
+};
+const UrLoaderDefaults ur_loader_defaults;
+} // namespace
 
 void *candle_sycl_malloc(CandleSyclQueue *q, size_t bytes) {
   try {

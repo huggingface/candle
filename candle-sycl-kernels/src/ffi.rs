@@ -387,6 +387,13 @@ extern "C" {
         dst_f32: *mut c_void,
         n_blocks: usize,
     ) -> c_int;
+    pub fn candle_sycl_dequantize_f16(
+        q: *mut CandleSyclQueue,
+        ggml_dtype: u32,
+        src: *const c_void,
+        dst_f16: *mut c_void,
+        n_blocks: usize,
+    ) -> c_int;
     #[allow(clippy::too_many_arguments)]
     pub fn candle_sycl_mmvq(
         q: *mut CandleSyclQueue,
@@ -397,6 +404,34 @@ extern "C" {
         n: usize,
         k: usize,
         m: usize,
+        tmp: *mut f32,
+        ch: usize,
+    ) -> c_int;
+    pub fn candle_sycl_get_rows(
+        q: *mut CandleSyclQueue,
+        dt: u32,
+        src: *const c_void,
+        ids: *const u32,
+        dst: *mut c_void,
+        n_ids: usize,
+        row_blocks: usize,
+    ) -> c_int;
+    pub fn candle_sycl_mmvq_q8(
+        q: *mut CandleSyclQueue,
+        dt: u32,
+        w: *const c_void,
+        act: *const c_void,
+        act_f16: c_int,
+        out: *mut c_void,
+        out_f16: c_int,
+        n: usize,
+        k: usize,
+        m: usize,
+        q8: *mut i8,
+        d8: *mut f32,
+        s32: *mut i32,
+        tmp: *mut f32,
+        ch: usize,
     ) -> c_int;
     pub fn candle_sycl_softmax_lastdim(
         q: *mut CandleSyclQueue,

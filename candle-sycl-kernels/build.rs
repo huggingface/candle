@@ -19,7 +19,8 @@ const SOURCES: &[&str] = &[
     "norm.cpp",
     "gemm.cpp",
 ];
-const HEADERS: &[&str] = &["candle_sycl.h", "common.hpp"];
+// Every header the sources include, so that editing one rebuilds the library.
+const HEADERS: &[&str] = &["candle_sycl.h", "common.hpp", "quant_blocks.hpp"];
 
 fn find_icpx() -> String {
     if let Ok(p) = std::env::var("CANDLE_SYCL_ICPX") {
@@ -86,6 +87,30 @@ fn main() {
         objs.push(obj);
     }
 
+    // oneAPI runtime directories, baked into the .so as an rpath so that a
+    // binary which finds this library resolves libsycl/libmkl without the
+    // caller having sourced `setvars.sh`.
+    let oneapi_root = std::env::var("ONEAPI_ROOT").ok().or_else(|| {
+        Path::new("/opt/intel/oneapi")
+            .exists()
+            .then(|| "/opt/intel/oneapi".to_string())
+    });
+    let mut runtime_dirs: Vec<String> = Vec::new();
+    if let Some(root) = oneapi_root.as_deref() {
+        for sub in [
+            "compiler/latest/lib",
+            "mkl/latest/lib",
+            "mkl/latest/lib/intel64",
+            "tcm/latest/lib",
+            "umf/latest/lib",
+        ] {
+            let p = format!("{root}/{sub}");
+            if Path::new(&p).exists() {
+                runtime_dirs.push(p);
+            }
+        }
+    }
+
     let lib = out.join("libcandle_sycl.so");
     let status = Command::new(&icpx)
         .args(common)
@@ -93,6 +118,8 @@ fn main() {
         .args(&objs)
         .arg("-o")
         .arg(&lib)
+        .args(runtime_dirs.iter().map(|d| format!("-L{d}")))
+        .args(runtime_dirs.iter().map(|d| format!("-Wl,-rpath,{d}")))
         .arg("-qmkl=sequential")
         .arg("-lmkl_sycl")
         .arg("-lsycl")
