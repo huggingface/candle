@@ -89,6 +89,7 @@ nccl = ["cuda", "cudarc/nccl", "dep:half"]
 onnx = ["candle-onnx"]
 metal = ["candle/metal", "candle-nn/metal"]
 metal-debug-labels = ["metal", "candle/metal-debug-labels", "candle-nn/metal-debug-labels", "candle-transformers/metal-debug-labels"]
+vulkan = ["candle/vulkan", "candle-nn/vulkan", "candle-transformers/vulkan"]
 microphone = ["cpal", "rubato"]
 encodec = ["cpal", "symphonia", "rubato"]
 mimi = ["cpal", "symphonia", "rubato"]
@@ -120,6 +121,10 @@ required-features = ["onnx"]
 [[example]]
 name = "whisper"
 required-features = ["symphonia"]
+
+[[example]]
+name = "qwen3-vulkan"
+required-features = ["vulkan"]
 
 [[example]]
 name = "whisper-microphone"

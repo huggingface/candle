@@ -1,0 +1,90 @@
+// Tiled f32 GEMM: out[b, m, n] = lhs[b, m, k] @ rhs[b, k, n].
+//
+// The rhs may be stored transposed as (b, n, k); the `rhs_transposed`
+// push constant selects the indexing. 16x16 workgroup tiles over 16-wide
+// slabs of the reduction dimension; m, n and k need not be multiples of
+// 16 (out-of-range elements are zero-filled in the tiles).
+//
+// WGSL (rather than GLSL) because naga's GLSL frontend synthesizes exactly
+// one entry point per module, named `main`, while this kernel is
+// registered as `main_gemm`.
+//
+// Barrier discipline: `workgroupBarrier()` is UB in divergent control
+// flow (Vulkan spec 15.5.3), and RADV miscompiles it there. Every thread
+// therefore executes both barriers on every slab iteration, regardless of
+// whether its output element is in range; out-of-range threads still
+// load/zero-fill their tile cells (so in-range readers see valid data)
+// and skip only the reduction and the output store.
+
+const TILE: u32 = 16u;
+
+struct GemmParams {
+    batch: u32,
+    m: u32,
+    n: u32,
+    k: u32,
+    rhs_transposed: u32,
+}
+
+@group(0) @binding(0)
+var<storage, read> lhs_buf: array<f32>;
+
+@group(0) @binding(1)
+var<storage, read> rhs_buf: array<f32>;
+
+@group(0) @binding(2)
+var<storage, read_write> out_buf: array<f32>;
+
+var<immediate> params: GemmParams;
+
+var<workgroup> a_tile: array<f32, TILE * TILE>;
+var<workgroup> b_tile: array<f32, TILE * TILE>;
+
+@compute @workgroup_size(16, 16)
+fn main_gemm(
+    @builtin(workgroup_id) wg: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+    let batch = wg.z;
+    let row = wg.x * TILE + lid.y;
+    let col = wg.y * TILE + lid.x;
+    let in_range = row < params.m && col < params.n;
+
+    var acc = 0.0;
+    for (var k0: u32 = 0u; k0 < params.k; k0 += TILE) {
+        // Every lane loads one element of the lhs tile (its row, all k
+        // across the workgroup) and one of the rhs tile (all k in its
+        // column). Cells are zero-filled when the source element is out
+        // of range (k dimension or m/n dimension) so the reduction stays
+        // correct at tile borders and no out-of-bounds load is issued.
+        let a_k = k0 + lid.x;
+        if (a_k < params.k && row < params.m) {
+            a_tile[lid.y * TILE + lid.x] =
+                lhs_buf[batch * params.m * params.k + row * params.k + a_k];
+        } else {
+            a_tile[lid.y * TILE + lid.x] = 0.0;
+        }
+        let b_k = k0 + lid.y;
+        if (b_k < params.k && col < params.n) {
+            if (params.rhs_transposed == 1u) {
+                b_tile[lid.y * TILE + lid.x] =
+                    rhs_buf[batch * params.n * params.k + col * params.k + b_k];
+            } else {
+                b_tile[lid.y * TILE + lid.x] =
+                    rhs_buf[batch * params.k * params.n + b_k * params.n + col];
+            }
+        } else {
+            b_tile[lid.y * TILE + lid.x] = 0.0;
+        }
+        workgroupBarrier();
+        if (in_range) {
+            for (var kk: u32 = 0u; kk < TILE; kk += 1u) {
+                acc += a_tile[lid.y * TILE + kk] * b_tile[kk * TILE + lid.x];
+            }
+        }
+        workgroupBarrier();
+    }
+    if (in_range) {
+        out_buf[batch * params.m * params.n + row * params.n + col] = acc;
+    }
+}

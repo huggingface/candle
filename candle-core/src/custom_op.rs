@@ -1,3 +1,5 @@
+#[cfg(feature = "vulkan")]
+use crate::backend::{BackendDevice, BackendStorage};
 use crate::layout::LayoutRelation;
 use crate::op::{BackpropOp, Op};
 use crate::tensor::from_storage;
@@ -39,14 +41,29 @@ pub trait CustomOp1 {
     }
     /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
+    /// The forward pass, as run on the vulkan gpu device. Implemented as a
+    /// CPU round-trip: download the storage, run `cpu_fwd`, upload the
+    /// result. This keeps user-land custom ops (e.g. `RmsNorm`, the rotary
+    /// embeddings) working without dedicated Vulkan kernels.
     fn vulkan_fwd(
         &self,
-        _storage: &VulkanStorage,
-        _layout: &Layout,
+        storage: &VulkanStorage,
+        layout: &Layout,
     ) -> Result<(VulkanStorage, Shape)> {
-        Err(crate::Error::Vulkan(
-            format!("no vulkan implementation for {}", self.name()).into(),
-        ))
+        #[cfg(feature = "vulkan")]
+        {
+            let cpu = storage.to_cpu_storage()?;
+            let (cpu_res, shape) = self.cpu_fwd(&cpu, layout)?;
+            let res = storage.device().storage_from_cpu_storage(&cpu_res)?;
+            Ok((res, shape))
+        }
+        #[cfg(not(feature = "vulkan"))]
+        {
+            let _ = (storage, layout);
+            Err(crate::Error::Vulkan(
+                format!("no vulkan implementation for {}", self.name()).into(),
+            ))
+        }
     }
 
     /// This function takes as argument the argument `arg` used in the forward pass, the result
@@ -101,16 +118,29 @@ pub trait CustomOp2 {
     }
     /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
+    /// The forward pass, as run on the vulkan gpu device. See `CustomOp1::vulkan_fwd`.
     fn vulkan_fwd(
         &self,
-        _: &VulkanStorage,
-        _: &Layout,
-        _: &VulkanStorage,
-        _: &Layout,
+        s1: &VulkanStorage,
+        l1: &Layout,
+        s2: &VulkanStorage,
+        l2: &Layout,
     ) -> Result<(VulkanStorage, Shape)> {
-        Err(crate::Error::Vulkan(
-            format!("no vulkan implementation for {}", self.name()).into(),
-        ))
+        #[cfg(feature = "vulkan")]
+        {
+            let c1 = s1.to_cpu_storage()?;
+            let c2 = s2.to_cpu_storage()?;
+            let (cpu_res, shape) = self.cpu_fwd(&c1, l1, &c2, l2)?;
+            let res = s1.device().storage_from_cpu_storage(&cpu_res)?;
+            Ok((res, shape))
+        }
+        #[cfg(not(feature = "vulkan"))]
+        {
+            let _ = (s1, l1, s2, l2);
+            Err(crate::Error::Vulkan(
+                format!("no vulkan implementation for {}", self.name()).into(),
+            ))
+        }
     }
 
     fn bwd(
@@ -174,18 +204,32 @@ pub trait CustomOp3 {
     }
     /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
+    /// The forward pass, as run on the vulkan gpu device. See `CustomOp1::vulkan_fwd`.
     fn vulkan_fwd(
         &self,
-        _: &VulkanStorage,
-        _: &Layout,
-        _: &VulkanStorage,
-        _: &Layout,
-        _: &VulkanStorage,
-        _: &Layout,
+        s1: &VulkanStorage,
+        l1: &Layout,
+        s2: &VulkanStorage,
+        l2: &Layout,
+        s3: &VulkanStorage,
+        l3: &Layout,
     ) -> Result<(VulkanStorage, Shape)> {
-        Err(crate::Error::Vulkan(
-            format!("no vulkan implementation for {}", self.name()).into(),
-        ))
+        #[cfg(feature = "vulkan")]
+        {
+            let c1 = s1.to_cpu_storage()?;
+            let c2 = s2.to_cpu_storage()?;
+            let c3 = s3.to_cpu_storage()?;
+            let (cpu_res, shape) = self.cpu_fwd(&c1, l1, &c2, l2, &c3, l3)?;
+            let res = s1.device().storage_from_cpu_storage(&cpu_res)?;
+            Ok((res, shape))
+        }
+        #[cfg(not(feature = "vulkan"))]
+        {
+            let _ = (s1, l1, s2, l2, s3, l3);
+            Err(crate::Error::Vulkan(
+                format!("no vulkan implementation for {}", self.name()).into(),
+            ))
+        }
     }
 
     fn bwd(

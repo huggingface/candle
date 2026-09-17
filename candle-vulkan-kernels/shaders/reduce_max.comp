@@ -1,0 +1,29 @@
+#version 460
+
+layout(local_size_x = 1) in;
+
+layout(binding = 0) buffer Input {
+    float data[];
+} in_buf;
+
+layout(binding = 1) buffer Output {
+    float data[];
+} out_buf;
+
+layout(push_constant) uniform Params {
+    uint rows;
+    uint cols;
+} params;
+
+// Max over the last (contiguous) axis: out[row] = max_c in[row * cols + c].
+void main() {
+    uint row = gl_GlobalInvocationID.x;
+    if (row >= params.rows) {
+        return;
+    }
+    float acc = -3.402823466e+38;
+    for (uint c = 0u; c < params.cols; c++) {
+        acc = max(acc, in_buf.data[row * params.cols + c]);
+    }
+    out_buf.data[row] = acc;
+}

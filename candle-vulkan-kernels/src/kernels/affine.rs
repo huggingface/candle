@@ -38,8 +38,12 @@ pub fn call_affine_f32(
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
-    cbb.push_constants(entry.layout.clone(), 0, [size as u32, mul.to_bits(), add.to_bits()])
-        .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
+    cbb.push_constants(
+        entry.layout.clone(),
+        0,
+        [size as u32, mul.to_bits(), add.to_bits()],
+    )
+    .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     let workgroups = ((size + (WORKGROUP_SIZE as u64) - 1) / (WORKGROUP_SIZE as u64)) as u32;
     unsafe { cbb.dispatch([workgroups, 1, 1]) }
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;

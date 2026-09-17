@@ -218,6 +218,30 @@ impl VulkanDevice {
             .map_err(|e| Error::Vulkan(format!("buffer read: {e}").into()))?;
         Ok((*guard).to_vec())
     }
+
+    /// Uploads `data` into a device u32 storage buffer.
+    pub fn upload_u32(&self, data: &[u32]) -> Result<Subbuffer<[u32]>> {
+        Buffer::from_iter(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            Self::storage_alloc_info(),
+            data.iter().copied(),
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))
+    }
+
+    /// Copies a device u32 buffer back to the host (the buffers are
+    /// allocated host-mapped, see `storage_alloc_info`).
+    pub fn download_u32(&self, buffer: &Subbuffer<[u32]>) -> Result<Vec<u32>> {
+        self.synchronize()?;
+        let guard = buffer
+            .read()
+            .map_err(|e| Error::Vulkan(format!("buffer read: {e}").into()))?;
+        Ok((*guard).to_vec())
+    }
     pub fn seed_atomic(&self) -> &AtomicU64 {
         &self.seed
     }
@@ -231,10 +255,33 @@ impl VulkanDevice {
     }
 }
 
-/// A Vulkan tensor: a device f32 storage buffer plus its element count.
+/// The underlying buffer of a `VulkanStorage`: f32 or u32 elements.
+#[derive(Clone)]
+pub enum VBuf {
+    F32(Subbuffer<[f32]>),
+    U32(Subbuffer<[u32]>),
+}
+
+impl VBuf {
+    pub fn as_f32(&self) -> Option<&Subbuffer<[f32]>> {
+        match self {
+            VBuf::F32(b) => Some(b),
+            VBuf::U32(_) => None,
+        }
+    }
+
+    pub fn as_u32(&self) -> Option<&Subbuffer<[u32]>> {
+        match self {
+            VBuf::F32(_) => None,
+            VBuf::U32(b) => Some(b),
+        }
+    }
+}
+
+/// A Vulkan tensor: a device f32/u32 storage buffer plus its element count.
 #[derive(Clone)]
 pub struct VulkanStorage {
-    pub(super) buffer: Subbuffer<[f32]>,
+    pub(super) buffer: VBuf,
     pub(super) device: VulkanDevice,
     pub(super) data_len: usize,
     pub(super) dtype: DType,
@@ -250,12 +297,7 @@ impl std::fmt::Debug for VulkanStorage {
 }
 
 impl VulkanStorage {
-    pub fn new(
-        buffer: Subbuffer<[f32]>,
-        device: &VulkanDevice,
-        data_len: usize,
-        dtype: DType,
-    ) -> Self {
+    pub fn new(buffer: VBuf, device: &VulkanDevice, data_len: usize, dtype: DType) -> Self {
         Self {
             buffer,
             device: device.clone(),
@@ -264,12 +306,12 @@ impl VulkanStorage {
         }
     }
 
-    pub fn buffer(&self) -> &Subbuffer<[f32]> {
-        &self.buffer
+    pub fn as_f32(&self) -> Option<&Subbuffer<[f32]>> {
+        self.buffer.as_f32()
     }
 
-    pub fn device(&self) -> &VulkanDevice {
-        &self.device
+    pub fn as_u32(&self) -> Option<&Subbuffer<[u32]>> {
+        self.buffer.as_u32()
     }
 
     pub fn len(&self) -> usize {

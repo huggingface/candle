@@ -11,22 +11,32 @@ use vulkano::descriptor_set::layout::{
 };
 use vulkano::device::Device;
 use vulkano::pipeline::compute::ComputePipelineCreateInfo;
-use vulkano::pipeline::layout::{
-    PipelineLayoutCreateInfo, PushConstantRange,
-};
+use vulkano::pipeline::layout::{PipelineLayoutCreateInfo, PushConstantRange};
 use vulkano::pipeline::{ComputePipeline, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::shader::ShaderStages;
 
 use crate::err::VulkanKernelError;
 use crate::source::Source;
 
-/// Number of storage-buffer bindings shared by the scaffold kernels (input + output).
-const DESCRIPTOR_BINDINGS: u32 = 2;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KernelName {
     AffineF32,
     ReduceSumF32,
+    ReduceMaxF32,
+    GatherF32,
+    CopyF32,
+    ElemAddF32,
+    ElemSubF32,
+    ElemMulF32,
+    ElemDivF32,
+    ElemSigmoidF32,
+    ElemSiluF32,
+    ElemExpF32,
+    ElemSqrtF32,
+    ElemSinF32,
+    ElemCosF32,
+    ElemNegF32,
+    GemmF32,
 }
 
 impl AsRef<str> for KernelName {
@@ -34,6 +44,21 @@ impl AsRef<str> for KernelName {
         match self {
             Self::AffineF32 => "main",
             Self::ReduceSumF32 => "main",
+            Self::ReduceMaxF32 => "main",
+            Self::GatherF32 => "main",
+            Self::CopyF32 => "main",
+            Self::ElemAddF32 => "main_add",
+            Self::ElemSubF32 => "main_sub",
+            Self::ElemMulF32 => "main_mul",
+            Self::ElemDivF32 => "main_div",
+            Self::ElemSigmoidF32 => "main_sigmoid",
+            Self::ElemSiluF32 => "main_silu",
+            Self::ElemExpF32 => "main_exp",
+            Self::ElemSqrtF32 => "main_sqrt",
+            Self::ElemSinF32 => "main_sin",
+            Self::ElemCosF32 => "main_cos",
+            Self::ElemNegF32 => "main_neg",
+            Self::GemmF32 => "main_gemm",
         }
     }
 }
@@ -55,10 +80,7 @@ pub struct Kernels {
 }
 
 impl Kernels {
-    pub fn new(
-        device: Arc<Device>,
-        dss_alloc: Arc<StandardDescriptorSetAllocator>,
-    ) -> Self {
+    pub fn new(device: Arc<Device>, dss_alloc: Arc<StandardDescriptorSetAllocator>) -> Self {
         Self {
             device,
             dss_alloc,
@@ -91,7 +113,11 @@ impl Kernels {
         Ok(entry)
     }
 
-    fn build_pipeline(&self, source: Source, name: KernelName) -> Result<PipelineEntry, VulkanKernelError> {
+    fn build_pipeline(
+        &self,
+        source: Source,
+        name: KernelName,
+    ) -> Result<PipelineEntry, VulkanKernelError> {
         let words = source.spv_words();
         let shader = unsafe {
             vulkano::shader::ShaderModule::new(
@@ -105,9 +131,10 @@ impl Kernels {
             .entry_point(name.as_ref())
             .ok_or(VulkanKernelError::EntryPoint)?;
 
-        let bindings = (0..DESCRIPTOR_BINDINGS)
+        let bindings = (0..descriptor_bindings(name))
             .map(|i| {
-                let mut b = DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageBuffer);
+                let mut b =
+                    DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageBuffer);
                 b.stages = ShaderStages::COMPUTE;
                 (i, b)
             })
@@ -128,13 +155,12 @@ impl Kernels {
                 push_constant_ranges: vec![PushConstantRange {
                     stages: ShaderStages::COMPUTE,
                     offset: 0,
-                    size: source.push_constant_size(),
+                    size: source.push_constant_size(name),
                 }],
                 ..Default::default()
             },
         )
         .map_err(|e| VulkanKernelError::Pipeline(e.to_string()))?;
-
         let stage = PipelineShaderStageCreateInfo::new(entry_point);
         let pipeline = ComputePipeline::new(
             self.device.clone(),
@@ -148,5 +174,31 @@ impl Kernels {
             layout,
             set_layout,
         })
+    }
+}
+
+/// Number of storage-buffer bindings in the kernel's descriptor set. The
+/// elementwise WGSL module is shared by all its entry points, so each of
+/// them sees in/rhs/out at bindings 0/1/2 and needs the 3-binding layout;
+/// the other kernels use their input (+rhs) and output at bindings 0..N-1.
+fn descriptor_bindings(name: KernelName) -> u32 {
+    match name {
+        KernelName::AffineF32
+        | KernelName::ReduceSumF32
+        | KernelName::ReduceMaxF32
+        | KernelName::CopyF32 => 2,
+        KernelName::GatherF32
+        | KernelName::ElemAddF32
+        | KernelName::ElemSubF32
+        | KernelName::ElemMulF32
+        | KernelName::ElemDivF32
+        | KernelName::ElemSigmoidF32
+        | KernelName::ElemSiluF32
+        | KernelName::ElemExpF32
+        | KernelName::ElemSqrtF32
+        | KernelName::ElemSinF32
+        | KernelName::ElemCosF32
+        | KernelName::ElemNegF32
+        | KernelName::GemmF32 => 3,
     }
 }
