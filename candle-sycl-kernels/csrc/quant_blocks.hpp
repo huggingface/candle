@@ -46,22 +46,29 @@ inline void get_scale_min_k4(int j, const uint8_t *q, uint8_t &d, uint8_t &m) {
   }
 }
 
-// -- one block -> `qk`/QK_K floats at y --
-inline void deq_q4_0(const BQ4_0 &b, float *y) {
+// -- one block -> `qk`/QK_K values at y --
+// Overloaded on the block type, and templated on the output element type: the
+// block arithmetic is always float, only the store converts, so a
+// half-precision pipeline can dequantize straight to f16 rather than
+// materialising f32 and casting.
+template <typename T>
+inline void deq_blk(const BQ4_0 &b, T *y) {
   float d = (float)b.d;
   for (int j = 0; j < 16; ++j) {
     y[j] = ((int)(b.qs[j] & 0xF) - 8) * d;
     y[j + 16] = ((int)(b.qs[j] >> 4) - 8) * d;
   }
 }
-inline void deq_q4_1(const BQ4_1 &b, float *y) {
+template <typename T>
+inline void deq_blk(const BQ4_1 &b, T *y) {
   float d = (float)b.d, m = (float)b.m;
   for (int j = 0; j < 16; ++j) {
     y[j] = (b.qs[j] & 0xF) * d + m;
     y[j + 16] = (b.qs[j] >> 4) * d + m;
   }
 }
-inline void deq_q5_0(const BQ5_0 &b, float *y) {
+template <typename T>
+inline void deq_blk(const BQ5_0 &b, T *y) {
   float d = (float)b.d;
   uint32_t qh = rd_u32(b.qh);
   for (int j = 0; j < 16; ++j) {
@@ -71,7 +78,8 @@ inline void deq_q5_0(const BQ5_0 &b, float *y) {
     y[j + 16] = (((int)((b.qs[j] >> 4) | xh1)) - 16) * d;
   }
 }
-inline void deq_q5_1(const BQ5_1 &b, float *y) {
+template <typename T>
+inline void deq_blk(const BQ5_1 &b, T *y) {
   float d = (float)b.d, m = (float)b.m;
   uint32_t qh = rd_u32(b.qh);
   for (int j = 0; j < 16; ++j) {
@@ -81,16 +89,19 @@ inline void deq_q5_1(const BQ5_1 &b, float *y) {
     y[j + 16] = (float)((b.qs[j] >> 4) | xh1) * d + m;
   }
 }
-inline void deq_q8_0(const BQ8_0 &b, float *y) {
+template <typename T>
+inline void deq_blk(const BQ8_0 &b, T *y) {
   float d = (float)b.d;
   for (int j = 0; j < 32; ++j) y[j] = b.qs[j] * d;
 }
-inline void deq_q8_1(const BQ8_1 &b, float *y) {
+template <typename T>
+inline void deq_blk(const BQ8_1 &b, T *y) {
   float d = (float)b.d;
   for (int j = 0; j < 32; ++j) y[j] = b.qs[j] * d;
 }
 
-inline void deq_q2_k(const BQ2K &b, float *y) {
+template <typename T>
+inline void deq_blk(const BQ2K &b, T *y) {
   float d = (float)b.d, mn = (float)b.dmin;
   int is = 0;
   for (int blk = 0; blk < 2; ++blk) {
@@ -110,7 +121,8 @@ inline void deq_q2_k(const BQ2K &b, float *y) {
   }
 }
 
-inline void deq_q3_k(const BQ3K &b, float *y) {
+template <typename T>
+inline void deq_blk(const BQ3K &b, T *y) {
   const uint32_t KM1 = 0x03030303, KM2 = 0x0f0f0f0f;
   uint32_t aux[4] = {0, 0, 0, 0};
   std::memcpy(aux, b.scales, 12);
@@ -139,7 +151,8 @@ inline void deq_q3_k(const BQ3K &b, float *y) {
   }
 }
 
-inline void deq_q4_k(const BQ4K &b, float *y) {
+template <typename T>
+inline void deq_blk(const BQ4K &b, T *y) {
   float d = (float)b.d, mn = (float)b.dmin;
   int is = 0, yi = 0;
   for (int j = 0; j < QK_K; j += 64) {
@@ -155,7 +168,8 @@ inline void deq_q4_k(const BQ4K &b, float *y) {
   }
 }
 
-inline void deq_q5_k(const BQ5K &b, float *y) {
+template <typename T>
+inline void deq_blk(const BQ5K &b, T *y) {
   float d = (float)b.d, mn = (float)b.dmin;
   int is = 0, yi = 0;
   uint8_t u1 = 1, u2 = 2;
@@ -180,29 +194,58 @@ inline void deq_q5_k(const BQ5K &b, float *y) {
   }
 }
 
-inline void deq_q6_k(const BQ6K &b, float *y) {
+template <typename T>
+inline void deq_blk(const BQ6K &b, T *y) {
+  // Writes must be sequential in `y`. The natural transcription of ggml's
+  // layout emits yy[l], yy[l+32], yy[l+64], yy[l+96] from one loop — four
+  // interleaved streams 128 B apart, which Xe cannot merge into wide stores.
+  // That alone cost 15x here (2547 -> 39722 Melem/s on a B70, bit-identical),
+  // and was what made Q6_K the outlier among the block types. Same arithmetic,
+  // reordered so each 32-element run is written in address order.
   float d = (float)b.d;
-  for (int n = 0; n < QK_K; n += 128) {
-    int idx = n / 128;
-    float *yy = y + n;
+  for (int idx = 0; idx < 2; ++idx) {
+    T *yy = y + 128 * idx;
     const int8_t *sc = b.scales + 8 * idx;
     const uint8_t *ql = b.ql + 64 * idx;
     const uint8_t *qh = b.qh + 32 * idx;
-    for (int l = 0; l < 32; ++l) {
-      int is = l / 16;
-      int q1 = (int)((ql[l] & 0xF) | ((qh[l] & 3) << 4)) - 32;
-      int q2 = (int)((ql[l + 32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) - 32;
-      int q3 = (int)((ql[l] >> 4) | (((qh[l] >> 4) & 3) << 4)) - 32;
-      int q4 = (int)((ql[l + 32] >> 4) | (((qh[l] >> 6) & 3) << 4)) - 32;
-      yy[l] = d * sc[is] * q1;
-      yy[l + 32] = d * sc[is + 2] * q2;
-      yy[l + 64] = d * sc[is + 4] * q3;
-      yy[l + 96] = d * sc[is + 6] * q4;
+    for (int g = 0; g < 4; ++g) {
+      // g selects (which 32 ql bytes, which nibble, which qh bit pair).
+      const uint8_t *qlo = ql + 32 * (g & 1);
+      const int nsh = 4 * (g >> 1), hsh = 2 * g;
+      for (int l = 0; l < 32; ++l) {
+        int q = (int)(((qlo[l] >> nsh) & 0xF) | (((qh[l] >> hsh) & 3) << 4)) - 32;
+        yy[32 * g + l] = d * sc[2 * g + (l >> 4)] * q;
+      }
     }
   }
 }
 
-inline void deq_q8_k(const BQ8K &b, float *y) {
+template <typename T>
+inline void deq_blk(const BQ8K &b, T *y) {
   for (int j = 0; j < QK_K; ++j) y[j] = b.d * b.qs[j];
 }
 
+// Call `f(tag)` with a tag naming the block layout `ggml_dtype` denotes:
+// `decltype(tag)::Blk` is the struct, `decltype(tag)::blk` its element count.
+template <typename Blk_, int blk_> struct BlkTag {
+  using Blk = Blk_;
+  static constexpr int blk = blk_;
+};
+
+template <typename F> inline int dispatch_blk(uint32_t ggml_dtype, F &&f) {
+  switch (ggml_dtype) {
+  case G_Q4_0: return f(BlkTag<BQ4_0, QK>{});
+  case G_Q4_1: return f(BlkTag<BQ4_1, QK>{});
+  case G_Q5_0: return f(BlkTag<BQ5_0, QK>{});
+  case G_Q5_1: return f(BlkTag<BQ5_1, QK>{});
+  case G_Q8_0: return f(BlkTag<BQ8_0, QK>{});
+  case G_Q8_1: return f(BlkTag<BQ8_1, QK>{});
+  case G_Q2K: return f(BlkTag<BQ2K, QK_K>{});
+  case G_Q3K: return f(BlkTag<BQ3K, QK_K>{});
+  case G_Q4K: return f(BlkTag<BQ4K, QK_K>{});
+  case G_Q5K: return f(BlkTag<BQ5K, QK_K>{});
+  case G_Q6K: return f(BlkTag<BQ6K, QK_K>{});
+  case G_Q8K: return f(BlkTag<BQ8K, QK_K>{});
+  default: return CANDLE_SYCL_ERR_UNSUPPORTED_DTYPE;
+  }
+}

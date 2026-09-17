@@ -86,3 +86,7 @@ required-features = ["sycl"]
 [[example]]
 name = "sycl_qbench"
 required-features = ["sycl"]
+
+[[example]]
+name = "sycl_parity"
+required-features = ["sycl"]

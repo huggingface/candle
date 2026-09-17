@@ -183,10 +183,24 @@ int candle_sycl_conv_transpose1d(CandleSyclQueue *q, CandleSyclDType dt, const v
 // ggml_dtype: candle-source-order id (F32=0,F16=1,BF16=2,Q4_0=3,...,Q8K=14).
 int candle_sycl_dequantize(CandleSyclQueue *q, uint32_t ggml_dtype, const void *src,
                            void *dst_f32, size_t n_blocks);
+// As above but writes f16, for a half-precision pipeline that would otherwise
+// dequantize to f32 and cast.
+int candle_sycl_dequantize_f16(CandleSyclQueue *q, uint32_t ggml_dtype, const void *src,
+                               void *dst_f16, size_t n_blocks);
+// Dequantize the `n_ids` rows named by `ids` (each `row_blocks` blocks) of a
+// quantized matrix into `dst_f32`.
+int candle_sycl_get_rows(CandleSyclQueue *q, uint32_t ggml_dtype, const void *src,
+                         const uint32_t *ids, void *dst_f32, size_t n_ids, size_t row_blocks);
 // Fused quantized mat-vec: weight (n rows x k/blk blocks) @ act^T (f32, m x k),
-// m <= 8. out is f32 (m x n).
+// m <= 8. out is f32 (m x n). `tmp`/`ch` are partial-sum scratch, see mmvq.cpp.
 int candle_sycl_mmvq(CandleSyclQueue *q, uint32_t dt, const void *w, const float *act,
-                     float *out, size_t n, size_t k, size_t m);
+                     float *out, size_t n, size_t k, size_t m, float *tmp, size_t ch);
+// As above, dotting in integer arithmetic against an int8-quantized activation.
+// `act`/`out` are f32, or f16 when `act_f16`/`out_f16`; `q8`, `d8` and `s32`
+// hold the quantized activation. See mmvq.cpp for the scratch sizes.
+int candle_sycl_mmvq_q8(CandleSyclQueue *q, uint32_t dt, const void *w, const void *act,
+                        int act_f16, void *out, int out_f16, size_t n, size_t k, size_t m,
+                        int8_t *q8, float *d8, int32_t *s32, float *tmp, size_t ch);
 
 // ---- candle-nn fused ops -----------------------------------------
 int candle_sycl_softmax_lastdim(CandleSyclQueue *q, CandleSyclDType dt, const void *inp,

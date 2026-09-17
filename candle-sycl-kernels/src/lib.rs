@@ -194,7 +194,17 @@ pub struct DeviceInfo {
 /// buffers are parked here and handed straight back.
 pub struct Queue {
     raw: *mut CandleSyclQueue,
-    pool: std::sync::Mutex<std::collections::HashMap<usize, Vec<*mut c_void>>>,
+    pool: std::sync::Mutex<Pool>,
+    /// Buffers the pool declined, waiting to be freed behind a synchronize.
+    /// See [`Queue::defer_free`].
+    pending_free: std::sync::Mutex<Vec<*mut c_void>>,
+}
+
+/// Freed device buffers, keyed by exact byte size, plus a running total.
+#[derive(Default)]
+struct Pool {
+    buckets: std::collections::HashMap<usize, Vec<*mut c_void>>,
+    bytes: usize,
 }
 // The underlying `sycl::queue` is safe to share and submit to from multiple
 // threads; candle serialises higher up anyway.
@@ -202,6 +212,14 @@ unsafe impl Send for Queue {}
 unsafe impl Sync for Queue {}
 
 const POOL_PER_BUCKET: usize = 16;
+
+/// Upper bound on the bytes parked in the pool, so that the dequantized
+/// weights a prefill allocates cannot crowd out the weights and KV cache.
+const POOL_MAX_BYTES: usize = 1 << 30;
+
+/// How many declined buffers to accumulate before paying one synchronize to
+/// free them all.
+const PENDING_FREE_FLUSH: usize = 64;
 
 impl Queue {
     pub fn new(ordinal: usize) -> Result<Arc<Self>> {
@@ -214,32 +232,72 @@ impl Queue {
         }
         Ok(Arc::new(Self {
             raw,
-            pool: std::sync::Mutex::new(std::collections::HashMap::new()),
+            pool: std::sync::Mutex::new(Pool::default()),
+            pending_free: std::sync::Mutex::new(Vec::new()),
         }))
     }
 
     fn pool_take(&self, len: usize) -> Option<*mut c_void> {
-        self.pool.lock().unwrap().get_mut(&len).and_then(Vec::pop)
+        let mut pool = self.pool.lock().unwrap();
+        let ptr = pool.buckets.get_mut(&len).and_then(Vec::pop);
+        if ptr.is_some() {
+            pool.bytes = pool.bytes.saturating_sub(len);
+        }
+        ptr
     }
 
     fn pool_give(&self, len: usize, ptr: *mut c_void) -> bool {
         let mut pool = self.pool.lock().unwrap();
-        let slot = pool.entry(len).or_default();
+        if pool.bytes + len > POOL_MAX_BYTES {
+            return false;
+        }
+        let slot = pool.buckets.entry(len).or_default();
         if slot.len() < POOL_PER_BUCKET {
             slot.push(ptr);
+            pool.bytes += len;
             true
         } else {
             false
         }
     }
 
+    /// Park `ptr` until it is safe to free.
+    ///
+    /// `sycl::free` does not wait for work already submitted to the queue, so
+    /// freeing a buffer whose kernels are merely enqueued is a use-after-free.
+    /// Batch the frees and pay one synchronize per [`PENDING_FREE_FLUSH`].
+    fn defer_free(&self, ptr: *mut c_void) {
+        let batch = {
+            let mut pending = self.pending_free.lock().unwrap();
+            pending.push(ptr);
+            if pending.len() < PENDING_FREE_FLUSH {
+                return;
+            }
+            std::mem::take(&mut *pending)
+        };
+        let _ = self.synchronize();
+        for p in batch {
+            unsafe { candle_sycl_free(self.raw, p) }
+        }
+    }
+
     /// Free every cached allocation (e.g. before a large one-off allocation).
     pub fn drain_pool(&self) {
+        // Synchronize first, for the reason in [`Queue::defer_free`]: a pooled
+        // pointer's `DeviceBuffer` was dropped, which says nothing about whether
+        // the kernels reading it have run.
+        let _ = self.synchronize();
+        let pending = std::mem::take(&mut *self.pending_free.lock().unwrap());
         let mut pool = self.pool.lock().unwrap();
-        for (_, ptrs) in pool.drain() {
+        for (_, ptrs) in pool.buckets.drain() {
             for p in ptrs {
                 unsafe { candle_sycl_free(self.raw, p) }
             }
+        }
+        pool.bytes = 0;
+        drop(pool);
+        for p in pending {
+            unsafe { candle_sycl_free(self.raw, p) }
         }
     }
 
@@ -295,7 +353,10 @@ impl Queue {
 
 impl Drop for Queue {
     fn drop(&mut self) {
-        for (_, ptrs) in self.pool.get_mut().unwrap().drain() {
+        for p in std::mem::take(self.pending_free.get_mut().unwrap()) {
+            unsafe { candle_sycl_free(self.raw, p) }
+        }
+        for (_, ptrs) in self.pool.get_mut().unwrap().buckets.drain() {
             for p in ptrs {
                 unsafe { candle_sycl_free(self.raw, p) }
             }
@@ -315,6 +376,9 @@ pub struct DeviceBuffer {
     ptr: *mut c_void,
     len_bytes: usize,
     queue: Arc<Queue>,
+    /// `false` for a [`DeviceBuffer::view`] alias: dropping it must neither
+    /// free nor pool the pointer, because another `DeviceBuffer` owns it.
+    owned: bool,
 }
 unsafe impl Send for DeviceBuffer {}
 unsafe impl Sync for DeviceBuffer {}
@@ -324,10 +388,18 @@ impl DeviceBuffer {
         let ptr = match queue.pool_take(len_bytes) {
             Some(p) => p,
             None => {
-                let p = unsafe { candle_sycl_malloc(queue.raw, len_bytes) };
+                let mut p = unsafe { candle_sycl_malloc(queue.raw, len_bytes) };
+                if p.is_null() {
+                    // The pool buckets by exact size and never shrinks on its
+                    // own, so it can hold buffers nothing will ask for again
+                    // while a fresh allocation fails. Hand them back and retry.
+                    queue.drain_pool();
+                    p = unsafe { candle_sycl_malloc(queue.raw, len_bytes) };
+                }
                 if p.is_null() {
                     return Err(SyclError(format!(
-                        "malloc_device({len_bytes}) returned null"
+                        "malloc_device({len_bytes}) returned null (device out of memory, \
+                         and the allocation pool was already drained)"
                     )));
                 }
                 p
@@ -337,7 +409,43 @@ impl DeviceBuffer {
             ptr,
             len_bytes,
             queue: queue.clone(),
+            owned: true,
         })
+    }
+
+    /// A non-owning alias of this allocation, so a buffer can be handed to
+    /// something that wants a `DeviceBuffer` without copying it. Dropping the
+    /// view is a no-op.
+    ///
+    /// # Safety
+    ///
+    /// The caller must keep `self` alive for as long as the view is used, and
+    /// must not let the view outlive it.
+    pub unsafe fn view(&self) -> Self {
+        Self {
+            ptr: self.ptr,
+            len_bytes: self.len_bytes,
+            queue: self.queue.clone(),
+            owned: false,
+        }
+    }
+
+    /// A non-owning alias starting `byte_off` into this allocation, for an
+    /// operand that is contiguous but does not start at element 0. Dropping the
+    /// view is a no-op.
+    ///
+    /// # Safety
+    ///
+    /// As [`DeviceBuffer::view`], and `byte_off` must be within the buffer.
+    pub unsafe fn view_at(&self, byte_off: usize) -> Self {
+        debug_assert!(byte_off <= self.len_bytes);
+        let byte_off = byte_off.min(self.len_bytes);
+        Self {
+            ptr: unsafe { (self.ptr as *mut u8).add(byte_off) as *mut c_void },
+            len_bytes: self.len_bytes - byte_off,
+            queue: self.queue.clone(),
+            owned: false,
+        }
     }
 
     pub fn len_bytes(&self) -> usize {
@@ -397,9 +505,13 @@ impl DeviceBuffer {
 
 impl Drop for DeviceBuffer {
     fn drop(&mut self) {
-        // Park the allocation in the queue's cache; free only if the bucket is full.
+        if !self.owned {
+            return;
+        }
+        // Park the allocation in the queue's cache; if the cache declines it,
+        // hand it to `defer_free` rather than freeing here — see that method.
         if !self.queue.pool_give(self.len_bytes, self.ptr) {
-            unsafe { candle_sycl_free(self.queue.raw, self.ptr) }
+            self.queue.defer_free(self.ptr);
         }
     }
 }
@@ -1097,7 +1209,7 @@ pub fn conv_transpose1d(
 /// `m <= 8`; `out` is dense f32 `(m, n)`.
 #[allow(clippy::too_many_arguments)]
 pub fn mmvq(
-    q: &Queue,
+    q: &Arc<Queue>,
     dt: GgmlDType,
     w: &DeviceBuffer,
     act: &DeviceBuffer,
@@ -1106,6 +1218,16 @@ pub fn mmvq(
     k: usize,
     m: usize,
 ) -> Result<()> {
+    let blk = match dt {
+        GgmlDType::Q2K
+        | GgmlDType::Q3K
+        | GgmlDType::Q4K
+        | GgmlDType::Q5K
+        | GgmlDType::Q6K
+        | GgmlDType::Q8K => 256,
+        _ => 32,
+    };
+    let (tmp, ch) = mmvq_scratch(q, n, m, k / blk)?;
     check(
         unsafe {
             candle_sycl_mmvq(
@@ -1117,9 +1239,110 @@ pub fn mmvq(
                 n,
                 k,
                 m,
+                tmp.ptr as *mut f32,
+                ch,
             )
         },
         "mmvq",
+    )
+}
+
+/// Per-(row, chunk) partial-sum scratch for the mat-vec kernels. One weight
+/// block per work-item is fastest, so the chunk size `ch` only grows enough to
+/// keep the scratch bounded on very large `n * m * nblk` (a vocab head).
+fn mmvq_scratch(q: &Arc<Queue>, n: usize, m: usize, nblk: usize) -> Result<(DeviceBuffer, usize)> {
+    const MAX_ITEMS: usize = 1 << 24;
+    let ch = (n * m * nblk).div_ceil(MAX_ITEMS).max(1);
+    let tmp = DeviceBuffer::alloc(q, n * m * nblk.div_ceil(ch) * 4)?;
+    Ok((tmp, ch))
+}
+
+/// Integer quantized mat-vec: quantizes `act` to int8 blocks on the device, then
+/// integer-dots each weight row (the CPU `vec_dot` numerics). `act` and `out`
+/// are dense f32, or f16 when `act_f16` / `out_f16`. Returns `Ok(false)` without
+/// launching anything when `dt` has no integer kernel; use [`mmvq`] then.
+#[allow(clippy::too_many_arguments)]
+pub fn mmvq_q8(
+    q: &Arc<Queue>,
+    dt: GgmlDType,
+    w: &DeviceBuffer,
+    act: &DeviceBuffer,
+    act_f16: bool,
+    out: &DeviceBuffer,
+    out_f16: bool,
+    n: usize,
+    k: usize,
+    m: usize,
+) -> Result<bool> {
+    let blk = match mmvq_q8_block(dt) {
+        Some(b) if k.is_multiple_of(b) => b,
+        _ => return Ok(false),
+    };
+    let nblk = m * (k / blk);
+    let q8 = DeviceBuffer::alloc(q, m * k)?;
+    let d8 = DeviceBuffer::alloc(q, nblk * 4)?;
+    let s32 = DeviceBuffer::alloc(q, nblk * 8 * 4)?;
+    let (tmp, ch) = mmvq_scratch(q, n, m, k / blk)?;
+    check(
+        unsafe {
+            candle_sycl_mmvq_q8(
+                q.raw,
+                dt as u32,
+                w.ptr,
+                act.ptr,
+                c_int::from(act_f16),
+                out.ptr,
+                c_int::from(out_f16),
+                n,
+                k,
+                m,
+                q8.ptr as *mut i8,
+                d8.ptr as *mut f32,
+                s32.ptr as *mut i32,
+                tmp.ptr as *mut f32,
+                ch,
+            )
+        },
+        "mmvq_q8",
+    )?;
+    Ok(true)
+}
+
+/// Activation block size of the integer mat-vec kernel for `dt`, or `None` if
+/// `dt` has no integer kernel.
+pub fn mmvq_q8_block(dt: GgmlDType) -> Option<usize> {
+    match dt {
+        GgmlDType::Q4_0 | GgmlDType::Q8_0 => Some(32),
+        GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K => Some(256),
+        _ => None,
+    }
+}
+
+/// Gather `n_ids` rows (each `row_blocks` blocks) of a quantized matrix by the
+/// `u32` indices in `ids`, dequantized into `dst` (`n_ids * row_blocks *
+/// block_size(dt)` f32). Unquantized `dt`s (F32/F16/BF16) are not supported.
+pub fn get_rows(
+    q: &Queue,
+    dt: GgmlDType,
+    src: &DeviceBuffer,
+    ids: &DeviceBuffer,
+    dst: &DeviceBuffer,
+    n_ids: usize,
+    row_blocks: usize,
+) -> Result<()> {
+    check(
+        unsafe {
+            candle_sycl_get_rows(
+                q.raw,
+                dt as u32,
+                src.ptr,
+                ids.ptr as *const u32,
+                dst.ptr,
+                n_ids,
+                row_blocks,
+            )
+        },
+        "get_rows",
     )
 }
 
@@ -1134,6 +1357,21 @@ pub fn dequantize(
     check(
         unsafe { candle_sycl_dequantize(q.raw, dt as u32, src.ptr, dst.ptr, n_blocks) },
         "dequantize",
+    )
+}
+
+/// As [`dequantize`], but writes f16 directly, saving the f32 staging buffer
+/// and the extra pass a cast would need.
+pub fn dequantize_f16(
+    q: &Queue,
+    dt: GgmlDType,
+    src: &DeviceBuffer,
+    dst: &DeviceBuffer,
+    n_blocks: usize,
+) -> Result<()> {
+    check(
+        unsafe { candle_sycl_dequantize_f16(q.raw, dt as u32, src.ptr, dst.ptr, n_blocks) },
+        "dequantize_f16",
     )
 }
 

@@ -860,7 +860,7 @@ impl BackendStorage for SyclStorage {
     }
 
     fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
-        require_contig(ids_l, "gather ids")?;
+        let ids_buf = contig_operand(&ids.buffer, ids_l, ids.dtype, "gather ids")?;
         let sdims = l.dims();
         let left: usize = sdims[..dim].iter().product();
         let right: usize = sdims[dim + 1..].iter().product();
@@ -873,7 +873,7 @@ impl BackendStorage for SyclStorage {
             to_sycl_dtype(ids.dtype)?,
             &ffi_layout(l)?,
             &self.buffer,
-            &ids.buffer,
+            &ids_buf,
             &out.buffer,
             left,
             src_dim,
@@ -908,7 +908,7 @@ impl BackendStorage for SyclStorage {
     }
 
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
-        require_contig(ids_l, "index_select ids")?;
+        let ids_buf = contig_operand(&ids.buffer, ids_l, ids.dtype, "index_select ids")?;
         let sdims = l.dims();
         let left: usize = sdims[..dim].iter().product();
         let right: usize = sdims[dim + 1..].iter().product();
@@ -923,7 +923,7 @@ impl BackendStorage for SyclStorage {
             to_sycl_dtype(ids.dtype)?,
             &lin,
             &self.buffer,
-            &ids.buffer,
+            &ids_buf,
             &out.buffer,
             left,
             src_dim,
@@ -942,9 +942,9 @@ impl BackendStorage for SyclStorage {
         src_l: &Layout,
         dim: usize,
     ) -> Result<Self> {
-        require_contig(l, "index_add self")?;
-        require_contig(ids_l, "index_add ids")?;
-        require_contig(src_l, "index_add src")?;
+        // `self` needs no check: `try_clone(l)` below materialises a dense copy.
+        let ids_buf = contig_operand(&ids.buffer, ids_l, ids.dtype, "index_add ids")?;
+        let src_buf = contig_operand(&src.buffer, src_l, src.dtype, "index_add src")?;
         let sdims = l.dims();
         let left: usize = sdims[..dim].iter().product();
         let right: usize = sdims[dim + 1..].iter().product();
@@ -957,8 +957,8 @@ impl BackendStorage for SyclStorage {
             self.sd()?,
             to_sycl_dtype(ids.dtype)?,
             &out.buffer,
-            &ids.buffer,
-            &src.buffer,
+            &ids_buf,
+            &src_buf,
             left,
             ids_dim,
             dst_dim,
@@ -1173,18 +1173,31 @@ fn nchw9(l: &Layout) -> [i64; 9] {
     ]
 }
 
-fn require_contig(l: &Layout, what: &str) -> Result<()> {
-    if l.start_offset() == 0 && l.is_contiguous() {
-        Ok(())
-    } else {
-        Err(crate::Error::Sycl(
+/// A zero-offset alias of `buf` for an operand the indexing kernels index from
+/// element 0. They have no stride support, so contiguity is required, but a
+/// non-zero `start_offset` (what `narrow` produces) only moves the base pointer.
+///
+/// The returned buffer borrows `buf`; keep `buf` alive while it is in use.
+fn contig_operand(
+    buf: &DeviceBuffer,
+    l: &Layout,
+    dtype: DType,
+    what: &str,
+) -> Result<DeviceBuffer> {
+    if !l.is_contiguous() {
+        return Err(crate::Error::Sycl(
             SyclError::msg(format!(
-                "{what}: SYCL indexing kernels need a contiguous, zero-offset operand                  (got strides {:?}); call .contiguous() upstream — general strided support                  is a later phase",
-                l.stride()
+                "{what}: SYCL indexing kernels need a contiguous operand (got shape \
+                 {:?} strides {:?} offset {}); call .contiguous() upstream — general \
+                 strided support is a later phase",
+                l.shape().dims(),
+                l.stride(),
+                l.start_offset(),
             ))
             .into(),
-        ))
+        ));
     }
+    Ok(unsafe { buf.view_at(l.start_offset() * dtype.size_in_bytes()) })
 }
 
 impl SyclStorage {
@@ -1199,9 +1212,9 @@ impl SyclStorage {
         src_l: &Layout,
         dim: usize,
     ) -> Result<()> {
-        require_contig(l, "scatter self")?;
-        require_contig(ids_l, "scatter ids")?;
-        require_contig(src_l, "scatter src")?;
+        let self_buf = contig_operand(&self.buffer, l, self.dtype, "scatter self")?;
+        let ids_buf = contig_operand(&ids.buffer, ids_l, ids.dtype, "scatter ids")?;
+        let src_buf = contig_operand(&src.buffer, src_l, src.dtype, "scatter src")?;
         let sdims = l.dims();
         let left: usize = sdims[..dim].iter().product();
         let right: usize = sdims[dim + 1..].iter().product();
@@ -1212,9 +1225,9 @@ impl SyclStorage {
             add,
             self.sd()?,
             to_sycl_dtype(ids.dtype)?,
-            &self.buffer,
-            &ids.buffer,
-            &src.buffer,
+            &self_buf,
+            &ids_buf,
+            &src_buf,
             left,
             src_dim,
             dst_dim,

@@ -900,7 +900,10 @@ thread_local! {
 impl QMatMul {
     pub fn from_arc(qtensor: std::sync::Arc<QTensor>) -> Result<Self> {
         let dequantize = match qtensor.dtype() {
-            GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16 => true,
+            // Widening an already dense tensor to F32 is only needed by the
+            // backends that cannot matmul against it in its own dtype; the SYCL
+            // one handles these in `QSyclStorage::fwd`.
+            GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16 => !qtensor.device().is_sycl(),
             _ => DEQUANTIZE_ALL.with(|b| *b),
         };
         let t = if dequantize {
@@ -913,6 +916,13 @@ impl QMatMul {
             Self::QTensor(qtensor)
         };
         Ok(t)
+    }
+
+    /// Whether the weight is still quantized, as opposed to one dequantized
+    /// into a dense `Tensor` at construction. Both answer `forward`, so callers
+    /// that special-case the quantized path have to ask.
+    pub fn is_quantized(&self) -> bool {
+        matches!(self, Self::QTensor(_))
     }
 
     pub fn from_qtensor(qtensor: QTensor) -> Result<Self> {
