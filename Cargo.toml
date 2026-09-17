@@ -94,13 +94,10 @@ serde = { version = "1.0.171", features = ["derive"] }
 serde_plain = "1.0.2"
 serde_json = "1.0.99"
 thiserror = "2"
-# candle-wax: the tile IR is defined as a pliron dialect.
 pliron = "0.17"
 pliron-derive = "0.17"
 wax-ir = { path = "./candle-wax/wax-ir", version = "0.11.0" }
 wax-macro = { path = "./candle-wax/wax-macro", version = "0.11.0" }
-# candle-wax: `#[wax::module]` captures its module's source text, so it needs the span
-# locations feature to map a captured span back to a file and line.
 syn = { version = "2.0", features = ["full", "extra-traits"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1.0"
