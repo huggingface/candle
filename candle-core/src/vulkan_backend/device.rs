@@ -7,7 +7,7 @@ use vulkano::command_buffer::allocator::{
     StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
 };
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferSubmitInfo, CommandBufferUsage,
+    AutoCommandBufferBuilder, CommandBufferSubmitInfo, CommandBufferUsage, CopyBufferInfo,
     PrimaryAutoCommandBuffer, SubmitInfo,
 };
 use vulkano::descriptor_set::allocator::{
@@ -161,44 +161,85 @@ impl VulkanDevice {
         })
     }
 
-    /// Allocation for the compute buffers: host-mapped (so that
-    /// `Buffer::from_iter` can initialize them and `read()` can read
-    /// them back) but device-preferred, so on RDNA the allocation
-    /// still lands in VRAM.
+    /// Allocation for the compute buffers: device-local (VRAM).
+    /// Host-mapped allocations on this platform fall back to system
+    /// RAM (the BAR aperture is small), which caps decode at the PCIe
+    /// bandwidth; weights and activations live in VRAM instead, with
+    /// one-shot staging copies for uploads and readback.
     fn storage_alloc_info() -> AllocationCreateInfo {
         AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS
-                | MemoryTypeFilter::PREFER_DEVICE,
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
             ..Default::default()
         }
     }
 
-    /// Uploads `data` into a device f32 storage buffer.
-    pub fn upload_f32(&self, data: &[f32]) -> Result<Subbuffer<[f32]>> {
-        Buffer::from_iter(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            Self::storage_alloc_info(),
-            data.iter().copied(),
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))
+    /// Host-visible staging memory for uploads and readback.
+    fn staging_alloc_info() -> AllocationCreateInfo {
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS,
+            ..Default::default()
+        }
     }
 
-    /// Allocates a zero-filled f32 buffer of `len` elements.
-    pub fn new_f32_buffer(&self, len: usize) -> Result<Subbuffer<[f32]>> {
-        Buffer::from_iter(
+    /// Uploads `data` into a device f32 storage buffer in VRAM. A
+    /// host-visible staging copy is recorded onto the pending batch
+    /// and runs at the next `synchronize`.
+    pub fn upload_f32(&self, data: &[f32]) -> Result<Subbuffer<[f32]>> {
+        let buffer = Buffer::new_slice(
             self.mem_alloc.clone(),
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
+                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
             Self::storage_alloc_info(),
-            std::iter::repeat_n(0f32, len),
+            data
+                .len()
+                .try_into()
+                .map_err(|_| Error::Vulkan("f32 buffer length".to_string().into()))?,
         )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let staging = Buffer::from_iter(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            Self::staging_alloc_info(),
+            data.iter().copied(),
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let dst = buffer.clone();
+        self.execute(move |cbb| {
+            cbb
+                .copy_buffer(CopyBufferInfo::buffers(staging, dst))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+        Ok(buffer)
+    }
+
+    /// Allocates a zero-filled f32 buffer of `len` elements in VRAM
+    /// (the fill is deferred onto the pending batch).
+    pub fn new_f32_buffer(&self, len: usize) -> Result<Subbuffer<[f32]>> {
+        let buffer = Buffer::new_slice(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            Self::storage_alloc_info(),
+            len.try_into()
+                .map_err(|_| Error::Vulkan("f32 buffer length".to_string().into()))?,
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let dst: Subbuffer<[u32]> = buffer.clone().reinterpret();
+        self.execute(move |cbb| {
+            cbb
+                .fill_buffer(dst, 0)
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+        Ok(buffer)
     }
 
     /// Defers `encode` onto the pending batch. All pending encodes are
@@ -286,8 +327,8 @@ impl VulkanDevice {
                 })
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
             let t_wait = std::time::Instant::now();
-            self.queue
-                .with(|mut q| q.wait_idle())
+            fence
+                .wait(Some(std::time::Duration::from_secs(60)))
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
             if std::env::var("CANDLE_VULKAN_PROFILE").is_ok() {
                 eprintln!(
@@ -302,35 +343,97 @@ impl VulkanDevice {
         Ok(())
     }
 
-    /// Copies a device f32 buffer back to the host (the buffers are
-    /// allocated host-mapped, see `storage_alloc_info`).
+    /// Copies a device f32 buffer (VRAM) back to the host via a
+    /// host-visible staging buffer, then returns the data.
     pub fn download_f32(&self, buffer: &Subbuffer<[f32]>) -> Result<Vec<f32>> {
+        let staging = Buffer::new_slice(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            Self::staging_alloc_info(),
+            buffer
+                .len()
+                .try_into()
+                .map_err(|_| Error::Vulkan("f32 buffer length".to_string().into()))?,
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let src = buffer.clone();
+        let dst = staging.clone();
+        self.execute(move |cbb| {
+            cbb
+                .copy_buffer(CopyBufferInfo::buffers(src, dst))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
         self.synchronize()?;
-        let guard = buffer
+        let guard = staging
             .read()
             .map_err(|e| Error::Vulkan(format!("buffer read: {e}").into()))?;
         Ok((*guard).to_vec())
     }
 
-    /// Uploads `data` into a device u32 storage buffer.
+    /// Uploads `data` into a device u32 storage buffer in VRAM.
     pub fn upload_u32(&self, data: &[u32]) -> Result<Subbuffer<[u32]>> {
-        Buffer::from_iter(
+        let buffer = Buffer::new_slice(
             self.mem_alloc.clone(),
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
+                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
             Self::storage_alloc_info(),
+            data
+                .len()
+                .try_into()
+                .map_err(|_| Error::Vulkan("u32 buffer length".to_string().into()))?,
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let staging = Buffer::from_iter(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            Self::staging_alloc_info(),
             data.iter().copied(),
         )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let dst = buffer.clone();
+        self.execute(move |cbb| {
+            cbb
+                .copy_buffer(CopyBufferInfo::buffers(staging, dst))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+        Ok(buffer)
     }
 
-    /// Copies a device u32 buffer back to the host (the buffers are
-    /// allocated host-mapped, see `storage_alloc_info`).
+    /// Copies a device u32 buffer (VRAM) back to the host.
     pub fn download_u32(&self, buffer: &Subbuffer<[u32]>) -> Result<Vec<u32>> {
+        let staging = Buffer::new_slice(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            Self::staging_alloc_info(),
+            buffer
+                .len()
+                .try_into()
+                .map_err(|_| Error::Vulkan("u32 buffer length".to_string().into()))?,
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let src = buffer.clone();
+        let dst = staging.clone();
+        self.execute(move |cbb| {
+            cbb
+                .copy_buffer(CopyBufferInfo::buffers(src, dst))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
         self.synchronize()?;
-        let guard = buffer
+        let guard = staging
             .read()
             .map_err(|e| Error::Vulkan(format!("buffer read: {e}").into()))?;
         Ok((*guard).to_vec())
