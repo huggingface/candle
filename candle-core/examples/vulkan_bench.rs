@@ -1,8 +1,19 @@
 //! Temporary microbenchmark: per-dispatch GPU cost for elementwise and
 //! decode-shaped gemm. Not a permanent example.
 use candle_core::{Device, Tensor};
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Vulkan per-dispatch microbenchmark", long_about = None)]
+struct Args {
+    /// The Vulkan device ordinal.
+    #[arg(short = 'g', long, default_value_t = 0)]
+    gpu: usize,
+}
+
 fn main() -> anyhow::Result<()> {
-    let device = Device::new_vulkan(0)?;
+    let args = Args::parse();
+    let device = Device::new_vulkan(args.gpu)?;
     let n = 1024usize;
     let mut x = Tensor::arange(0f32, n as f32, &device)?;
     for _ in 0..8 {

@@ -78,5 +78,9 @@ name = "vulkan_basics"
 required-features = ["vulkan"]
 
 [[example]]
+name = "vulkan_bench"
+required-features = ["vulkan"]
+
+[[example]]
 name = "cutile"
 required-features = ["cutile"]

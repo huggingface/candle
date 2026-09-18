@@ -4,6 +4,15 @@ extern crate accelerate_src;
 extern crate intel_mkl_src;
 use anyhow::{bail, Result};
 use candle_core::{Device, Tensor};
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Vulkan backend smoke test", long_about = None)]
+struct Args {
+    /// The Vulkan device ordinal.
+    #[arg(short = 'g', long, default_value_t = 0)]
+    gpu: usize,
+}
 
 fn assert_close(got: &[f32], want: &[f32], tol: f32, what: &str) -> Result<()> {
     for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
@@ -15,12 +24,8 @@ fn assert_close(got: &[f32], want: &[f32], tol: f32, what: &str) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let gpu = std::env::args()
-        .nth(1)
-        .map(|s| s.parse::<usize>())
-        .transpose()?
-        .unwrap_or(0);
-    let device = Device::new_vulkan(gpu)?;
+    let args = Args::parse();
+    let device = Device::new_vulkan(args.gpu)?;
 
     // `affine` dispatches the vulkan affine compute kernel (y = 2x + 1).
     let x = Tensor::arange(0f32, 16., &device)?.reshape((4, 4))?;
