@@ -8,7 +8,9 @@ use cutile_expand::rank_instantiation::{
 use cutile_expand::shadow_dispatch::{
     desugar_variadic_trait_decl, desugar_variadic_trait_impl, emit_shadow_dispatch,
 };
-use cutile_expand::validate_dsl_syntax::{validate_entry_attribute, validate_entry_point_parameters};
+use cutile_expand::validate_dsl_syntax::{
+    validate_entry_attribute, validate_entry_point_parameters,
+};
 use cutile_syn_utils::syn_utils::{clear_attributes, get_meta_list, get_meta_list_by_last_segment};
 use cutile_syn_utils::type_aliases::{collect_type_aliases, normalize_item_fn_param_type_aliases};
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
@@ -237,4 +239,3 @@ fn clear_entry_attribute(attrs: &mut Vec<syn::Attribute>) {
             .is_none_or(|seg| seg.ident != "entry")
     });
 }
-

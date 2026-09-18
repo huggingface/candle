@@ -4,6 +4,9 @@
 //! taking its own dependency on pliron. This crate owns the framework relationship; a backend
 //! naming `pliron::pass::*` directly would be coupled to our choice of IR framework rather
 //! than to our IR.
+pub mod dialect_view;
+pub mod fragment_set;
+pub mod uniformity;
 pub use pliron::pass::{Analysis, AnalysisManager, Pass, PassResult};
 
 // On attribute naming

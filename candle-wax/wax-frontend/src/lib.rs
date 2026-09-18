@@ -23,6 +23,33 @@ pub struct Compiled {
     pub ir: wax_ir::ir::WaxIr,
 }
 
+impl Compiled {
+    /// The same kernel as a pliron module in the `wax` dialect.
+    ///
+    /// Built on request rather than always, because a backend lowers from [`Self::ir`] and does
+    /// not need this. What does need it is our IR-level work - `cross_loop_reuse`,
+    /// `verify_operation`, and the passes plan section 8 has queued - all of which operate on
+    /// the dialect. Without it that layer is bypassed entirely on this path.
+    pub fn to_wax_module(&self, name: &str) -> Result<wax_ir::Module, String> {
+        let root = *self
+            .module
+            .functions
+            .first()
+            .ok_or("compiled module has no entry function")?;
+        let src = CutileSource::new(&self.module);
+        let params: Vec<_> = {
+            use wax_ir::source::WaxSource;
+            let regions = src.regions(root);
+            let first = regions.first().copied().ok_or("entry has no region")?;
+            let blocks = src.region_blocks(first);
+            let entry = blocks.first().copied().ok_or("entry has no block")?;
+            src.block_args(entry).into_iter().map(|(_, t)| t).collect()
+        };
+        wax_ir::from_source::module_from_source(name, &src, root, &params)
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// Compiler of one kernel entry point in a `#[wax::module]`.
 ///
 /// Mirrors the `cutile-compiler` closely.
@@ -133,7 +160,30 @@ impl<F: Fn() -> ast::Module> KernelCompiler<F> {
             .functions
             .first()
             .ok_or("compiled module has no entry function")?;
-        let ir = wax_ir::ir::from_source(&CutileSource::new(&module), root);
+        // Route through the dialect rather than straight to the flat form: the IR-level
+        // passes operate on the pliron module, and materialising from their output is what
+        // carries their conclusions into what a backend lowers. Going direct - which this did
+        // until now - silently skipped every one of them.
+        let src = CutileSource::new(&module);
+        let params: Vec<_> = {
+            use wax_ir::source::WaxSource;
+            let r = src.regions(root);
+            let first = r.first().copied().ok_or("entry has no region")?;
+            let b = src.region_blocks(first);
+            let entry = b.first().copied().ok_or("entry has no block")?;
+            src.block_args(entry).into_iter().map(|(_, t)| t).collect()
+        };
+        let mut pm =
+            wax_ir::from_source::module_from_source(&self.function_name, &src, root, &params)
+                .map_err(|e| e.to_string())?;
+        let func = *pm.functions.first().ok_or("built module has no function")?;
+
+        let mut analyses = wax_ir::passes::AnalysisManager::default();
+        // A pass failing is an analysis result, not a compile error: the kernel is still
+        // correct, it just misses an optimisation. Same handling the backend gives it.
+        let _ = wax_ir::passes::cross_loop_reuse::annotate_with(&mut analyses, &pm.ctx, func);
+
+        let ir = wax_ir::ir::from_source(&pm, func);
         Ok(Compiled { module, ir })
     }
 }

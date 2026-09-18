@@ -231,3 +231,53 @@ impl<S: WaxSource> Materialiser<'_, S> {
         slot
     }
 }
+
+/// The materialised IR is a source like any other.
+///
+/// Exists so a backend walking `WaxIr` and a conversion walking the dialect run the SAME
+/// analysis rather than two copies of it. `fragment_set` and `uniformity` are generic over
+/// [`WaxSource`] for exactly this reason: their answers are properties of the IR, and two
+/// implementations would drift apart silently - the backend would believe a value lives in a
+/// fragment register while the conversion believed it lived in a scalar.
+impl crate::source::WaxSource for WaxIr {
+    type Op = OpRef;
+    type Val = ValRef;
+    type Block = BlockRef;
+    type Region = RegionRef;
+
+    fn opcode(&self, op: Self::Op) -> Opcode {
+        self.op(op).opcode
+    }
+    fn operands(&self, op: Self::Op) -> Vec<Self::Val> {
+        self.op(op).operands.clone()
+    }
+    fn result_types(&self, op: Self::Op) -> Vec<Type> {
+        self.op(op).result_types.clone()
+    }
+    fn attributes(&self, op: Self::Op) -> Vec<(String, Attribute)> {
+        self.op(op).attributes.clone()
+    }
+    fn regions(&self, op: Self::Op) -> Vec<Self::Region> {
+        self.op(op).regions.clone()
+    }
+    fn op_result(&self, op: Self::Op, result_index: u32) -> Option<Self::Val> {
+        // `None` here means the result is dead, which is the same convention the trait uses.
+        self.op(op)
+            .results
+            .get(result_index as usize)
+            .copied()
+            .flatten()
+    }
+    fn value_type(&self, v: Self::Val) -> Type {
+        WaxIr::value_type(self, v).clone()
+    }
+    fn region_blocks(&self, r: Self::Region) -> Vec<Self::Block> {
+        self.region(r).blocks.clone()
+    }
+    fn block_ops(&self, b: Self::Block) -> Vec<Self::Op> {
+        self.block(b).ops.clone()
+    }
+    fn block_args(&self, b: Self::Block) -> Vec<(Self::Val, Type)> {
+        self.block(b).args.clone()
+    }
+}

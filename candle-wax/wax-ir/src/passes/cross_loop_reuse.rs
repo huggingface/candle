@@ -13,6 +13,7 @@
 //! [`PassResult`] whether the IR changed and which analyses remain valid.
 use crate::attr::Attribute;
 use crate::opcode::Opcode;
+use crate::passes::dialect_view::DialectView;
 use crate::source::WaxSource;
 use crate::types::{ScalarType, TileElementType, Type};
 use pliron::context::{Context, Ptr};
@@ -489,67 +490,4 @@ fn set_int_attr(ctx: &Context, op: Ptr<Operation>, key: &str, v: i64) {
         .unwrap_or_else(|_| panic!("attribute key `{key}` is not a valid pliron Identifier"));
     let value = WaxAttr(Attribute::Integer(v, Type::Scalar(ScalarType::I32)));
     op.deref_mut(ctx).attributes.set(ident, value);
-}
-
-/// Dialect read through [`WaxSource`] so the pass sees ops the same way lowering does.
-struct DialectView<'a> {
-    ctx: &'a Context,
-}
-
-impl WaxSource for DialectView<'_> {
-    type Op = Ptr<Operation>;
-    type Val = pliron::value::Value;
-    type Block = Ptr<pliron::basic_block::BasicBlock>;
-    type Region = Ptr<pliron::region::Region>;
-
-    fn opcode(&self, op: Self::Op) -> Opcode {
-        crate::dialect::source::opcode_of(self.ctx, op)
-    }
-    fn operands(&self, op: Self::Op) -> Vec<Self::Val> {
-        op.deref(self.ctx).operands().collect()
-    }
-    fn result_types(&self, op: Self::Op) -> Vec<Type> {
-        use pliron::r#type::Typed;
-        let o = op.deref(self.ctx);
-        (0..o.get_num_results())
-            .filter_map(|i| {
-                crate::dialect::types::from_pliron(self.ctx, o.get_result(i).get_type(self.ctx))
-            })
-            .collect()
-    }
-    fn attributes(&self, op: Self::Op) -> Vec<(String, Attribute)> {
-        use crate::dialect::attr_mirror::WaxAttr;
-        op.deref(self.ctx)
-            .attributes
-            .0
-            .iter()
-            .filter_map(|(k, v)| {
-                v.downcast_ref::<WaxAttr>()
-                    .map(|a| (k.to_string(), a.0.clone()))
-            })
-            .collect()
-    }
-    fn regions(&self, op: Self::Op) -> Vec<Self::Region> {
-        op.deref(self.ctx).regions().collect()
-    }
-    fn op_result(&self, op: Self::Op, i: u32) -> Option<Self::Val> {
-        let o = op.deref(self.ctx);
-        ((i as usize) < o.get_num_results()).then(|| o.get_result(i as usize))
-    }
-    fn value_type(&self, v: Self::Val) -> Type {
-        use pliron::r#type::Typed;
-        crate::dialect::types::from_pliron(self.ctx, v.get_type(self.ctx)).unwrap_or(Type::Token)
-    }
-    fn region_blocks(&self, r: Self::Region) -> Vec<Self::Block> {
-        use pliron::linked_list::ContainsLinkedList;
-        r.deref(self.ctx).iter(self.ctx).collect()
-    }
-    fn block_ops(&self, b: Self::Block) -> Vec<Self::Op> {
-        use pliron::linked_list::ContainsLinkedList;
-        b.deref(self.ctx).iter(self.ctx).collect()
-    }
-    fn block_args(&self, b: Self::Block) -> Vec<(Self::Val, Type)> {
-        let blk = b.deref(self.ctx);
-        blk.arguments().map(|v| (v, self.value_type(v))).collect()
-    }
 }

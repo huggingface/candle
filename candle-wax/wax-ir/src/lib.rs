@@ -11,6 +11,7 @@ pub mod attr;
 pub mod build;
 pub mod builder;
 pub mod dialect;
+pub mod from_source;
 pub mod global;
 pub mod ir;
 pub mod location;
