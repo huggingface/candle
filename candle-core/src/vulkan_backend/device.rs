@@ -242,6 +242,30 @@ impl VulkanDevice {
         Ok(buffer)
     }
 
+    /// Allocate a zero-filled u32 storage buffer (the fill is deferred
+    /// onto the pending batch).
+    pub fn new_u32_buffer(&self, len: usize) -> Result<Subbuffer<[u32]>> {
+        let buffer = Buffer::new_slice(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            Self::storage_alloc_info(),
+            len.try_into()
+                .map_err(|_| Error::Vulkan("u32 buffer length".to_string().into()))?,
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let dst: Subbuffer<[u32]> = buffer.clone();
+        self.execute(move |cbb| {
+            cbb
+                .fill_buffer(dst, 0)
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+        Ok(buffer)
+    }
+
     /// Defers `encode` onto the pending batch. All pending encodes are
     /// recorded onto a single command buffer and submitted by the next
     /// `synchronize()`, which also drains the GPU. Callers that read back
@@ -581,5 +605,18 @@ impl VulkanStorage {
 
     pub fn is_empty(&self) -> bool {
         self.data_len == 0
+    }
+
+    /// Transfers this storage to `device`: a shallow clone when both
+    /// point at the same logical device (device clones share the
+    /// underlying vulkano `Device`), otherwise a full copy through the
+    /// host (download + upload).
+    pub fn transfer_to_device(&self, device: &VulkanDevice) -> Result<Self> {
+        if std::sync::Arc::ptr_eq(&self.device.device, &device.device) {
+            return Ok(self.clone());
+        }
+        let cpu = crate::backend::BackendStorage::to_cpu_storage(self)?;
+        let storage = crate::backend::BackendDevice::storage_from_cpu_storage(device, &cpu)?;
+        Ok(storage)
     }
 }

@@ -1,8 +1,11 @@
 //! The Vulkan backend: storage + device trait implementations.
 //!
-//! Scaffold: `affine` (f32) and `reduce` (Sum, f32) are implemented through
-//! the `candle_vulkan_kernels` compute shaders; every other operation returns
-//! `Err(Error::Msg("vulkan: <op> not implemented (scaffold)"))`.
+//! Implemented in f32 through the `candle_vulkan_kernels` compute shaders:
+//! elementwise unary (exp, sin, cos, neg, sqrt, silu, sigmoid) and binary
+//! ops, affine, gather, copy, matmul (gemm / gemv), reduce (sum / max),
+//! rms_norm, rope, softmax, plus the quantized Q4_K / Q6_K dequant and
+//! matmul kernels in `crate::quantized::vulkan`. Unsupported operations and
+//! dtypes return `not_impl` errors.
 
 use std::sync::atomic::Ordering;
 
@@ -42,7 +45,7 @@ impl From<String> for VulkanError {
 }
 
 fn not_impl(op: &str) -> Error {
-    Error::Msg(format!("vulkan: {op} not implemented (scaffold)"))
+    Error::Msg(format!("vulkan: {op} not implemented"))
 }
 
 fn contig_strides(dims: &[usize]) -> Vec<usize> {
@@ -771,8 +774,17 @@ impl BackendDevice for VulkanDevice {
 
     unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
         let dim = shape.elem_count();
-        let buffer = self.new_f32_buffer(dim)?;
-        Ok(VulkanStorage::new(VBuf::F32(buffer), self, dim, dtype))
+        match dtype {
+            DType::F32 => {
+                let buffer = self.new_f32_buffer(dim)?;
+                Ok(VulkanStorage::new(VBuf::F32(buffer), self, dim, dtype))
+            }
+            DType::U32 => {
+                let buffer = self.new_u32_buffer(dim)?;
+                Ok(VulkanStorage::new(VBuf::U32(buffer), self, dim, dtype))
+            }
+            _ => Err(not_impl("alloc_uninit (dtype)")),
+        }
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, slice: &[T]) -> Result<Self::Storage> {

@@ -32,6 +32,20 @@ impl QVulkanStorage {
             dtype,
         })
     }
+    /// Allocate a zero-filled quantized buffer for `elem_count` elements.
+    pub fn zeros(device: &VulkanDevice, elem_count: usize, dtype: GgmlDType) -> Result<Self> {
+        let size = elem_count.div_ceil(dtype.block_size()) * dtype.type_size();
+        let bytes = device.upload_u8(&vec![0u8; size])?;
+        Ok(Self {
+            bytes,
+            device: device.clone(),
+            dtype,
+        })
+    }
+    /// Vulkan kernels take buffer handles; raw device pointers are not exposed.
+    pub fn device_ptr(&self) -> Result<*const u8> {
+        crate::bail!("vulkan: raw device pointers are not exposed by this backend")
+    }
     pub fn device(&self) -> &VulkanDevice {
         &self.device
     }
@@ -82,11 +96,6 @@ impl QVulkanStorage {
             }
             GgmlDType::Q6K => {
                 let device = self.device.clone();
-                if std::env::var("QWV_DEBUG").is_ok() {
-                    let db = self.data()?;
-                    let mut nz = 0usize; for b in db.iter().take(2048) { if *b != 0 { nz += 1; } }
-                    eprintln!("Q6K_WEIGHTS uploaded bytes len={} first2048 nonzero={}/2048 first16={:?}", db.len(), nz, db.iter().take(16).collect::<Vec<_>>());
-                }
                 let out = device.new_f32_buffer(elem_count)?;
                 let w = self.bytes.clone();
                 let o = out.clone();
@@ -101,11 +110,6 @@ impl QVulkanStorage {
                     )
                     .map_err(|e| e.to_string())
                 })?;
-                if std::env::var("QWV_DEBUG").is_ok() {
-                    let dv = device.download_f32(&out)?;
-                    let mut nz = 0usize; for b in dv.iter().take(2048) { if *b != 0.0 { nz += 1; } }
-                    eprintln!("Q6K_DEQUANT_OUT len={} first2048 nonzero={}/2048 max={:?} first8={:?}", dv.len(), nz, dv.iter().take(2048).cloned().fold(f32::NEG_INFINITY, f32::max), dv.iter().take(8).collect::<Vec<_>>());
-                }
                 Ok(VulkanStorage::new(
                     VBuf::F32(out),
                     &self.device,

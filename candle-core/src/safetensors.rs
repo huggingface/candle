@@ -281,7 +281,8 @@ impl Tensor {
                     #[cfg(feature = "vulkan")]
                     Device::Vulkan(_) => {
                         return Err(Error::Msg(
-                            "vulkan: safetensors not implemented (scaffold)".to_string(),
+                            "vulkan: raw-bytes sub-8-bit-float storage is not supported"
+                                .to_string(),
                         ));
                     }
                     #[cfg(not(feature = "vulkan"))]
@@ -391,7 +392,7 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
         #[cfg(feature = "vulkan")]
         Device::Vulkan(_) => {
             return Err(Error::Msg(
-                "vulkan: safetensors not implemented (scaffold)".to_string(),
+                "vulkan: raw-bytes sub-8-bit-float storage is not supported".to_string()
             ));
         }
         #[cfg(not(feature = "vulkan"))]

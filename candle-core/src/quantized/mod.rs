@@ -1,8 +1,6 @@
 use crate::{
     backend::BackendStorage, CpuStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
-#[cfg(feature = "vulkan")]
-use crate::backend::BackendDevice;
 use k_quants::*;
 use std::borrow::Cow;
 
@@ -10,12 +8,17 @@ use std::borrow::Cow;
 pub mod avx;
 mod dummy_cuda;
 mod dummy_metal;
+mod dummy_vulkan;
 pub mod ggml_file;
 pub mod gguf_file;
 pub mod imatrix_file;
 pub mod k_quants;
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
+#[cfg(not(feature = "vulkan"))]
+mod vulkan {
+    pub use super::dummy_vulkan::*;
+}
 #[cfg(feature = "metal")]
 pub mod metal;
 pub mod repack;
@@ -84,9 +87,10 @@ impl Device {
                 let storage = metal::QMetalStorage::zeros(metal, elem_count, dtype)?;
                 Ok(QStorage::Metal(storage))
             }
-            Device::Vulkan(_) => Err(crate::Error::Msg(
-                "vulkan: quantized zeros not implemented (scaffold)".into(),
-            )),
+            Device::Vulkan(v) => {
+                let storage = vulkan::QVulkanStorage::zeros(v, elem_count, dtype)?;
+                Ok(QStorage::Vulkan(storage))
+            }
             Device::Cuda(cuda) => {
                 let storage = cuda::QCudaStorage::zeros(cuda, elem_count, dtype)?;
                 Ok(QStorage::Cuda(storage))
@@ -98,7 +102,6 @@ impl Device {
 pub enum QStorage {
     Cpu(Box<dyn QuantizedType>),
     Metal(metal::QMetalStorage),
-    #[cfg(feature = "vulkan")]
     Vulkan(vulkan::QVulkanStorage),
     Cuda(cuda::QCudaStorage),
 }
@@ -125,12 +128,7 @@ impl QStorage {
                 GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
             },
-            #[cfg(feature = "vulkan")]
             Device::Vulkan(d) => vulkan::load_quantized(d, data, dtype),
-            #[cfg(not(feature = "vulkan"))]
-            Device::Vulkan(_) => Err(crate::Error::Msg(
-                "vulkan: quantized load not implemented".into(),
-            )),
             Device::Cuda(d) => match dtype {
                 GgmlDType::F32 => cuda::load_quantized(d, as_t_slice::<f32>(data)),
                 GgmlDType::F16 => cuda::load_quantized(d, as_t_slice::<f16>(data)),
@@ -155,7 +153,6 @@ impl QStorage {
         match self {
             QStorage::Cpu(storage) => storage.block_size(),
             QStorage::Metal(storage) => storage.dtype().block_size(),
-            #[cfg(feature = "vulkan")]
             QStorage::Vulkan(storage) => storage.dtype().block_size(),
             QStorage::Cuda(storage) => storage.dtype().block_size(),
         }
@@ -165,7 +162,6 @@ impl QStorage {
         match self {
             QStorage::Cpu(storage) => storage.dtype(),
             QStorage::Metal(storage) => storage.dtype(),
-            #[cfg(feature = "vulkan")]
             QStorage::Vulkan(storage) => storage.dtype(),
             QStorage::Cuda(storage) => storage.dtype(),
         }
@@ -175,7 +171,6 @@ impl QStorage {
         match self {
             QStorage::Cpu(_storage) => Device::Cpu,
             QStorage::Metal(storage) => Device::Metal(storage.device().clone()),
-            #[cfg(feature = "vulkan")]
             QStorage::Vulkan(storage) => Device::Vulkan(storage.device().clone()),
             QStorage::Cuda(storage) => Device::Cuda(storage.device().clone()),
         }
@@ -185,7 +180,6 @@ impl QStorage {
         match self {
             QStorage::Cpu(storage) => storage.storage_size_in_bytes(),
             QStorage::Metal(storage) => storage.storage_size_in_bytes(),
-            #[cfg(feature = "vulkan")]
             QStorage::Vulkan(storage) => storage.size_in_bytes(),
             QStorage::Cuda(storage) => storage.storage_size_in_bytes(),
         }
@@ -261,7 +255,6 @@ impl QStorage {
         match self {
             QStorage::Cpu(storage) => Ok(Storage::Cpu(storage.dequantize(elem_count)?)),
             QStorage::Metal(storage) => Ok(Storage::Metal(storage.dequantize(elem_count)?)),
-            #[cfg(feature = "vulkan")]
             QStorage::Vulkan(storage) => Ok(Storage::Vulkan(storage.dequantize_f32(elem_count)?)),
             QStorage::Cuda(storage) => Ok(Storage::Cuda(storage.dequantize(elem_count)?)),
         }
@@ -277,7 +270,6 @@ impl QStorage {
             }
             QStorage::Cuda(storage) => Ok(Cow::from(storage.data()?)),
             QStorage::Metal(storage) => Ok(Cow::from(storage.data()?)),
-            #[cfg(feature = "vulkan")]
             QStorage::Vulkan(storage) => Ok(Cow::from(storage.data()?)),
         }
     }
@@ -288,10 +280,7 @@ impl QStorage {
             QStorage::Metal(_) | QStorage::Cpu(_) => {
                 crate::bail!("not implemented");
             }
-            #[cfg(feature = "vulkan")]
-            QStorage::Vulkan(_) => {
-                crate::bail!("not implemented");
-            }
+            QStorage::Vulkan(storage) => storage.device_ptr(),
         }
     }
 
@@ -308,10 +297,7 @@ impl QStorage {
             QStorage::Metal(_) | QStorage::Cpu(_) => {
                 crate::bail!("not implemented");
             }
-            #[cfg(feature = "vulkan")]
-            QStorage::Vulkan(_) => {
-                crate::bail!("not implemented");
-            }
+            QStorage::Vulkan(_) => crate::bail!("not implemented"),
         }
     }
 }
@@ -839,10 +825,7 @@ impl QTensor {
             QStorage::Metal(_) | QStorage::Cpu(_) => {
                 crate::bail!("not implemented");
             }
-            #[cfg(feature = "vulkan")]
-            QStorage::Vulkan(_) => {
-                crate::bail!("not implemented");
-            }
+            QStorage::Vulkan(storage) => storage.device_ptr(),
         }
     }
 
@@ -1332,23 +1315,16 @@ impl crate::CustomOp1 for QTensor {
         };
         self_storage.fwd(&self.shape, storage, layout)
     }
-    #[cfg(feature = "vulkan")]
     fn vulkan_fwd(
         &self,
         storage: &crate::VulkanStorage,
         layout: &crate::Layout,
     ) -> Result<(crate::VulkanStorage, Shape)> {
-        match &self.storage {
-            QStorage::Vulkan(s) => s.fwd(&self.shape, storage, layout),
-            _ => {
-                // Non-Vulkan storage with a Vulkan input: CPU round-trip
-                // (mirrors the CustomOp1 default).
-                let cpu = storage.to_cpu_storage()?;
-                let (cpu_res, shape) = self.cpu_fwd(&cpu, layout)?;
-                let res = storage.device().storage_from_cpu_storage(&cpu_res)?;
-                Ok((res, shape))
-            }
-        }
+        let self_storage = match &self.storage {
+            QStorage::Vulkan(vulkan) => vulkan,
+            _ => unreachable!("Cannot call vulkan matmul on non vulkan QTensor"),
+        };
+        self_storage.fwd(&self.shape, storage, layout)
     }
 }
 
