@@ -45,6 +45,9 @@ pub enum KernelName {
     SoftmaxLastDimF32,
     RopeF32,
     GemvF32,
+    Q4kQmatvecF32,
+    Q4kDequantF32,
+    Q6kDequantF32,
 }
 
 impl AsRef<str> for KernelName {
@@ -72,6 +75,9 @@ impl AsRef<str> for KernelName {
             Self::RopeF32 => "main",
             Self::GemvF32 => "main",
             Self::GemvTF32 => "main",
+            Self::Q4kQmatvecF32 => "main_qmatvec",
+            Self::Q4kDequantF32 => "main_dequant",
+            Self::Q6kDequantF32 => "main_q6k_dequant",
         }
     }
 }
@@ -228,7 +234,11 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::GemmF32
         | KernelName::RmsNormF32 => 3,
         KernelName::RopeF32 => 4,
-        KernelName::GemvF32 | KernelName::GemvTF32 => 3,
+        KernelName::GemvF32
+        | KernelName::GemvTF32
+        | KernelName::Q4kQmatvecF32
+        | KernelName::Q4kDequantF32
+        | KernelName::Q6kDequantF32 => 3,
     }
 }
 

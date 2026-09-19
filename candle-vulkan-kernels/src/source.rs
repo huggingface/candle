@@ -14,6 +14,7 @@ const SOFTMAX_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/softmax.spv
 const ROPE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rope.spv"));
 const GEMV_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv.spv"));
 const GEMV_T_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv_t.spv"));
+const Q4K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q4k.spv"));
 
 /// The set of compiled compute shaders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,6 +31,7 @@ pub enum Source {
     Rope,
     Gemv,
     GemvT,
+    Q4k,
 }
 
 impl Source {
@@ -60,6 +62,9 @@ impl Source {
             KernelName::RopeF32 => 20,
             KernelName::GemvF32 => 8,
             KernelName::GemvTF32 => 12,
+            KernelName::Q4kQmatvecF32 => 8,
+            KernelName::Q4kDequantF32 => 8,
+            KernelName::Q6kDequantF32 => 8,
         }
     }
 
@@ -78,6 +83,7 @@ impl Source {
             Self::Rope => ROPE_SPV,
             Self::Gemv => GEMV_SPV,
             Self::GemvT => GEMV_T_SPV,
+            Self::Q4k => Q4K_SPV,
         };
         bytes
             .chunks_exact(4)
@@ -94,6 +100,7 @@ impl AsRef<str> for Source {
             Self::Gemm => "gemm",
             Self::Gemv => "gemv",
             Self::GemvT => "gemv_t",
+            Self::Q4k => "q4k",
             Self::Reduce => "reduce",
             Self::ReduceMax => "reduce_max",
             Self::Gather => "gather",

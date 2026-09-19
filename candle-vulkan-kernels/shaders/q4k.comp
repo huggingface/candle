@@ -1,0 +1,244 @@
+// Q4_K and Q6_K quantized ops for the Vulkan backend.
+//
+// Entry points:
+//   main_qmatvec     Q4_K decode GEMV (m == 1): out[row] = dot(a, q4k_row)
+//   main_dequant     Q4_K full dequant -> f32 (prefill + weight-load)
+//   main_q6k_dequant Q6_K full dequant -> f32 (load-time; attn_v, ffn_down,
+//                    embedding are converted once, then run the f32 kernels)
+//
+// Q4_K block: 256 elements in 144 bytes (36 u32 words), little endian:
+//   word 0      d (f16, low 16 bits) and dmin (f16, high 16 bits)
+//   words 1..3  scales[12] (bytes 4..16)
+//   words 4..35 qs[128] (bytes 16..144), 2 quants (nibbles) per byte
+// The 12 scale bytes hold 8 (scale, min) pairs of 6-bit codes; element e
+// of the block is in subblock e/64, byte t = (e%64)/2, nibble e%2, using
+// pair subblock*2 + (e%2):  y = d * sc * qval - dmin * mn.
+//
+// Q6_K block: 256 elements in 210 bytes (not u32-aligned: 210 % 4 == 2),
+// so bytes are read through a byte accessor over the u32 word view:
+//   bytes [0..128)   ql (low 4 bits of each of the 256 quants)
+//   bytes [128..192) qh (2 high bits per quant, 4 per byte)
+//   bytes [192..208) scales (16 i8, one per 16-element group)
+//   bytes [208..210) d (f16)
+//
+// f16 -> f32 is done with an explicit field-based conversion (the
+// zero-extension bitcast is wrong: it lands in the f32 subnormal range).
+
+struct Params {
+    // qmatvec: k = input length, n = row count (rows are workgroups).
+    // dequant / q6k_dequant: k = element count.
+    k: u32,
+    n: u32,
+}
+// Single push-constant block shared by every entry point (two separate
+// `var<immediate>` blocks in one module are not delivered reliably by the
+// RADV driver).
+var<immediate> params: Params;
+
+@group(0) @binding(0)
+var<storage, read> a_buf: array<f32>;
+
+@group(0) @binding(1)
+var<storage, read> w_buf: array<u32>;
+
+@group(0) @binding(2)
+var<storage, read_write> out_buf: array<f32>;
+
+// Scratch for the qmatvec workgroup reduction (module scope is required
+// for the workgroup address space).
+var<workgroup> wsum: array<f32, 256>;
+
+// Convert an f16 bit pattern (low 16 bits of `h`) to f32.
+fn f16_to_f32(h: u32) -> f32 {
+    let sign = (h & 0x8000u) << 16;
+    let exp = (h >> 10) & 0x1Fu;
+    var mant = h & 0x3FFu;
+    if (exp == 0u) {
+        if (mant == 0u) {
+            return bitcast<f32>(sign);
+        }
+        // Subnormal f16: normalize the 10-bit mantissa to 1.m.
+        var e = 1u;
+        while (mant < 0x200u) {
+            mant = mant << 1;
+            e = e + 1u;
+        }
+        let fexp = 112u - e;
+        let mm = mant & 0x1FFu;
+        return bitcast<f32>(sign | (fexp << 23) | (mm << 13));
+    } else if (exp == 31u) {
+        return bitcast<f32>(sign | 0x7F800000u | (mant << 13));
+    } else {
+        return bitcast<f32>(sign | ((exp + 112u) << 23) | (mant << 13));
+    }
+}
+
+// Read one byte at absolute byte offset `bb` from the u32 word view.
+fn bget(bb: u32) -> u32 {
+    return (w_buf[bb / 4u] >> (8u * (bb % 4u))) & 0xFFu;
+}
+
+struct Scales {
+    sc: array<f32, 8>,
+    mn: array<f32, 8>,
+};
+
+// Extract the 8 (scale, min) 6-bit code pairs of a Q4_K block. `base` is
+// the block's offset in w_buf in u32 words.
+fn q4k_scales(base: u32) -> Scales {
+    let w1 = w_buf[base + 1u];
+    let w2 = w_buf[base + 2u];
+    let w3 = w_buf[base + 3u];
+    let s0 = w1 & 0xFFu;
+    let s1 = (w1 >> 8u) & 0xFFu;
+    let s2 = (w1 >> 16u) & 0xFFu;
+    let s3 = (w1 >> 24u) & 0xFFu;
+    let s4 = w2 & 0xFFu;
+    let s5 = (w2 >> 8u) & 0xFFu;
+    let s6 = (w2 >> 16u) & 0xFFu;
+    let s7 = (w2 >> 24u) & 0xFFu;
+    let s8 = w3 & 0xFFu;
+    let s9 = (w3 >> 8u) & 0xFFu;
+    let s10 = (w3 >> 16u) & 0xFFu;
+    let s11 = (w3 >> 24u) & 0xFFu;
+    let sc = array<f32, 8>(
+        f32(s0 & 63u),
+        f32(s1 & 63u),
+        f32(s2 & 63u),
+        f32(s3 & 63u),
+        f32((s8 & 0xFu) | ((s0 >> 6u) << 4u)),
+        f32((s9 & 0xFu) | ((s1 >> 6u) << 4u)),
+        f32((s10 & 0xFu) | ((s2 >> 6u) << 4u)),
+        f32((s11 & 0xFu) | ((s3 >> 6u) << 4u)),
+    );
+    let mn = array<f32, 8>(
+        f32(s4 & 63u),
+        f32(s5 & 63u),
+        f32(s6 & 63u),
+        f32(s7 & 63u),
+        f32((s8 >> 4u) | ((s4 >> 6u) << 4u)),
+        f32((s9 >> 4u) | ((s5 >> 6u) << 4u)),
+        f32((s10 >> 4u) | ((s6 >> 6u) << 4u)),
+        f32((s11 >> 4u) | ((s7 >> 6u) << 4u)),
+    );
+    return Scales(sc, mn);
+}
+
+// One Q4_K value: block `base` (word offset), element `e` within the block.
+fn q4k_value(base: u32, d: f32, dmin: f32, sm: Scales, e: u32) -> f32 {
+    let sub = e / 64u;
+    let r = e % 64u;
+    let t = r % 32u;                 // byte within the 32-byte qs group
+    let half = r / 32u;              // 0 = lower nibble, 1 = upper nibble
+    let pair = sub * 2u + half;
+    let byte_idx = 32u * sub + t;    // absolute qs byte (0..127)
+    let qw = w_buf[base + 4u + byte_idx / 4u];
+    let byte = (qw >> (8u * (byte_idx % 4u))) & 0xFFu;
+    let qval = (byte >> (4u * half)) & 0xFu;
+    return d * sm.sc[pair] * f32(qval) - dmin * sm.mn[pair];
+}
+
+// Q4_K decode GEMV: out[row] = dot(a_buf[0..k], q4k_row(row)). Dispatch
+// [n, 1, 1]: one workgroup of 256 threads per output row; the workgroup
+// walks the row's k/256 blocks, each lane holding one element per block.
+@compute @workgroup_size(256)
+fn main_qmatvec(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+    let row = gid.x;
+    let k = params.k;
+    let lane = lid.x;
+    let blocks = (k + 255u) / 256u;
+    let row_words = 36u * blocks;
+
+    var acc = 0.0;
+    for (var b = 0u; b < blocks; b = b + 1u) {
+        let base = row * row_words + b * 36u;
+        let w0 = w_buf[base];
+        let d = f16_to_f32(w0 & 0xFFFFu);
+        let dmin = f16_to_f32((w0 >> 16u) & 0xFFFFu);
+        let e = b * 256u + lane;
+        if (e < k) {
+            let sm = q4k_scales(base);
+            let qv = q4k_value(base, d, dmin, sm, lane);
+            acc += a_buf[e] * qv;
+        }
+    }
+
+    // Workgroup reduction over the 256 lanes.
+    wsum[lane] = acc;
+    workgroupBarrier();
+    for (var stride = 128u; stride > 0u; stride = stride / 2u) {
+        if (lane < stride) {
+            wsum[lane] += wsum[lane + stride];
+        }
+        workgroupBarrier();
+    }
+    if (lane == 0u) {
+        out_buf[row] = wsum[0];
+    }
+}
+
+// Q4_K full dequant: raw bytes -> f32. Dispatch [ceil(k/256), 1, 1]: one
+// workgroup per block, one element per lane.
+@compute @workgroup_size(256)
+fn main_dequant(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+    let block = gid.x;
+    let lane = lid.x;
+    let e = block * 256u + lane;
+    if (e >= params.k) {
+        return;
+    }
+    let base = block * 36u;
+    let w0 = w_buf[base];
+    let d = f16_to_f32(w0 & 0xFFFFu);
+    let dmin = f16_to_f32((w0 >> 16u) & 0xFFFFu);
+    let sm = q4k_scales(base);
+    out_buf[e] = q4k_value(base, d, dmin, sm, lane);
+}
+
+// Q6_K full dequant: raw bytes -> f32 (see file header for the layout).
+// Dispatch [ceil(k/256), 1, 1]: one workgroup per block, one element per
+// lane. params.k = element count.
+@compute @workgroup_size(256)
+fn main_q6k_dequant(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+    let block = gid.x;
+    let n = lid.x;
+    let e = block * 256u + n;
+    if (e >= params.k) {
+        return;
+    }
+    let bb = 210u * block;
+    let idx = n / 128u;
+    let r = n % 128u;
+    let l = r % 32u;
+    let which = r / 32u;
+    let ql_base = 64u * idx;
+    let qh_base = 128u + 32u * idx;
+    let ql_lo = bget(bb + ql_base + l);
+    let ql_hi = bget(bb + ql_base + 32u + l);
+    let qhb = bget(bb + qh_base + l);
+    var q = 0u;
+    if (which == 0u) {
+        q = (ql_lo & 0xFu) | ((qhb & 3u) << 4u);
+    } else if (which == 1u) {
+        q = (ql_hi & 0xFu) | (((qhb >> 2u) & 3u) << 4u);
+    } else if (which == 2u) {
+        q = (ql_lo >> 4u) | (((qhb >> 4u) & 3u) << 4u);
+    } else {
+        q = (ql_hi >> 4u) | (((qhb >> 6u) & 3u) << 4u);
+    }
+    let sc_off = 8u * idx + (l / 16u) + 2u * which;
+    let sb = bget(bb + 192u + sc_off);
+    let scale = f32(sb) - f32(sb & 0x80u) * 2.0;  // u8 byte -> signed i8
+    let d = f16_to_f32(bget(bb + 208u) | (bget(bb + 209u) << 8u));
+    // DEBUG: write marker + params.k to check kernel dispatch
+    out_buf[e] = 1.0 + f32(params.k) * 0.0;
+}

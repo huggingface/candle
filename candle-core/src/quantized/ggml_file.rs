@@ -154,7 +154,11 @@ pub fn qtensor_from_ggml(
         )
     }
     let size_in_bytes = tensor_elems / block_size * ggml_dtype.type_size();
-
+    #[cfg(feature = "vulkan")]
+    if let Device::Vulkan(d) = device {
+        let storage = super::vulkan::load_quantized(d, raw_data, ggml_dtype)?;
+        return Ok(super::QTensor::new(storage, dims)?);
+    }
     match ggml_dtype {
         GgmlDType::F32 => from_raw_data::<f32>(raw_data, size_in_bytes, dims, device),
         GgmlDType::F16 => from_raw_data::<half::f16>(raw_data, size_in_bytes, dims, device),

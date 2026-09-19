@@ -374,6 +374,71 @@ impl VulkanDevice {
         Ok((*guard).to_vec())
     }
 
+    /// Uploads `data` into a device u8 storage buffer in VRAM. A
+    /// host-visible staging copy is recorded onto the pending batch
+    /// and runs at the next `synchronize`.
+    pub fn upload_u8(&self, data: &[u8]) -> Result<Subbuffer<[u8]>> {
+        let buffer = Buffer::new_slice(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            Self::storage_alloc_info(),
+            data
+                .len()
+                .try_into()
+                .map_err(|_| Error::Vulkan("u8 buffer length".to_string().into()))?,
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let staging = Buffer::from_iter(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            Self::staging_alloc_info(),
+            data.iter().copied(),
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let dst = buffer.clone();
+        self.execute(move |cbb| {
+            cbb
+                .copy_buffer(CopyBufferInfo::buffers(staging, dst))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+        Ok(buffer)
+    }
+    /// Downloads a device u8 storage buffer to the host.
+    pub fn download_u8(&self, buffer: &Subbuffer<[u8]>) -> Result<Vec<u8>> {
+        let staging = Buffer::new_slice(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            Self::staging_alloc_info(),
+            buffer
+                .len()
+                .try_into()
+                .map_err(|_| Error::Vulkan("u8 buffer length".to_string().into()))?,
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let src = buffer.clone();
+        let dst = staging.clone();
+        self.execute(move |cbb| {
+            cbb
+                .copy_buffer(CopyBufferInfo::buffers(src, dst))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+        self.synchronize()?;
+        let guard = staging
+            .read()
+            .map_err(|e| Error::Vulkan(format!("buffer read: {e}").into()))?;
+        Ok((*guard).to_vec())
+    }
     /// Uploads `data` into a device u32 storage buffer in VRAM.
     pub fn upload_u32(&self, data: &[u32]) -> Result<Subbuffer<[u32]>> {
         let buffer = Buffer::new_slice(

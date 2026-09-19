@@ -480,13 +480,19 @@ impl ModelWeights {
         let rms_norm_eps = md_get("qwen3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
         let rope_freq_base = md_get("qwen3.rope.freq_base")?.to_f32()? as f64;
 
-        let dtype = match gg.metadata().get("general.dtype") {
-            Some(v) => match v.to_u32() {
-                Ok(0) => DType::F32,
-                Ok(1) => DType::F16,
-                _ => DType::F16,
-            },
-            None => DType::F16,
+        // The Vulkan backend is f32-only (VBuf has no f16), so compute in f32
+        // there; other backends follow the GGUF's general.dtype.
+        let dtype = if device.is_vulkan() {
+            DType::F32
+        } else {
+            match gg.metadata().get("general.dtype") {
+                Some(v) => match v.to_u32() {
+                    Ok(0) => DType::F32,
+                    Ok(1) => DType::F16,
+                    _ => DType::F16,
+                },
+                None => DType::F16,
+            }
         };
 
         let embed_tensor = gg.tensor("token_embd.weight")?;
@@ -538,7 +544,20 @@ impl ModelWeights {
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (_b, l) = input.dims2()?;
+        if std::env::var("QWV_DEBUG").is_ok() {
+            let w = self.embed_tokens.embeddings().clone();
+            eprintln!("EMBEDDING_WEIGHT dtype={:?} shape={:?} dev={:?}", w.dtype(), w.dims(), w.device());
+            let vals = w.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+            let mut nz = 0usize; for b in vals.iter().take(2048) { if *b != 0.0 { nz += 1; } }
+            eprintln!("EMBEDDING_WEIGHT first 2048 vals nonzero={}/2048 max={:?}", nz, vals.iter().take(2048).cloned().fold(f32::NEG_INFINITY, f32::max));
+            eprintln!("EMBEDDING_WEIGHT vals[0..8] = {:?}", vals.iter().take(8).collect::<Vec<_>>());
+        }
         let mut h = self.embed_tokens.forward(input)?;
+        if std::env::var("QWV_DEBUG").is_ok() {
+            let ev = h.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+            let mut nz = 0usize; for v in ev.iter() { if *v != 0.0 { nz += 1; } }
+            eprintln!("EMBEDDING shape={:?} nonzero={}/{} max={:?}", h.dims(), nz, ev.len(), ev.iter().cloned().fold(f32::NEG_INFINITY, f32::max));
+        }
         // Skip mask materialization when using CPU flash attention
         let causal_mask = if l == 1 || self.device.is_cpu() {
             None
@@ -556,7 +575,12 @@ impl ModelWeights {
         }
         let h = self.norm.forward(&h)?;
         let _enter = self.span_output.enter();
-        let last_hidden = h.narrow(1, l - 1, 1)?;
+        let last_hidden = h.narrow(1, l - 1, 1)?.contiguous()?;
+        if std::env::var("QWV_DEBUG").is_ok() {
+            let hv = last_hidden.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+            let mut nz = 0usize; for v in hv.iter() { if *v != 0.0 { nz += 1; } }
+            eprintln!("FINAL_HID shape={:?} nonzero={}/{} max={:?}", last_hidden.dims(), nz, hv.len(), hv.iter().cloned().fold(f32::NEG_INFINITY, f32::max));
+        }
         self.lm_head.forward(&last_hidden)?.squeeze(1)
     }
 
