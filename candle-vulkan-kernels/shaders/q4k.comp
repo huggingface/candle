@@ -24,6 +24,11 @@
 // f16 -> f32 is done with an explicit field-based conversion (the
 // zero-extension bitcast is wrong: it lands in the f32 subnormal range).
 
+// IMPORTANT: no entry point may declare both @builtin(global_invocation_id)
+// and @builtin(local_invocation_id). On RADV gfx1036 (naga 30.0.1 spv-out)
+// the global id then reads back as the local id, silently corrupting every
+// element index; derive lane/block arithmetically from the global id instead.
+
 struct Params {
     // qmatvec: k = input length, n = row count (rows are workgroups).
     // dequant / q6k_dequant: k = element count.
@@ -43,6 +48,7 @@ var<storage, read> w_buf: array<u32>;
 
 @group(0) @binding(2)
 var<storage, read_write> out_buf: array<f32>;
+
 
 // Scratch for the qmatvec workgroup reduction (module scope is required
 // for the workgroup address space).
@@ -138,20 +144,44 @@ fn q4k_value(base: u32, d: f32, dmin: f32, sm: Scales, e: u32) -> f32 {
     return d * sm.sc[pair] * f32(qval) - dmin * sm.mn[pair];
 }
 
+// Q4_K full dequant: raw bytes -> f32. Dispatch [ceil(k/256), 1, 1]: one
+// workgroup per block, one element per lane.
+
+@compute @workgroup_size(256)
+fn main_dequant(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+) {
+    // NOTE: only global_invocation_id is declared. On RADV gfx1036 with
+    // naga 30.0.1 spv-out, adding @builtin(local_invocation_id) to the
+    // same entry makes gid.x read back as the local id, so the lane is
+    // derived arithmetically instead.
+    let e = gid.x;
+    if (e >= params.k) {
+        return;
+    }
+    let block = e / 256u;
+    let lane = e % 256u;
+    let base = block * 36u;
+    let w0 = w_buf[base];
+    let d = f16_to_f32(w0 & 0xFFFFu);
+    let dmin = f16_to_f32((w0 >> 16u) & 0xFFFFu);
+    let sm = q4k_scales(base);
+    out_buf[e] = q4k_value(base, d, dmin, sm, lane);
+}
+
 // Q4_K decode GEMV: out[row] = dot(a_buf[0..k], q4k_row(row)). Dispatch
 // [n, 1, 1]: one workgroup of 256 threads per output row; the workgroup
 // walks the row's k/256 blocks, each lane holding one element per block.
 @compute @workgroup_size(256)
 fn main_qmatvec(
     @builtin(global_invocation_id) gid: vec3<u32>,
-    @builtin(local_invocation_id) lid: vec3<u32>,
 ) {
-    let row = gid.x;
+    // gid-only; see the note in main_dequant.
+    let row = gid.x / 256u;
     let k = params.k;
-    let lane = lid.x;
+    let lane = gid.x % 256u;
     let blocks = (k + 255u) / 256u;
     let row_words = 36u * blocks;
-
     var acc = 0.0;
     for (var b = 0u; b < blocks; b = b + 1u) {
         let base = row * row_words + b * 36u;
@@ -180,41 +210,20 @@ fn main_qmatvec(
     }
 }
 
-// Q4_K full dequant: raw bytes -> f32. Dispatch [ceil(k/256), 1, 1]: one
-// workgroup per block, one element per lane.
-@compute @workgroup_size(256)
-fn main_dequant(
-    @builtin(global_invocation_id) gid: vec3<u32>,
-    @builtin(local_invocation_id) lid: vec3<u32>,
-) {
-    let block = gid.x;
-    let lane = lid.x;
-    let e = block * 256u + lane;
-    if (e >= params.k) {
-        return;
-    }
-    let base = block * 36u;
-    let w0 = w_buf[base];
-    let d = f16_to_f32(w0 & 0xFFFFu);
-    let dmin = f16_to_f32((w0 >> 16u) & 0xFFFFu);
-    let sm = q4k_scales(base);
-    out_buf[e] = q4k_value(base, d, dmin, sm, lane);
-}
-
 // Q6_K full dequant: raw bytes -> f32 (see file header for the layout).
 // Dispatch [ceil(k/256), 1, 1]: one workgroup per block, one element per
 // lane. params.k = element count.
 @compute @workgroup_size(256)
 fn main_q6k_dequant(
     @builtin(global_invocation_id) gid: vec3<u32>,
-    @builtin(local_invocation_id) lid: vec3<u32>,
 ) {
-    let block = gid.x;
-    let n = lid.x;
-    let e = block * 256u + n;
+    // gid-only; see the note in main_dequant.
+    let e = gid.x;
     if (e >= params.k) {
         return;
     }
+    let block = e / 256u;
+    let n = e % 256u;
     let bb = 210u * block;
     let idx = n / 128u;
     let r = n % 128u;
@@ -239,6 +248,5 @@ fn main_q6k_dequant(
     let sb = bget(bb + 192u + sc_off);
     let scale = f32(sb) - f32(sb & 0x80u) * 2.0;  // u8 byte -> signed i8
     let d = f16_to_f32(bget(bb + 208u) | (bget(bb + 209u) << 8u));
-    // DEBUG: write marker + params.k to check kernel dispatch
-    out_buf[e] = 1.0 + f32(params.k) * 0.0;
+    out_buf[e] = d * scale * (f32(q) - 32.0);
 }

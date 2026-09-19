@@ -43,8 +43,10 @@ tokenizers = { workspace = true, features = ["fancy-regex"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+candle-vulkan-kernels = { workspace = true }
 clap = { workspace = true }
 criterion = { workspace = true }
+vulkano = { workspace = true }
 
 [features]
 default = []
