@@ -169,3 +169,7 @@ required-features = ["symphonia", "tekken", "rubato"]
 [[example]]
 name = "bert_single_file_binary"
 required-features = ["buildtime-download"]
+
+[[example]]
+name = "qwen3-cmp"
+required-features = ["vulkan"]

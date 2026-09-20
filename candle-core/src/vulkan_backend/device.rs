@@ -41,6 +41,15 @@ pub struct VulkanDevice {
     /// them all onto a single command buffer and submits it. Shared by all
     /// `VulkanDevice` clones since they submit to the same queue.
     pending: Arc<std::sync::Mutex<Vec<Encode>>>,
+    /// Buffers allocated since the last `synchronize()`. The closures
+    /// recorded by `execute` own temporary buffers (e.g. dequant scratch)
+    /// and are consumed when the batch is recorded, so without this list
+    /// those buffers would be freed before the GPU executes the command
+    /// buffer that uses them. `synchronize` clears the list after the
+    /// batch's fence signals, at which point the GPU is done with every
+    /// buffer of the batch and the allocator may recycle the memory.
+    keepalive_f32: Arc<std::sync::Mutex<Vec<Subbuffer<[f32]>>>>,
+    keepalive_u32: Arc<std::sync::Mutex<Vec<Subbuffer<[u32]>>>>,
     _gpu_id: usize,
 }
 
@@ -75,6 +84,8 @@ impl Clone for VulkanDevice {
                 self.seed.load(std::sync::atomic::Ordering::Relaxed),
             ),
             fence_ring: self.fence_ring.clone(),
+            keepalive_f32: self.keepalive_f32.clone(),
+            keepalive_u32: self.keepalive_u32.clone(),
             fence_next: self.fence_next.clone(),
             pending: self.pending.clone(),
             _gpu_id: self._gpu_id,
@@ -156,6 +167,8 @@ impl VulkanDevice {
             seed: AtomicU64::new(0),
             fence_ring: Arc::new(std::sync::Mutex::new(fence_ring)),
             fence_next: Arc::new(AtomicUsize::new(0)),
+            keepalive_f32: Arc::new(std::sync::Mutex::new(Vec::new())),
+            keepalive_u32: Arc::new(std::sync::Mutex::new(Vec::new())),
             pending: Arc::new(std::sync::Mutex::new(Vec::new())),
             _gpu_id: gpu_id,
         })
@@ -239,6 +252,7 @@ impl VulkanDevice {
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;
+        self.keepalive_f32.lock().unwrap().push(buffer.clone());
         Ok(buffer)
     }
 
@@ -263,6 +277,7 @@ impl VulkanDevice {
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;
+        self.keepalive_u32.lock().unwrap().push(buffer.clone());
         Ok(buffer)
     }
 
@@ -354,6 +369,10 @@ impl VulkanDevice {
             fence
                 .wait(Some(std::time::Duration::from_secs(60)))
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            // The batch is done on the GPU: release the keep-alive refs so
+            // the allocator can recycle the memory for the next batch.
+            self.keepalive_f32.lock().unwrap().clear();
+            self.keepalive_u32.lock().unwrap().clear();
             if std::env::var("CANDLE_VULKAN_PROFILE").is_ok() {
                 eprintln!(
                     "vulkan profile: {} encodes, encode+build {:?}, submit+wait {:?}",

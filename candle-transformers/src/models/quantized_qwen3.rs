@@ -570,8 +570,23 @@ impl ModelWeights {
                 self.dtype,
             )?)
         };
-        for layer in &mut self.layers {
+        for (li, layer) in self.layers.iter_mut().enumerate() {
             h = layer.forward(&h, causal_mask.as_ref(), offset)?;
+            if let Ok(dir) = std::env::var("QWV_LAYER_DUMP") {
+                let hv = h.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+                let mut nz = 0usize; for v in hv.iter() { if *v != 0.0 { nz += 1; } }
+                eprintln!(
+                    "[dump] LAYER{} shape={:?} nonzero={}/{} max={:?} min={:?}",
+                    li,
+                    h.dims(),
+                    nz,
+                    hv.len(),
+                    hv.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
+                    hv.iter().cloned().fold(f32::INFINITY, f32::min)
+                );
+                let bytes: Vec<u8> = hv.iter().flat_map(|f| f.to_le_bytes()).collect();
+                let _ = std::fs::write(std::path::Path::new(&dir).join(format!("layer-{li}.bin")), bytes);
+            }
         }
         let h = self.norm.forward(&h)?;
         let _enter = self.span_output.enter();
