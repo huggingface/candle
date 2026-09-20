@@ -58,20 +58,20 @@ var<workgroup> wsum: array<f32, 256>;
 fn f16_to_f32(h: u32) -> f32 {
     let sign = (h & 0x8000u) << 16;
     let exp = (h >> 10) & 0x1Fu;
-    var mant = h & 0x3FFu;
+    let mant = h & 0x3FFu;
     if (exp == 0u) {
         if (mant == 0u) {
             return bitcast<f32>(sign);
         }
-        // Subnormal f16: normalize the 10-bit mantissa to 1.m.
-        var e = 1u;
-        while (mant < 0x200u) {
-            mant = mant << 1;
-            e = e + 1u;
+        // Subnormal f16: value = mant * 2^-24. f32 represents this exactly
+        // (mant < 2^10, power-of-two scaling loses no precision), so no
+        // normalization loop is needed.
+        let mag = f32(mant) * 5.960464477539063e-08; // 2^-24
+        var r = mag;
+        if ((h & 0x8000u) != 0u) {
+            r = -mag;
         }
-        let fexp = 112u - e;
-        let mm = mant & 0x1FFu;
-        return bitcast<f32>(sign | (fexp << 23) | (mm << 13));
+        return r;
     } else if (exp == 31u) {
         return bitcast<f32>(sign | 0x7F800000u | (mant << 13));
     } else {

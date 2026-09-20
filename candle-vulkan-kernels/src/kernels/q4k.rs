@@ -38,8 +38,8 @@ pub fn call_q4k_qmatvec_f32(
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.push_constants(entry.layout.clone(), 0, [k as u32, n as u32])
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
-    // One workgroup per output column.
-    unsafe { cbb.dispatch([n as u32, 1, 1]) }
+    // main_qmatvec computes one output row per workgroup of 256 threads.
+    unsafe { cbb.dispatch([n as u32 * 256, 1, 1]) }
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     Ok(())
 }
