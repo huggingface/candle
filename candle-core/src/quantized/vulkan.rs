@@ -3,8 +3,9 @@
 //! `QVulkanStorage` holds the raw quantized bytes (as read from the GGUF
 //! file) in a `Subbuffer<[u8]>`. The decode (m == 1) matmul runs the Q4_K
 //! GEMV kernel directly on the raw bytes; the prefill (m > 1) path
-//! dequantizes to f32 in VRAM and runs the f32 GEMM. Q6_K weights are
-//! dequantized to f32 on the fly and run the f32 kernels.
+//! dequantizes to f32 in VRAM and runs the f32 GEMM. The other dtypes
+//! (Q6_K, Q8_0, Q5_0, Q5_K) dequantize to f32 on the fly and run the f32
+//! kernels.
 use vulkano::buffer::Subbuffer;
 use crate::quantized::GgmlDType;
 use crate::vulkan_backend::{VBuf, VulkanDevice, VulkanStorage};
@@ -58,8 +59,9 @@ impl QVulkanStorage {
     pub fn data(&self) -> Result<Vec<u8>> {
         self.device.download_u8(&self.bytes)
     }
-    /// Dequantize to f32 in VRAM: Q4_K/Q6_K through the GPU dequant
-    /// kernels, f32 weights by reinterpreting the buffer (no copy).
+    /// Dequantize to f32 in VRAM: Q4_K/Q6_K/Q8_0/Q5_0/Q5_K through the
+    /// GPU dequant kernels, f32 weights by reinterpreting the buffer (no
+    /// copy).
     pub fn dequantize_f32(&self, elem_count: usize) -> Result<VulkanStorage> {
         match self.dtype {
             GgmlDType::F32 => {
@@ -71,44 +73,19 @@ impl QVulkanStorage {
                     DType::F32,
                 ))
             }
-            GgmlDType::Q4K => {
+            GgmlDType::Q4K
+            | GgmlDType::Q6K
+            | GgmlDType::Q8_0
+            | GgmlDType::Q5_0
+            | GgmlDType::Q5K => {
                 let device = self.device.clone();
                 let out = device.new_f32_buffer(elem_count)?;
                 let w = self.bytes.clone();
                 let o = out.clone();
                 let kernels = device.kernels();
+                let dtype = self.dtype;
                 device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_q4k_dequant_f32(
-                        cbb,
-                        &kernels,
-                        &w,
-                        &o,
-                        elem_count,
-                    )
-                    .map_err(|e| e.to_string())
-                })?;
-                Ok(VulkanStorage::new(
-                    VBuf::F32(out),
-                    &self.device,
-                    elem_count,
-                    DType::F32,
-                ))
-            }
-            GgmlDType::Q6K => {
-                let device = self.device.clone();
-                let out = device.new_f32_buffer(elem_count)?;
-                let w = self.bytes.clone();
-                let o = out.clone();
-                let kernels = device.kernels();
-                device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_q6k_dequant_f32(
-                        cbb,
-                        &kernels,
-                        &w,
-                        &o,
-                        elem_count,
-                    )
-                    .map_err(|e| e.to_string())
+                    dequant_dispatch(dtype, cbb, &kernels, &w, &o, elem_count)
                 })?;
                 Ok(VulkanStorage::new(
                     VBuf::F32(out),
@@ -131,9 +108,16 @@ impl QVulkanStorage {
         storage: &VulkanStorage,
         layout: &Layout,
     ) -> Result<(VulkanStorage, Shape)> {
-        if self.dtype != GgmlDType::Q4K && self.dtype != GgmlDType::Q6K {
+        if !matches!(
+            self.dtype,
+            GgmlDType::Q4K
+                | GgmlDType::Q6K
+                | GgmlDType::Q8_0
+                | GgmlDType::Q5_0
+                | GgmlDType::Q5K
+        ) {
             crate::bail!(
-                "vulkan: qmatmul only supports Q4_K/Q6_K (got {:?})",
+                "vulkan: qmatmul only supports Q4_K/Q6_K/Q8_0/Q5_0/Q5_K (got {:?})",
                 self.dtype
             );
         }
@@ -164,32 +148,9 @@ impl QVulkanStorage {
         let o = out.clone();
         let in_buf = input.clone();
         let kernels = device.kernels();
-        let q6k = self.dtype == GgmlDType::Q6K;
+        let dtype = self.dtype;
         if m == 1 {
-            if q6k {
-                let tmp = device.new_f32_buffer(n * k)?;
-                let t = tmp.clone();
-                device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_q6k_dequant_f32(
-                        cbb,
-                        &kernels,
-                        &w,
-                        &t,
-                        n * k,
-                    )
-                    .map_err(|e| e.to_string())?;
-                    candle_vulkan_kernels::call_gemv_f32(
-                        cbb,
-                        &kernels,
-                        &in_buf,
-                        &t,
-                        &o,
-                        k,
-                        n,
-                    )
-                    .map_err(|e| e.to_string())
-                })?;
-            } else {
+            if dtype == GgmlDType::Q4K {
                 device.execute(move |cbb| {
                     candle_vulkan_kernels::call_q4k_qmatvec_f32(
                         cbb,
@@ -202,60 +163,43 @@ impl QVulkanStorage {
                     )
                     .map_err(|e| e.to_string())
                 })?;
+            } else {
+                let tmp = device.new_f32_buffer(n * k)?;
+                let t = tmp.clone();
+                device.execute(move |cbb| {
+                    dequant_dispatch(dtype, cbb, &kernels, &w, &t, n * k)?;
+                    candle_vulkan_kernels::call_gemv_f32(
+                        cbb,
+                        &kernels,
+                        &in_buf,
+                        &t,
+                        &o,
+                        k,
+                        n,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
             }
         } else {
             // Prefill: dequant the weight to f32 in VRAM, then f32 GEMM.
             let tmp = device.new_f32_buffer(n * k)?;
             let t = tmp.clone();
-            if q6k {
-                device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_q6k_dequant_f32(
-                        cbb,
-                        &kernels,
-                        &w,
-                        &t,
-                        n * k,
-                    )
-                    .map_err(|e| e.to_string())?;
-                    candle_vulkan_kernels::call_gemm_f32(
-                        cbb,
-                        &kernels,
-                        &in_buf,
-                        &t,
-                        &o,
-                        1,
-                        m,
-                        n,
-                        k,
-                        true,
-                    )
-                    .map_err(|e| e.to_string())
-                })?;
-            } else {
-                device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_q4k_dequant_f32(
-                        cbb,
-                        &kernels,
-                        &w,
-                        &t,
-                        n * k,
-                    )
-                    .map_err(|e| e.to_string())?;
-                    candle_vulkan_kernels::call_gemm_f32(
-                        cbb,
-                        &kernels,
-                        &in_buf,
-                        &t,
-                        &o,
-                        1,
-                        m,
-                        n,
-                        k,
-                        true,
-                    )
-                    .map_err(|e| e.to_string())
-                })?;
-            }
+            device.execute(move |cbb| {
+                dequant_dispatch(dtype, cbb, &kernels, &w, &t, n * k)?;
+                candle_vulkan_kernels::call_gemm_f32(
+                    cbb,
+                    &kernels,
+                    &in_buf,
+                    &t,
+                    &o,
+                    1,
+                    m,
+                    n,
+                    k,
+                    true,
+                )
+                .map_err(|e| e.to_string())
+            })?;
         }
         let mut dst_dims = src_dims.to_vec();
         dst_dims.pop();
@@ -267,6 +211,44 @@ impl QVulkanStorage {
         ))
     }
 }
+/// Records a dequant dispatch for the dtypes handled by this backend
+/// (Q4_K, Q6_K, Q8_0, Q5_0, Q5_K).
+fn dequant_dispatch(
+    dtype: GgmlDType,
+    cbb: &mut vulkano::command_buffer::AutoCommandBufferBuilder<
+        vulkano::command_buffer::PrimaryAutoCommandBuffer,
+    >,
+    kernels: &candle_vulkan_kernels::Kernels,
+    w: &Subbuffer<[u8]>,
+    out: &Subbuffer<[f32]>,
+    elems: usize,
+) -> std::result::Result<(), String> {
+    let r: std::result::Result<(), candle_vulkan_kernels::VulkanKernelError> = match dtype {
+        GgmlDType::Q4K => {
+            candle_vulkan_kernels::call_q4k_dequant_f32(cbb, kernels, w, out, elems)
+        }
+        GgmlDType::Q6K => {
+            candle_vulkan_kernels::call_q6k_dequant_f32(cbb, kernels, w, out, elems)
+        }
+        GgmlDType::Q8_0 => {
+            candle_vulkan_kernels::call_q80_dequant_f32(cbb, kernels, w, out, elems)
+        }
+        GgmlDType::Q5_0 => {
+            candle_vulkan_kernels::call_q50_dequant_f32(cbb, kernels, w, out, elems)
+        }
+        GgmlDType::Q5K => {
+            candle_vulkan_kernels::call_q5k_dequant_f32(cbb, kernels, w, out, elems)
+        }
+        other => {
+            return Err(format!(
+                "vulkan: dequantize of {:?} not implemented",
+                other
+            ))
+        }
+    };
+    r.map_err(|e| e.to_string())
+}
+
 /// Uploads raw quantized bytes to the Vulkan device.
 pub fn load_quantized(
     device: &VulkanDevice,

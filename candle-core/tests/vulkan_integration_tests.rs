@@ -650,3 +650,148 @@ fn q4k_qmatvec_vs_cpu() -> Result<()> {
     }
     Ok(())
 }
+// ------------------------------------------------- quantized dequant CPU
+//
+// Q8_0 / Q5_0 / Q5_K dequant kernels vs candle's own CPU dequantization
+// (`GgmlType::to_float`, the same reference the GGUF loader uses on the
+// CPU backend). The d/dmin f16 bytes are pinned to finite values: raw
+// random bytes have a ~3% chance per f16 of landing on NaN/Inf.
+
+use candle_core::quantized::k_quants::{BlockQ5K, BlockQ5_0, BlockQ8_0, GgmlType};
+
+/// Reinterprets `w` as `T` blocks in an allocation aligned for `T`
+/// (`Vec<u8>` allocations carry no alignment guarantee).
+fn blocks_aligned<T: Clone>(w: &[u8]) -> Vec<T> {
+    let n = w.len() / std::mem::size_of::<T>();
+    let layout = std::alloc::Layout::from_size_align(
+        n * std::mem::size_of::<T>(),
+        std::mem::align_of::<T>(),
+    )
+    .unwrap();
+    unsafe {
+        let ptr = std::alloc::alloc(layout);
+        std::ptr::copy_nonoverlapping(w.as_ptr(), ptr as *mut u8, w.len());
+        let v: Vec<T> = std::slice::from_raw_parts(ptr as *const T, n).to_vec();
+        std::alloc::dealloc(ptr as *mut u8, layout);
+        v
+    }
+}
+
+/// Pins the leading f16 field(s) of block `b` of `w` (each `block` bytes
+/// long) to finite values: `d = 1.0`, and `dmin = 0.5` when the dtype has
+/// one (Q5_K).
+fn pin_dbytes(w: &mut [u8], b: usize, block: usize, dmin: bool) {
+    w[b * block..b * block + 2].copy_from_slice(&[0x00, 0x3C]);
+    if dmin {
+        w[b * block + 2..b * block + 4].copy_from_slice(&[0x00, 0x38]);
+    }
+}
+
+#[test]
+fn q80_dequant_vs_cpu() -> Result<()> {
+    // Q8_0 kernel vs candle's CPU reference (BlockQ8_0::to_float).
+    let d = vulkan_dev()?;
+    let vd = d.as_vulkan_device()?;
+    let mut rng = Rng::new(1101);
+    let mut wb = rng.bytes(3 * 34);
+    for b in 0..3 {
+        pin_dbytes(&mut wb, b, 34, false);
+    }
+    let blocks = blocks_aligned::<BlockQ8_0>(&wb);
+    let mut cpu = vec![0.0f32; 3 * 32];
+    GgmlType::to_float(&blocks, &mut cpu);
+    let iw = vd.upload_u8(&wb)?;
+    let o = vd.new_f32_buffer(3 * 32)?;
+    let (w2, o2, kern) = (iw.clone(), o.clone(), vd.kernels());
+    let got = run_and_get(vd, &o, move |cbb| {
+        vk::call_q80_dequant_f32(cbb, &kern, &w2, &o2, 3 * 32).map_err(|e| e.to_string())
+    })?;
+    for (i, (g, w)) in got.iter().zip(cpu.iter()).enumerate() {
+        let tol = 1e-4 * w.abs().max(1.0);
+        assert!((g - w).abs() <= tol, "q80_dequant vs cpu: [{i}] got {g}, want {w}");
+    }
+    Ok(())
+}
+
+#[test]
+fn q50_dequant_vs_cpu() -> Result<()> {
+    // Q5_0 kernel vs candle's CPU reference (BlockQ5_0::to_float).
+    let d = vulkan_dev()?;
+    let vd = d.as_vulkan_device()?;
+    let mut rng = Rng::new(1102);
+    let mut wb = rng.bytes(3 * 22);
+    for b in 0..3 {
+        pin_dbytes(&mut wb, b, 22, false);
+    }
+    let blocks = blocks_aligned::<BlockQ5_0>(&wb);
+    let mut cpu = vec![0.0f32; 3 * 32];
+    GgmlType::to_float(&blocks, &mut cpu);
+    let iw = vd.upload_u8(&wb)?;
+    let o = vd.new_f32_buffer(3 * 32)?;
+    let (w2, o2, kern) = (iw.clone(), o.clone(), vd.kernels());
+    let got = run_and_get(vd, &o, move |cbb| {
+        vk::call_q50_dequant_f32(cbb, &kern, &w2, &o2, 3 * 32).map_err(|e| e.to_string())
+    })?;
+    for (i, (g, w)) in got.iter().zip(cpu.iter()).enumerate() {
+        let tol = 1e-4 * w.abs().max(1.0);
+        assert!((g - w).abs() <= tol, "q50_dequant vs cpu: [{i}] got {g}, want {w}");
+    }
+    Ok(())
+}
+
+#[test]
+fn q5k_dequant_vs_cpu() -> Result<()> {
+    // Q5_K kernel vs candle's CPU reference (BlockQ5K::to_float).
+    let d = vulkan_dev()?;
+    let vd = d.as_vulkan_device()?;
+    let mut rng = Rng::new(1103);
+    let mut wb = rng.bytes(3 * 176);
+    for b in 0..3 {
+        pin_dbytes(&mut wb, b, 176, true);
+    }
+    let blocks = blocks_aligned::<BlockQ5K>(&wb);
+    let mut cpu = vec![0.0f32; 3 * 256];
+    GgmlType::to_float(&blocks, &mut cpu);
+    let iw = vd.upload_u8(&wb)?;
+    let o = vd.new_f32_buffer(3 * 256)?;
+    let (w2, o2, kern) = (iw.clone(), o.clone(), vd.kernels());
+    let got = run_and_get(vd, &o, move |cbb| {
+        vk::call_q5k_dequant_f32(cbb, &kern, &w2, &o2, 3 * 256).map_err(|e| e.to_string())
+    })?;
+    for (i, (g, w)) in got.iter().zip(cpu.iter()).enumerate() {
+        let tol = 1e-4 * w.abs().max(1.0);
+        assert!((g - w).abs() <= tol, "q5k_dequant vs cpu: [{i}] got {g}, want {w}");
+    }
+    Ok(())
+}
+#[test]
+fn q50_debug_dump() -> Result<()> {
+    // Temporary diagnostic: dump raw bytes + all got/want pairs.
+    let d = vulkan_dev()?;
+    let vd = d.as_vulkan_device()?;
+    let mut rng = Rng::new(1102);
+    let mut wb = rng.bytes(3 * 22);
+    for b in 0..3 {
+        pin_dbytes(&mut wb, b, 22, false);
+    }
+    println!(
+        "wb: {}",
+        wb.iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    let blocks = blocks_aligned::<BlockQ5_0>(&wb);
+    let mut cpu = vec![0.0f32; 3 * 32];
+    GgmlType::to_float(&blocks, &mut cpu);
+    let iw = vd.upload_u8(&wb)?;
+    let o = vd.new_f32_buffer(3 * 32)?;
+    let (w2, o2, kern) = (iw.clone(), o.clone(), vd.kernels());
+    let got = run_and_get(vd, &o, move |cbb| {
+        vk::call_q50_dequant_f32(cbb, &kern, &w2, &o2, 3 * 32).map_err(|e| e.to_string())
+    })?;
+    for (i, (g, w)) in got.iter().zip(cpu.iter()).enumerate() {
+        println!("elem[{i}]: got {g} want {w}");
+    }
+    Ok(())
+}

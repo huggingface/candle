@@ -21,6 +21,7 @@ fn main() {
         ("elementwise", "wgsl"),
         ("gemm", "wgsl"),
         ("q4k", "wgsl"),
+        ("q5q8", "wgsl"),
     ] {
         let source_path = src_dir.join(format!("{shader}.comp"));
         let source = fs::read_to_string(&source_path)

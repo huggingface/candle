@@ -15,6 +15,7 @@ const ROPE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rope.spv"));
 const GEMV_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv.spv"));
 const GEMV_T_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv_t.spv"));
 const Q4K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q4k.spv"));
+const Q5Q8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q5q8.spv"));
 
 /// The set of compiled compute shaders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -32,6 +33,7 @@ pub enum Source {
     Gemv,
     GemvT,
     Q4k,
+    Q5q8,
 }
 
 impl Source {
@@ -65,6 +67,9 @@ impl Source {
             KernelName::Q4kQmatvecF32 => 8,
             KernelName::Q4kDequantF32 => 8,
             KernelName::Q6kDequantF32 => 8,
+            KernelName::Q80DequantF32 => 8,
+            KernelName::Q50DequantF32 => 8,
+            KernelName::Q5KDequantF32 => 8,
         }
     }
 
@@ -84,6 +89,7 @@ impl Source {
             Self::Gemv => GEMV_SPV,
             Self::GemvT => GEMV_T_SPV,
             Self::Q4k => Q4K_SPV,
+            Self::Q5q8 => Q5Q8_SPV,
         };
         bytes
             .chunks_exact(4)
@@ -101,6 +107,7 @@ impl AsRef<str> for Source {
             Self::Gemv => "gemv",
             Self::GemvT => "gemv_t",
             Self::Q4k => "q4k",
+            Self::Q5q8 => "q5q8",
             Self::Reduce => "reduce",
             Self::ReduceMax => "reduce_max",
             Self::Gather => "gather",

@@ -1,0 +1,149 @@
+// Q8_0, Q5_0 and Q5_K dequant kernels for the Vulkan backend.
+//
+// Entry points (all dequant -> f32; params.k = element count; dispatch
+// [ceil(k/256), 1, 1], one element per lane, workgroup of 256):
+//   main_q80_dequant Q8_0 (34 bytes/block)
+//   main_q50_dequant Q5_0 (22 bytes/block)
+//   main_q5k_dequant Q5_K (176 bytes/block)
+//
+// Q8_0 block: [0..2) d (f16), [2..34) qs[32] (i8).  y = d * qs.
+// Q5_0 block: [0..2) d (f16), [2..6) qh[4] (u32 bitfield), [6..22) qs[16].
+//   Element e: nibble byte j = e%16; low nibble for e < 16, high nibble
+//   for e >= 16. hi = bit (j + 16) of qh for the high half: ggml's
+//   quantizer writes bit (j + 16) (= j + qk/2) and both reference
+//   dequantizers read it as (qh >> (j + 12)) & 0x10, i.e. bit (j + 16).
+//   y = d * ((lo | hi*16) - 16).
+// Q5_K block: [0..2) d, [2..4) dmin, [4..16) scales[12], [16..48) qh[32],
+//   [48..176) qs[128]. 8 sub-blocks of 32 elements each with a 6-bit
+//   (scale, min) pair. Element e = 64g + 32*half + l (g in 0..4, half in
+//   0..2, l in 0..32): q = nibble(half) of qs[32g + l], plus 16 if bit
+//   (2g + half) of qh[l] is set;  y = d * sc * q - dmin * mn, where the
+//   (sc, mn) pair is the one of sub-block 2g + half.
+//
+// Every block size is not a multiple of 4 bytes, so bytes are read
+// through the byte accessor `bget` over the u32 word view (as in Q6_K).
+//
+// IMPORTANT (same as q4k.comp): no entry point may declare both
+// @builtin(global_invocation_id) and @builtin(local_invocation_id). On
+// RADV gfx1036 (naga 30.0.1 spv-out) the global id then reads back as
+// the local id, silently corrupting every element index; derive all
+// lane/block arithmetically from the global id instead.
+struct Params {
+    // dequant: k = element count.
+    k: u32,
+    n: u32,
+};
+// Single push-constant block shared by every entry point (two separate
+// `var<immediate>` blocks in one module are not delivered reliably by the
+// RADV driver).
+var<immediate> params: Params;
+@group(0) @binding(0)
+var<storage, read> a_buf: array<f32>;
+@group(0) @binding(1)
+var<storage, read> w_buf: array<u32>;
+@group(0) @binding(2)
+var<storage, read_write> out_buf: array<f32>;
+// Convert an f16 bit pattern (low 16 bits of `h`) to f32 (identical to
+// q4k.comp; the zero-extension bitcast is wrong: it lands in the f32
+// subnormal range).
+fn f16_to_f32(h: u32) -> f32 {
+    let sign = (h & 0x8000u) << 16;
+    let exp = (h >> 10) & 0x1Fu;
+    let mant = h & 0x3FFu;
+    if (exp == 0u) {
+        if (mant == 0u) {
+            return bitcast<f32>(sign);
+        }
+        // Subnormal f16: value = mant * 2^-24, exact in f32.
+        let mag = f32(mant) * 5.960464477539063e-08; // 2^-24
+        var r = mag;
+        if ((h & 0x8000u) != 0u) {
+            r = -mag;
+        }
+        return r;
+    } else if (exp == 31u) {
+        return bitcast<f32>(sign | 0x7F800000u | (mant << 13));
+    } else {
+        return bitcast<f32>(sign | ((exp + 112u) << 23) | (mant << 13));
+    }
+}
+// Read one byte at absolute byte offset `bb` from the u32 word view.
+fn bget(bb: u32) -> u32 {
+    return (w_buf[bb / 4u] >> (8u * (bb % 4u))) & 0xFFu;
+}
+// Q8_0 full dequant: y = d * qs[i].
+@compute @workgroup_size(256)
+fn main_q80_dequant(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+) {
+    let e = gid.x;
+    if (e >= params.k) {
+        return;
+    }
+    let bb = 34u * (e / 32u);
+    let j = e % 32u;
+    let d = f16_to_f32(bget(bb) | (bget(bb + 1u) << 8u));
+    let q = bget(bb + 2u + j);
+    let qf = f32(q) - f32(q & 0x80u) * 2.0;  // u8 byte -> signed i8
+    out_buf[e] = d * qf;
+}
+// Q5_0 full dequant: y = d * ((lo | hi << 4) - 16).
+@compute @workgroup_size(256)
+fn main_q50_dequant(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+) {
+    let e = gid.x;
+    if (e >= params.k) {
+        return;
+    }
+    let bb = 22u * (e / 32u);
+    let ei = e % 32u;
+    let j = ei % 16u;
+    let high = ei >= 16u;
+    let d = f16_to_f32(bget(bb) | (bget(bb + 1u) << 8u));
+    let qh = bget(bb + 2u)
+        | (bget(bb + 3u) << 8u)
+        | (bget(bb + 4u) << 16u)
+        | (bget(bb + 5u) << 24u);
+    let hi = (qh >> (j + select(0u, 16u, high))) & 1u;
+    let qb = bget(bb + 6u + j);
+    let lo = select(qb & 0xFu, (qb >> 4u) & 0xFu, high);
+    out_buf[e] = d * (f32(lo + hi * 16u) - 16.0);
+}
+// Q5_K full dequant: y = d * sc * q - dmin * mn (see file header).
+@compute @workgroup_size(256)
+fn main_q5k_dequant(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+) {
+    let e = gid.x;
+    if (e >= params.k) {
+        return;
+    }
+    let bb = 176u * (e / 256u);
+    let n = e % 256u;
+    let g = n / 64u;
+    let t = n % 64u;
+    let half = t / 32u;
+    let l = t % 32u;
+    let d = f16_to_f32(bget(bb) | (bget(bb + 1u) << 8u));
+    let dmin = f16_to_f32(bget(bb + 2u) | (bget(bb + 3u) << 8u));
+    let is = 2u * g + half;
+    var sc = 0u;
+    var mn = 0u;
+    if (is < 4u) {
+        sc = bget(bb + 4u + is) & 63u;
+        mn = bget(bb + 8u + is) & 63u;
+    } else {
+        let b4 = bget(bb + 8u + is);      // scales[is + 4]
+        let b0 = bget(bb + 4u + is);      // scales[is]
+        let bp = bget(bb + 4u + is - 4u); // scales[is - 4]
+        sc = (b4 & 0xFu) | ((bp >> 6u) << 4u);
+        mn = (b4 >> 4u) | ((b0 >> 6u) << 4u);
+    }
+    let qb = bget(bb + 48u + 32u * g + l);
+    var q = (qb >> (4u * half)) & 0xFu;
+    if ((bget(bb + 16u + l) & (1u << (2u * g + half))) != 0u) {
+        q = q + 16u;
+    }
+    out_buf[e] = d * f32(sc) * f32(q) - dmin * f32(mn);
+}

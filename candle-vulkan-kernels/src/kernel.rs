@@ -48,6 +48,9 @@ pub enum KernelName {
     Q4kQmatvecF32,
     Q4kDequantF32,
     Q6kDequantF32,
+    Q80DequantF32,
+    Q50DequantF32,
+    Q5KDequantF32,
 }
 
 impl AsRef<str> for KernelName {
@@ -78,6 +81,9 @@ impl AsRef<str> for KernelName {
             Self::Q4kQmatvecF32 => "main_qmatvec",
             Self::Q4kDequantF32 => "main_dequant",
             Self::Q6kDequantF32 => "main_q6k_dequant",
+            Self::Q80DequantF32 => "main_q80_dequant",
+            Self::Q50DequantF32 => "main_q50_dequant",
+            Self::Q5KDequantF32 => "main_q5k_dequant",
         }
     }
 }
@@ -238,7 +244,10 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::GemvTF32
         | KernelName::Q4kQmatvecF32
         | KernelName::Q4kDequantF32
-        | KernelName::Q6kDequantF32 => 3,
+        | KernelName::Q6kDequantF32
+        | KernelName::Q80DequantF32
+        | KernelName::Q50DequantF32
+        | KernelName::Q5KDequantF32 => 3,
     }
 }
 
