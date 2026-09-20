@@ -348,7 +348,13 @@ impl Device {
     pub fn supports_bf16(&self) -> bool {
         match self {
             Self::Cuda(_) | Self::Metal(_) => true,
-            Self::Cpu | Self::Vulkan(_) => false,
+            Self::Cpu => false,
+            #[cfg(feature = "vulkan")]
+            Self::Vulkan(device) => {
+                    device.supports_bf16()
+            },
+            #[cfg(not(feature = "vulkan"))]
+            Self::Vulkan(_) => false,
         }
     }
 

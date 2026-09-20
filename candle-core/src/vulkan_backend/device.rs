@@ -194,6 +194,12 @@ impl VulkanDevice {
         }
     }
 
+    pub fn supports_bf16(&self) -> bool {
+        self.device.physical_device().extension_properties().iter().any(|property| {
+            property.extension_name.eq("VK_KHR_shader_bfloat16")
+        })
+    }
+
     /// Uploads `data` into a device f32 storage buffer in VRAM. A
     /// host-visible staging copy is recorded onto the pending batch
     /// and runs at the next `synchronize`.
