@@ -546,7 +546,7 @@ impl ModelWeights {
         let (_b, l) = input.dims2()?;
         if std::env::var("QWV_DEBUG").is_ok() {
             let w = self.embed_tokens.embeddings().clone();
-            eprintln!(
+            tracing::debug!(
                 "EMBEDDING_WEIGHT dtype={:?} shape={:?} dev={:?}",
                 w.dtype(),
                 w.dims(),
@@ -559,7 +559,7 @@ impl ModelWeights {
                     nz += 1;
                 }
             }
-            eprintln!(
+            tracing::debug!(
                 "EMBEDDING_WEIGHT first 2048 vals nonzero={}/2048 max={:?}",
                 nz,
                 vals.iter()
@@ -567,7 +567,7 @@ impl ModelWeights {
                     .cloned()
                     .fold(f32::NEG_INFINITY, f32::max)
             );
-            eprintln!(
+            tracing::debug!(
                 "EMBEDDING_WEIGHT vals[0..8] = {:?}",
                 vals.iter().take(8).collect::<Vec<_>>()
             );
@@ -581,7 +581,7 @@ impl ModelWeights {
                     nz += 1;
                 }
             }
-            eprintln!(
+            tracing::debug!(
                 "EMBEDDING shape={:?} nonzero={}/{} max={:?}",
                 h.dims(),
                 nz,
@@ -611,7 +611,7 @@ impl ModelWeights {
                         nz += 1;
                     }
                 }
-                eprintln!(
+                tracing::debug!(
                     "[dump] LAYER{} shape={:?} nonzero={}/{} max={:?} min={:?}",
                     li,
                     h.dims(),
@@ -641,7 +641,7 @@ impl ModelWeights {
                     nz += 1;
                 }
             }
-            eprintln!(
+            tracing::debug!(
                 "FINAL_HID shape={:?} nonzero={}/{} max={:?}",
                 last_hidden.dims(),
                 nz,

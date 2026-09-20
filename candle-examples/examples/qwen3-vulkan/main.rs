@@ -13,6 +13,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::time::Instant;
 use tokenizers::Tokenizer;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -32,6 +33,7 @@ struct Args {
     #[arg(short = 'g', long, default_value_t = 0)]
     gpu: usize,
 }
+
 fn next_token(logits: &Tensor) -> Result<u32> {
     let vals = logits
         .to_device(&Device::Cpu)
@@ -44,13 +46,17 @@ fn next_token(logits: &Tensor) -> Result<u32> {
         .map(|(i, _)| i as u32)
         .ok_or_else(|| anyhow!("empty logits"))
 }
+
 fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
     let args = Args::parse();
     let device = Device::new_vulkan(args.gpu).context("creating the Vulkan device")?;
     let ct = gguf_file::Content::read(&mut BufReader::new(File::open(&args.model)?))
         .with_context(|| format!("reading gguf metadata from {}", args.model))?;
     let md = &ct.metadata;
-    eprintln!(
+    tracing::debug!(
         "layers {}, hidden {}, heads {} (kv {})",
         md.get("qwen3.block_count")
             .and_then(|v| match v {
@@ -82,14 +88,14 @@ fn main() -> Result<()> {
     let mut file = BufReader::new(File::open(&args.model)?);
     let mut model =
         Qwen3::from_gguf(ct, &mut file, &device).context("loading the quantized model")?;
-    eprintln!("model loaded in {:.1} s", t0.elapsed().as_secs_f64());
+    tracing::debug!("model loaded in {:.1} s", t0.elapsed().as_secs_f64());
     let tokenizer = Tokenizer::from_file(&args.tokenizer).map_err(anyhow::Error::msg)?;
     let prompt_ids: Vec<u32> = tokenizer
         .encode(args.prompt.as_str(), true)
         .map_err(anyhow::Error::msg)?
         .get_ids()
         .to_vec();
-    print!(
+    tracing::debug!(
         "{}",
         tokenizer
             .decode(&prompt_ids, true)
@@ -108,11 +114,11 @@ fn main() -> Result<()> {
         let mut top: Vec<_> = lv.iter().enumerate().collect();
         top.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap());
         top.truncate(5);
-        eprintln!(
+        tracing::debug!(
             "PREFILL top5: {:?}",
             top.iter().map(|(i, v)| (*i, *v)).collect::<Vec<_>>()
         );
-        eprintln!(
+        tracing::debug!(
             "PREFILL logits[0..4]: {:?} max={}",
             &lv[0..4],
             lv.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
@@ -127,7 +133,7 @@ fn main() -> Result<()> {
         let input = Tensor::from_vec(vec![next], (1, 1), &device)?;
         logits = model.forward(&input, offset)?;
         offset += 1;
-        print!(
+        tracing::debug!(
             "{}",
             tokenizer
                 .decode(&[next], false)
@@ -136,7 +142,7 @@ fn main() -> Result<()> {
         std::io::Write::flush(&mut std::io::stdout())?;
         all.push(next);
         if std::env::var("QWV_DEBUG").is_ok() {
-            eprintln!("tok {} id={}", all.len() - 1, next);
+            tracing::debug!("tok {} id={}", all.len() - 1, next);
         }
     }
     if std::env::var("QWV_DEBUG").is_ok() {
@@ -144,20 +150,19 @@ fn main() -> Result<()> {
         let mut top: Vec<_> = lv.iter().enumerate().collect();
         top.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap());
         top.truncate(5);
-        eprintln!(
+        tracing::debug!(
             "top5 logits: {:?}",
             top.iter().map(|(i, v)| (*i, *v)).collect::<Vec<_>>()
         );
-        eprintln!("logits[0..4]: {:?}", &lv[0..4.min(lv.len())]);
-        eprintln!(
+        tracing::debug!("logits[0..4]: {:?}", &lv[0..4.min(lv.len())]);
+        tracing::debug!(
             "logit max={} min={}",
             lv.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
             lv.iter().cloned().fold(f32::INFINITY, f32::min)
         );
     }
     let decode_s = t0.elapsed().as_secs_f64();
-    println!();
-    eprintln!(
+    tracing::debug!(
         "prompt tokens: {}, prefill: {:.1} tok/s, decode: {:.1} tok/s, generated: {}",
         prompt_ids.len(),
         prompt_ids.len() as f64 / prefill_s,
