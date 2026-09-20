@@ -299,7 +299,14 @@ fn prepare_4d_attention_mask(
 
     let inverted_mask = (1.0 - expanded_mask)?;
 
-    (inverted_mask * f32::MIN as f64)?.to_dtype(dtype)
+    // The masked-out value has to stay finite once cast: f32::MIN becomes -inf in f16, and
+    // a row that is entirely -inf makes the softmax produce NaN.
+    let neg = match dtype {
+        DType::F16 => -65504.0f64,
+        DType::BF16 => -3.0e38f64,
+        _ => f32::MIN as f64,
+    };
+    (inverted_mask * neg)?.to_dtype(dtype)
 }
 
 // Attention mask caused by the sliding window
@@ -307,6 +314,7 @@ fn get_local_attention_mask(
     seq_len: usize,
     max_distance: usize,
     device: &Device,
+    dtype: DType,
 ) -> Result<Tensor> {
     let mask: Vec<_> = (0..seq_len)
         .flat_map(|i| {
@@ -319,7 +327,7 @@ fn get_local_attention_mask(
             })
         })
         .collect();
-    Tensor::from_slice(&mask, (seq_len, seq_len), device)
+    Tensor::from_slice(&mask, (seq_len, seq_len), device)?.to_dtype(dtype)
 }
 
 // ModernBERT backbone
@@ -389,11 +397,14 @@ impl ModernBert {
 
     pub fn forward(&self, xs: &Tensor, mask: &Tensor) -> Result<Tensor> {
         let seq_len = xs.shape().dims()[1];
-        let global_attention_mask =
-            prepare_4d_attention_mask(mask, DType::F32, None)?.to_device(xs.device())?;
-        let local_attention_mask =
-            get_local_attention_mask(seq_len, self.local_attention_size / 2, xs.device())?;
+        // Embed first: `xs` arrives as u32 token ids, so the masks must take their dtype from
+        // the hidden states rather than from the input.
         let mut xs = xs.apply(&self.word_embeddings)?.apply(&self.norm)?;
+        let dtype = xs.dtype();
+        let global_attention_mask =
+            prepare_4d_attention_mask(mask, dtype, None)?.to_device(xs.device())?;
+        let local_attention_mask =
+            get_local_attention_mask(seq_len, self.local_attention_size / 2, xs.device(), dtype)?;
         for layer in self.layers.iter() {
             xs = layer.forward(&xs, &global_attention_mask, &local_attention_mask)?;
         }
