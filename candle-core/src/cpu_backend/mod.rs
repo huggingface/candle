@@ -1215,17 +1215,53 @@ impl Map1 for Im2Col {
 
 struct Col2Im1D {
     stride: usize,
+    padding: usize,
+    output_padding: usize,
 }
 
 impl Map1 for Col2Im1D {
     fn f<T: WithDType>(&self, col: &[T], l: &Layout) -> Result<Vec<T>> {
         let (b_size, l_in, c_out, k_size) = l.shape().dims4()?;
         let stride = self.stride;
-        let l_out = (l_in - 1) * stride + k_size;
+        let l_out = (l_in - 1) * stride + k_size + self.output_padding - 2 * self.padding;
         let mut im = vec![T::zero(); b_size * c_out * l_out];
         let (dst_s0, dst_s1) = (c_out * l_out, l_out);
         let (src_s0, src_s1, src_s2) = (c_out * k_size * l_in, c_out * k_size, k_size);
         if k_size == 0 || c_out == 0 {
+            return Ok(im);
+        }
+        if self.padding != 0 {
+            for b_i in 0..b_size {
+                // Clip each window to the output. Leave gaps at zero.
+                let mut add_window = |pos: usize, channel: usize| {
+                    let start = pos * stride;
+                    let first = self.padding.saturating_sub(start).min(k_size);
+                    let end = (self.padding + l_out).saturating_sub(start).min(k_size);
+                    if first >= end {
+                        return;
+                    }
+                    let dst_idx = b_i * dst_s0 + channel * dst_s1 + start + first - self.padding;
+                    let src_idx = b_i * src_s0 + pos * src_s1 + channel * src_s2 + first;
+                    let dst = &mut im[dst_idx..dst_idx + end - first];
+                    let src = &col[src_idx..src_idx + end - first];
+                    for (dst, src) in dst.iter_mut().zip(src) {
+                        *dst += *src;
+                    }
+                };
+                if k_size <= stride {
+                    for channel in 0..c_out {
+                        for pos in 0..l_in {
+                            add_window(pos, channel);
+                        }
+                    }
+                } else {
+                    for pos in 0..l_in {
+                        for channel in 0..c_out {
+                            add_window(pos, channel);
+                        }
+                    }
+                }
+            }
             return Ok(im);
         }
         if k_size <= stride {
@@ -1298,7 +1334,12 @@ fn col2im1d_sum_order() -> Result<()> {
                     let col: Vec<_> = (0..b * len * channels * kernel)
                         .map(|i| T::from_f64(values[i % values.len()]))
                         .collect();
-                    let actual = Col2Im1D { stride }.f(&col, &layout)?;
+                    let actual = Col2Im1D {
+                        stride,
+                        padding: 0,
+                        output_padding: 0,
+                    }
+                    .f(&col, &layout)?;
                     for batch in 0..b {
                         for channel in 0..channels {
                             for x in 0..out_len {
@@ -2968,10 +3009,18 @@ impl BackendStorage for CpuStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConvTranspose1D,
     ) -> Result<Self> {
-        let can_use_col2im = kernel_l.is_contiguous()
-            && params.dilation == 1
-            && params.padding == 0
-            && params.output_padding == 0;
+        let mut can_use_col2im = kernel_l.is_contiguous() && params.dilation == 1;
+        if can_use_col2im && (params.padding != 0 || params.output_padding != 0) {
+            let supports_matmul = matches!(self.dtype(), DType::F32 | DType::F64)
+                || (self.dtype() == DType::F16
+                    && cfg!(not(any(feature = "mkl", feature = "accelerate"))));
+            // The native MatMul cannot merge these transposed batches. See #3758.
+            let batch_layout_ok = cfg!(any(feature = "mkl", feature = "accelerate"))
+                || params.b_size <= 1
+                || l.stride()[0] != params.l_in * params.c_in
+                || l.stride()[2] == params.c_in;
+            can_use_col2im = supports_matmul && batch_layout_ok;
+        }
         if USE_COL2IM_CONV1D_TR && can_use_col2im {
             let (b_size, c_in, l_in) = l.shape().dims3()?;
             let (c_in2, c_out, k_size) = kernel_l.shape().dims3()?;
@@ -3009,6 +3058,8 @@ impl BackendStorage for CpuStorage {
             let col_l = Layout::contiguous((b_size, l_in, c_out, k_size));
             Col2Im1D {
                 stride: params.stride,
+                padding: params.padding,
+                output_padding: params.output_padding,
             }
             .map(&col, &col_l)
         } else {
