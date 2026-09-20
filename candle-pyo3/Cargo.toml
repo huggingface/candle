@@ -30,5 +30,6 @@ pyo3-build-config = "0.29"
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
+vulkan = ["candle/vulkan"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
 onnx = ["dep:candle-onnx"]

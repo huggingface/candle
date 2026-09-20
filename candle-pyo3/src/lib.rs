@@ -71,6 +71,7 @@ impl PyDType {
 
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 static METAL_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+static VULKAN_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PyDevice {
@@ -111,9 +112,15 @@ impl PyDevice {
                 *device = Some(d.clone());
                 Ok(d)
             }
-            Self::Vulkan => Err(PyValueError::new_err(
-                "vulkan devices are not supported by the candle Python bindings",
-            )),
+            Self::Vulkan => {
+                let mut device = VULKAN_DEVICE.lock().unwrap();
+                if let Some(device) = device.as_ref() {
+                    return Ok(device.clone());
+                };
+                let d = Device::new_vulkan(0).map_err(wrap_err)?;
+                *device = Some(d.clone());
+                Ok(d)
+            }
         }
     }
 }
@@ -127,6 +134,7 @@ impl FromPyObject<'_, '_> for PyDevice {
             "cpu" => PyDevice::Cpu,
             "cuda" => PyDevice::Cuda,
             "metal" => PyDevice::Metal,
+            "vulkan" => PyDevice::Vulkan,
             _ => Err(PyTypeError::new_err(format!("invalid device '{device}'")))?,
         };
         Ok(device)
