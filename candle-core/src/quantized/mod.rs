@@ -770,12 +770,8 @@ impl QTensor {
             QStorage::Vulkan(storage) => {
                 let deq = storage.dequantize_f32(rows * hidden)?;
                 let none = crate::op::BackpropOp::none();
-                let t = crate::tensor::from_storage(
-                    Storage::Vulkan(deq),
-                    (rows, hidden),
-                    none,
-                    false,
-                );
+                let t =
+                    crate::tensor::from_storage(Storage::Vulkan(deq), (rows, hidden), none, false);
                 return Ok(t.index_select(&ids, 0)?);
             }
         };
@@ -1230,7 +1226,9 @@ impl crate::CustomOp1 for QTensor {
         #[allow(clippy::infallible_destructuring_match)]
         let self_storage = match &self.storage {
             QStorage::Cpu(storage) => storage,
-            QStorage::Metal(_) | QStorage::Cuda(_) | QStorage::Vulkan(_) => crate::bail!("Invalid storage"),
+            QStorage::Metal(_) | QStorage::Cuda(_) | QStorage::Vulkan(_) => {
+                crate::bail!("Invalid storage")
+            }
         };
         match storage.dtype() {
             DType::F32 => {

@@ -6,10 +6,10 @@
 //! dequantizes to f32 in VRAM and runs the f32 GEMM. The other dtypes
 //! (Q6_K, Q8_0, Q5_0, Q5_K) dequantize to f32 on the fly and run the f32
 //! kernels.
-use vulkano::buffer::Subbuffer;
 use crate::quantized::GgmlDType;
 use crate::vulkan_backend::{VBuf, VulkanDevice, VulkanStorage};
 use crate::{DType, Layout, Result, Shape};
+use vulkano::buffer::Subbuffer;
 pub struct QVulkanStorage {
     bytes: Subbuffer<[u8]>,
     device: VulkanDevice,
@@ -110,11 +110,7 @@ impl QVulkanStorage {
     ) -> Result<(VulkanStorage, Shape)> {
         if !matches!(
             self.dtype,
-            GgmlDType::Q4K
-                | GgmlDType::Q6K
-                | GgmlDType::Q8_0
-                | GgmlDType::Q5_0
-                | GgmlDType::Q5K
+            GgmlDType::Q4K | GgmlDType::Q6K | GgmlDType::Q8_0 | GgmlDType::Q5_0 | GgmlDType::Q5K
         ) {
             crate::bail!(
                 "vulkan: qmatmul only supports Q4_K/Q6_K/Q8_0/Q5_0/Q5_K (got {:?})",
@@ -153,13 +149,7 @@ impl QVulkanStorage {
             if dtype == GgmlDType::Q4K {
                 device.execute(move |cbb| {
                     candle_vulkan_kernels::call_q4k_qmatvec_f32(
-                        cbb,
-                        &kernels,
-                        &in_buf,
-                        &w,
-                        &o,
-                        k,
-                        n,
+                        cbb, &kernels, &in_buf, &w, &o, k, n,
                     )
                     .map_err(|e| e.to_string())
                 })?;
@@ -168,16 +158,8 @@ impl QVulkanStorage {
                 let t = tmp.clone();
                 device.execute(move |cbb| {
                     dequant_dispatch(dtype, cbb, &kernels, &w, &t, n * k)?;
-                    candle_vulkan_kernels::call_gemv_f32(
-                        cbb,
-                        &kernels,
-                        &in_buf,
-                        &t,
-                        &o,
-                        k,
-                        n,
-                    )
-                    .map_err(|e| e.to_string())
+                    candle_vulkan_kernels::call_gemv_f32(cbb, &kernels, &in_buf, &t, &o, k, n)
+                        .map_err(|e| e.to_string())
                 })?;
             }
         } else {
@@ -187,16 +169,7 @@ impl QVulkanStorage {
             device.execute(move |cbb| {
                 dequant_dispatch(dtype, cbb, &kernels, &w, &t, n * k)?;
                 candle_vulkan_kernels::call_gemm_f32(
-                    cbb,
-                    &kernels,
-                    &in_buf,
-                    &t,
-                    &o,
-                    1,
-                    m,
-                    n,
-                    k,
-                    true,
+                    cbb, &kernels, &in_buf, &t, &o, 1, m, n, k, true,
                 )
                 .map_err(|e| e.to_string())
             })?;
@@ -224,27 +197,12 @@ fn dequant_dispatch(
     elems: usize,
 ) -> std::result::Result<(), String> {
     let r: std::result::Result<(), candle_vulkan_kernels::VulkanKernelError> = match dtype {
-        GgmlDType::Q4K => {
-            candle_vulkan_kernels::call_q4k_dequant_f32(cbb, kernels, w, out, elems)
-        }
-        GgmlDType::Q6K => {
-            candle_vulkan_kernels::call_q6k_dequant_f32(cbb, kernels, w, out, elems)
-        }
-        GgmlDType::Q8_0 => {
-            candle_vulkan_kernels::call_q80_dequant_f32(cbb, kernels, w, out, elems)
-        }
-        GgmlDType::Q5_0 => {
-            candle_vulkan_kernels::call_q50_dequant_f32(cbb, kernels, w, out, elems)
-        }
-        GgmlDType::Q5K => {
-            candle_vulkan_kernels::call_q5k_dequant_f32(cbb, kernels, w, out, elems)
-        }
-        other => {
-            return Err(format!(
-                "vulkan: dequantize of {:?} not implemented",
-                other
-            ))
-        }
+        GgmlDType::Q4K => candle_vulkan_kernels::call_q4k_dequant_f32(cbb, kernels, w, out, elems),
+        GgmlDType::Q6K => candle_vulkan_kernels::call_q6k_dequant_f32(cbb, kernels, w, out, elems),
+        GgmlDType::Q8_0 => candle_vulkan_kernels::call_q80_dequant_f32(cbb, kernels, w, out, elems),
+        GgmlDType::Q5_0 => candle_vulkan_kernels::call_q50_dequant_f32(cbb, kernels, w, out, elems),
+        GgmlDType::Q5K => candle_vulkan_kernels::call_q5k_dequant_f32(cbb, kernels, w, out, elems),
+        other => return Err(format!("vulkan: dequantize of {:?} not implemented", other)),
     };
     r.map_err(|e| e.to_string())
 }

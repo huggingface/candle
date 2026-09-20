@@ -546,17 +546,48 @@ impl ModelWeights {
         let (_b, l) = input.dims2()?;
         if std::env::var("QWV_DEBUG").is_ok() {
             let w = self.embed_tokens.embeddings().clone();
-            eprintln!("EMBEDDING_WEIGHT dtype={:?} shape={:?} dev={:?}", w.dtype(), w.dims(), w.device());
+            eprintln!(
+                "EMBEDDING_WEIGHT dtype={:?} shape={:?} dev={:?}",
+                w.dtype(),
+                w.dims(),
+                w.device()
+            );
             let vals = w.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
-            let mut nz = 0usize; for b in vals.iter().take(2048) { if *b != 0.0 { nz += 1; } }
-            eprintln!("EMBEDDING_WEIGHT first 2048 vals nonzero={}/2048 max={:?}", nz, vals.iter().take(2048).cloned().fold(f32::NEG_INFINITY, f32::max));
-            eprintln!("EMBEDDING_WEIGHT vals[0..8] = {:?}", vals.iter().take(8).collect::<Vec<_>>());
+            let mut nz = 0usize;
+            for b in vals.iter().take(2048) {
+                if *b != 0.0 {
+                    nz += 1;
+                }
+            }
+            eprintln!(
+                "EMBEDDING_WEIGHT first 2048 vals nonzero={}/2048 max={:?}",
+                nz,
+                vals.iter()
+                    .take(2048)
+                    .cloned()
+                    .fold(f32::NEG_INFINITY, f32::max)
+            );
+            eprintln!(
+                "EMBEDDING_WEIGHT vals[0..8] = {:?}",
+                vals.iter().take(8).collect::<Vec<_>>()
+            );
         }
         let mut h = self.embed_tokens.forward(input)?;
         if std::env::var("QWV_DEBUG").is_ok() {
             let ev = h.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
-            let mut nz = 0usize; for v in ev.iter() { if *v != 0.0 { nz += 1; } }
-            eprintln!("EMBEDDING shape={:?} nonzero={}/{} max={:?}", h.dims(), nz, ev.len(), ev.iter().cloned().fold(f32::NEG_INFINITY, f32::max));
+            let mut nz = 0usize;
+            for v in ev.iter() {
+                if *v != 0.0 {
+                    nz += 1;
+                }
+            }
+            eprintln!(
+                "EMBEDDING shape={:?} nonzero={}/{} max={:?}",
+                h.dims(),
+                nz,
+                ev.len(),
+                ev.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            );
         }
         // Skip mask materialization when using CPU flash attention
         let causal_mask = if l == 1 || self.device.is_cpu() {
@@ -574,7 +605,12 @@ impl ModelWeights {
             h = layer.forward(&h, causal_mask.as_ref(), offset)?;
             if let Ok(dir) = std::env::var("QWV_LAYER_DUMP") {
                 let hv = h.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
-                let mut nz = 0usize; for v in hv.iter() { if *v != 0.0 { nz += 1; } }
+                let mut nz = 0usize;
+                for v in hv.iter() {
+                    if *v != 0.0 {
+                        nz += 1;
+                    }
+                }
                 eprintln!(
                     "[dump] LAYER{} shape={:?} nonzero={}/{} max={:?} min={:?}",
                     li,
@@ -585,16 +621,33 @@ impl ModelWeights {
                     hv.iter().cloned().fold(f32::INFINITY, f32::min)
                 );
                 let bytes: Vec<u8> = hv.iter().flat_map(|f| f.to_le_bytes()).collect();
-                let _ = std::fs::write(std::path::Path::new(&dir).join(format!("layer-{li}.bin")), bytes);
+                let _ = std::fs::write(
+                    std::path::Path::new(&dir).join(format!("layer-{li}.bin")),
+                    bytes,
+                );
             }
         }
         let h = self.norm.forward(&h)?;
         let _enter = self.span_output.enter();
         let last_hidden = h.narrow(1, l - 1, 1)?.contiguous()?;
         if std::env::var("QWV_DEBUG").is_ok() {
-            let hv = last_hidden.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
-            let mut nz = 0usize; for v in hv.iter() { if *v != 0.0 { nz += 1; } }
-            eprintln!("FINAL_HID shape={:?} nonzero={}/{} max={:?}", last_hidden.dims(), nz, hv.len(), hv.iter().cloned().fold(f32::NEG_INFINITY, f32::max));
+            let hv = last_hidden
+                .to_device(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let mut nz = 0usize;
+            for v in hv.iter() {
+                if *v != 0.0 {
+                    nz += 1;
+                }
+            }
+            eprintln!(
+                "FINAL_HID shape={:?} nonzero={}/{} max={:?}",
+                last_hidden.dims(),
+                nz,
+                hv.len(),
+                hv.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            );
         }
         self.lm_head.forward(&last_hidden)?.squeeze(1)
     }

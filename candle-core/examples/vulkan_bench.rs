@@ -65,7 +65,11 @@ fn main() -> anyhow::Result<()> {
         dt.as_secs_f32() * 1000.0 / (n_ops + 1) as f32
     );
     // gemv_t shape sweep: the Qwen3-0.6B decode GEMV shapes.
-    for &(ns, ks) in &[(512usize, 1024usize), (3072usize, 1024usize), (1024usize, 3072usize)] {
+    for &(ns, ks) in &[
+        (512usize, 1024usize),
+        (3072usize, 1024usize),
+        (1024usize, 3072usize),
+    ] {
         let a_s = Tensor::arange(0f32, ks as f32, &device)?.reshape((1, ks))?;
         let w_s = Tensor::arange(0f32, (ns * ks) as f32, &device)?.reshape((ns, ks))?;
         for _ in 0..4 {
@@ -86,14 +90,17 @@ fn main() -> anyhow::Result<()> {
     }
     // gemv_t correctness: a (k,) @ w.t() with w stored (n, k) row-major.
     // n/k are deliberately not multiples of 16/32 to exercise the guards.
-        // Micro test: n=4, k=4, w_stride=4, known values.
+    // Micro test: n=4, k=4, w_stride=4, known values.
     {
         let a: Vec<f32> = vec![1.0, 1.0, 1.0, 1.0];
         let w: Vec<f32> = (1..=16).map(|x| x as f32).collect();
         let at = Tensor::from_vec(a.clone(), (1, 4), &device)?;
         let wt = Tensor::from_vec(w.clone(), (4, 4), &device)?;
         let out = at.matmul(&wt.t()?)?;
-        let got = out.flatten(0, 1)?.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        let got = out
+            .flatten(0, 1)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<f32>()?;
         let want = [10f32, 26.0, 42.0, 58.0];
         println!(
             "vulkan_bench: gemv_t micro got: {:?} want: {:?} ok: {}",
@@ -102,7 +109,7 @@ fn main() -> anyhow::Result<()> {
             got.iter().zip(want).all(|(g, x)| (g - x).abs() < 1e-4)
         );
     }
-        let (n, k) = (3074usize, 1000usize);
+    let (n, k) = (3074usize, 1000usize);
     let a: Vec<f32> = (0..k).map(|i| (i as f32) * 0.001f32).collect();
     let w: Vec<f32> = (0..n * k)
         .map(|i| (((i * 7) % 13) as f32 - 6.0) * 0.01f32)
@@ -110,7 +117,10 @@ fn main() -> anyhow::Result<()> {
     let at = Tensor::from_vec(a.clone(), (1, k), &device)?;
     let wt = Tensor::from_vec(w.clone(), (n, k), &device)?;
     let out = at.matmul(&wt.t()?)?;
-    let got = out.flatten(0, 1)?.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+    let got = out
+        .flatten(0, 1)?
+        .to_device(&Device::Cpu)?
+        .to_vec1::<f32>()?;
     let want: Vec<f32> = (0..n)
         .map(|ni| (0..k).map(|ki| a[ki] * w[ni * k + ki]).sum())
         .collect();
@@ -133,7 +143,14 @@ fn main() -> anyhow::Result<()> {
         println!("  n={ni} got={:.6} want={:.6}", got[ni], want[ni]);
     }
     // bisection: regular n + irregular k, and irregular n + regular k
-    for &(nb, kb) in &[(3072usize, 64usize), (32usize, 1024usize), (32usize, 64usize), (256usize, 1024usize), (1024usize, 1024usize), (3072usize, 1024usize)] {
+    for &(nb, kb) in &[
+        (3072usize, 64usize),
+        (32usize, 1024usize),
+        (32usize, 64usize),
+        (256usize, 1024usize),
+        (1024usize, 1024usize),
+        (3072usize, 1024usize),
+    ] {
         let ab: Vec<f32> = (0..kb).map(|i| (i as f32) * 0.001).collect();
         let wb: Vec<f32> = (0..nb * kb)
             .map(|i| (((i * 7) % 13) as f32 - 6.0) * 0.01)
@@ -141,7 +158,10 @@ fn main() -> anyhow::Result<()> {
         let atb = Tensor::from_vec(ab.clone(), (1, kb), &device)?;
         let wtb = Tensor::from_vec(wb.clone(), (nb, kb), &device)?;
         let outb2 = atb.matmul(&wtb.t()?)?;
-        let gotb2 = outb2.flatten(0, 1)?.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        let gotb2 = outb2
+            .flatten(0, 1)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<f32>()?;
         let wantb2: Vec<f32> = (0..nb)
             .map(|ni| (0..kb).map(|ki| ab[ki] * wb[ni * kb + ki]).sum())
             .collect();
@@ -159,7 +179,10 @@ fn main() -> anyhow::Result<()> {
     let at2 = Tensor::from_vec(a2.clone(), (1, k2), &device)?;
     let wt2b = Tensor::from_vec(w2.clone(), (n2, k2), &device)?;
     let outb = at2.matmul(&wt2b.t()?)?;
-    let gotb = outb.flatten(0, 1)?.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+    let gotb = outb
+        .flatten(0, 1)?
+        .to_device(&Device::Cpu)?
+        .to_vec1::<f32>()?;
     let wantb: Vec<f32> = (0..n2).map(|ni| w2[ni * k2]).collect();
     let badb = (0..n2)
         .filter(|ni| (gotb[*ni] - wantb[*ni]).abs() > 1e-6)
@@ -176,7 +199,10 @@ fn main() -> anyhow::Result<()> {
     // non-transposed gemv sanity (same data, w stored (k, n))
     let wt2 = Tensor::from_vec(w.clone(), (n, k), &device)?;
     let out2 = at.matmul(&wt2.t()?.contiguous()?)?;
-    let got2 = out2.flatten(0, 1)?.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+    let got2 = out2
+        .flatten(0, 1)?
+        .to_device(&Device::Cpu)?
+        .to_vec1::<f32>()?;
     let max_err2 = got2
         .iter()
         .zip(want.iter())

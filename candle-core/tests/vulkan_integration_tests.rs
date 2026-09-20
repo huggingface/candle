@@ -18,8 +18,8 @@ mod vulkan_expected;
 
 use vulkan_expected::*;
 
-use candle_core::{Device, Result};
 use candle_core::VulkanDevice;
+use candle_core::{Device, Result};
 use candle_vulkan_kernels as vk;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
@@ -80,8 +80,9 @@ fn vulkan_dev() -> Result<Device> {
 fn run_and_get(
     d: &VulkanDevice,
     out: &Subbuffer<[f32]>,
-    encode: impl FnOnce(&mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>)
-        -> std::result::Result<(), String>
+    encode: impl FnOnce(
+            &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        ) -> std::result::Result<(), String>
         + Send
         + 'static,
 ) -> Result<Vec<f32>> {
@@ -158,7 +159,11 @@ fn elem_binary(op: vk::KernelName, name: &str, seed: u64, div: bool) -> Result<(
     let vd = d.as_vulkan_device()?;
     let mut rng = Rng::new(seed);
     let lhs = rng.f32s(128, -2.0, 2.0);
-    let rhs = if div { rng.f32s(8, 0.5, 1.5) } else { rng.f32s(8, -1.0, 1.0) };
+    let rhs = if div {
+        rng.f32s(8, 0.5, 1.5)
+    } else {
+        rng.f32s(8, -1.0, 1.0)
+    };
     let il = vd.upload_f32(&lhs)?;
     let ir = vd.upload_f32(&rhs)?;
     let o = vd.new_f32_buffer(128)?;
@@ -223,7 +228,13 @@ fn elem_unary(op: vk::KernelName, name: &str, seed: u64, lo: f32, hi: f32) -> Re
 
 #[test]
 fn elem_sigmoid() -> Result<()> {
-    elem_unary(vk::KernelName::ElemSigmoidF32, "ELEM_SIGMOID", 1006, -3.0, 3.0)
+    elem_unary(
+        vk::KernelName::ElemSigmoidF32,
+        "ELEM_SIGMOID",
+        1006,
+        -3.0,
+        3.0,
+    )
 }
 
 #[test]
@@ -288,12 +299,19 @@ fn gemm() -> Result<()> {
     let irt = vd.upload_f32(&rhs_t)?;
     let o1 = vd.new_f32_buffer(bsz * m * n)?;
     let o2 = vd.new_f32_buffer(bsz * m * n)?;
-    let (l2, r2, rt2, o12, o22, kern) =
-        (il.clone(), ir.clone(), irt.clone(), o1.clone(), o2.clone(), vd.kernels());
+    let (l2, r2, rt2, o12, o22, kern) = (
+        il.clone(),
+        ir.clone(),
+        irt.clone(),
+        o1.clone(),
+        o2.clone(),
+        vd.kernels(),
+    );
     vd.execute(move |cbb| {
         vk::call_gemm_f32(cbb, &kern, &l2, &r2, &o12, bsz, m, n, k, false)
             .map_err(|e| e.to_string())?;
-        vk::call_gemm_f32(cbb, &kern, &l2, &rt2, &o22, bsz, m, n, k, true).map_err(|e| e.to_string())
+        vk::call_gemm_f32(cbb, &kern, &l2, &rt2, &o22, bsz, m, n, k, true)
+            .map_err(|e| e.to_string())
     })?;
     vd.synchronize()?;
     let g1 = vd.download_f32(&o1)?;
@@ -609,7 +627,10 @@ fn q4k_dequant_vs_cpu() -> Result<()> {
     })?;
     for (i, (g, w)) in got.iter().zip(cpu.iter()).enumerate() {
         let tol = 1e-5 * w.abs().max(1.0);
-        assert!((g - w).abs() <= tol, "q4k_dequant vs cpu: [{i}] got {g}, want {w}");
+        assert!(
+            (g - w).abs() <= tol,
+            "q4k_dequant vs cpu: [{i}] got {g}, want {w}"
+        );
     }
     Ok(())
 }
@@ -646,7 +667,10 @@ fn q4k_qmatvec_vs_cpu() -> Result<()> {
     })?;
     for (i, (g, w)) in got.iter().zip(cpu.iter()).enumerate() {
         let tol = 1e-4 * w.abs().max(1.0);
-        assert!((g - w).abs() <= tol, "q4k_qmatvec vs cpu: [{i}] got {g}, want {w}");
+        assert!(
+            (g - w).abs() <= tol,
+            "q4k_qmatvec vs cpu: [{i}] got {g}, want {w}"
+        );
     }
     Ok(())
 }
@@ -708,7 +732,10 @@ fn q80_dequant_vs_cpu() -> Result<()> {
     })?;
     for (i, (g, w)) in got.iter().zip(cpu.iter()).enumerate() {
         let tol = 1e-4 * w.abs().max(1.0);
-        assert!((g - w).abs() <= tol, "q80_dequant vs cpu: [{i}] got {g}, want {w}");
+        assert!(
+            (g - w).abs() <= tol,
+            "q80_dequant vs cpu: [{i}] got {g}, want {w}"
+        );
     }
     Ok(())
 }
@@ -734,7 +761,10 @@ fn q50_dequant_vs_cpu() -> Result<()> {
     })?;
     for (i, (g, w)) in got.iter().zip(cpu.iter()).enumerate() {
         let tol = 1e-4 * w.abs().max(1.0);
-        assert!((g - w).abs() <= tol, "q50_dequant vs cpu: [{i}] got {g}, want {w}");
+        assert!(
+            (g - w).abs() <= tol,
+            "q50_dequant vs cpu: [{i}] got {g}, want {w}"
+        );
     }
     Ok(())
 }
@@ -760,7 +790,10 @@ fn q5k_dequant_vs_cpu() -> Result<()> {
     })?;
     for (i, (g, w)) in got.iter().zip(cpu.iter()).enumerate() {
         let tol = 1e-4 * w.abs().max(1.0);
-        assert!((g - w).abs() <= tol, "q5k_dequant vs cpu: [{i}] got {g}, want {w}");
+        assert!(
+            (g - w).abs() <= tol,
+            "q5k_dequant vs cpu: [{i}] got {g}, want {w}"
+        );
     }
     Ok(())
 }

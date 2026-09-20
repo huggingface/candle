@@ -5,13 +5,13 @@
 //! bytes, and the prefill dequantizes in VRAM and runs the f32 GEMM.
 //! Greedy decoding, with the argmax done on the CPU to keep the sample
 //! self-contained.
-use std::fs::File;
-use std::io::BufReader;
-use std::time::Instant;
 use anyhow::{anyhow, Context, Result};
 use candle::{quantized::gguf_file, Device, Tensor};
 use candle_transformers::models::quantized_qwen3::ModelWeights as Qwen3;
 use clap::Parser;
+use std::fs::File;
+use std::io::BufReader;
+use std::time::Instant;
 use tokenizers::Tokenizer;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -80,8 +80,8 @@ fn main() -> Result<()> {
     // Quantized model: weights stay quantized in VRAM.
     let t0 = Instant::now();
     let mut file = BufReader::new(File::open(&args.model)?);
-    let mut model = Qwen3::from_gguf(ct, &mut file, &device)
-        .context("loading the quantized model")?;
+    let mut model =
+        Qwen3::from_gguf(ct, &mut file, &device).context("loading the quantized model")?;
     eprintln!("model loaded in {:.1} s", t0.elapsed().as_secs_f64());
     let tokenizer = Tokenizer::from_file(&args.tokenizer).map_err(anyhow::Error::msg)?;
     let prompt_ids: Vec<u32> = tokenizer
@@ -106,10 +106,17 @@ fn main() -> Result<()> {
     if std::env::var("QWV_DEBUG").is_ok() {
         let lv = logits.flatten_all()?.to_vec1::<f32>()?;
         let mut top: Vec<_> = lv.iter().enumerate().collect();
-        top.sort_by(|a,b| b.1.partial_cmp(a.1).unwrap());
+        top.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap());
         top.truncate(5);
-        eprintln!("PREFILL top5: {:?}", top.iter().map(|(i,v)| (*i, *v)).collect::<Vec<_>>());
-        eprintln!("PREFILL logits[0..4]: {:?} max={}", &lv[0..4], lv.iter().cloned().fold(f32::NEG_INFINITY, f32::max));
+        eprintln!(
+            "PREFILL top5: {:?}",
+            top.iter().map(|(i, v)| (*i, *v)).collect::<Vec<_>>()
+        );
+        eprintln!(
+            "PREFILL logits[0..4]: {:?} max={}",
+            &lv[0..4],
+            lv.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+        );
     }
     let prefill_s = t0.elapsed().as_secs_f64();
     // Greedy decode.
@@ -135,11 +142,18 @@ fn main() -> Result<()> {
     if std::env::var("QWV_DEBUG").is_ok() {
         let lv = logits.flatten_all()?.to_vec1::<f32>()?;
         let mut top: Vec<_> = lv.iter().enumerate().collect();
-        top.sort_by(|a,b| b.1.partial_cmp(a.1).unwrap());
+        top.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap());
         top.truncate(5);
-        eprintln!("top5 logits: {:?}", top.iter().map(|(i,v)| (*i, *v)).collect::<Vec<_>>());
+        eprintln!(
+            "top5 logits: {:?}",
+            top.iter().map(|(i, v)| (*i, *v)).collect::<Vec<_>>()
+        );
         eprintln!("logits[0..4]: {:?}", &lv[0..4.min(lv.len())]);
-        eprintln!("logit max={} min={}", lv.iter().cloned().fold(f32::NEG_INFINITY, f32::max), lv.iter().cloned().fold(f32::INFINITY, f32::min));
+        eprintln!(
+            "logit max={} min={}",
+            lv.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
+            lv.iter().cloned().fold(f32::INFINITY, f32::min)
+        );
     }
     let decode_s = t0.elapsed().as_secs_f64();
     println!();

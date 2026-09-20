@@ -58,11 +58,16 @@ fn run_one(
     eprintln!("[{tag}] loaded in {:.1} s", t0.elapsed().as_secs_f64());
 
     let t0 = Instant::now();
-    let mut logits = model
-        .forward(&Tensor::from_vec(prompt_ids.to_vec(), (1, prompt_ids.len()), device)?, 0)?;
+    let mut logits = model.forward(
+        &Tensor::from_vec(prompt_ids.to_vec(), (1, prompt_ids.len()), device)?,
+        0,
+    )?;
     let prefill_s = t0.elapsed().as_secs_f64();
     {
-        let lv = logits.flatten_all()?.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        let lv = logits
+            .flatten_all()?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<f32>()?;
         if let Ok(dir) = std::env::var("QWV_LAYER_DUMP") {
             let bytes: Vec<u8> = lv.iter().flat_map(|f| f.to_le_bytes()).collect();
             let _ = std::fs::write(format!("{dir}/logits.bin"), bytes);
@@ -93,13 +98,8 @@ fn run_one(
         .flatten_all()?
         .to_device(&Device::Cpu)?
         .to_vec1::<f32>()?;
-    eprintln!(
-        "[{tag}] prefill {prefill_s:.2} s, decode {decode_s:.2} s, first decode ids {ids:?}"
-    );
-    eprintln!(
-        "[{tag}] prefill top5: {:?}",
-        top5(&final_logits, 5)
-    );
+    eprintln!("[{tag}] prefill {prefill_s:.2} s, decode {decode_s:.2} s, first decode ids {ids:?}");
+    eprintln!("[{tag}] prefill top5: {:?}", top5(&final_logits, 5));
     eprintln!(
         "[{tag}] prefill decoded: {:?}",
         tok.decode(&ids, true).map_err(|e| anyhow::anyhow!("{e}"))?
@@ -117,9 +117,22 @@ fn main() -> Result<()> {
         .to_vec();
     eprintln!("prompt ids: {prompt_ids:?}");
 
-    let (cpu_logits, cpu_ids) = run_one("cpu", &Device::Cpu, &args.model, &tok, &prompt_ids, args.decode)?;
-    let (vk_logits, vk_ids) =
-        run_one("vulkan", &Device::new_vulkan(args.gpu)?, &args.model, &tok, &prompt_ids, args.decode)?;
+    let (cpu_logits, cpu_ids) = run_one(
+        "cpu",
+        &Device::Cpu,
+        &args.model,
+        &tok,
+        &prompt_ids,
+        args.decode,
+    )?;
+    let (vk_logits, vk_ids) = run_one(
+        "vulkan",
+        &Device::new_vulkan(args.gpu)?,
+        &args.model,
+        &tok,
+        &prompt_ids,
+        args.decode,
+    )?;
 
     assert_eq!(cpu_logits.len(), vk_logits.len());
     let max_abs: f32 = cpu_logits
@@ -155,16 +168,34 @@ fn main() -> Result<()> {
         let mut worst = 0.0f32;
         let mut first_bad = None;
         for name in &files {
-            let Ok(a) = std::fs::read(format!("{dir}/cpu/{name}")) else { continue };
-            let Ok(b) = std::fs::read(format!("{dir}/vulkan/{name}")) else { continue };
+            let Ok(a) = std::fs::read(format!("{dir}/cpu/{name}")) else {
+                continue;
+            };
+            let Ok(b) = std::fs::read(format!("{dir}/vulkan/{name}")) else {
+                continue;
+            };
             if a.len() != b.len() {
-                eprintln!("{name}: size mismatch {} vs {} (FIRST DIVERGING)", a.len(), b.len());
+                eprintln!(
+                    "{name}: size mismatch {} vs {} (FIRST DIVERGING)",
+                    a.len(),
+                    b.len()
+                );
                 first_bad = Some(name.clone());
                 break;
             }
-            let av: Vec<f32> = a.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
-            let bv: Vec<f32> = b.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
-            let d: f32 = av.iter().zip(bv.iter()).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
+            let av: Vec<f32> = a
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .collect();
+            let bv: Vec<f32> = b
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .collect();
+            let d: f32 = av
+                .iter()
+                .zip(bv.iter())
+                .map(|(x, y)| (x - y).abs())
+                .fold(0f32, f32::max);
             let mark = if d > 1e-3 { "  <<< DIVERGES" } else { "" };
             eprintln!("{name}: max abs diff {d:.6}{mark}");
             if d > worst {

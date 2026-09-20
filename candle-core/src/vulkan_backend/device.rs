@@ -55,7 +55,12 @@ pub struct VulkanDevice {
 
 /// A deferred kernel record: `execute` appends these, `synchronize` plays
 /// them back onto one command buffer in order.
-type Encode = Box<dyn FnOnce(&mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>) -> std::result::Result<(), String> + Send>;
+type Encode = Box<
+    dyn FnOnce(
+            &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        ) -> std::result::Result<(), String>
+        + Send,
+>;
 
 /// One slot of the fence ring: the command buffer of the last submission
 /// that used this slot (kept alive until the fence signals, because the
@@ -154,7 +159,10 @@ impl VulkanDevice {
         for _ in 0..FENCE_RING_SIZE {
             let fence = Fence::new(device.clone(), FenceCreateInfo::default())
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-            fence_ring.push(InFlight { cbb: None, fence: Arc::new(fence) });
+            fence_ring.push(InFlight {
+                cbb: None,
+                fence: Arc::new(fence),
+            });
         }
         Ok(Self {
             instance,
@@ -195,9 +203,11 @@ impl VulkanDevice {
     }
 
     pub fn supports_bf16(&self) -> bool {
-        self.device.physical_device().extension_properties().iter().any(|property| {
-            property.extension_name.eq("VK_KHR_shader_bfloat16")
-        })
+        self.device
+            .physical_device()
+            .extension_properties()
+            .iter()
+            .any(|property| property.extension_name.eq("VK_KHR_shader_bfloat16"))
     }
 
     /// Uploads `data` into a device f32 storage buffer in VRAM. A
@@ -207,12 +217,13 @@ impl VulkanDevice {
         let buffer = Buffer::new_slice(
             self.mem_alloc.clone(),
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+                usage: BufferUsage::STORAGE_BUFFER
+                    | BufferUsage::TRANSFER_SRC
+                    | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
             Self::storage_alloc_info(),
-            data
-                .len()
+            data.len()
                 .try_into()
                 .map_err(|_| Error::Vulkan("f32 buffer length".to_string().into()))?,
         )
@@ -229,8 +240,7 @@ impl VulkanDevice {
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let dst = buffer.clone();
         self.execute(move |cbb| {
-            cbb
-                .copy_buffer(CopyBufferInfo::buffers(staging, dst))
+            cbb.copy_buffer(CopyBufferInfo::buffers(staging, dst))
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;
@@ -243,7 +253,9 @@ impl VulkanDevice {
         let buffer = Buffer::new_slice(
             self.mem_alloc.clone(),
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+                usage: BufferUsage::STORAGE_BUFFER
+                    | BufferUsage::TRANSFER_SRC
+                    | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
             Self::storage_alloc_info(),
@@ -253,9 +265,7 @@ impl VulkanDevice {
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let dst: Subbuffer<[u32]> = buffer.clone().reinterpret();
         self.execute(move |cbb| {
-            cbb
-                .fill_buffer(dst, 0)
-                .map_err(|e| e.to_string())?;
+            cbb.fill_buffer(dst, 0).map_err(|e| e.to_string())?;
             Ok(())
         })?;
         self.keepalive_f32.lock().unwrap().push(buffer.clone());
@@ -268,7 +278,9 @@ impl VulkanDevice {
         let buffer = Buffer::new_slice(
             self.mem_alloc.clone(),
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+                usage: BufferUsage::STORAGE_BUFFER
+                    | BufferUsage::TRANSFER_SRC
+                    | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
             Self::storage_alloc_info(),
@@ -278,9 +290,7 @@ impl VulkanDevice {
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let dst: Subbuffer<[u32]> = buffer.clone();
         self.execute(move |cbb| {
-            cbb
-                .fill_buffer(dst, 0)
-                .map_err(|e| e.to_string())?;
+            cbb.fill_buffer(dst, 0).map_err(|e| e.to_string())?;
             Ok(())
         })?;
         self.keepalive_u32.lock().unwrap().push(buffer.clone());
@@ -297,8 +307,10 @@ impl VulkanDevice {
     pub fn execute<F>(&self, encode: F) -> Result<()>
     where
         F: FnOnce(
-            &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-        ) -> std::result::Result<(), String> + Send + 'static,
+                &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+            ) -> std::result::Result<(), String>
+            + Send
+            + 'static,
     {
         self.pending.lock().unwrap().push(Box::new(encode));
         Ok(())
@@ -337,9 +349,9 @@ impl VulkanDevice {
                 encode(&mut cbb).map_err(|e| Error::Vulkan(e.into()))?;
             }
             let t_build = t0.elapsed();
-            let cbb = cbb.build().map_err(|e| {
-                Error::Vulkan(format!("command buffer build: {e}").into())
-            })?;
+            let cbb = cbb
+                .build()
+                .map_err(|e| Error::Vulkan(format!("command buffer build: {e}").into()))?;
             let idx = self
                 .fence_next
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -353,8 +365,7 @@ impl VulkanDevice {
                         .wait(None)
                         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
                 }
-                unsafe { slot.fence.reset() }
-                    .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                unsafe { slot.fence.reset() }.map_err(|e| Error::Vulkan(e.to_string().into()))?;
                 slot.cbb = Some(cbb);
                 slot.fence.clone()
             };
@@ -411,8 +422,7 @@ impl VulkanDevice {
         let src = buffer.clone();
         let dst = staging.clone();
         self.execute(move |cbb| {
-            cbb
-                .copy_buffer(CopyBufferInfo::buffers(src, dst))
+            cbb.copy_buffer(CopyBufferInfo::buffers(src, dst))
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;
@@ -430,12 +440,13 @@ impl VulkanDevice {
         let buffer = Buffer::new_slice(
             self.mem_alloc.clone(),
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+                usage: BufferUsage::STORAGE_BUFFER
+                    | BufferUsage::TRANSFER_SRC
+                    | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
             Self::storage_alloc_info(),
-            data
-                .len()
+            data.len()
                 .try_into()
                 .map_err(|_| Error::Vulkan("u8 buffer length".to_string().into()))?,
         )
@@ -452,8 +463,7 @@ impl VulkanDevice {
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let dst = buffer.clone();
         self.execute(move |cbb| {
-            cbb
-                .copy_buffer(CopyBufferInfo::buffers(staging, dst))
+            cbb.copy_buffer(CopyBufferInfo::buffers(staging, dst))
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;
@@ -477,8 +487,7 @@ impl VulkanDevice {
         let src = buffer.clone();
         let dst = staging.clone();
         self.execute(move |cbb| {
-            cbb
-                .copy_buffer(CopyBufferInfo::buffers(src, dst))
+            cbb.copy_buffer(CopyBufferInfo::buffers(src, dst))
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;
@@ -493,12 +502,13 @@ impl VulkanDevice {
         let buffer = Buffer::new_slice(
             self.mem_alloc.clone(),
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC | BufferUsage::TRANSFER_DST,
+                usage: BufferUsage::STORAGE_BUFFER
+                    | BufferUsage::TRANSFER_SRC
+                    | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
             Self::storage_alloc_info(),
-            data
-                .len()
+            data.len()
                 .try_into()
                 .map_err(|_| Error::Vulkan("u32 buffer length".to_string().into()))?,
         )
@@ -515,8 +525,7 @@ impl VulkanDevice {
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let dst = buffer.clone();
         self.execute(move |cbb| {
-            cbb
-                .copy_buffer(CopyBufferInfo::buffers(staging, dst))
+            cbb.copy_buffer(CopyBufferInfo::buffers(staging, dst))
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;
@@ -541,8 +550,7 @@ impl VulkanDevice {
         let src = buffer.clone();
         let dst = staging.clone();
         self.execute(move |cbb| {
-            cbb
-                .copy_buffer(CopyBufferInfo::buffers(src, dst))
+            cbb.copy_buffer(CopyBufferInfo::buffers(src, dst))
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;

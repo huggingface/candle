@@ -14,10 +14,8 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer
 
 use candle_vulkan_kernels::{
     call_affine_f32, call_copy_f32, call_elem_binary_f32, call_elem_unary_f32, call_gather_f32,
-    call_gemm_f32, call_gemv_f32, call_gemv_t_f32, call_reduce_max_f32,
-    call_reduce_sum_f32,
-    call_rms_norm_f32,
-    call_rope_f32, call_softmax_last_dim_f32, KernelName,
+    call_gemm_f32, call_gemv_f32, call_gemv_t_f32, call_reduce_max_f32, call_reduce_sum_f32,
+    call_rms_norm_f32, call_rope_f32, call_softmax_last_dim_f32, KernelName,
 };
 
 pub use crate::vulkan_backend::device::{VBuf, VulkanDevice, VulkanStorage};
@@ -119,7 +117,16 @@ fn materialize(
     device.execute(
         move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
             call_copy_f32(
-                cbb, kernels.as_ref(), &src, &dst, total, &dims, &sstr, &dstr, soff, 0,
+                cbb,
+                kernels.as_ref(),
+                &src,
+                &dst,
+                total,
+                &dims,
+                &sstr,
+                &dstr,
+                soff,
+                0,
             )
             .map_err(|e| e.to_string())
         },
@@ -155,8 +162,17 @@ pub fn rms_norm_f32(
     let kernels = input.device.kernels();
     input.device.execute(
         move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
-            call_rms_norm_f32(cbb, kernels.as_ref(), &in_buf, &w_buf, &out_arg, rows, cols, eps)
-                .map_err(|e| e.to_string())
+            call_rms_norm_f32(
+                cbb,
+                kernels.as_ref(),
+                &in_buf,
+                &w_buf,
+                &out_arg,
+                rows,
+                cols,
+                eps,
+            )
+            .map_err(|e| e.to_string())
         },
     )?;
     Ok((
@@ -310,8 +326,15 @@ impl BackendStorage for VulkanStorage {
         let kernels = device.kernels();
         self.device.execute(
             move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
-                call_affine_f32(cbb, kernels.as_ref(), &input, &out_arg, mul as f32, add as f32)
-                    .map_err(|e| e.to_string())
+                call_affine_f32(
+                    cbb,
+                    kernels.as_ref(),
+                    &input,
+                    &out_arg,
+                    mul as f32,
+                    add as f32,
+                )
+                .map_err(|e| e.to_string())
             },
         )?;
         Ok(Self::new(VBuf::F32(out), &self.device, size, DType::F32))
@@ -411,7 +434,8 @@ impl BackendStorage for VulkanStorage {
         let kernels = self.device.kernels();
         self.device.execute(
             move |cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>| {
-                call_elem_unary_f32(cbb, kernels.as_ref(), name, &input, &out_arg).map_err(|e| e.to_string())
+                call_elem_unary_f32(cbb, kernels.as_ref(), name, &input, &out_arg)
+                    .map_err(|e| e.to_string())
             },
         )?;
         Ok(Self::new(VBuf::F32(out), &self.device, total, DType::F32))
@@ -624,10 +648,28 @@ impl BackendStorage for VulkanStorage {
                 if use_gemv {
                     call_gemv_f32(cbb, kernels.as_ref(), &input, &rbuf, &out_arg, k, n)
                 } else if use_gemv_t {
-                    call_gemv_t_f32(cbb, kernels.as_ref(), &input, &rbuf, &out_arg, n, k, w_stride)
+                    call_gemv_t_f32(
+                        cbb,
+                        kernels.as_ref(),
+                        &input,
+                        &rbuf,
+                        &out_arg,
+                        n,
+                        k,
+                        w_stride,
+                    )
                 } else {
                     call_gemm_f32(
-                        cbb, kernels.as_ref(), &input, &rbuf, &out_arg, b, m, n, k, transposed,
+                        cbb,
+                        kernels.as_ref(),
+                        &input,
+                        &rbuf,
+                        &out_arg,
+                        b,
+                        m,
+                        n,
+                        k,
+                        transposed,
                     )
                 }
                 .map_err(|e| e.to_string())
