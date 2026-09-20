@@ -12,6 +12,9 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
     let args = Args::parse();
     let device = Device::new_vulkan(args.gpu)?;
     let n = 1024usize;
@@ -26,7 +29,7 @@ fn main() -> anyhow::Result<()> {
     }
     let _v: Vec<f32> = x.to_vec1::<f32>()?;
     let dt = t0.elapsed();
-    println!(
+    tracing::debug!(
         "vulkan_bench: {n_ops} silu dispatches ({n} elems): {:.3} ms/dispatch",
         dt.as_secs_f32() * 1000.0 / n_ops as f32
     );
@@ -44,7 +47,7 @@ fn main() -> anyhow::Result<()> {
     let probe = a.matmul(&w)?;
     let _v: Vec<f32> = probe.flatten(0, 1)?.to_vec1::<f32>()?;
     let dt = t0.elapsed();
-    println!(
+    tracing::debug!(
         "vulkan_bench: {n_ops} gemm dispatches (1x1024 @ 1024x1024): {:.3} ms/dispatch",
         dt.as_secs_f32() * 1000.0 / (n_ops + 1) as f32
     );
@@ -60,7 +63,7 @@ fn main() -> anyhow::Result<()> {
     let probe_t = a.matmul(&wt_t.t()?)?;
     let _v: Vec<f32> = probe_t.flatten(0, 1)?.to_vec1::<f32>()?;
     let dt = t0.elapsed();
-    println!(
+    tracing::debug!(
         "vulkan_bench: {n_ops} gemv_t dispatches (1x1024 @ 1024x1024^T): {:.3} ms/dispatch",
         dt.as_secs_f32() * 1000.0 / (n_ops + 1) as f32
     );
@@ -83,7 +86,7 @@ fn main() -> anyhow::Result<()> {
         let probe_s = a_s.matmul(&w_s.t()?)?;
         let _v: Vec<f32> = probe_s.flatten(0, 1)?.to_vec1::<f32>()?;
         let dt = t0.elapsed();
-        println!(
+        tracing::debug!(
             "vulkan_bench: {m_ops} gemv_t dispatches (1x{ks} @ {ns}x{ks}^T): {:.3} ms/dispatch",
             dt.as_secs_f32() * 1000.0 / (m_ops + 1) as f32
         );
@@ -102,7 +105,7 @@ fn main() -> anyhow::Result<()> {
             .to_device(&Device::Cpu)?
             .to_vec1::<f32>()?;
         let want = [10f32, 26.0, 42.0, 58.0];
-        println!(
+        tracing::debug!(
             "vulkan_bench: gemv_t micro got: {:?} want: {:?} ok: {}",
             got,
             want,
@@ -129,18 +132,18 @@ fn main() -> anyhow::Result<()> {
         .zip(want.iter())
         .map(|(x, y)| (x - y).abs())
         .fold(0f32, f32::max);
-    println!("vulkan_bench: gemv_t max_err: {max_err:.3e}");
+    tracing::debug!("vulkan_bench: gemv_t max_err: {max_err:.3e}");
     let bad = (0..n)
         .filter(|ni| (got[*ni] - want[*ni]).abs() > 1e-3)
         .collect::<Vec<_>>();
-    println!(
+    tracing::debug!(
         "vulkan_bench: gemv_t bad: {}/{} first: {:?}",
         bad.len(),
         n,
         bad.iter().take(8).cloned().collect::<Vec<_>>()
     );
     for ni in [0usize, 1, 2, 15, 16, 17, 3072, 3073] {
-        println!("  n={ni} got={:.6} want={:.6}", got[ni], want[ni]);
+        tracing::debug!("  n={ni} got={:.6} want={:.6}", got[ni], want[ni]);
     }
     // bisection: regular n + irregular k, and irregular n + regular k
     for &(nb, kb) in &[
@@ -170,7 +173,7 @@ fn main() -> anyhow::Result<()> {
             .zip(wantb2.iter())
             .map(|(x, y)| (x - y).abs())
             .fold(0f32, f32::max);
-        println!("vulkan_bench: gemv_t n={nb} k={kb} max_err: {maxe:.3e}");
+        tracing::debug!("vulkan_bench: gemv_t n={nb} k={kb} max_err: {maxe:.3e}");
     }
     // invertible case: a = e0 -> out[n] = w[n, 0]
     let (n2, k2) = (32usize, 64usize);
@@ -187,14 +190,14 @@ fn main() -> anyhow::Result<()> {
     let badb = (0..n2)
         .filter(|ni| (gotb[*ni] - wantb[*ni]).abs() > 1e-6)
         .collect::<Vec<_>>();
-    println!(
+    tracing::debug!(
         "vulkan_bench: gemv_t delta bad: {}/{} first: {:?}",
         badb.len(),
         n2,
         badb.iter().take(8).cloned().collect::<Vec<_>>()
     );
     for ni in 0..8usize {
-        println!("  n={ni} got={:.6} want={:.6}", gotb[ni], wantb[ni]);
+        tracing::debug!("  n={ni} got={:.6} want={:.6}", gotb[ni], wantb[ni]);
     }
     // non-transposed gemv sanity (same data, w stored (k, n))
     let wt2 = Tensor::from_vec(w.clone(), (n, k), &device)?;
@@ -208,6 +211,6 @@ fn main() -> anyhow::Result<()> {
         .zip(want.iter())
         .map(|(x, y)| (x - y).abs())
         .fold(0f32, f32::max);
-    println!("vulkan_bench: gemv max_err: {max_err2:.3e}");
+    tracing::debug!("vulkan_bench: gemv max_err: {max_err2:.3e}");
     Ok(())
 }

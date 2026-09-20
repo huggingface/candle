@@ -1,6 +1,19 @@
 use candle_core::{Device, Tensor};
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+struct Args {
+    /// The Vulkan device ordinal.
+    #[arg(short = 'g', long, default_value_t = 0)]
+    gpu: usize,
+}
+
 fn main() -> anyhow::Result<()> {
-    let device = Device::new_vulkan(0)?;
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+    let args = Args::parse();
+    let device = Device::new_vulkan(args.gpu)?;
     let x = Tensor::arange(0f32, 16., &device)?.reshape((4, 4))?;
     let rhs = Tensor::new(&[10f32, 20., 30., 40.], &device)?.reshape((4, 1))?;
     let bm: Vec<f32> = x.broadcast_mul(&rhs)?.flatten(0, 1)?.to_vec1::<f32>()?;
@@ -14,11 +27,11 @@ fn main() -> anyhow::Result<()> {
     if !ok {
         for (i, (g, w)) in bm.iter().zip(want.iter()).enumerate() {
             if (g - w).abs() > 1e-4 {
-                eprintln!("FAIL element {i}: got {g}, want {w}");
+                tracing::error!("FAIL element {i}: got {g}, want {w}");
             }
         }
         std::process::exit(1);
     }
-    println!("vulkan_mul_min: OK");
+    tracing::debug!("vulkan_mul_min: OK");
     Ok(())
 }

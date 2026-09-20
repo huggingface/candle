@@ -87,6 +87,6 @@ fn main() -> Result<()> {
         .to_vec1::<f32>()?;
     assert_close(&c4, &want, 1e-3, "matmul 4d transposed")?;
 
-    println!("vulkan_basics: affine, reduce, elementwise, gemm verified on {device:?}");
+    tracing::debug!("vulkan_basics: affine, reduce, elementwise, gemm verified on {device:?}");
     Ok(())
 }
