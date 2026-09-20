@@ -164,6 +164,7 @@ impl VulkanDevice {
                 fence: Arc::new(fence),
             });
         }
+        tracing::debug!("Initializing vulkan device '{gpu_id}'");
         Ok(Self {
             instance,
             device,

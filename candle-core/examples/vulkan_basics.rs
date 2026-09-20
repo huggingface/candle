@@ -24,6 +24,9 @@ fn assert_close(got: &[f32], want: &[f32], tol: f32, what: &str) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
     let args = Args::parse();
     let device = Device::new_vulkan(args.gpu)?;
 
