@@ -3,7 +3,7 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{DType, Error, IntDType, Layout, NdIter, Result, Shape, WithDType};
 use float8::F8E4M3;
-use half::{bf16, f16, slice::HalfFloatSliceExt};
+use half::{bf16, f16, slice::HalfFloatSliceExt, vec::HalfFloatVecExt};
 use rayon::prelude::*;
 
 mod utils;
@@ -3062,9 +3062,7 @@ impl BackendStorage for CpuStorage {
             let Self::F32(out_v) = out else {
                 crate::bail!("matmul dtype mismatch")
             };
-            return Ok(Self::BF16(
-                out_v.iter().map(|v| half::bf16::from_f32(*v)).collect(),
-            ));
+            return Ok(Self::BF16(Vec::from_f32_slice(&out_v)));
         }
         MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)
     }

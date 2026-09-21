@@ -10,20 +10,20 @@ use core::arch::x86::*;
 use core::arch::x86_64::*;
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn sum_i16_pairs_float(x: __m256i) -> __m256 {
+pub(crate) fn sum_i16_pairs_float(x: __m256i) -> __m256 {
     let ones = _mm256_set1_epi16(1);
     let summed_pairs = _mm256_madd_epi16(ones, x);
     _mm256_cvtepi32_ps(summed_pairs)
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn mul_sum_us8_pairs_float(ax: __m256i, sy: __m256i) -> __m256 {
+pub(crate) fn mul_sum_us8_pairs_float(ax: __m256i, sy: __m256i) -> __m256 {
     let dot = _mm256_maddubs_epi16(ax, sy);
     sum_i16_pairs_float(dot)
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn hsum_float_8(x: __m256) -> f32 {
+pub(crate) fn hsum_float_8(x: __m256) -> f32 {
     let res = _mm256_extractf128_ps(x, 1);
     let res = _mm_add_ps(res, _mm256_castps256_ps128(x));
     let res = _mm_add_ps(res, _mm_movehl_ps(res, res));
@@ -31,23 +31,25 @@ pub(crate) unsafe fn hsum_float_8(x: __m256) -> f32 {
     _mm_cvtss_f32(res)
 }
 
+/// # Safety
+/// `rsi` must point to at least 16 readable bytes.
 #[target_feature(enable = "avx2,fma")]
 pub(crate) unsafe fn bytes_from_nibbles_32(rsi: *const u8) -> __m256i {
-    let tmp = _mm_loadu_si128(rsi as *const __m128i);
+    let tmp = unsafe { _mm_loadu_si128(rsi as *const __m128i) };
     let bytes = _mm256_insertf128_si256::<1>(_mm256_castsi128_si256(tmp), _mm_srli_epi16(tmp, 4));
     let low_mask = _mm256_set1_epi8(0xF);
     _mm256_and_si256(low_mask, bytes)
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn mul_sum_i8_pairs_float(x: __m256i, y: __m256i) -> __m256 {
+pub(crate) fn mul_sum_i8_pairs_float(x: __m256i, y: __m256i) -> __m256 {
     let ax = _mm256_sign_epi8(x, x);
     let sy = _mm256_sign_epi8(y, x);
     mul_sum_us8_pairs_float(ax, sy)
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) -> f32 {
+pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) -> f32 {
     debug_assert!(
         n.is_multiple_of(QK8_0),
         "vec_dot_q4_0_q8_0: {n} is not divisible by {QK8_0}"
@@ -68,7 +70,7 @@ pub(crate) unsafe fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) -> f32 {
+pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) -> f32 {
     debug_assert!(
         n.is_multiple_of(QK8_0),
         "vec_dot_q8_0_q8_0: {n} is not divisible by {QK8_0}"
@@ -86,6 +88,8 @@ pub(crate) unsafe fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8
     }
 }
 
+/// # Safety
+/// `i` must be less than 8.
 #[target_feature(enable = "avx2,fma")]
 unsafe fn get_scale_shuffle(i: usize) -> __m128i {
     const K_SHUFFLE: [u8; 128] = [
@@ -95,9 +99,11 @@ unsafe fn get_scale_shuffle(i: usize) -> __m128i {
         11, 11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13,
         13, 14, 14, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15,
     ];
-    _mm_loadu_si128((K_SHUFFLE.as_ptr() as *const __m128i).add(i))
+    unsafe { _mm_loadu_si128((K_SHUFFLE.as_ptr() as *const __m128i).add(i)) }
 }
 
+/// # Safety
+/// `i` must be less than 8.
 #[target_feature(enable = "avx2,fma")]
 unsafe fn get_scale_shuffle_k4(i: usize) -> __m256i {
     const K_SHUFFLE: [u8; 256] = [
@@ -112,9 +118,11 @@ unsafe fn get_scale_shuffle_k4(i: usize) -> __m256i {
         13, 12, 13, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15,
         14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15,
     ];
-    _mm256_loadu_si256((K_SHUFFLE.as_ptr() as *const __m256i).add(i))
+    unsafe { _mm256_loadu_si256((K_SHUFFLE.as_ptr() as *const __m256i).add(i)) }
 }
 
+/// # Safety
+/// `i` must be less than 4.
 #[target_feature(enable = "avx2,fma")]
 unsafe fn get_scale_shuffle_q3k(i: usize) -> __m256i {
     const K_SHUFFLE: [u8; 128] = [
@@ -124,11 +132,11 @@ unsafe fn get_scale_shuffle_q3k(i: usize) -> __m256i {
         10, 11, 10, 11, 10, 11, 10, 11, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12,
         13, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15,
     ];
-    _mm256_loadu_si256((K_SHUFFLE.as_ptr() as *const __m256i).add(i))
+    unsafe { _mm256_loadu_si256((K_SHUFFLE.as_ptr() as *const __m256i).add(i)) }
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> f32 {
+pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> f32 {
     debug_assert!(
         n.is_multiple_of(QK_K),
         "vec_dot_q6k_8k: {n} is not divisible by {QK_K}"
@@ -216,12 +224,12 @@ pub(crate) unsafe fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K])
 }
 
 #[target_feature(enable = "avx2,fma")]
-unsafe fn mm256_set_m128i(a: __m128i, b: __m128i) -> __m256i {
+fn mm256_set_m128i(a: __m128i, b: __m128i) -> __m256i {
     _mm256_insertf128_si256(_mm256_castsi128_si256(b), a, 1)
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> f32 {
+pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> f32 {
     debug_assert!(
         n.is_multiple_of(QK_K),
         "vec_dot_q2k_q8k: {n} is not divisible by {QK_K}"
@@ -304,7 +312,7 @@ pub(crate) unsafe fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K])
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> f32 {
+pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> f32 {
     debug_assert!(
         n.is_multiple_of(QK_K),
         "vec_dot_q3k_q8k: {n} is not divisible by {QK_K}"
@@ -440,7 +448,7 @@ pub(crate) unsafe fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K])
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> f32 {
+pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> f32 {
     debug_assert!(
         n.is_multiple_of(QK_K),
         "vec_dot_q4k_q8k: {n} is not divisible by {QK_K}"
@@ -525,7 +533,7 @@ pub(crate) unsafe fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K])
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> f32 {
+pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> f32 {
     debug_assert!(
         n.is_multiple_of(QK_K),
         "vec_dot_q5k_q8k: {n} is not divisible by {QK_K}"
@@ -638,7 +646,7 @@ pub(crate) unsafe fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K])
 }
 
 #[target_feature(enable = "avx2,fma")]
-pub(crate) unsafe fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> f32 {
+pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> f32 {
     debug_assert!(
         n.is_multiple_of(QK_K),
         "vec_dot_q8k_8k: {n} is not divisible by {QK_K}"

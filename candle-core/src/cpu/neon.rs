@@ -4,7 +4,7 @@ use core::arch::arm::*;
 
 #[cfg(target_arch = "aarch64")]
 use core::arch::aarch64::*;
-use half::{bf16 as f16b, f16};
+use half::{bf16, f16};
 
 pub struct CurrentCpu {}
 
@@ -277,7 +277,7 @@ mod fp16 {
 
 pub use fp16::CurrentCpuF16;
 
-mod bf16 {
+mod bfloat16 {
     use super::super::CpuBF16;
     use core::arch::aarch64::*;
     use half::bf16;
@@ -426,7 +426,7 @@ mod bf16 {
     pub use inner::CurrentCpuBF16;
 }
 
-pub use bf16::CurrentCpuBF16;
+pub use bfloat16::CurrentCpuBF16;
 
 pub(crate) unsafe fn vec_dot_f32(a_row: *const f32, b_row: *const f32, c: *mut f32, k: usize) {
     let mut sum = CurrentCpu::zero_array();
@@ -497,7 +497,7 @@ pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f
     *c = sumf;
 }
 
-pub(crate) unsafe fn vec_dot_bf16(a_row: *const f16b, b_row: *const f16b, c: *mut f32, k: usize) {
+pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut f32, k: usize) {
     let mut sum = CurrentCpuBF16::zero_array();
     let mut i = 0;
     while i + CurrentCpuBF16::STEP <= k {
@@ -536,7 +536,7 @@ pub(crate) unsafe fn vec_add_f16(a_row: *const f16, b_row: *const f16, c: *mut f
     }
 }
 
-pub(crate) unsafe fn vec_add_bf16(a_row: *const f16b, b_row: *const f16b, c: *mut f16b, k: usize) {
+pub(crate) unsafe fn vec_add_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut bf16, k: usize) {
     // Widen to f32, add, narrow. The bfdot-specialized CurrentCpuBF16 keeps raw bf16 bits in
     // its Unit and its vec_add interprets them as f32 lanes, so it must not be used here.
     let mut i = 0;
@@ -574,7 +574,7 @@ pub(crate) unsafe fn vec_scalar_add_f16(scalar: f16, xs: *const f16, ys: *mut f1
     }
 }
 
-pub(crate) unsafe fn vec_mul_bf16(a_row: *const f16b, b_row: *const f16b, c: *mut f16b, k: usize) {
+pub(crate) unsafe fn vec_mul_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut bf16, k: usize) {
     let mut i = 0;
     while i + 8 <= k {
         let a = vld1q_u16(a_row.add(i) as *const u16);
@@ -593,7 +593,7 @@ pub(crate) unsafe fn vec_mul_bf16(a_row: *const f16b, b_row: *const f16b, c: *mu
     }
 }
 
-pub(crate) unsafe fn vec_scalar_add_bf16(scalar: f16b, xs: *const f16b, ys: *mut f16b, k: usize) {
+pub(crate) unsafe fn vec_scalar_add_bf16(scalar: bf16, xs: *const bf16, ys: *mut bf16, k: usize) {
     let sv = vdupq_n_f32(scalar.to_f32());
     let mut i = 0;
     while i + 8 <= k {
