@@ -389,21 +389,16 @@ impl Map1Any for FastReduce<'_> {
                 name,
             )
         };
-        let ds = dev.clone_htod(&[dims.as_slice(), stride.as_slice()].concat())?;
-        let src = &src.slice(layout.start_offset()..);
         if check_empty && layout.shape().elem_count() == 0 {
             Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
         }
         let func = dev.get_or_load_func(&kernel_name::<T>(kernel_name_str), &kernels::REDUCE)?;
+        let kernel_numel = if use_small_reduce { dst_el } else { src_el };
         if return_index {
             // SAFETY: filled in by the follow up kernel.
             let out = unsafe { dev.alloc::<u32>(dst_el)? };
             let mut builder = func.builder();
-            if use_small_reduce {
-                barg!(builder, dst_el);
-            } else {
-                barg!(builder, src_el);
-            }
+            barg!(builder, kernel_numel);
             barg!(builder, el_to_sum_per_block);
             barg!(builder, src_dims.len());
             ds.builder_arg(&mut builder);
@@ -416,11 +411,7 @@ impl Map1Any for FastReduce<'_> {
             // SAFETY: filled in by the follow up kernel.
             let out = unsafe { dev.alloc::<T>(dst_el)? };
             let mut builder = func.builder();
-            if use_small_reduce {
-                barg!(builder, dst_el);
-            } else {
-                barg!(builder, src_el);
-            }
+            barg!(builder, kernel_numel);
             barg!(builder, el_to_sum_per_block);
             barg!(builder, src_dims.len());
             ds.builder_arg(&mut builder);
