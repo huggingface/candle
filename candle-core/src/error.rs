@@ -95,6 +95,14 @@ pub enum Error {
         n_parts: usize,
     },
 
+    #[error(
+        "element count overflows usize for shape {shape:?}; the dimension product does not fit"
+    )]
+    ShapeElementCountOverflow { shape: Shape },
+
+    #[error("tensor byte size overflows usize for shape {shape:?} with dtype {dtype:?}")]
+    TensorSizeOverflow { shape: Shape, dtype: String },
+
     #[error("{op} can only be performed on a single dimension")]
     OnlySingleDimension { op: &'static str, dims: Vec<usize> },
 
