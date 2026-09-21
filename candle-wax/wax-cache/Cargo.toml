@@ -1,0 +1,12 @@
+[package]
+name = "wax-cache"
+version.workspace = true
+edition = "2024"
+description = "Backend neutral persistent cache for compiled wax kernels"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+# Trying to keep few dependencies here. May add one if we want a shared serialization format.
+[dependencies]

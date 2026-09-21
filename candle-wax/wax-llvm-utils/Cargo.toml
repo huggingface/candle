@@ -1,0 +1,9 @@
+[package]
+name = "wax-llvm-utils"
+version = "0.11.0"
+edition = "2024"
+publish = false
+
+# Separate crate so `llvm-sys` is never a hard dependency of a lowering.
+[dependencies]
+llvm-sys = "231.0.1"

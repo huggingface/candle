@@ -168,10 +168,8 @@ fn attr(a: &cir::Attribute) -> wax::Attribute {
     }
 }
 
-fn opcode(o: CirOpcode) -> wax::Opcode {
-    // TODO: We unwrap here because the opcodes are expected to be equal.
-    // Fairly safe to expect, but not guaranteed.
-    wax::Opcode::try_from(o.as_u16()).unwrap()
+fn opcode(o: CirOpcode) -> Option<wax::Opcode> {
+    wax::Opcode::try_from(o.as_u16()).ok()
 }
 
 impl WaxSource for CutileSource<'_> {
@@ -180,7 +178,7 @@ impl WaxSource for CutileSource<'_> {
     type Block = cir::BlockId;
     type Region = cir::RegionId;
 
-    fn opcode(&self, op: Self::Op) -> wax::Opcode {
+    fn opcode(&self, op: Self::Op) -> Option<wax::Opcode> {
         opcode(self.m.op(op).opcode)
     }
     fn operands(&self, op: Self::Op) -> Vec<Self::Val> {
@@ -199,6 +197,9 @@ impl WaxSource for CutileSource<'_> {
     }
     fn regions(&self, op: Self::Op) -> Vec<Self::Region> {
         self.m.op(op).regions.clone()
+    }
+    fn location(&self, op: Self::Op) -> wax::Location {
+        location(&self.m.op(op).location)
     }
     fn op_result(&self, op: Self::Op, result_index: u32) -> Option<Self::Val> {
         self.results.get(&(op, result_index)).copied()
@@ -219,5 +220,30 @@ impl WaxSource for CutileSource<'_> {
             .iter()
             .map(|(v, t)| (*v, ty(t)))
             .collect()
+    }
+}
+
+/// Map `cutile_ir` source location to ours.
+fn location(l: &cir::Location) -> wax::Location {
+    match l {
+        cir::Location::Unknown => wax::Location::Unknown,
+        cir::Location::FileLineCol {
+            filename,
+            line,
+            column,
+        } => wax::Location::FileLineCol {
+            filename: filename.clone(),
+            line: *line,
+            column: *column,
+        },
+        cir::Location::DebugInfo(d) => wax::Location::FileLineCol {
+            filename: d.filename.clone(),
+            line: d.line,
+            column: d.column,
+        },
+        cir::Location::CallSite { callee, caller } => wax::Location::CallSite {
+            callee: Box::new(location(callee)),
+            caller: Box::new(location(caller)),
+        },
     }
 }

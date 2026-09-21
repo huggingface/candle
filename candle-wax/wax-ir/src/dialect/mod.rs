@@ -16,4 +16,5 @@ pub mod attrs;
 pub mod make;
 pub mod ops;
 pub mod source;
+pub mod text;
 pub mod types;

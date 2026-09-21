@@ -1,39 +1,66 @@
-//! Writes Apple `.metallib` (MTLB) containers.
+//! Writing Apple `.metallib` (MTLB) files.
 //!
-//! Replaces `xcrun metallib`, which cannot be shelled out to on iOS or in a sandboxed app.
-//! A metallib is a tag/length/value container around AIR bitcode; the loader accepts any
-//! AIR bitcode the compiler service can read, so the container is the only Apple-specific
-//! artifact needed. Output is byte-identical to `xcrun metallib` for a single-function
-//! library (see the tests).
+//! Feature subset of `xcrun metallib`, but works on iOS and in sandboxed environments.
+//! Metallib is a `tag | length | value` wrapper around AIR bitcode. Our output is byte-identical
+//! to `xcrun metallib` for a single function library.
 //!
-//! Layout, little-endian, offsets from file start. The 12 bytes from 0x04 come from
-//! [`crate::profile::TargetProfile`].
+//! Every section but the header is built from `tag | u16 length | payload`, where a tag is
+//! four ASCII bytes, and is closed by `ENDT`.
 //!
+//! Metallib layout
 //! ```text
-//!   0x00  'MTLB'
-//!   0x04  u16 format word         (0x8001 on macOS, 0x0001 elsewhere)
-//!   0x06  u16 (0x0002)
-//!   0x08  u16 format code         (9 for AIR 2.8)
-//!   0x0a  u8  (0)
-//!   0x0b  u8  platform tag        (0x81 macOS, 0x82 iOS, 0x87 iOS simulator, ...)
-//!   0x0c  u16 deployment target major, 0x0e  u16 minor
-//!   0x10  u64 total file size
-//!   0x18  u64 function-list offset      0x20  u64 function-list size
-//!   0x28  u64 public-metadata offset    0x30  u64 public-metadata size
-//!   0x38  u64 private-metadata offset   0x40  u64 private-metadata size
-//!   0x48  u64 bitcode offset            0x50  u64 bitcode size
-//!   0x58  u32 function count, then one entry per function, then b"ENDT"
+//! 0x00  b"MTLB"
+//! 0x04  u16 format word                 (0x8001 on macOS, 0x0001 elsewhere)
+//! 0x06  u16 (0x0002)
+//! 0x08  u16 container era code          (6, 7, 8 or 9. Its own column in `ERAS`)
+//! 0x0a  u8  (0)
+//! 0x0b  u8  platform tag                (0x81 macOS, 0x82 iOS, 0x87 iOS simulator, etc)
+//! 0x0c  u16 deployment target major
+//! 0x0e  u16 deployment target minor
+//! 0x10  u64 total file size
+//! 0x18  u64 function list offset        (always 0x58. header is fixed width)
+//! 0x20  u64 function list size          (entries only - see below)
+//! 0x28  u64 public metadata offset
+//! 0x30  u64 public metadata size
+//! 0x38  u64 private metadata offset
+//! 0x40  u64 private metadata size
+//! 0x48  u64 bitcode offset
+//! 0x50  u64 bitcode size
+//! 0x58  function list
+//! ...   public metadata section
+//! ...   private metadata section
+//! ...   bitcode
 //! ```
 //!
-//! Each function entry is `u32 entry_size` (counting itself) followed by
-//! `TAG | u16 len | payload` records terminated by `ENDT`:
-//! `NAME` (NUL-terminated), `TYPE` (u8 function kind), `HASH` (SHA-256 of the
-//! bitcode), `MDSZ` (u64 bitcode size), `OFFT` (3 x u64 section offsets, zero for a
-//! single-function library) and `VERS` (AIR then language version, as u16 pairs).
+//! Function list layout
+//! ```text
+//! 0x00  u32 function count
+//! 0x04  one entry per function
+//! ...   b"ENDT"
+//! ```
 //!
-//! Both metadata sections are the empty form: `u32 4` followed by `ENDT`.
+//! Function entry layout
+//! ```text
+//! 0x00  u32 entry size        (counts this field)
+//! 0x04  b"NAME"  u16  len     (entry point name. NUL-terminated)
+//! ....  b"TYPE"  u16    1     (u8 function kind)
+//! ....  b"HASH"  u16   32     (SHA-256 of the bitcode)
+//! ....  b"MDSZ"  u16    8     (u64 bitcode size)
+//! ....  b"OFFT"  u16   24     (3 x u64 section offsets)
+//! ....  b"VERS"  u16    8     (u16 AIR major, minor, then language major, minor)
+//! ....  b"ENDT"
+//! ```
+//!
+//! Metadata section layout
+//! ```text
+//! 0x00  u32           (section size)
+//! 0x04  tags, if any
+//! ...   b"ENDT"
+//! ```
+//! We emit two empty metadata sections.
 
 use crate::profile::TargetProfile;
+use sha2::{Digest, Sha256};
 
 /// Header size, and therefore the offset of the function list.
 const HEADER_LEN: usize = 0x58;
@@ -71,11 +98,11 @@ fn tag(out: &mut Vec<u8>, name: &[u8; 4], payload: &[u8]) {
 /// Wrap AIR `bitcode` (as produced for the `air64` target, with or without the
 /// 0x0b17c0de wrapper) into a metallib exposing `functions`.
 ///
-/// `profile` must be the one the bitcode was emitted for: the header and the `VERS`
+/// `profile` must be the one the bitcode was emitted for. The header and the `VERS`
 /// tag repeat the target's platform and AIR version, and the loader checks them
 /// against the module.
 pub fn wrap(bitcode: &[u8], functions: &[Function], profile: &TargetProfile) -> Vec<u8> {
-    let digest = sha256(bitcode);
+    let digest: [u8; 32] = Sha256::digest(bitcode).into();
 
     let mut entries = Vec::new();
     for f in functions {
@@ -107,11 +134,10 @@ pub fn wrap(bitcode: &[u8], functions: &[Function], profile: &TargetProfile) -> 
     func_list.extend_from_slice(&(functions.len() as u32).to_le_bytes());
     func_list.extend_from_slice(&entries);
     func_list.extend_from_slice(b"ENDT");
-    // The recorded size covers only the entries: not the count prefix, not the
-    // list terminator.
+    // Recorded size is for entries only. Not count prefix, not list terminator.
     let func_list_size = func_list.len() - 8;
 
-    // Empty metadata section: a size word followed by the terminator.
+    // Empty metadata section.
     let empty_md = {
         let mut m = Vec::with_capacity(8);
         m.extend_from_slice(&4u32.to_le_bytes());
@@ -148,109 +174,35 @@ pub fn wrap(bitcode: &[u8], functions: &[Function], profile: &TargetProfile) -> 
     out
 }
 
-/// SHA-256, so the container writer carries no dependency of its own.
-fn sha256(data: &[u8]) -> [u8; 32] {
-    const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
-        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
-        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
-        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
-        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
-        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
-        0xc67178f2,
-    ];
-    let mut h: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
-        0x5be0cd19,
-    ];
-    let mut msg = data.to_vec();
-    let bitlen = (data.len() as u64) * 8;
-    msg.push(0x80);
-    while msg.len() % 64 != 56 {
-        msg.push(0);
+/// Extract bitcode from a metallib container.
+pub fn bitcode_of(metallib: &[u8]) -> Result<&[u8], String> {
+    if metallib.get(..4) != Some(b"MTLB") {
+        return Err("not a metallib".into());
     }
-    msg.extend_from_slice(&bitlen.to_be_bytes());
-
-    for chunk in msg.chunks(64) {
-        let mut w = [0u32; 64];
-        for i in 0..16 {
-            w[i] = u32::from_be_bytes([
-                chunk[i * 4],
-                chunk[i * 4 + 1],
-                chunk[i * 4 + 2],
-                chunk[i * 4 + 3],
-            ]);
-        }
-        for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16]
-                .wrapping_add(s0)
-                .wrapping_add(w[i - 7])
-                .wrapping_add(s1);
-        }
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
-        for i in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let ch = (e & f) ^ (!e & g);
-            let t1 = hh
-                .wrapping_add(s1)
-                .wrapping_add(ch)
-                .wrapping_add(K[i])
-                .wrapping_add(w[i]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let t2 = s0.wrapping_add(maj);
-            hh = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(t1);
-            d = c;
-            c = b;
-            b = a;
-            a = t1.wrapping_add(t2);
-        }
-        for (dst, src) in h.iter_mut().zip([a, b, c, d, e, f, g, hh]) {
-            *dst = dst.wrapping_add(src);
-        }
+    let g = |o: usize| -> Result<usize, String> {
+        metallib
+            .get(o..o + 8)
+            .and_then(|b| b.try_into().ok())
+            .map(|b| u64::from_le_bytes(b) as usize)
+            .ok_or_else(|| format!("truncated at {o:#x}"))
+    };
+    let (off, size) = (g(0x48)?, g(0x50)?);
+    let mut blob = metallib
+        .get(off..off + size)
+        .ok_or("bitcode range outside the container")?;
+    if blob.get(..4) == Some(&[0xde, 0xc0, 0x17, 0x0b]) {
+        blob = &blob[20..];
     }
-    let mut out = [0u8; 32];
-    for (i, v) in h.iter().enumerate() {
-        out[i * 4..i * 4 + 4].copy_from_slice(&v.to_be_bytes());
+    if blob.get(..4) != Some(b"BC\xc0\xde") {
+        return Err(format!("no bitcode magic at {off:#x}"));
     }
-    out
+    Ok(blob)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn sha256_known_vectors() {
-        assert_eq!(
-            hex(&sha256(b"")),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
-        assert_eq!(
-            hex(&sha256(b"abc")),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
-        // Spans more than one block, to exercise the padding/length path.
-        assert_eq!(
-            hex(&sha256(b"The quick brown fox jumps over the lazy dog")),
-            "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
-        );
-    }
-
-    fn hex(b: &[u8]) -> String {
-        b.iter().map(|x| format!("{x:02x}")).collect()
-    }
-
-    /// The header must describe a self-consistent file: every section inside it,
-    /// laid end to end, with the bitcode last.
     #[test]
     fn header_is_self_consistent() {
         let bc = vec![0xABu8; 777];
@@ -266,9 +218,9 @@ mod tests {
         assert_eq!(g(0x48) + g(0x50), lib.len(), "bitcode runs to EOF");
         assert_eq!(g(0x50), bc.len(), "bitcode size");
         assert_eq!(&lib[g(0x48)..], &bc[..], "bitcode stored verbatim");
-        // HASH must cover the bitcode payload.
+        // The hash must cover the bitcode payload.
         let hpos = lib.windows(4).position(|w| w == b"HASH").unwrap();
-        assert_eq!(&lib[hpos + 6..hpos + 38], &sha256(&bc)[..]);
+        assert_eq!(&lib[hpos + 6..hpos + 38], &Sha256::digest(&bc)[..]);
         // The name is recorded NUL-terminated.
         let npos = lib.windows(4).position(|w| w == b"NAME").unwrap();
         assert_eq!(&lib[npos + 6..npos + 6 + 10], b"my_kernel\0");

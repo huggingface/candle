@@ -4,6 +4,10 @@ pub mod kernels;
 pub mod metal;
 pub mod source;
 pub mod utils;
+#[cfg(feature = "wax")]
+pub mod wax_gemm;
+#[cfg(feature = "wax")]
+mod wax_metal_cache;
 
 pub use err::MetalKernelError;
 pub use kernel::Kernels;

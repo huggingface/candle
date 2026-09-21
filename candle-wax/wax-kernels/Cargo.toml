@@ -1,0 +1,16 @@
+[package]
+name = "wax-kernels"
+version.workspace = true
+edition = "2024"
+description = "Wax DSL kernel sources, shared by the backends that compile them"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+[dependencies]
+wax-macro = { path = "../wax-macro" }
+wax-frontend = { path = "../wax-frontend" }
+# Use `cuda-rust/cuda-tile` once refactoring is upstreamed.
+cutile = { package = "cutile-dsl", git = "https://github.com/ivarflakstad/cutile-rs", branch = "dev" }
+syn = { workspace = true }

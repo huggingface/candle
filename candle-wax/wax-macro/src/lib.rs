@@ -52,10 +52,16 @@ fn emit_module(module_item: syn::ItemMod, raw_source: String) -> TokenStream {
             .unwrap_or(raw_source)
     };
 
+    // Parse at compile time, proving `__module_ast_self` parsing at runtime will not fail.
+    if let Err(e) = syn::parse_str::<syn::ItemMod>(&source_text) {
+        let msg = format!("wax::module: the captured source text does not re-parse: {e}");
+        return quote! { compile_error!(#msg); }.into();
+    }
+
     // Emit concrete kernel items (one per rank), plus dispatch scaffolding, so rustc can typecheck.
     let concrete_items: Vec<::proc_macro2::TokenStream> = match emitted_items(&module_item) {
         Ok(items) => items,
-        Err(err) => return err.into(),
+        Err(err) => return err,
     };
 
     // Create SHA-256 hash of source.
@@ -77,7 +83,7 @@ fn emit_module(module_item: syn::ItemMod, raw_source: String) -> TokenStream {
             pub fn __module_ast_self() -> ::wax_frontend::ast::Module {
                 let source_text: &str = #source_text;
                 let parsed_mod: ::syn::ItemMod = ::syn::parse_str(source_text)
-                    .expect("__module_ast_self: failed to re-parse captured source text");
+                    .expect("checked at expansion by wax_macro::module");
                 let span_base = ::wax_frontend::ast::SpanBase::new(
                     #source_file.to_string(),
                     #base_line,
@@ -94,9 +100,8 @@ fn emit_module(module_item: syn::ItemMod, raw_source: String) -> TokenStream {
 
             /// SHA-256 of module source, computed at compile time.
             ///
-            /// Simple and backend neutral. Not guaranteed to be suited as a backend cache
-            /// key.
-            /// Does not take into account changes outside this module (helper fn's etc).
+            /// Can be used to uniquely identify a kernel, but be aware that it does not capture
+            /// changes outside this module (helper functions etc).
             pub const SOURCE_HASH: &str = #source_hash;
         }
     }

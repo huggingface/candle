@@ -235,7 +235,7 @@ impl Opcode {
         Opcode::AtomicRedViewTko,
     ];
 
-    // TOOD: Uncomment if we add custom op codes
+    // TODO: Uncomment if we add custom op codes
     //pub fn is_backend_extension(self) -> bool {
     //    self.as_u16() >= 0x1000
     //}
@@ -247,7 +247,7 @@ impl TryFrom<u16> for Opcode {
     fn try_from(op: u16) -> Result<Self, Self::Error> {
         // TODO: Either type out the match arm properly or use a crate like num_derive or strum.
         match op {
-            0x00..0x75 => Ok(unsafe { std::mem::transmute(op) }),
+            0x00..0x75 => Ok(unsafe { std::mem::transmute::<u16, Opcode>(op) }),
             _ => Err(()),
         }
     }

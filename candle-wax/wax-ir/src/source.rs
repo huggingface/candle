@@ -1,5 +1,7 @@
 //! Generically reading a source of wax IR.
 
+// TODO: Retire. Delete.
+
 use crate::attr::Attribute;
 use crate::opcode::Opcode;
 use crate::types::Type;
@@ -21,13 +23,26 @@ pub trait WaxSource {
     /// A region.
     type Region: Copy + Eq + std::hash::Hash + std::fmt::Debug;
 
-    /// What kind of operation this is.
-    fn opcode(&self, op: Self::Op) -> Opcode;
+    /// The opcode of this operation. `None` if unsupported.
+    fn opcode(&self, op: Self::Op) -> Option<Opcode>;
 
     fn operands(&self, op: Self::Op) -> Vec<Self::Val>;
     fn result_types(&self, op: Self::Op) -> Vec<Type>;
     fn attributes(&self, op: Self::Op) -> Vec<(String, Attribute)>;
+
+    /// Pliron native attributes. Builtins like `OperandSegmentSizesAttr`.
+    fn native_attributes(
+        &self,
+        _op: Self::Op,
+    ) -> Vec<(pliron::identifier::Identifier, pliron::attribute::AttrObj)> {
+        Vec::new()
+    }
     fn regions(&self, op: Self::Op) -> Vec<Self::Region>;
+
+    /// Where the provided op came from in the source code.
+    fn location(&self, _op: Self::Op) -> crate::location::Location {
+        crate::location::Location::Unknown
+    }
 
     /// Extract result from op by index. Returns `None` if unused.
     fn op_result(&self, op: Self::Op, result_index: u32) -> Option<Self::Val>;
