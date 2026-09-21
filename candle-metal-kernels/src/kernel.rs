@@ -9,6 +9,7 @@ use crate::{
 };
 use objc2::available;
 use objc2::rc::Retained;
+use objc2_metal::MTLDevice;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
@@ -187,6 +188,21 @@ impl Kernels {
     ) -> Result<ComputePipeline, MetalKernelError> {
         self.load_pipeline_with_constants(device, source, name, None)
     }
+}
+
+/// Build a compute pipeline from a compiled metallib
+pub fn load_pipeline_from_metallib(
+    device: &Device,
+    metallib: &[u8],
+    entry: &str,
+) -> Result<ComputePipeline, MetalKernelError> {
+    let data = dispatch2::DispatchData::from_bytes(metallib);
+    let raw = device
+        .as_ref()
+        .newLibraryWithData_error(&data)
+        .map_err(|e| MetalKernelError::LoadLibraryError(format!("metallib load: {e}")))?;
+    let func = crate::metal::Library::new(raw).get_function(entry, None)?;
+    device.new_compute_pipeline_state_with_function(&func)
 }
 
 fn get_compile_options() -> Retained<MTLCompileOptions> {

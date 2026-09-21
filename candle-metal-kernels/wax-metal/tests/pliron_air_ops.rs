@@ -5,7 +5,6 @@
 //! ARGUMENTS instead. If that shape does not round-trip through the dialect, the bridge
 //! cannot be written.
 
-#![cfg(feature = "pliron-air")]
 
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::op_interfaces::{BranchOpInterface, OneRegionInterface};

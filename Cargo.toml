@@ -94,8 +94,8 @@ serde = { version = "1.0.171", features = ["derive"] }
 serde_plain = "1.0.2"
 serde_json = "1.0.99"
 thiserror = "2"
-pliron = "0.18"
-pliron-derive = "0.18"
+pliron = "0.20"
+pliron-derive = "0.20"
 wax-ir = { path = "./candle-wax/wax-ir", version = "0.11.0" }
 wax-macro = { path = "./candle-wax/wax-macro", version = "0.11.0" }
 syn = { version = "2.0", features = ["full", "extra-traits"] }

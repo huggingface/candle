@@ -52,20 +52,20 @@ impl std::fmt::Display for WaxBridgeErr {
     }
 }
 
-/// Renders the attributes of an op.
-fn render_attrs_of(attrs: &[(String, Attribute)]) -> String {
-    attrs
-        .iter()
-        .map(|(k, v)| format!("{k}={v:?}"))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 /// Get integer attribute from list by name.
 fn int_attr_of(attrs: &[(String, Attribute)], name: &str) -> Option<i64> {
     attrs.iter().find_map(|(k, v)| match v {
         Attribute::Integer(i, _) if k == name => Some(*i),
         _ => None,
+    })
+}
+
+/// Helper to extract result type of an op.
+fn result_ty(res_tys: &[TypeHandle], opcode: Opcode) -> Result<TypeHandle, WaxBridgeErr> {
+    res_tys.first().cloned().ok_or(WaxBridgeErr::ResultCount {
+        op: format!("{opcode:?}"),
+        want: 1,
+        got: res_tys.len(),
     })
 }
 
@@ -80,19 +80,19 @@ pub fn make_op(
 ) -> Result<Ptr<Operation>, WaxBridgeErr> {
     // Single op + operator in typed attribute.
     if let Some(a) = BinaryAttr::from_opcode(opcode) {
-        let ty = res_tys.first().cloned().expect("binary produces a value");
+        let ty = result_ty(res_tys, opcode)?;
         let o = BinaryOp::new(ctx, ty, opds[0], opds[1]);
         set_binary(o.get_operation(), ctx, a);
         return Ok(o.get_operation());
     }
     if let Some(a) = UnaryAttr::from_opcode(opcode) {
-        let ty = res_tys.first().cloned().expect("unary produces a value");
+        let ty = result_ty(res_tys, opcode)?;
         let o = UnaryOp::new(ctx, ty, opds[0]);
         set_unary(o.get_operation(), ctx, a);
         return Ok(o.get_operation());
     }
     if let Some(a) = CastAttr::from_opcode(opcode) {
-        let ty = res_tys.first().cloned().expect("cast produces a value");
+        let ty = result_ty(res_tys, opcode)?;
         let o = CastOp::new(ctx, ty, opds[0]);
         set_cast(o.get_operation(), ctx, a);
         return Ok(o.get_operation());
@@ -100,7 +100,7 @@ pub fn make_op(
 
     let o: Ptr<Operation> = match opcode {
         Opcode::CmpF | Opcode::CmpI => {
-            let ty = res_tys.first().cloned().expect("cmp produces a value");
+            let ty = result_ty(res_tys, opcode)?;
             let kind = if opcode == Opcode::CmpF {
                 CmpKindAttr::Float
             } else {
@@ -116,72 +116,62 @@ pub fn make_op(
             o.get_operation()
         }
         Opcode::Fma => {
-            let ty = res_tys.first().cloned().expect("fma produces a value");
+            let ty = result_ty(res_tys, opcode)?;
             FmaOp::new(ctx, ty, opds[0], opds[1], opds[2]).get_operation()
         }
         Opcode::Select => {
-            let ty = res_tys.first().cloned().expect("select produces a value");
+            let ty = result_ty(res_tys, opcode)?;
             SelectOp::new(ctx, ty, opds[0], opds[1], opds[2]).get_operation()
         }
         Opcode::Constant => {
-            let ty = res_tys.first().cloned().expect("constant produces a value");
-            ConstantOp::new(ctx, ty, &render_attrs_of(attrs)).get_operation()
+            let ty = result_ty(res_tys, opcode)?;
+            ConstantOp::new(ctx, ty).get_operation()
         }
         Opcode::Broadcast => {
-            let ty = res_tys
-                .first()
-                .cloned()
-                .expect("broadcast produces a value");
+            let ty = result_ty(res_tys, opcode)?;
             BroadcastOp::new(ctx, ty, opds[0]).get_operation()
         }
         Opcode::Reshape => {
-            let ty = res_tys.first().cloned().expect("reshape produces a value");
+            let ty = result_ty(res_tys, opcode)?;
             ReshapeOp::new(ctx, ty, opds[0]).get_operation()
         }
         Opcode::Extract => {
-            let ty = res_tys.first().cloned().expect("extract produces a value");
+            let ty = result_ty(res_tys, opcode)?;
             ExtractOp::new_with(ctx, ty, opds).get_operation()
         }
         Opcode::Offset => {
-            let ty = res_tys.first().cloned().expect("offset produces a value");
+            let ty = result_ty(res_tys, opcode)?;
             OffsetOp::new(ctx, ty, opds[0], opds[1]).get_operation()
         }
         Opcode::MmaF => {
-            let ty = res_tys.first().cloned().expect("mma produces a value");
+            let ty = result_ty(res_tys, opcode)?;
             MmaFOp::new(ctx, ty, opds[0], opds[1], opds[2]).get_operation()
         }
         Opcode::MakePartitionView => {
-            let ty = res_tys
-                .first()
-                .cloned()
-                .expect("make_partition_view produces a value");
+            let ty = result_ty(res_tys, opcode)?;
             MakePartitionViewOp::new(ctx, ty, opds[0]).get_operation()
         }
         Opcode::Assume => {
-            let ty = res_tys
-                .first()
-                .cloned()
-                .expect("assume forwards a refined value");
+            let ty = result_ty(res_tys, opcode)?;
             AssumeOp::new(ctx, ty, opds[0]).get_operation()
         }
         Opcode::Assert => AssertOp::new(ctx, opds[0]).get_operation(),
         Opcode::MakeToken => {
-            let ty = res_tys
-                .first()
-                .cloned()
-                .expect("make_token produces a value");
+            let ty = result_ty(res_tys, opcode)?;
             MakeTokenOp::new(ctx, ty).get_operation()
         }
         Opcode::MakeTensorView => {
-            let ty = res_tys
-                .first()
-                .cloned()
-                .expect("make_tensor_view produces a value");
+            let ty = result_ty(res_tys, opcode)?;
             MakeTensorViewOp::new_with(ctx, ty, opds).get_operation()
         }
         Opcode::LoadViewTko => {
             let tys = res_tys.to_vec();
-            let (view, idx) = opds.split_first().expect("load has a view operand");
+            let Some((view, idx)) = opds.split_first() else {
+                return Err(WaxBridgeErr::Arity {
+                    op: format!("{opcode:?}"),
+                    got: 0,
+                });
+            };
             LoadViewOp::new(ctx, tys, *view, idx.to_vec()).get_operation()
         }
         // Control flow. We build through `Operation::new` directly instead of through the constructors
@@ -202,7 +192,6 @@ pub fn make_op(
         }
         Opcode::Return => ReturnOp::new(ctx).get_operation(),
         Opcode::Yield => YieldOp::new(ctx, opds).get_operation(),
-        Opcode::Break => BreakOp::new(ctx).get_operation(),
         Opcode::Continue => ContinueOp::new(ctx, opds).get_operation(),
         other => {
             // Simple ops (op in -> results out).

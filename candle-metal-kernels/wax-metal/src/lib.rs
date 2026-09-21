@@ -8,40 +8,32 @@
 //! #[wax::entry] Rust kernel
 //!   -> KernelCompiler::compile() -> cutile_ir::Module
 //!        -> lower_to_metallib()  -> .metallib            (in process, no tools)
-//!        -> lower_to_air()       -> AIR text -> metal-as -> wrap_metallib()
 //! ```
 //!
 //! [`lower_to_metallib`] runs no external tools: [`bitcode`] writes the LLVM bitcode and
 //! [`metallib`] the container, so kernels compile where no Metal toolchain exists. It
-//! emits the pre-opaque-pointer dialect Apple's AIR reader requires; a stock LLVM writes
+//! emits the pre-opaque-pointer dialect Apple's AIR reader requires. A stock LLVM writes
 //! opaque pointers that reader cannot consume, so this is not replaceable by an LLVM dep.
 //!
-//! [`lower_to_air`] is kept as the reference the in-process writer is checked against:
-//! `wax-metal benches/tests/bitcode_vs_metal_as.rs` compiles both ways and requires
-//! bit-identical GPU results.
+//! The route is the pliron dialect conversion in [`wax_to_air`]: the entry function's
+//! `wax` ops are rewritten into `air` ops, and [`lower`]::to_bitcode emits the bitcode.
 
-#[cfg(feature = "pliron-air")]
 pub mod air_dialect;
+pub mod wax_to_air;
 /// The wax IR's own dialect, re-exported from the crate that defines it.
 pub use wax_ir::dialect;
 pub mod bitcode;
 pub mod gemm;
-pub mod ir_builder;
 pub mod launch;
 pub mod lower;
 pub mod metallib;
 pub mod mpp;
 pub mod profile;
-mod types;
+pub mod types;
 
-pub use gemm::{Backend, GemmSpec, Reason, Routing, route};
-pub use launch::{Launch, LoweredKernel};
-#[cfg(feature = "pliron-air")]
-pub use lower::lower_to_metallib_via_air;
-pub use lower::{
-    lower_to_air, lower_to_air_for, lower_to_metallib, lower_to_metallib_for,
-    lower_to_metallib_from_wax_ir,
-};
+pub use gemm::{GemmSpec, Plan, Reason, Routing, route};
+pub use launch::{Launch, LoweredKernel, SecondaryDispatch};
+pub use lower::{lower_to_metallib, lower_to_metallib_for};
 pub use metallib::{Function as MetallibFunction, wrap as wrap_metallib};
 pub use profile::{Platform, TargetProfile};
 

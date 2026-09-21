@@ -11,3 +11,10 @@ license.workspace = true
 [dependencies]
 pliron = { workspace = true }
 pliron-derive = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+wax-frontend = { path = "../wax-frontend" }
+wax-macro = { path = "../wax-macro" }
+cutile = { package = "cutile-dsl", git = "https://github.com/ivarflakstad/cutile-rs", branch = "dev" }
+syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
