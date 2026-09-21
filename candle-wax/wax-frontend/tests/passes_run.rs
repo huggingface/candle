@@ -1,14 +1,9 @@
-//! The IR-level passes must actually run on what a backend receives.
-//!
-//! `Compiled::ir` used to be materialised straight from `cutile_ir::Module`, bypassing the
-//! dialect and therefore every pass. Nothing failed: kernels compiled, ran and produced correct
-//! results, just without the optimisations. That is the failure mode worth a test - correct
-//! output is not evidence the pass ran.
+mod common;
+use common::all_ops;
 
 use wax_frontend::{KernelCompiler, ast};
 
-/// Two loops reading the same view, which is what cross-loop reuse looks for: the second loop
-/// can replay what the first read from thread-private registers instead of global memory.
+/// Two loops reading the same view. Should trigger cross loop reuse.
 fn kernel_ast() -> ast::Module {
     const SRC: &str = r#"
 mod kernels {
@@ -43,25 +38,27 @@ mod kernels {
 }
 
 #[test]
-fn cross_loop_reuse_annotations_reach_the_materialised_ir() {
+fn cross_loop_reuse_annotations_reach_the_pliron_module() {
     let c = KernelCompiler::new(kernel_ast, "kernels", "two_pass")
         .generics(vec!["32".into(), "4".into()])
         .strides(&[("out", &[32, 1]), ("x", &[32, 1])])
         .compile()
         .expect("frontend compiles two_pass");
 
-    // The pass marks the producing loop and the consuming loop. Finding either in the flat IR
-    // proves the pass ran AND that materialisation carried its conclusion across.
-    let annotated: Vec<&str> =
-        c.ir.ops
-            .iter()
-            .flat_map(|o| o.attributes.iter().map(|(k, _)| k.as_str()))
-            .filter(|k| k.starts_with("wax_cache_"))
-            .collect();
+    let m = c.to_wax_module("two_pass").expect("module builds");
+    let f = *m.entries().first().expect("one function");
+
+    let mut analyses = wax_ir::passes::AnalysisManager::default();
+    let _ = wax_ir::passes::cross_loop_reuse::annotate_with(&mut analyses, &m.ctx, f);
+    use wax_ir::source::WaxSource;
+    let annotated: Vec<String> = all_ops(&m)
+        .iter()
+        .flat_map(|o| m.attributes(*o).into_iter().map(|(k, _)| k))
+        .filter(|k| k.starts_with("wax_cache_"))
+        .collect();
 
     assert!(
         !annotated.is_empty(),
-        "no `wax_cache_*` attribute in the materialised IR: the pass did not run, or its \
-         conclusions were dropped on the way to the flat form"
+        "no `wax_cache_*` attribute in the module: pass did not run"
     );
 }

@@ -1,36 +1,41 @@
-//! Operations of the `wax` dialect. Based on cutile.
-//!
-//! The cutile opcodes that represent actual operations are represented here as ~40 pliron ops.
-//! Other opcodes are represented as typed pliron attributes in `attrs`.
-//!
-//! `wax.for` and `wax.if` carry their bodies as regions, the way `cutile_ir` does, rather than as
-//! flattened basic blocks. Turning them into blocks and phis is delegated to the backend, as doing
-//! it here would throw away the structure before any pass could use it.
-//! By keeping the structure an optimization pass can reason about a loop immediately rather than having
-//! to infer it from branches.
+//! Operations of the `wax` dialect.
+
 use super::attrs::{BinaryAttr, CastAttr, CmpKindAttr, UnaryAttr};
-use pliron::builtin::attributes::{IntegerAttr, StringAttr};
+use pliron::basic_block::BasicBlock;
+use pliron::builtin::attributes::IntegerAttr;
 use pliron::builtin::op_interfaces::{
     IsTerminatorInterface, NResultsInterface, OneOpdInterface, OneResultInterface,
     SingleBlockRegionInterface,
+};
+use pliron::builtin::op_interfaces::{
+    RegionBranchOpInterface, RegionBranchPoint, RegionEdge, RegionSuccessor,
 };
 use pliron::builtin::types::{IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::derive::pliron_op;
 use pliron::op::Op;
 use pliron::operation::Operation;
+use pliron::region::Region;
 use pliron::r#type::TypeHandle;
 use pliron::utils::apint::APInt;
 use pliron::value::Value;
+use std::result::Result;
 
-/// Key for the operator/predicate an op carries.
-pub static ATTR_KEY_WAX_OP: &str = "wax_op";
-/// Key for a cmp predicate code, as `cutile_ir` numbers it.
-pub static ATTR_KEY_WAX_PRED: &str = "wax_pred";
-/// Key for a constant's value, rendered the way `cutile_ir` renders it.
-pub static ATTR_KEY_WAX_VALUE: &str = "wax_value";
-/// Key for a dimension index (reduce, scan, iota, shape queries).
-pub static ATTR_KEY_WAX_DIM: &str = "wax_dim";
+pliron::dict_key!(
+    /// Key for the operator/predicate an op carries.
+    ATTR_KEY_WAX_OP,
+    "wax_op"
+);
+pliron::dict_key!(
+    /// Key for a cmp predicate code.
+    ATTR_KEY_WAX_PRED,
+    "wax_pred"
+);
+pliron::dict_key!(
+    /// Key for a dimension index (reduce, scan, shape queries, etc).
+    ATTR_KEY_WAX_DIM,
+    "wax_dim"
+);
 
 macro_rules! op_new {
     ($ty:ident, $($opd:ident),*) => {
@@ -129,8 +134,8 @@ op_new!(SelectOp, cond, t, f);
 pub struct ConstantOp;
 
 impl ConstantOp {
-    pub fn new(ctx: &mut Context, res_ty: TypeHandle, rendered: &str) -> Self {
-        let op = ConstantOp {
+    pub fn new(ctx: &mut Context, res_ty: TypeHandle) -> Self {
+        ConstantOp {
             op: Operation::new(
                 ctx,
                 Self::get_concrete_op_info(),
@@ -139,12 +144,7 @@ impl ConstantOp {
                 vec![],
                 0,
             ),
-        };
-        op.get_operation().deref_mut(ctx).attributes.set(
-            ATTR_KEY_WAX_VALUE.try_into().unwrap(),
-            StringAttr::new(rendered.to_string()),
-        );
-        op
+        }
     }
 }
 
@@ -479,15 +479,6 @@ pub struct IfOp;
 )]
 pub struct YieldOp;
 
-/// Early loop exit. A terminator, like [`YieldOp`].
-#[pliron_op(
-    name = "wax.break",
-    interfaces = [IsTerminatorInterface, NResultsInterface<0>],
-    format,
-    verifier = "succ"
-)]
-pub struct BreakOp;
-
 /// Skip to next iteration, carrying loop values forward.
 #[pliron_op(
     name = "wax.continue",
@@ -508,26 +499,20 @@ pub struct ContinueOp;
 pub struct ReturnOp;
 
 pub fn set_binary(op: Ptr<Operation>, ctx: &Context, a: BinaryAttr) {
-    op.deref_mut(ctx)
-        .attributes
-        .set(ATTR_KEY_WAX_OP.try_into().unwrap(), a);
+    op.deref_mut(ctx).attributes.set(ATTR_KEY_WAX_OP.clone(), a);
 }
 pub fn set_unary(op: Ptr<Operation>, ctx: &Context, a: UnaryAttr) {
-    op.deref_mut(ctx)
-        .attributes
-        .set(ATTR_KEY_WAX_OP.try_into().unwrap(), a);
+    op.deref_mut(ctx).attributes.set(ATTR_KEY_WAX_OP.clone(), a);
 }
 pub fn set_cast(op: Ptr<Operation>, ctx: &Context, a: CastAttr) {
-    op.deref_mut(ctx)
-        .attributes
-        .set(ATTR_KEY_WAX_OP.try_into().unwrap(), a);
+    op.deref_mut(ctx).attributes.set(ATTR_KEY_WAX_OP.clone(), a);
 }
 
 /// Set the compare kind and and its `cutile_ir` predicate code.
 pub fn set_cmp(op: Ptr<Operation>, ctx: &mut Context, kind: CmpKindAttr, pred: i64) {
     op.deref_mut(ctx)
         .attributes
-        .set(ATTR_KEY_WAX_OP.try_into().unwrap(), kind);
+        .set(ATTR_KEY_WAX_OP.clone(), kind);
     let ty = IntegerType::get(ctx, 32, Signedness::Signless);
     let attr = IntegerAttr::new(
         ty,
@@ -535,7 +520,7 @@ pub fn set_cmp(op: Ptr<Operation>, ctx: &mut Context, kind: CmpKindAttr, pred: i
     );
     op.deref_mut(ctx)
         .attributes
-        .set(ATTR_KEY_WAX_PRED.try_into().unwrap(), attr);
+        .set(ATTR_KEY_WAX_PRED.clone(), attr);
 }
 
 /// Set dimension index. Used by reduce/scan/iota and shape queries.
@@ -547,7 +532,7 @@ pub fn set_dim(op: Ptr<Operation>, ctx: &mut Context, dim: i64) {
     );
     op.deref_mut(ctx)
         .attributes
-        .set(ATTR_KEY_WAX_DIM.try_into().unwrap(), attr);
+        .set(ATTR_KEY_WAX_DIM.clone(), attr);
 }
 
 /// The bounds of a loop, as `(lo, hi, step)`.
@@ -584,8 +569,7 @@ impl ForOp {
         let region = op.get_operation().deref_mut(ctx).get_region(0);
         let mut args = vec![iv_ty];
         args.extend(carried);
-        let body =
-            pliron::basic_block::BasicBlock::new(ctx, Some("body".try_into().unwrap()), args);
+        let body = pliron::basic_block::BasicBlock::new(ctx, Some(pliron::ident!("body")), args);
         body.insert_at_front(region, ctx);
         op
     }
@@ -615,9 +599,12 @@ impl IfOp {
         };
         for i in 0..n {
             let region = op.get_operation().deref_mut(ctx).get_region(i);
-            let label = if i == 0 { "then" } else { "else" };
-            let b =
-                pliron::basic_block::BasicBlock::new(ctx, Some(label.try_into().unwrap()), vec![]);
+            let label = if i == 0 {
+                pliron::ident!("then")
+            } else {
+                pliron::ident!("else")
+            };
+            let b = pliron::basic_block::BasicBlock::new(ctx, Some(label), vec![]);
             b.insert_at_front(region, ctx);
         }
         op
@@ -636,14 +623,6 @@ impl YieldOp {
     pub fn new(ctx: &mut Context, vals: Vec<Value>) -> Self {
         YieldOp {
             op: Operation::new(ctx, Self::get_concrete_op_info(), vec![], vals, vec![], 0),
-        }
-    }
-}
-
-impl BreakOp {
-    pub fn new(ctx: &mut Context) -> Self {
-        BreakOp {
-            op: Operation::new(ctx, Self::get_concrete_op_info(), vec![], vec![], vec![], 0),
         }
     }
 }
@@ -724,5 +703,187 @@ impl MakeTensorViewOp {
                 0,
             ),
         }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WaxVerifyErr {
+    #[error("wax.for: {0}")]
+    For(&'static str),
+    #[error("wax.if needs a condition and one or two regions, each with an entry block")]
+    If,
+}
+
+// Verifying structured control flow (`wax.for` and `wax.if`).
+
+impl ForOp {
+    fn body_shape(&self, ctx: &Context) -> Result<(Ptr<BasicBlock>, Ptr<Operation>), WaxVerifyErr> {
+        let op = self.get_operation();
+        let (n_regions, n_res, n_opds) = {
+            let o = op.deref(ctx);
+            (o.num_regions(), o.get_num_results(), o.get_num_operands())
+        };
+        // Single region
+        if n_regions != 1 {
+            return Err(WaxVerifyErr::For("Entry block must have a single region."));
+        }
+        // `lo`, `hi`, `step` + 1 per iter value
+        if n_opds != 3 + n_res {
+            return Err(WaxVerifyErr::For("Entry block has incorrect operands."));
+        }
+        // Induction variable + 1 per iter value
+        let Some(entry) = op.deref(ctx).get_region(0).deref(ctx).get_entry_block() else {
+            return Err(WaxVerifyErr::For("Missing body."));
+        };
+        if entry.deref(ctx).get_num_arguments() != 1 + n_res {
+            return Err(WaxVerifyErr::For("Body has incorrect arguments."));
+        }
+        // Terminator must have same amount of operands as there are results.
+        let Some(term) = entry.deref(ctx).get_terminator(ctx) else {
+            return Err(WaxVerifyErr::For("Missing terminator."));
+        };
+        if term.deref(ctx).get_num_operands() != n_res {
+            return Err(WaxVerifyErr::For("Terminator has incorrect operands."));
+        }
+        Ok((entry, term))
+    }
+}
+
+#[pliron::derive::op_interface_impl]
+impl RegionBranchOpInterface for ForOp {
+    fn verify_region_edges_layout(&self, ctx: &Context) -> pliron::result::Result<()> {
+        if let Err(err) = self.body_shape(ctx) {
+            return pliron::verify_err!(self.loc(ctx), err);
+        }
+        Ok(())
+    }
+
+    fn region_edges(&self, ctx: &Context) -> Vec<RegionEdge> {
+        let Ok((entry, term)) = self.body_shape(ctx) else {
+            return Vec::new();
+        };
+        let op = self.get_operation();
+        let n = op.deref(ctx).get_num_results();
+        let body = op.deref(ctx).get_region(0);
+        let init = |i: usize| op.deref(ctx).get_operand_as_use(3 + i);
+        let carried = |i: usize| entry.deref(ctx).get_argument(1 + i);
+        let result = |i: usize| op.deref(ctx).get_result(i);
+        let yielded = |i: usize| term.deref(ctx).get_operand_as_use(i);
+        let (lo, hi, step) = {
+            let o = op.deref(ctx);
+            (
+                o.get_operand_as_use(0),
+                o.get_operand_as_use(1),
+                o.get_operand_as_use(2),
+            )
+        };
+        vec![
+            // Entering loop.
+            RegionEdge {
+                from: RegionBranchPoint::Parent,
+                to: RegionSuccessor::Region(body),
+                flows: (0..n).map(|i| (init(i), carried(i))).collect(),
+                reads: vec![lo, hi, step],
+            },
+            // Skip the loop. Inits are the results.
+            RegionEdge {
+                from: RegionBranchPoint::Parent,
+                to: RegionSuccessor::After,
+                flows: (0..n).map(|i| (init(i), result(i))).collect(),
+                reads: vec![lo, hi, step],
+            },
+            // The back edge of the loop.
+            RegionEdge {
+                from: RegionBranchPoint::Terminator(term),
+                to: RegionSuccessor::Region(body),
+                flows: (0..n).map(|i| (yielded(i), carried(i))).collect(),
+                reads: vec![hi, step],
+            },
+            // Exiting loop.
+            RegionEdge {
+                from: RegionBranchPoint::Terminator(term),
+                to: RegionSuccessor::After,
+                flows: (0..n).map(|i| (yielded(i), result(i))).collect(),
+                reads: vec![hi],
+            },
+        ]
+    }
+}
+
+type Arms = Vec<(Ptr<Region>, Option<Ptr<Operation>>)>;
+
+impl IfOp {
+    fn arms(&self, ctx: &Context) -> Result<Arms, WaxVerifyErr> {
+        let op = self.get_operation();
+        let (n_regions, n_res, n_opds) = {
+            let o = op.deref(ctx);
+            (o.num_regions(), o.get_num_results(), o.get_num_operands())
+        };
+        // TODO: Tighten. Report specific error like we do for `ForOp`.
+        if n_opds == 0 || !(1..=2).contains(&n_regions) {
+            return Err(WaxVerifyErr::If);
+        }
+        Ok((0..n_regions)
+            .filter_map(|i| {
+                let r = op.deref(ctx).get_region(i);
+                let entry = r.deref(ctx).get_entry_block()?;
+                let term = entry
+                    .deref(ctx)
+                    .get_terminator(ctx)
+                    .filter(|t| t.deref(ctx).get_num_operands() == n_res);
+                Some((r, term))
+            })
+            .collect())
+    }
+}
+
+#[pliron::derive::op_interface_impl]
+impl RegionBranchOpInterface for IfOp {
+    fn verify_region_edges_layout(&self, ctx: &Context) -> pliron::result::Result<()> {
+        if let Err(err) = self.arms(ctx) {
+            return pliron::verify_err!(self.loc(ctx), err);
+        }
+        Ok(())
+    }
+
+    fn region_edges(&self, ctx: &Context) -> Vec<RegionEdge> {
+        let Ok(arms) = self.arms(ctx) else {
+            return Vec::new();
+        };
+        let op = self.get_operation();
+        let n = op.deref(ctx).get_num_results();
+        let cond = op.deref(ctx).get_operand_as_use(0);
+        let result = |i: usize| op.deref(ctx).get_result(i);
+        let mut edges = Vec::with_capacity(2 * arms.len() + 1);
+        for &(region, term) in &arms {
+            // Entering arm.
+            edges.push(RegionEdge {
+                from: RegionBranchPoint::Parent,
+                to: RegionSuccessor::Region(region),
+                flows: Vec::new(),
+                reads: vec![cond],
+            });
+            if let Some(term) = term {
+                // Arm produces value
+                edges.push(RegionEdge {
+                    from: RegionBranchPoint::Terminator(term),
+                    to: RegionSuccessor::After,
+                    flows: (0..n)
+                        .map(|i| (term.deref(ctx).get_operand_as_use(i), result(i)))
+                        .collect(),
+                    reads: Vec::new(),
+                });
+            }
+        }
+        if arms.len() < 2 {
+            // Must still be possible to skip if-statement even if there is no "else" arm.
+            edges.push(RegionEdge {
+                from: RegionBranchPoint::Parent,
+                to: RegionSuccessor::After,
+                flows: Vec::new(),
+                reads: vec![cond],
+            });
+        }
+        edges
     }
 }

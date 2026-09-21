@@ -1,24 +1,8 @@
-//! Build a pliron [`Module`] from any [`WaxSource`].
-//!
-//! The counterpart to [`crate::ir::from_source`], which materialises the same source into the
-//! flat [`WaxIr`](crate::ir::WaxIr) a backend lowers from. Both read the same trait; they differ
-//! in what they produce and therefore in what they are for.
-//!
-//! This one exists because the dialect is where our IR-level work lives - `cross_loop_reuse`,
-//! `verify_operation`, and everything plan section 8 has queued. A frontend that emits wax IR
-//! directly builds the module as it goes and needs none of this. One that hands us its own IR
-//! does: `wax-frontend` compiles through `cutile-frontend`, whose output is a
-//! `cutile_ir::Module`, and without this the whole dialect layer is bypassed.
-//!
-//! Ordering follows from wax IR being SSA and structured: a definition always precedes its uses
-//! within a block, and a value from an enclosing scope is a block argument. So blocks are
-//! created with their arguments first, then ops in order, and every operand is resolvable by the
-//! time it is read.
+//! Build a pliron [`Module`] in the `wax` dialect from any [`WaxSource`].
 
 use crate::attr::Attribute;
-use crate::build::{BlockId, Module, Region, Value};
+use crate::build::{BlockId, Module, Value};
 use crate::builder::OpBuilder;
-use crate::location::Location;
 use crate::source::WaxSource;
 use crate::types::Type;
 use std::collections::HashMap;
@@ -52,26 +36,46 @@ pub fn module_from_source<S: WaxSource>(
     root: S::Op,
     param_types: &[Type],
 ) -> Result<Module, BuildErr> {
+    module_from_source_multi(name, src, &[(root, name.to_string(), param_types.to_vec())])
+}
+
+/// Build a module named `name` from several of `src`'s functions, each kept under its own
+/// name. The single-root form is [`module_from_source`]. Each function is cloned
+/// independently, and no value crosses between them, so the clone is the same one-function
+/// walk, run once per root.
+pub fn module_from_source_multi<S: WaxSource>(
+    name: &str,
+    src: &S,
+    roots: &[(S::Op, String, Vec<Type>)],
+) -> Result<Module, BuildErr> {
     let mut m = Module::new(name);
+    for (root, fname, param_types) in roots {
+        clone_function(&mut m, src, *root, fname, param_types)?;
+    }
+    Ok(m)
+}
+
+fn clone_function<S: WaxSource>(
+    m: &mut Module,
+    src: &S,
+    root: S::Op,
+    name: &str,
+    param_types: &[Type],
+) -> Result<(), BuildErr> {
     let (func, entry, args) = m.begin_function(name, param_types);
 
-    // Function-level attributes, carried across. `begin_function` builds a fresh `FuncOp`, so
-    // without this everything the frontend recorded ON THE FUNCTION is silently dropped -
-    // `const_param_slots`, which decides that a buffer binds in constant address space, and
-    // `tg_scratch_rows`, which sizes threadgroup scratch. Both are read from the function much
-    // later, and their absence reads as "not requested" rather than as an error.
+    // Clone function attributes.
     for (k, v) in src.attributes(root) {
-        m.set_op_attr(func, &k, v);
+        crate::builder::set_op_attr_str_in(&m.ctx, func, &k, v);
     }
 
     let mut b = Builder {
         src,
-        m: &mut m,
+        m,
         vals: HashMap::new(),
     };
 
-    // The entry block's arguments are the function's parameters. Binding them before anything
-    // else is what lets the first op resolve its operands.
+    // Entry function's block arguments are cloned first.
     let regions = b.src.regions(root);
     let Some(&first) = regions.first() else {
         return Err(BuildErr::RootNotAFunction);
@@ -84,7 +88,7 @@ pub fn module_from_source<S: WaxSource>(
         b.vals.insert(v, a);
     }
 
-    // Blocks first, then ops: a terminator can target a block that appears later.
+    // Blocks first, then ops. Terminators can target a block that appears later.
     let mut mapped = vec![entry];
     for &blk in blocks.iter().skip(1) {
         let arg_tys: Vec<Type> = b.src.block_args(blk).into_iter().map(|(_, t)| t).collect();
@@ -98,8 +102,8 @@ pub fn module_from_source<S: WaxSource>(
         b.ops_into(src_blk, dst_blk)?;
     }
 
-    m.functions.push(func);
-    Ok(m)
+    m.mark_entry(func);
+    Ok(())
 }
 
 struct Builder<'a, S: WaxSource> {
@@ -124,10 +128,25 @@ impl<S: WaxSource> Builder<'_, S> {
                 .map(|v| self.resolve(v))
                 .collect::<Result<_, _>>()?;
             let result_types = self.src.result_types(op);
-            let attrs: Vec<(String, Attribute)> = self.src.attributes(op);
 
-            // Regions are built first and adopted by the op, because pliron's `FuncOp` owns its
-            // blocks: an op cannot take a region that was never allocated to it.
+            // Get operand segment sizes.
+            // Converted from MLIR's `operandSegmentSizes` to pliron's `OperandSegmentSizesAttr`.
+            let mut segment_sizes = None;
+            let attrs: Vec<(String, Attribute)> = self
+                .src
+                .attributes(op)
+                .into_iter()
+                .filter(|(k, v)| {
+                    if k == "operandSegmentSizes" {
+                        segment_sizes = crate::builder::segment_sizes_of(v);
+                        false
+                    } else {
+                        true
+                    }
+                })
+                .collect();
+
+            // Regions are built first and taken by the op, because `FuncOp` owns its blocks.
             let mut region_ids = Vec::new();
             for r in self.src.regions(op) {
                 let src_blocks = self.src.region_blocks(r);
@@ -148,17 +167,24 @@ impl<S: WaxSource> Builder<'_, S> {
                 for (&sb, &db) in src_blocks.iter().zip(ids.iter()) {
                     self.ops_into(sb, db)?;
                 }
-                region_ids.push(self.m.alloc_region(Region { blocks: ids }));
+                region_ids.push(ids);
             }
 
-            // `OpBuilder` owns the awkward part: a region has to be allocated before the op
-            // exists and adopted after, because pliron ops own their regions.
-            let (_, results) = OpBuilder::new(opcode, Location::Unknown)
+            // `OpBuilder` adopts the regions built above.
+            let (id, results) = OpBuilder::new(opcode, self.src.location(op))
                 .operands(operands)
                 .results(result_types.clone())
                 .attrs(attrs)
                 .regions(region_ids)
-                .build_and_append(self.m, dst_blk);
+                .build_and_append(self.m, dst_blk)
+                .map_err(|e| BuildErr::Op(e.to_string()))?;
+            if let Some(sizes) = segment_sizes {
+                crate::builder::set_operand_segment_sizes(&self.m.ctx, id, sizes);
+            }
+            // Clone pliron native attributes (like builtins). Only applicable for a wax to wax clone.
+            for (k, v) in self.src.native_attributes(op) {
+                id.deref_mut(&self.m.ctx).attributes.0.insert(k, v);
+            }
 
             for (i, _) in result_types.iter().enumerate() {
                 if let (Some(sv), Some(v)) = (self.src.op_result(op, i as u32), results.get(i)) {

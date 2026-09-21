@@ -11,30 +11,44 @@
 //! [`CrossLoopReuseAnalysis`] analyses the IR and computes the reuse plans. [`CrossLoopReusePass`] asks the
 //! [`AnalysisManager`] for those plans, writes the appropriate attributes onto the IR, and reports through
 //! [`PassResult`] whether the IR changed and which analyses remain valid.
+
 use crate::attr::Attribute;
+use crate::dialect::source::{attributes_of, opcode_of, operands_of, value_type};
 use crate::opcode::Opcode;
-use crate::passes::dialect_view::DialectView;
-use crate::source::WaxSource;
 use crate::types::{ScalarType, TileElementType, Type};
 use pliron::context::{Context, Ptr};
+use pliron::identifier::Identifier;
 use pliron::irbuild::IRStatus;
+use pliron::linked_list::ContainsLinkedList;
 use pliron::operation::Operation;
 use pliron::pass::{Analysis, AnalysisManager, Pass, PassResult};
 use pliron::result::Result;
 
-/// Set on the `wax.for` that produces the cache, i.e. caches a view in registers for reuse.
-/// Value is the cache length.
-pub const ATTR_CACHE_PRODUCER: &str = "wax_cache_producer";
-/// Set on the `wax.for` that consumes what the producer loop cached.
-pub const ATTR_CACHE_CONSUMER: &str = "wax_cache_consumer";
+pliron::dict_key!(
+    /// Set on the `wax.for` that produces the cache, i.e. caches a view in registers for reuse.
+    /// Value is the cache length.
+    ATTR_CACHE_PRODUCER,
+    "wax_cache_producer"
+);
+pliron::dict_key!(
+    /// Set on the `wax.for` that consumes what the producer loop cached.
+    ATTR_CACHE_CONSUMER,
+    "wax_cache_consumer"
+);
 
-/// Bytes per thread of the producer cache, set alongside [`ATTR_CACHE_PRODUCER`].
-pub const ATTR_CACHE_BYTES: &str = "wax_cache_bytes";
+pliron::dict_key!(
+    /// Bytes per thread of the producer cache, set alongside [`ATTR_CACHE_PRODUCER`].
+    ATTR_CACHE_BYTES,
+    "wax_cache_bytes"
+);
 
-/// Unique id of a caching producer/consumer pair. Written to both loops of a plan.
-///
-/// Removes the need for re-deriving pairs later.
-pub const ATTR_CACHE_ID: &str = "wax_cache_id";
+pliron::dict_key!(
+    /// Unique id of a caching producer/consumer pair. Written to both loops of a plan.
+    ///
+    /// Removes the need for re-deriving pairs later.
+    ATTR_CACHE_ID,
+    "wax_cache_id"
+);
 
 /// A producer/consumer pair.
 // TODO: Perhaps this should be a group with a single producer and multiple consumers.
@@ -119,19 +133,19 @@ impl Analysis for CrossLoopReuseAnalysis {
 /// simply because `find_plans` saves both loops in `paired`, so the producer would be skipped by the
 /// "already paired" check. We could change the [`Plan`] to model groups rather than pairs.
 pub fn find_plans(ctx: &Context, func: Ptr<Operation>) -> Vec<Plan> {
-    let src = DialectView { ctx };
-    let Some(block) = src
-        .regions(func)
-        .first()
-        .and_then(|r| src.region_blocks(*r).first().copied())
+    let Some(block) = func
+        .deref(ctx)
+        .regions()
+        .next()
+        .and_then(|r| r.deref(ctx).iter(ctx).next())
     else {
         return Vec::new();
     };
 
-    let fors: Vec<Ptr<Operation>> = src
-        .block_ops(block)
-        .into_iter()
-        .filter(|&o| src.opcode(o) == Opcode::For)
+    let fors: Vec<Ptr<Operation>> = block
+        .deref(ctx)
+        .iter(ctx)
+        .filter(|&o| opcode_of(ctx, o) == Opcode::For)
         .collect();
 
     let mut plans: Vec<Plan> = Vec::new();
@@ -142,22 +156,22 @@ pub fn find_plans(ctx: &Context, func: Ptr<Operation>) -> Vec<Plan> {
             if paired.contains(&first) || paired.contains(&second) {
                 continue;
             }
-            let Some(num_chunks) = matching_bounds(&src, first, second) else {
+            let Some(num_chunks) = matching_bounds(ctx, first, second) else {
                 continue;
             };
-            let read_by_first = views_read(&src, first);
+            let read_by_first = views_read(ctx, first);
             if read_by_first.is_empty() {
                 continue;
             }
-            let read_by_second = views_read(&src, second);
+            let read_by_second = views_read(ctx, second);
             let Some(shared) = read_by_first.iter().find(|v| read_by_second.contains(v)) else {
                 continue;
             };
-            let Some(elem_bytes) = view_elem_bytes(&src, *shared) else {
+            let Some(elem_bytes) = view_elem_bytes(ctx, *shared) else {
                 continue;
             };
             // Ensure no values are written to the source (producer) of the cache.
-            if may_be_written(&src, block, first, second, *shared) {
+            if may_be_written(ctx, block, first, second, *shared) {
                 continue;
             }
             plans.push(Plan {
@@ -216,17 +230,21 @@ impl Pass for CrossLoopReusePass {
 fn apply(ctx: &Context, plans: &[Plan]) {
     for (id, p) in plans.iter().enumerate() {
         let id = id as i64;
-        set_int_attr(ctx, p.producer, ATTR_CACHE_PRODUCER, p.num_chunks as i64);
-        set_int_attr(ctx, p.producer, ATTR_CACHE_BYTES, p.bytes_per_thread as i64);
-        set_int_attr(ctx, p.producer, ATTR_CACHE_ID, id);
-        set_int_attr(ctx, p.consumer, ATTR_CACHE_CONSUMER, 1);
-        set_int_attr(ctx, p.consumer, ATTR_CACHE_ID, id);
+        set_int_attr(ctx, p.producer, &ATTR_CACHE_PRODUCER, p.num_chunks as i64);
+        set_int_attr(
+            ctx,
+            p.producer,
+            &ATTR_CACHE_BYTES,
+            p.bytes_per_thread as i64,
+        );
+        set_int_attr(ctx, p.producer, &ATTR_CACHE_ID, id);
+        set_int_attr(ctx, p.consumer, &ATTR_CACHE_CONSUMER, 1);
+        set_int_attr(ctx, p.consumer, &ATTR_CACHE_ID, id);
     }
 }
 
 /// Performs croos-loop reuse analysis and applies it to one function.
-///
-/// TODO: Take `&mut Context`, as that is what `Pass::run` requires.
+// TODO: Take `&mut Context`, as that is what `Pass::run` requires.
 pub fn annotate_with(
     analyses: &mut AnalysisManager,
     ctx: &Context,
@@ -246,18 +264,14 @@ pub fn annotate_with(
 ///
 /// All bounds must compile-time constants.
 // TODO: Investigate if we can capture more patterns.
-fn matching_bounds(
-    src: &DialectView<'_>,
-    first: Ptr<Operation>,
-    second: Ptr<Operation>,
-) -> Option<i32> {
-    let (o1, o2) = (src.operands(first), src.operands(second));
+fn matching_bounds(ctx: &Context, first: Ptr<Operation>, second: Ptr<Operation>) -> Option<i32> {
+    let (o1, o2) = (operands_of(ctx, first), operands_of(ctx, second));
     if o1.len() < 3 || o2.len() < 3 {
         return None;
     }
-    let (lo1, lo2) = (const_i32(src, o1[0])?, const_i32(src, o2[0])?);
-    let (hi1, hi2) = (const_i32(src, o1[1])?, const_i32(src, o2[1])?);
-    let (st1, st2) = (const_i32(src, o1[2])?, const_i32(src, o2[2])?);
+    let (lo1, lo2) = (const_i32(ctx, o1[0])?, const_i32(ctx, o2[0])?);
+    let (hi1, hi2) = (const_i32(ctx, o1[1])?, const_i32(ctx, o2[1])?);
+    let (st1, st2) = (const_i32(ctx, o1[2])?, const_i32(ctx, o2[2])?);
     if lo1 != 0 || lo2 != 0 || hi1 != hi2 || st1 != st2 || st1 <= 0 {
         return None;
     }
@@ -281,7 +295,7 @@ const MAX_VIEW_CHAIN: usize = 8;
 ///
 /// This includes `int_to_ptr` bases, as different values does not necessarily mean different
 /// tensors.
-fn view_base(src: &DialectView<'_>, mut v: pliron::value::Value) -> Option<pliron::value::Value> {
+fn view_base(ctx: &Context, mut v: pliron::value::Value) -> Option<pliron::value::Value> {
     use pliron::value::DefiningEntity;
     for _ in 0..MAX_VIEW_CHAIN {
         // Defining entity of value is an op. Continue traversal.
@@ -290,12 +304,12 @@ fn view_base(src: &DialectView<'_>, mut v: pliron::value::Value) -> Option<pliro
             // This means the value is a block argument -> our root.
             return Some(v);
         };
-        match src.opcode(op) {
+        match opcode_of(ctx, op) {
             Opcode::MakePartitionView
             | Opcode::MakeTensorView
             | Opcode::MakeStridedView
             | Opcode::MakeGatherScatterView => {
-                v = *src.operands(op).first()?;
+                v = *operands_of(ctx, op).first()?;
             }
             _ => return None, // some other producer. not identifiable.
         }
@@ -304,18 +318,14 @@ fn view_base(src: &DialectView<'_>, mut v: pliron::value::Value) -> Option<pliro
 }
 
 /// Walk through the tree of ops starting at `op`. Stops early if `f` is true.
-fn walk_ops(
-    src: &DialectView<'_>,
-    op: Ptr<Operation>,
-    f: &mut impl FnMut(Ptr<Operation>) -> bool,
-) -> bool {
+fn walk_ops(ctx: &Context, op: Ptr<Operation>, f: &mut impl FnMut(Ptr<Operation>) -> bool) -> bool {
     if f(op) {
         return true;
     }
-    for r in src.regions(op) {
-        for b in src.region_blocks(r) {
-            for inner in src.block_ops(b) {
-                if walk_ops(src, inner, f) {
+    for r in op.deref(ctx).regions() {
+        for b in r.deref(ctx).iter(ctx) {
+            for inner in b.deref(ctx).iter(ctx) {
+                if walk_ops(ctx, inner, f) {
                     return true;
                 }
             }
@@ -346,35 +356,35 @@ fn walk_ops(
 ///   counts as a conflict. This means that a kernel that gathers through a reconstructed address
 ///   would not benefit from this pass.
 fn may_be_written(
-    src: &DialectView<'_>,
+    ctx: &Context,
     block: Ptr<pliron::basic_block::BasicBlock>,
     producer: Ptr<Operation>,
     consumer: Ptr<Operation>,
     cached: pliron::value::Value,
 ) -> bool {
-    let Some(cached_base) = view_base(src, cached) else {
+    let Some(cached_base) = view_base(ctx, cached) else {
         return true;
     };
 
     let writes_cached = |op: Ptr<Operation>| -> bool {
         // Operand differes per opcode.
-        let dst_index = match src.opcode(op) {
+        let dst_index = match opcode_of(ctx, op) {
             Opcode::StoreViewTko => 1,
             Opcode::AtomicRMW | Opcode::AtomicCAS => 0,
             _ => return false,
         };
         // A write whose destination we cannot read has to count as a conflict.
-        let Some(&dst) = src.operands(op).get(dst_index) else {
+        let Some(&dst) = operands_of(ctx, op).get(dst_index) else {
             return true;
         };
-        match view_base(src, dst) {
+        match view_base(ctx, dst) {
             Some(b) => b == cached_base,
             None => true,
         }
     };
 
     let mut writes_cached = writes_cached;
-    let ops = src.block_ops(block);
+    let ops: Vec<Ptr<Operation>> = block.deref(ctx).iter(ctx).collect();
     let (Some(i), Some(j)) = (
         ops.iter().position(|&o| o == producer),
         ops.iter().position(|&o| o == consumer),
@@ -389,14 +399,14 @@ fn may_be_written(
     // Check if any of the ops between `producer` and `consumer` makes the cache stale.
     if ops[i + 1..j]
         .iter()
-        .any(|&o| walk_ops(src, o, &mut writes_cached))
+        .any(|&o| walk_ops(ctx, o, &mut writes_cached))
     {
         return true;
     }
 
     // Check if any of the ops inside `producer` or `consumer` makes the cache stale.
     for for_op in [producer, consumer] {
-        if walk_ops(src, for_op, &mut writes_cached) {
+        if walk_ops(ctx, for_op, &mut writes_cached) {
             return true;
         }
     }
@@ -415,17 +425,17 @@ fn may_be_written(
 /// Improving this would require proving that nested loads execute every iteration, or that two
 /// views are conditionally equal.
 // TODO: Investigate supporting nested loads.
-fn views_read(src: &DialectView<'_>, for_op: Ptr<Operation>) -> Vec<pliron::value::Value> {
+fn views_read(ctx: &Context, for_op: Ptr<Operation>) -> Vec<pliron::value::Value> {
     let mut views = Vec::new();
-    for r in src.regions(for_op) {
-        for b in src.region_blocks(r) {
-            for op in src.block_ops(b) {
-                if src.opcode(op) != Opcode::LoadViewTko {
+    for r in for_op.deref(ctx).regions() {
+        for b in r.deref(ctx).iter(ctx) {
+            for op in b.deref(ctx).iter(ctx) {
+                if opcode_of(ctx, op) != Opcode::LoadViewTko {
                     continue;
                 }
-                let opds = src.operands(op);
+                let opds = operands_of(ctx, op);
                 let Some(&pv) = opds.first() else { continue };
-                if !matches!(src.value_type(pv), Type::PartitionView(_)) {
+                if !matches!(value_type(ctx, pv), Some(Type::PartitionView(_))) {
                     continue;
                 }
                 views.push(pv);
@@ -436,33 +446,35 @@ fn views_read(src: &DialectView<'_>, for_op: Ptr<Operation>) -> Vec<pliron::valu
 }
 
 /// Bytes held by the view of one thread.
-fn view_elem_bytes(src: &DialectView<'_>, v: pliron::value::Value) -> Option<i32> {
-    match src.value_type(v) {
-        Type::PartitionView(pv) => Some(pv.tensor_view.element_type.byte_width() as i32),
+fn view_elem_bytes(ctx: &Context, v: pliron::value::Value) -> Option<i32> {
+    match value_type(ctx, v) {
+        Some(Type::PartitionView(pv)) => Some(pv.tensor_view.element_type.byte_width() as i32),
         _ => None,
     }
 }
 
 /// Extract a constant i32 from the value, if it has one.
-fn const_i32(src: &DialectView<'_>, v: pliron::value::Value) -> Option<i32> {
+fn const_i32(ctx: &Context, v: pliron::value::Value) -> Option<i32> {
     use pliron::value::DefiningEntity;
     let DefiningEntity::Op(op) = v.defining_entity() else {
         return None;
     };
-    if src.opcode(op) != Opcode::Constant {
+    if opcode_of(ctx, op) != Opcode::Constant {
         return None;
     }
-    src.attributes(op).into_iter().find_map(|(k, a)| match a {
-        Attribute::DenseElements(de)
-            if k == "value"
+    attributes_of(ctx, op)
+        .into_iter()
+        .find_map(|(k, a)| match a {
+            Attribute::DenseElements(de)
+                if k == "value"
                 && de.shape.is_empty()                  // a scalar, not a tile of values
                 && is_scalarlike_i32(&de.element_type)  // and actually an i32
                 && de.data.len() >= 4 =>
-        {
-            Some(i32::from_le_bytes(de.data[..4].try_into().unwrap()))
-        }
-        _ => None,
-    })
+            {
+                Some(i32::from_le_bytes(de.data[..4].try_into().unwrap()))
+            }
+            _ => None,
+        })
 }
 
 /// Checks if type is a scalar-like i32
@@ -481,13 +493,8 @@ fn is_scalarlike_i32(t: &Type) -> bool {
 }
 
 /// Set an integer attribute on the operation. Overrides previous value if present.
-///
-/// Panics if `key` is not a valid pliron `Identifier` (`[a-zA-Z_][a-zA-Z0-9_]*`).
-fn set_int_attr(ctx: &Context, op: Ptr<Operation>, key: &str, v: i64) {
+fn set_int_attr(ctx: &Context, op: Ptr<Operation>, key: &Identifier, v: i64) {
     use crate::dialect::attr_mirror::WaxAttr;
-    let ident = key
-        .try_into()
-        .unwrap_or_else(|_| panic!("attribute key `{key}` is not a valid pliron Identifier"));
     let value = WaxAttr(Attribute::Integer(v, Type::Scalar(ScalarType::I32)));
-    op.deref_mut(ctx).attributes.set(ident, value);
+    op.deref_mut(ctx).attributes.set(key.clone(), value);
 }

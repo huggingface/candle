@@ -2,6 +2,8 @@
 
 use wax_ir::{ScalarType, TileElementType, TileType, Type};
 
+use crate::ir_builder::LlType;
+
 /// Lower a scalar type to an LLVM IR **storage** type name.
 ///
 /// This is the type used for GEP, load, and store instructions (memory ops).
@@ -27,20 +29,6 @@ pub fn ll_scalar(s: &ScalarType) -> &'static str {
             ll_scalar(&st)
         }
     }
-}
-
-/// Lower a scalar type to its LLVM IR **compute** (in-register) type name.
-///
-/// For built-in types this is identical to [`ll_scalar`].  For `External`
-/// types this returns the compute type (e.g. "half" for fp8E4M3FN stored as
-/// i8 but computed in f16).  Use this for arithmetic instructions on loaded
-/// tile values.
-pub fn ll_compute_scalar(s: &ScalarType) -> &'static str {
-    if let ScalarType::External(t) = s {
-        let ct = t.compute_type();
-        return ll_scalar(&ct);
-    }
-    ll_scalar(s)
 }
 
 /// True if the scalar type is a floating-point type.
@@ -77,97 +65,6 @@ pub fn scalar_byte_width(s: &ScalarType) -> u32 {
     }
 }
 
-/// Lower a cutile `Type` to an LLVM IR type string.
-///
-/// `TensorView`, `PartitionView`, and related view types are lowered to their
-/// underlying device pointer; shape/stride information lives only in the type
-/// and is consulted at the use site (e.g. `LoadViewTko`).
-pub fn ll_type(ty: &Type) -> String {
-    match ty {
-        Type::Scalar(s) => ll_scalar(s).to_string(),
-        Type::Pointer(p) => format!("{} addrspace(1)*", ll_scalar(&p.pointee)),
-        Type::Tile(TileType {
-            shape,
-            element_type,
-        }) => {
-            let elem = match element_type {
-                // In-register type: use compute type for External (e.g. "half" for fp8 stored as i8).
-                TileElementType::Scalar(s) => ll_compute_scalar(s).to_string(),
-                TileElementType::Pointer(p) => format!("{} addrspace(1)*", ll_scalar(&p.pointee)),
-            };
-            if shape.is_empty() {
-                // Scalar tile - a single register value.
-                elem
-            } else {
-                let n: i64 = shape.iter().product();
-                // 8x8 tiles become SGMMA <64 x float> registers.
-                // Use is_sgmma_tile so External types (e.g. fp8 computing in f16) also map here.
-                if is_sgmma_tile(&Type::Tile(TileType {
-                    shape: shape.clone(),
-                    element_type: element_type.clone(),
-                })) {
-                    return "<64 x float>".to_string();
-                }
-                format!("[{n} x {elem}]")
-            }
-        }
-        // View types: underlying device pointer (shape/stride accessed via type metadata).
-        Type::TensorView(tv) => format!("{} addrspace(1)*", ll_scalar(&tv.element_type)),
-        Type::PartitionView(pv) => {
-            format!("{} addrspace(1)*", ll_scalar(&pv.tensor_view.element_type))
-        }
-        Type::GatherScatterView(gsv) => {
-            format!("{} addrspace(1)*", ll_scalar(&gsv.tensor_view.element_type))
-        }
-        Type::StridedView(sv) => {
-            format!("{} addrspace(1)*", ll_scalar(&sv.tensor_view.element_type))
-        }
-        // Token: a synchronisation handle - we represent it as i1 (unused at runtime).
-        Type::Token => "i1".to_string(),
-        Type::Func(_) => "void ()*".to_string(),
-    }
-}
-
-/// Lower a type as it appears in the AIR function signature.
-///
-/// - Pointer types -> `{elem} addrspace(1)*` (device buffer)
-/// - View types -> `{elem} addrspace(1)*` (device buffer)
-/// - Scalar types -> `{ty} addrspace(2)*` (passed as const reference in Metal ABI)
-/// - Tile<[], T> -> `{T} addrspace(2)*` (scalar register passed by const ref)
-pub fn ll_param_type(ty: &Type) -> String {
-    match ty {
-        Type::Scalar(s) => format!("{} addrspace(2)*", ll_scalar(s)),
-        // Scalar-element empty-shape tile: passed by const-ref in addrspace(2) (e.g. stride i32).
-        Type::Tile(TileType {
-            shape,
-            element_type: TileElementType::Scalar(s),
-        }) if shape.is_empty() => {
-            format!("{} addrspace(2)*", ll_scalar(s))
-        }
-        // Pointer-element empty-shape tile: a device buffer pointer (addrspace 1).
-        Type::Tile(TileType {
-            shape,
-            element_type: TileElementType::Pointer(p),
-        }) if shape.is_empty() => {
-            format!("{} addrspace(1)*", ll_scalar(&p.pointee))
-        }
-        Type::Pointer(p) => format!("{} addrspace(1)*", ll_scalar(&p.pointee)),
-        Type::TensorView(tv) => format!("{} addrspace(1)*", ll_scalar(&tv.element_type)),
-        Type::PartitionView(pv) => {
-            format!("{} addrspace(1)*", ll_scalar(&pv.tensor_view.element_type))
-        }
-        Type::GatherScatterView(gsv) => {
-            format!("{} addrspace(1)*", ll_scalar(&gsv.tensor_view.element_type))
-        }
-        Type::StridedView(sv) => {
-            format!("{} addrspace(1)*", ll_scalar(&sv.tensor_view.element_type))
-        }
-        _ => ll_type(ty),
-    }
-}
-
-/// Whether a parameter needs to be loaded on entry (scalar ABI: passed as
-/// `addrspace(2)*`, so we emit a load at the start of the function body).
 pub fn param_needs_load(ty: &Type) -> bool {
     match ty {
         Type::Scalar(_) => true,
@@ -209,28 +106,6 @@ pub fn sgmma_dims(ty: &Type) -> Option<(usize, usize)> {
     }
 }
 
-/// Whether a type maps to one or more SGMMA registers (any MxN f32/tf32 tile where
-/// M and N are positive multiples of 8).
-pub fn is_sgmma_tile(ty: &Type) -> bool {
-    sgmma_dims(ty).is_some()
-}
-
-/// 64-bit hex representation of an f32 value for LLVM IR float literals.
-pub fn float_hex(v: f32) -> String {
-    // LLVM uses 64-bit hex for all float constants in text IR.
-    format!("0x{:016X}", (v as f64).to_bits())
-}
-
-/// LLVM IR half-precision hex literal (0xH prefix, 4 hex digits).
-pub fn half_hex(v: f32) -> String {
-    format!("0xH{:04X}", f32_to_f16_bits(v))
-}
-
-/// LLVM IR bfloat16 hex literal (0xR prefix, 4 hex digits).
-pub fn bfloat_hex(v: f32) -> String {
-    format!("0xR{:04X}", f32_to_bf16_bits(v))
-}
-
 pub(crate) fn f32_to_f16_bits(v: f32) -> u16 {
     let bits = v.to_bits();
     let sign = ((bits >> 31) as u16) << 15;
@@ -264,4 +139,145 @@ pub(crate) fn f32_to_bf16_bits(v: f32) -> u16 {
     let bits = v.to_bits();
     let lsb = (bits >> 16) & 1;
     ((bits.wrapping_add(0x7fff + lsb)) >> 16) as u16
+}
+
+// ---------------------------------------------------------------------------
+// Shared element-type helpers, used by both lowering routes.
+
+pub(crate) fn loop_unroll_factor(body_straight: bool, body_insts: usize) -> Option<u32> {
+    // METAL_TILE_UNROLL overrides the policy for tuning: `0` disables unrolling,
+    // any other value forces that factor on every straight-line counted loop
+    // (including the large SGMMA bodies this normally skips).
+    if let Some(v) = std::env::var_os("METAL_TILE_UNROLL")
+        && let Some(n) = v.to_str().and_then(|s| s.parse::<u32>().ok())
+    {
+        if !body_straight || body_insts == 0 {
+            return None;
+        }
+        return if n == 0 { None } else { Some(n) };
+    }
+    if !body_straight || body_insts == 0 || body_insts > 32 {
+        return None;
+    }
+    Some((160 / body_insts).clamp(2, 8) as u32)
+}
+
+pub(crate) fn wider_float(a: &LlType, b: &LlType) -> Option<LlType> {
+    let rank = |t: &LlType| match t {
+        LlType::Half | LlType::BFloat => Some(1),
+        LlType::Float => Some(2),
+        LlType::Double => Some(3),
+        _ => None,
+    };
+    let (ra, rb) = (rank(a)?, rank(b)?);
+    Some(if ra >= rb { a.clone() } else { b.clone() })
+}
+
+pub(crate) fn param_elem(ty: &Type) -> ScalarType {
+    let e = match ty {
+        Type::Pointer(p) => p.pointee.clone(),
+        Type::TensorView(tv) => tv.element_type.clone(),
+        Type::PartitionView(pv) => pv.tensor_view.element_type.clone(),
+        Type::Tile(TileType {
+            element_type: TileElementType::Pointer(p),
+            ..
+        }) => p.pointee.clone(),
+        other => scalar_of(other),
+    };
+    match e {
+        ScalarType::External(t) => t.storage_type(),
+        other => other,
+    }
+}
+
+pub(crate) fn tile_elem_count(ty: &Type) -> Option<i32> {
+    match ty {
+        Type::Tile(t) => i32::try_from(t.shape.iter().copied().product::<i64>()).ok(),
+        _ => None,
+    }
+}
+
+pub(crate) fn float_elem(s: &ScalarType) -> Option<(LlType, &'static str)> {
+    match s {
+        ScalarType::F32 => Some((LlType::Float, "f32")),
+        ScalarType::F16 => Some((LlType::Half, "f16")),
+        ScalarType::BF16 => Some((LlType::BFloat, "bf16")),
+        _ => None,
+    }
+}
+
+pub(crate) fn mem_elem_lltype(s: &ScalarType) -> Option<LlType> {
+    match s {
+        ScalarType::F32 => Some(LlType::Float),
+        ScalarType::F16 => Some(LlType::Half),
+        ScalarType::BF16 => Some(LlType::BFloat),
+        ScalarType::I8 => Some(LlType::I8),
+        ScalarType::I16 => Some(LlType::I16),
+        ScalarType::I32 => Some(LlType::I32),
+        ScalarType::I64 => Some(LlType::I64),
+        _ => None,
+    }
+}
+
+pub(crate) fn atomic_scope(compiler_scope: i64) -> i32 {
+    match compiler_scope {
+        0 => 1, // TileBlock -> threadgroup
+        2 => 4, // System
+        _ => 2, // Device (default)
+    }
+}
+
+pub(crate) fn atomic_air_ty(elem_ll: &str) -> &'static str {
+    match elem_ll {
+        "float" => "f32",
+        "half" => "f16",
+        "bfloat" => "bf16",
+        "i64" => "i64",
+        _ => "i32",
+    }
+}
+
+pub(crate) fn atomic_rmw_intrinsic(mode: i64, elem_ll: &str, asn: u32) -> (String, &'static str) {
+    let mem_space = if asn == 3 { "local" } else { "global" };
+    let is_float = matches!(elem_ll, "float" | "half" | "bfloat");
+    let air_ty = atomic_air_ty(elem_ll);
+    let op_part = match mode {
+        0 => "and.s",
+        1 => "or.s",
+        2 => "xor.s",
+        3 => "add.s", // integer signed add
+        4 => "add",   // float add (no sign)
+        5 if !is_float => "max.s",
+        6 if !is_float => "min.s",
+        7 => "max.u",
+        8 => "min.u",
+        _ => "add.s",
+    };
+    (
+        format!("@air.atomic.{mem_space}.{op_part}.{air_ty}"),
+        air_ty,
+    )
+}
+
+pub(crate) fn atomic_lltype(air_ty: &str) -> LlType {
+    match air_ty {
+        "f32" => LlType::Float,
+        "f16" => LlType::Half,
+        "bf16" => LlType::BFloat,
+        "i64" => LlType::I64,
+        _ => LlType::I32,
+    }
+}
+
+pub(crate) fn scalar_of(ty: &Type) -> ScalarType {
+    match ty {
+        Type::Scalar(s) => s.clone(),
+        Type::Tile(TileType {
+            element_type: TileElementType::Scalar(s),
+            ..
+        }) => s.clone(),
+        Type::TensorView(tv) => tv.element_type.clone(),
+        Type::PartitionView(pv) => pv.tensor_view.element_type.clone(),
+        _ => ScalarType::F32,
+    }
 }

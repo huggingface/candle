@@ -52,15 +52,6 @@ impl std::fmt::Display for WaxBridgeErr {
     }
 }
 
-/// Renders the attributes of an op.
-fn render_attrs_of(attrs: &[(String, Attribute)]) -> String {
-    attrs
-        .iter()
-        .map(|(k, v)| format!("{k}={v:?}"))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 /// Get integer attribute from list by name.
 fn int_attr_of(attrs: &[(String, Attribute)], name: &str) -> Option<i64> {
     attrs.iter().find_map(|(k, v)| match v {
@@ -125,7 +116,7 @@ pub fn make_op(
         }
         Opcode::Constant => {
             let ty = res_tys.first().cloned().expect("constant produces a value");
-            ConstantOp::new(ctx, ty, &render_attrs_of(attrs)).get_operation()
+            ConstantOp::new(ctx, ty).get_operation()
         }
         Opcode::Broadcast => {
             let ty = res_tys
@@ -202,7 +193,6 @@ pub fn make_op(
         }
         Opcode::Return => ReturnOp::new(ctx).get_operation(),
         Opcode::Yield => YieldOp::new(ctx, opds).get_operation(),
-        Opcode::Break => BreakOp::new(ctx).get_operation(),
         Opcode::Continue => ContinueOp::new(ctx, opds).get_operation(),
         other => {
             // Simple ops (op in -> results out).

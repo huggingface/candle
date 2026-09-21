@@ -1,10 +1,10 @@
 //! Writes Apple `.metallib` (MTLB) containers.
 //!
 //! Replaces `xcrun metallib`, which cannot be shelled out to on iOS or in a sandboxed app.
-//! A metallib is a tag/length/value container around AIR bitcode; the loader accepts any
+//! A metallib is a tag/length/value container around AIR bitcode. The loader accepts any
 //! AIR bitcode the compiler service can read, so the container is the only Apple-specific
 //! artifact needed. Output is byte-identical to `xcrun metallib` for a single-function
-//! library (see the tests).
+//! library.
 //!
 //! Layout, little-endian, offsets from file start. The 12 bytes from 0x04 come from
 //! [`crate::profile::TargetProfile`].
@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(g(0x48) + g(0x50), lib.len(), "bitcode runs to EOF");
         assert_eq!(g(0x50), bc.len(), "bitcode size");
         assert_eq!(&lib[g(0x48)..], &bc[..], "bitcode stored verbatim");
-        // HASH must cover the bitcode payload.
+        // The hash must cover the bitcode payload.
         let hpos = lib.windows(4).position(|w| w == b"HASH").unwrap();
         assert_eq!(&lib[hpos + 6..hpos + 38], &sha256(&bc)[..]);
         // The name is recorded NUL-terminated.

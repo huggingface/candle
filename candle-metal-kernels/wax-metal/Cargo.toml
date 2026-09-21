@@ -2,23 +2,20 @@
 name = "wax-metal"
 version = "0.11.0"
 edition = "2024"
-description = "The Metal backend for candle-wax: wax IR to AIR bitcode to metallib"
+description = "Metal backend for wax IR"
 repository = "https://github.com/huggingface/candle"
 license = "MIT OR Apache-2.0"
-
-[features]
-default = []
-# The AIR dialect as pliron ops, for inspecting a lowering. Not on the emission path.
-pliron-air = ["dep:pliron", "dep:pliron-derive"]
 
 [dependencies]
 wax-ir = { path = "../../candle-wax/wax-ir" }
 thiserror = "2"
-pliron = { version = "0.18", optional = true }
-pliron-derive = { version = "0.18", optional = true }
+pliron = "0.20"
+pliron-derive = "0.20"
+# For all AIR ops that are plain LLVM.
+# `default-features = false` drops `llvm-sys`. We need our own emitter.
+pliron-llvm = { version = "0.20", default-features = false }
 
 [dev-dependencies]
-# The backend's own tests need a frontend to produce IR from. A backend must not depend on one
-# in its own right, which is why this is dev-only.
 wax-frontend = { path = "../../candle-wax/wax-frontend" }
+wax-kernels = { path = "../../candle-wax/wax-kernels" }
 syn = { version = "2", features = ["full", "parsing", "extra-traits"] }

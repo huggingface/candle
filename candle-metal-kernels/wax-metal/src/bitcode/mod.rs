@@ -1,12 +1,12 @@
 //! Writes LLVM bitcode in the dialect Apple's AIR reader accepts.
 //!
-//! Replaces `xcrun metal-as`, the last external tool in the pipeline - shelling out to
-//! Xcode is impossible on iOS and in sandboxed apps.
+//! Replaces `xcrun metal-as`, the last external tool in the pipeline. Shelling out to Xcode
+//! is impossible on iOS and in sandboxed apps.
 //!
-//! Dialect constraints, MEASURED:
-//! * TYPED POINTERS. The reader is pre-opaque-pointer and wants `POINTER(pointee,
-//!   addrspace)`. A stock LLVM 21 emits `OPAQUE_POINTER`; the library loads but then
-//!   CRASHES MTLCompilerService at pipeline creation, so no upstream LLVM can stand in.
+//! Dialect constraints:
+//! * Typed pointers. The reader is pre-opaque-pointer and wants `POINTER(pointee,
+//!   addrspace)`. A stock LLVM 21 emits `OPAQUE_POINTER`; the library loads but then crashes
+//!   MTLCompilerService at pipeline creation, so no upstream LLVM can stand in.
 //! * `IDENTIFICATION` epoch 0, `MODULE_CODE_VERSION` 2 (selects string-table symbol names).
 //!
 //! Records are emitted unabbreviated: a reader must accept the long form, so this avoids
@@ -14,9 +14,8 @@
 //! vectors for version-sensitive records (notably `MODULE_CODE_FUNCTION`) are replicated
 //! from what `metal-as` emits, read with `llvm-bcanalyzer`, not derived from LLVM source.
 
-// Some block IDs and record codes below are not referenced yet: they belong to the
-// blocks still to be implemented (constants, metadata, attribute groups, function
-// bodies), and are kept so the numbering lives in one place.
+// `BLOCK_FUNCTION` and `BLOCK_METADATA` are defined in `func` and `metadata` too. The copies
+// here are what the `allow` silences. They stay so the full block-ID table lives in one place.
 #![allow(dead_code)]
 
 pub mod bitstream;
@@ -272,7 +271,7 @@ pub enum Const {
     Int(Ty, i64),
     /// A zeroinitializer of the given type.
     Null(Ty),
-    /// `undef` of the given type - what an uninitialized threadgroup global uses.
+    /// `undef` of the given type. What an uninitialized threadgroup global uses.
     Undef(Ty),
     /// A float constant by raw bit pattern, at the type's width. Bits rather than an
     /// `f32` so f16/bf16 values (including infinities) stay exact.
@@ -298,15 +297,15 @@ impl Const {
 /// Module-level constants, in emission order. Metadata operands such as
 /// `i32 7` reference these by value index, so the pool has to be built before the
 /// metadata block is written.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ConstPool {
     items: Vec<Const>,
 }
 
 impl ConstPool {
-    /// Index of `c` in the module's value table, interning it if new. The returned
-    /// index is relative to the start of the constant pool; callers add the number of
-    /// preceding values (globals and functions) to get an absolute value id.
+    /// Index of `c` in the module's value table, interning it if new. The returned index is
+    /// relative to the start of the constant pool. Callers add the number of preceding values
+    /// (globals and functions) to get an absolute value id.
     pub fn intern(&mut self, c: Const) -> u32 {
         if let Some(i) = self.items.iter().position(|x| *x == c) {
             return i as u32;
@@ -323,8 +322,8 @@ impl ConstPool {
         self.items.is_empty()
     }
 
-    /// The types of every constant in the pool - all of which must be interned before
-    /// the pool is written, since SETTYPE names them.
+    /// The types of every constant in the pool. All of them must be interned before the pool
+    /// is written, since SETTYPE names them.
     pub fn types(&self) -> Vec<Ty> {
         self.items.iter().map(|c| c.ty().clone()).collect()
     }
@@ -347,7 +346,7 @@ impl ConstPool {
             match c {
                 Const::Null(_) => w.record(CST_CODE_NULL, &[]),
                 Const::Undef(_) => w.record(CST_CODE_UNDEF, &[]),
-                // The bit pattern is stored directly; its width comes from SETTYPE.
+                // The bit pattern is stored directly. Its width comes from SETTYPE.
                 Const::Float(_, bits) => w.record(CST_CODE_FLOAT, &[*bits]),
                 Const::Int(_, v) => w.record(CST_CODE_INTEGER, &[encode_signed(*v)]),
                 Const::DataArray(_, vals) => w.record(CST_CODE_DATA, vals),
@@ -412,13 +411,13 @@ pub struct Module {
     pub md_kinds: MdKinds,
     pub globals: Vec<Global>,
     pub funcs: Vec<FuncDecl>,
-    /// Section names, in emission order; `FuncDecl::section` indexes this 1-based.
+    /// Section names, in emission order. `FuncDecl::section` indexes this 1-based.
     sections: Vec<String>,
     /// Bodies for the non-proto functions, in the order they were declared.
     bodies: Vec<(usize, Body)>,
     /// Attribute groups, in emission order. Each is (group id, attribute kinds).
     attr_groups: Vec<(u32, Vec<u32>)>,
-    /// Attribute lists; entry i (1-based for callers) names one group.
+    /// Attribute lists. Entry i (1-based for callers) names one group.
     attr_lists: Vec<u32>,
 }
 
@@ -454,14 +453,14 @@ impl Module {
         gid
     }
 
-    /// `{convergent nounwind}` - what a kernel definition carries. `convergent` is
-    /// load-bearing: without it the optimizer may move barriers and SIMD intrinsics
-    /// across control flow and cross-SIMD reductions silently produce wrong results.
+    /// `{convergent nounwind}`, what a kernel definition carries. `convergent` is load-bearing.
+    /// Without it the optimizer may move barriers and SIMD intrinsics across control flow, and
+    /// cross-SIMD reductions silently produce wrong results.
     pub fn kernel_attrs(&mut self) -> u32 {
         self.attr_list(&[attr::CONVERGENT, attr::NOUNWIND])
     }
 
-    /// `{convergent nounwind willreturn}` - what AIR intrinsic declarations carry.
+    /// `{convergent nounwind willreturn}`, what AIR intrinsic declarations carry.
     pub fn intrinsic_attrs(&mut self) -> u32 {
         self.attr_list(&[attr::CONVERGENT, attr::NOUNWIND, attr::WILLRETURN])
     }
@@ -474,7 +473,7 @@ impl Module {
         for (gid, kinds) in &self.attr_groups {
             let mut ops = vec![*gid as u64, ATTR_IDX_FUNCTION];
             for k in kinds {
-                // 0 marks a well-known enum attribute; the kind number follows.
+                // 0 marks a well-known enum attribute. The kind number follows.
                 ops.push(0);
                 ops.push(*k as u64);
             }
@@ -531,8 +530,8 @@ impl Module {
         self.bodies.push((func_index, body));
     }
 
-    /// Declare a threadgroup global: an `undef`-initialised value in address space 3.
-    /// `count > 1` makes it an array; `count == 1` a plain scalar, which is how the
+    /// Declare a threadgroup global. An `undef`-initialised value in address space 3.
+    /// `count > 1` makes it an array, `count == 1` a plain scalar, which is how the
     /// cross-SIMD reduce's single-value slot is declared.
     pub fn threadgroup_global(&mut self, name: &str, elem: Ty, count: u64) -> u32 {
         if count > 1 {
@@ -572,8 +571,8 @@ impl Module {
     }
 
     /// Absolute value id of the first module-level constant. The module value table is
-    /// globals, then functions, then constants - so adding a global shifts every
-    /// function's id, which is why callers must not cache these.
+    /// globals, then functions, then constants. Adding a global shifts every function's id,
+    /// which is why callers must not cache these.
     pub fn const_base(&self) -> u32 {
         (self.globals.len() + self.funcs.len()) as u32
     }
@@ -669,8 +668,8 @@ impl Module {
         }
         for (f, (off, len)) in self.funcs.iter().zip(&name_slots) {
             let fty = self.types.get(&f.ty).expect("function type interned");
-            // Layout replicated from metal-as output (21 operands). Everything past
-            // the attribute id is a default; op19 is 14 as that tool emits it.
+            // Layout replicated from metal-as output (21 operands). Everything past the
+            // attribute id is a default. op19 is 14 as that tool emits it.
             w.record(
                 MODULE_CODE_FUNCTION,
                 &[
@@ -699,7 +698,7 @@ impl Module {
         self.consts.write(&mut w, &self.types);
         self.md_kinds.write(&mut w);
         self.md.write(&mut w, &self.types);
-        // Bodies come last, in declaration order; the reader pairs them with the
+        // Bodies come last, in declaration order. The reader pairs them with the
         // non-proto FUNCTION records in order.
         let func_base = const_base + self.consts.len() as u32;
         let mut ordered: Vec<&(usize, Body)> = self.bodies.iter().collect();
@@ -796,10 +795,10 @@ mod tests {
         assert_eq!(p.len(), 2);
     }
 
-    /// The string table must land in the file as raw bytes. It is emitted through a
-    /// blob abbreviation; if it ever regresses to per-byte record operands those
-    /// bytes get VBR6-packed and no longer appear verbatim - and LLVM's reader
-    /// rejects the module outright ("Invalid record").
+    /// The string table must land in the file as raw bytes. It is emitted through a blob
+    /// abbreviation. If it ever regresses to per-byte record operands, those bytes get
+    /// VBR6-packed and no longer appear verbatim, and LLVM's reader rejects the module
+    /// outright ("Invalid record").
     #[test]
     fn strtab_is_stored_as_a_verbatim_blob() {
         let mut m = air_module();

@@ -9,13 +9,13 @@ use wax_ir::dialect::ops::*;
 use wax_ir::dialect::types::to_pliron;
 use wax_ir::{ScalarType, TileElementType, TileType, Type};
 
-fn f32_ty(ctx: &mut Context) -> pliron::r#type::TypeHandle {
+fn f32_ty(ctx: &Context) -> pliron::r#type::TypeHandle {
     to_pliron(ctx, &Type::Scalar(ScalarType::F32)).unwrap()
 }
-fn i32_ty(ctx: &mut Context) -> pliron::r#type::TypeHandle {
+fn i32_ty(ctx: &Context) -> pliron::r#type::TypeHandle {
     to_pliron(ctx, &Type::Scalar(ScalarType::I32)).unwrap()
 }
-fn tile_ty(ctx: &mut Context, shape: Vec<i64>) -> pliron::r#type::TypeHandle {
+fn tile_ty(ctx: &Context, shape: Vec<i64>) -> pliron::r#type::TypeHandle {
     to_pliron(
         ctx,
         &Type::Tile(TileType {
@@ -26,9 +26,8 @@ fn tile_ty(ctx: &mut Context, shape: Vec<i64>) -> pliron::r#type::TypeHandle {
     .unwrap()
 }
 
-/// The uniform families map opcodes onto typed attributes exhaustively.
 #[test]
-fn opcode_families_map() {
+fn uniform_opcodes_map_as_expected() {
     use wax_ir::Opcode;
     assert_eq!(
         BinaryAttr::from_opcode(Opcode::AddF),
@@ -49,10 +48,8 @@ fn opcode_families_map() {
     assert_eq!(UnaryAttr::from_opcode(Opcode::AddF), None);
 }
 
-/// A structed counted loop with a carried tile. One op, one region, the carry as a body
-/// block argument.
 #[test]
-fn a_structured_loop_builds_and_verifies() {
+fn for_op_builds_and_verifies() {
     let ctx = &mut Context::new();
     let i32t = i32_ty(ctx);
     let f32t = f32_ty(ctx);
@@ -62,10 +59,10 @@ fn a_structured_loop_builds_and_verifies() {
     let func = FuncOp::new(ctx, "structured".try_into().unwrap(), fn_ty);
     let entry = func.get_entry_block(ctx);
 
-    let lo = ConstantOp::new(ctx, i32t, "0");
-    let hi = ConstantOp::new(ctx, i32t, "8");
-    let step = ConstantOp::new(ctx, i32t, "1");
-    let init = ConstantOp::new(ctx, tile, "splat 0.0");
+    let lo = ConstantOp::new(ctx, i32t);
+    let hi = ConstantOp::new(ctx, i32t);
+    let step = ConstantOp::new(ctx, i32t);
+    let init = ConstantOp::new(ctx, tile);
     for o in [&lo, &hi, &step, &init] {
         o.get_operation().insert_at_back(entry, ctx);
     }
@@ -91,13 +88,14 @@ fn a_structured_loop_builds_and_verifies() {
     );
     for_op.get_operation().insert_at_back(entry, ctx);
 
-    // acc = acc + acc; yield acc.
+    // acc = acc + acc.
     let body = for_op.body(ctx);
     let acc = body.deref(ctx).get_argument(1);
     let add = BinaryOp::new(ctx, tile, acc, acc);
     set_binary(add.get_operation(), ctx, BinaryAttr::AddF);
     add.get_operation().insert_at_back(body, ctx);
     let sum = add.get_operation().deref(ctx).get_result(0);
+    // yield acc.
     YieldOp::new(ctx, vec![sum])
         .get_operation()
         .insert_at_back(body, ctx);
@@ -137,9 +135,8 @@ fn a_structured_loop_builds_and_verifies() {
     let _ = f32t;
 }
 
-/// A conditional keeps both arms as regions.
 #[test]
-fn a_structured_if_has_two_arms() {
+fn if_has_two_arm_regions() {
     let ctx = &mut Context::new();
     let i32t = i32_ty(ctx);
     let tile = tile_ty(ctx, vec![1, 32]);
@@ -148,7 +145,7 @@ fn a_structured_if_has_two_arms() {
     let func = FuncOp::new(ctx, "cond".try_into().unwrap(), fn_ty);
     let entry = func.get_entry_block(ctx);
 
-    let c = ConstantOp::new(ctx, i32t, "1");
+    let c = ConstantOp::new(ctx, i32t);
     c.get_operation().insert_at_back(entry, ctx);
     let cv = c.get_operation().deref(ctx).get_result(0);
 
@@ -157,7 +154,7 @@ fn a_structured_if_has_two_arms() {
 
     for arm in 0..2 {
         let b = if_op.arm(ctx, arm);
-        let k = ConstantOp::new(ctx, tile, if arm == 0 { "splat 1.0" } else { "splat 2.0" });
+        let k = ConstantOp::new(ctx, tile);
         k.get_operation().insert_at_back(b, ctx);
         let v = k.get_operation().deref(ctx).get_result(0);
         YieldOp::new(ctx, vec![v])

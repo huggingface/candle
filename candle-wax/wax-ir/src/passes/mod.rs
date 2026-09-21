@@ -1,12 +1,17 @@
 //! Tile-level analyses and transforms.
 //!
-//! The pliron pass types are re-exported here so a backend can drive these passes without
-//! taking its own dependency on pliron. This crate owns the framework relationship; a backend
-//! naming `pliron::pass::*` directly would be coupled to our choice of IR framework rather
-//! than to our IR.
-pub mod dialect_view;
+//! Pliron pass types are re-exported here so a backend can drive these passes without
+//! taking a direct dependency on pliron.
+
+pub mod cross_loop_reuse;
 pub mod fragment_set;
+pub mod gemm_analysis;
+pub mod gemv_t;
+pub mod launch;
+pub mod split_k;
 pub mod uniformity;
+pub mod utils;
+pub use launch::Launch;
 pub use pliron::pass::{Analysis, AnalysisManager, Pass, PassResult};
 
 // On attribute naming
@@ -28,5 +33,3 @@ pub use pliron::pass::{Analysis, AnalysisManager, Pass, PassResult};
 // another route the lowering does not need to be updated.
 // There is nothing inherently wrong with using the same attribute names in different passes. In
 // fact it simplifies lowering. It does, however, require coordination.
-
-pub mod cross_loop_reuse;

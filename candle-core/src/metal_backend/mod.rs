@@ -1750,6 +1750,48 @@ impl BackendStorage for MetalStorage {
                 )
             }
         };
+        #[cfg(feature = "wax")]
+        {
+            // Wax-first with an MLX fallback.
+            // CANDLE_WAX_GEMM=0 -> always MLX.
+            // CANDLE_WAX_GEMM=1 -> always wax, no fallback. Error on failure.
+            let force_wax_gemm = std::env::var("CANDLE_WAX_GEMM").ok().as_deref() == Some("1");
+            match candle_metal_kernels::wax_gemm::call_wax_gemm(
+                &self.device.device,
+                &encoder,
+                dtype,
+                (b, m, n, k),
+                lhs_l.stride(),
+                lhs_l.start_offset() * self.dtype.size_in_bytes(),
+                &self.buffer,
+                rhs_l.stride(),
+                rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
+                &rhs.buffer,
+                &buffer,
+            ) {
+                // Wax took the dispatch. The output is written, return it.
+                Ok(()) => {
+                    return Ok(Self::new(
+                        buffer,
+                        self.device.clone(),
+                        b * m * n,
+                        self.dtype(),
+                    ))
+                }
+                // CANDLE_WAX_GEMM=1 and wax cannot run this shape: return error.
+                Err(e) if force_wax_gemm => {
+                    return Err(
+                        MetalError::Message(format!(
+                            "CANDLE_WAX_GEMM=1: wax gemm cannot run {b}x{m}x{n}x{k} (refusing MLX fallback): {e:?}"
+                        ))
+                        .into(),
+                    )
+                }
+                // Default: fall back to MLX below.
+                Err(_) => {}
+            }
+        }
+
         candle_metal_kernels::call_mlx_gemm(
             &self.device.device,
             &encoder,

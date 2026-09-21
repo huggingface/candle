@@ -12,7 +12,7 @@ where
 {
     op.deref(ctx)
         .attributes
-        .get::<T>(&ATTR_KEY_WAX_OP.try_into().unwrap())
+        .get::<T>(&ATTR_KEY_WAX_OP)
         .expect("family op has no operator attribute")
         .clone()
 }
@@ -64,7 +64,6 @@ pub fn opcode_of(ctx: &Context, op: Ptr<Operation>) -> Opcode {
                 Opcode::StoreViewTko,
             ),
             (Operation::is_op::<YieldOp>(op, ctx), Opcode::Yield),
-            (Operation::is_op::<BreakOp>(op, ctx), Opcode::Break),
             (Operation::is_op::<ContinueOp>(op, ctx), Opcode::Continue),
             (Operation::is_op::<ForOp>(op, ctx), Opcode::For),
             (Operation::is_op::<IfOp>(op, ctx), Opcode::If),
@@ -80,4 +79,114 @@ pub fn opcode_of(ctx: &Context, op: Ptr<Operation>) -> Opcode {
         // TODO: Use proper error / Result instead
         panic!("no cutile opcode for this `wax` op");
     }
+}
+
+/// `op`'s operands.
+pub fn operands_of(ctx: &Context, op: Ptr<Operation>) -> Vec<pliron::value::Value> {
+    op.deref(ctx).operands().collect()
+}
+
+/// `op`'s results.
+pub fn results_of(ctx: &Context, op: Ptr<Operation>) -> Vec<pliron::value::Value> {
+    let o = op.deref(ctx);
+    (0..o.get_num_results()).map(|i| o.get_result(i)).collect()
+}
+
+/// Attempt to get wax type of a pliron value.
+pub fn value_type(ctx: &Context, v: pliron::value::Value) -> Option<crate::types::Type> {
+    use pliron::r#type::Typed;
+    crate::dialect::types::from_pliron(ctx, v.get_type(ctx))
+}
+
+/// Wax attributes of `op`. Pliron builtin's are not included.
+pub fn attributes_of(ctx: &Context, op: Ptr<Operation>) -> Vec<(String, crate::attr::Attribute)> {
+    use crate::dialect::attr_mirror::WaxAttr;
+    op.deref(ctx)
+        .attributes
+        .0
+        .iter()
+        .filter_map(|(k, v)| {
+            v.downcast_ref::<WaxAttr>()
+                .map(|a| (k.to_string(), a.0.clone()))
+        })
+        .collect()
+}
+
+/// Op that defines `v`.
+pub fn defining_op(v: pliron::value::Value) -> Option<Ptr<Operation>> {
+    use pliron::value::DefiningEntity;
+    match v.defining_entity() {
+        DefiningEntity::Op(o) => Some(o),
+        _ => None,
+    }
+}
+
+/// Operations in `blk`.
+pub fn ops_in(ctx: &Context, blk: Ptr<pliron::basic_block::BasicBlock>) -> Vec<Ptr<Operation>> {
+    use pliron::linked_list::ContainsLinkedList;
+    blk.deref(ctx).iter(ctx).collect()
+}
+
+/// Get i64 value of a `wax.constant`
+///
+/// Supports both `Attribute::Integer` and `Attribute::DenseElements`.
+pub fn const_int_of(ctx: &Context, op: Ptr<Operation>) -> Option<i64> {
+    if opcode_of(ctx, op) != Opcode::Constant {
+        return None;
+    }
+    let a = op
+        .deref(ctx)
+        .attributes
+        .get::<crate::dialect::attr_mirror::WaxAttr>(&crate::build::ATTR_VALUE)?
+        .0
+        .clone();
+    match a {
+        crate::attr::Attribute::DenseElements(de) => {
+            let b = de.data.get(..4)?;
+            Some(i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as i64)
+        }
+        crate::attr::Attribute::Integer(i, _) => Some(i),
+        _ => None,
+    }
+}
+
+/// Get i64 attribute of `op` by key.
+pub fn attr_i64(ctx: &Context, op: Ptr<Operation>, key: &str) -> Option<i64> {
+    attributes_of(ctx, op)
+        .into_iter()
+        .find_map(|(k, v)| match v {
+            crate::attr::Attribute::Integer(i, _) if k == key => Some(i),
+            _ => None,
+        })
+}
+
+/// Every operation and block under `root`.
+///
+/// `root` is excluded since it is the pliron function, not wax with opcode etc.
+pub fn ops_and_blocks_under(
+    ctx: &Context,
+    root: Ptr<Operation>,
+) -> (
+    Vec<Ptr<Operation>>,
+    Vec<Ptr<pliron::basic_block::BasicBlock>>,
+) {
+    use pliron::graph::walkers::{IRNode, WalkConfig, uninterruptible::immutable::walk_op};
+
+    let mut state: (
+        Ptr<Operation>,
+        Vec<Ptr<Operation>>,
+        Vec<Ptr<pliron::basic_block::BasicBlock>>,
+    ) = (root, Vec::new(), Vec::new());
+    walk_op(
+        ctx,
+        &mut state,
+        &WalkConfig::default(),
+        root,
+        |_ctx, (root, ops, blocks), node| match node {
+            IRNode::Operation(op) if op != *root => ops.push(op),
+            IRNode::BasicBlock(b) => blocks.push(b),
+            _ => {}
+        },
+    );
+    (state.1, state.2)
 }

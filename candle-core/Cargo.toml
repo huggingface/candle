@@ -58,6 +58,7 @@ metal = [
     "dep:candle-metal-kernels",
 ]
 metal-debug-labels = ["metal", "candle-metal-kernels/debug-labels"]
+wax = ["candle-metal-kernels?/wax"]
 
 [[bench]]
 name = "bench_main"

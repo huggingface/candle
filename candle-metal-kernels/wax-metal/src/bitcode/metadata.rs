@@ -1,4 +1,4 @@
-//! METADATA_BLOCK: the `!air.kernel` / argument-description metadata that makes Metal
+//! METADATA_BLOCK. The `!air.kernel` / argument-description metadata that makes Metal
 //! recognise a function as a kernel at all.
 //!
 //! # Index space
@@ -177,7 +177,7 @@ impl MetadataBuilder {
 
         for (name, ops) in &self.named {
             w.record_str(METADATA_CODE_NAME, name);
-            // Named-node operands are plain indices, unlike NODE's index + 1.
+            // Named-node operands are plain indices, unlike `NODE`'s index + 1.
             let ids: Vec<u64> = ops.iter().map(|o| self.resolve(*o) as u64).collect();
             w.record(METADATA_CODE_NAMED_NODE, &ids);
         }
@@ -186,9 +186,9 @@ impl MetadataBuilder {
     }
 }
 
-/// METADATA_KIND_BLOCK: names the metadata kinds instructions can carry. The block is
-/// self-describing - it defines the id/name mapping - so we only declare the kinds we
-/// actually attach and can number them from zero.
+/// METADATA_KIND_BLOCK. Names the metadata kinds instructions can carry. The block is
+/// self-describing. It defines the id/name mapping, so we only declare the kinds we actually
+/// attach and can number them from zero.
 #[derive(Default)]
 pub struct MdKinds {
     names: Vec<String>,
@@ -228,10 +228,9 @@ impl MdKinds {
 /// Builds the metadata every AIR kernel module needs: the module flags Metal expects,
 /// the AIR/language versions, and `!air.kernel` describing the entry point.
 ///
-/// `args` describes the kernel's parameters in order. Buffer arguments become
-/// `air.buffer` nodes with an index and address space; the thread-position builtins
-/// become their own node kinds. This mirrors what `metal-as` produces for a kernel
-/// compiled from Metal source.
+/// `args` describes the kernel's parameters in order. Buffer arguments become `air.buffer`
+/// nodes with an index and address space. The thread-position builtins become their own node
+/// kinds. This mirrors what `metal-as` produces for a kernel compiled from Metal source.
 pub struct KernelMetadata<'a> {
     pub entry_value_id: u32,
     pub entry_fn_ptr_ty: Ty,
@@ -292,12 +291,12 @@ pub enum KernelArg {
 }
 
 impl KernelMetadata<'_> {
-    /// Populate `md`, interning any integer constants needed into `consts`, and return
-    /// the constants' value ids so the caller can keep the module consistent.
+    /// Populate `md` with the kernel metadata, interning the integer constants it names
+    /// into `consts`.
     ///
-    /// `const_base` is the absolute value id of the first module constant (that is,
-    /// the number of globals plus functions), since metadata refers to constants by
-    /// absolute value id.
+    /// `const_base` is the absolute value id of the first module constant (that is, the
+    /// number of globals plus functions), since metadata refers to constants by absolute
+    /// value id.
     pub fn build(
         &self,
         md: &mut MetadataBuilder,
@@ -464,8 +463,6 @@ mod tests {
         assert_eq!(md.strings.len(), 1);
     }
 
-    /// The blob is VBR6 lengths, word-padded, then the characters; the offset points
-    /// at the characters.
     #[test]
     fn strings_blob_offset_points_at_chars() {
         let mut md = MetadataBuilder::new();

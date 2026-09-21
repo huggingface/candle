@@ -1,13 +1,12 @@
-//! LLVM bitstream container writer: the bit-level layer under bitcode.
+//! LLVM bitstream writer.
 //!
-//! Little-endian bits packed into 32-bit words. Structure comes from abbreviation IDs at
-//! the current width (2 bits at top level, wider in blocks): `0` END_BLOCK,
-//! `1` ENTER_SUBBLOCK, `2` DEFINE_ABBREV, `3` UNABBREV_RECORD, `4..` application-defined.
+//! Little-endian bits packed into 32-bit words. Structure comes from abbv IDs at
+//! the current width (2 bits at top, wider in blocks):
+//! `0` END_BLOCK, `1` ENTER_SUBBLOCK, `2` DEFINE_ABBREV, `3` UNABBREV_RECORD,
+//! `4..` application-defined.
 //!
-//! Records are UNABBREV_RECORD wherever possible: a reader must accept the unabbreviated
-//! form, so skipping abbreviations costs ~2x bytes and saves implementing BLOCKINFO. The
-//! exception is BLOBS, which have no unabbreviated spelling and which LLVM's reader
-//! insists on for records such as `STRTAB_BLOB` - see [`BitWriter::define_blob_abbrev`].
+//! Records are UNABBREV_RECORD wherever possible.
+//! The exception is blobs, which have no unabbv spelling. See [`BitWriter::define_blob_abbrev`].
 //!
 //! Reference: LLVM "Bitcode File Format", bitstream container sections.
 
@@ -84,7 +83,6 @@ impl BitWriter {
         }
     }
 
-    /// Variable bit-rate: `width-1` payload bits per chunk, high bit set to continue.
     pub fn vbr(&mut self, mut val: u64, width: u32) {
         debug_assert!(width > 1);
         let payload = width - 1;
@@ -148,8 +146,7 @@ impl BitWriter {
         }
     }
 
-    /// Emit a record whose operands are the bytes of `s` (how LLVM stores strings in
-    /// records such as TRIPLE and DATALAYOUT).
+    /// Emit an LLVM string record.
     pub fn record_str(&mut self, code: u32, s: &str) {
         let ops: Vec<u64> = s.bytes().map(|b| b as u64).collect();
         self.record(code, &ops);
@@ -210,7 +207,7 @@ impl BitWriter {
         self.align32();
     }
 
-    /// Emit a record previously declared by [`Self::define_blob_abbrev`].
+    /// Emit a record using the abbreviation [`Self::define_blob_abbrev`] declares.
     pub fn blob_record(&mut self, abbrev_id: u32, bytes: &[u8]) {
         self.fixed(abbrev_id, self.abbrev_width);
         self.vbr(bytes.len() as u64, 6);
@@ -263,7 +260,7 @@ mod tests {
         assert_eq!(b[4], 0b101);
     }
 
-    /// VBR6: values under 32 fit one chunk; larger ones set the continuation bit.
+    /// VBR6: values under 32 fit one chunk. Larger ones set the continuation bit.
     #[test]
     fn vbr_encodes_continuation() {
         let mut w = BitWriter::new();
@@ -287,7 +284,7 @@ mod tests {
         w.record(1, &[2]);
         w.end_block();
         let bytes = w.finish();
-        // Word 0 holds the enter header; word 1 is the length; the block body follows.
+        // Word 0 holds the enter header. Word 1 is the length. The block body follows.
         let len = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
         assert_eq!(len, bytes.len() / 4 - 2, "length counts the body words");
     }

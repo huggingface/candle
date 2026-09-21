@@ -1,3 +1,6 @@
+mod common;
+use common::all_ops;
+
 use wax_frontend::{KernelCompiler, ast};
 
 /// Manual `#[wax::module]`
@@ -28,7 +31,7 @@ mod gemm_kernels {
     let mut m = ast::Module::with_span_base(
         "gemm_kernels",
         item,
-        ast::SpanBase::new("tests/compiles_a_kernel.rs".into(), 1, 1),
+        ast::SpanBase::new("tests/kernel_compilation.rs".into(), 1, 1),
     );
     m.set_absolute_path("wax_frontend::gemm_kernels".to_string());
     m
@@ -49,10 +52,13 @@ fn gemm_kernel_compiles_to_valid_wax_ir() {
         .expect("kernel compiled");
 
     assert_eq!(out.module.functions.len(), 1, "single entry point");
-    assert!(!out.ir.ops.is_empty(), "materialised IR is not empty");
+    use wax_ir::source::WaxSource;
+    let m = out.to_wax_module("gemm").expect("module builds");
+    let ops = all_ops(&m);
+    assert!(!ops.is_empty(), "module has no ops");
 
     // Expected ops in the gemm kernel
-    let seen: Vec<wax_ir::Opcode> = out.ir.ops.iter().map(|o| o.opcode).collect();
+    let seen: Vec<wax_ir::Opcode> = ops.iter().map(|o| m.opcode(*o)).collect();
     for want in [
         wax_ir::Opcode::MakeTensorView,
         wax_ir::Opcode::MakePartitionView,
@@ -66,7 +72,7 @@ fn gemm_kernel_compiles_to_valid_wax_ir() {
 }
 
 #[test]
-fn unknown_entry_point_is_an_error_not_a_panic() {
+fn unknown_entry_point_is_an_error() {
     let err = match KernelCompiler::new(kernel_ast, "gemm_kernels", "wrong_kernel_name")
         .generics(vec![
             "f32".into(),

@@ -1,12 +1,12 @@
-//! FUNCTION_BLOCK: instruction bodies.
+//! Function block. Instruction bodies.
 //!
-//! RELATIVE VALUE NUMBERING. Operands are stored as `current_id - operand_id`, so backward
+//! Relative value numbering: Operands are stored as `current_id - operand_id`, so backward
 //! references encode as small positive numbers under VBR, and the operand's type is
-//! already known to the reader - most instructions carry no type operands.
+//! already known to the reader. Most instructions do not carry type operands.
 //!
-//! The value table is, in order: module values (globals, functions, module constants),
+//! The value table (in order): module values (globals, functions, module constants),
 //! the function's arguments, function-local constants, then one entry per value-producing
-//! instruction in program order. Store, br and ret void do not advance it.
+//! instruction in program order. Store, br and ret void do not advance.
 //!
 //! Encodings were read out of `metal-as` output with `llvm-bcanalyzer`.
 
@@ -18,7 +18,7 @@ const BLOCK_FUNCTION: u32 = 12;
 const BLOCK_METADATA_ATTACHMENT: u32 = 16;
 /// `METADATA_ATTACHMENT` inside a METADATA_ATTACHMENT_BLOCK. Determined empirically by
 /// emitting one record per candidate code and seeing which one `llvm-bcanalyzer` named
-/// ATTACHMENT - it is NOT 2, which is what the metadata block uses for VALUE.
+/// ATTACHMENT. It is not 2, which is what the metadata block uses for VALUE.
 const METADATA_ATTACHMENT_CODE: u32 = 11;
 
 const FUNC_CODE_DECLAREBLOCKS: u32 = 1;
@@ -37,11 +37,12 @@ const FUNC_CODE_INST_CMP2: u32 = 28;
 const FUNC_CODE_INST_CALL: u32 = 34;
 const FUNC_CODE_INST_GEP: u32 = 43;
 const FUNC_CODE_INST_STORE: u32 = 44;
+const FUNC_CODE_INST_UNOP: u32 = 56;
 
-/// Binary opcodes as the BITCODE encodes them (`llvm::bitc::BinaryOpcodes`), which is
-/// NOT `Instruction::BinaryOps` - the two enums differ. Float operations reuse the same
-/// codes: the reader picks the floating-point variant when the operands are floats, so
-/// `ADD` on floats is `fadd` and `UDIV` on floats is `fdiv`.
+/// Binary opcodes as the bitcode encodes them (`llvm::bitc::BinaryOpcodes`), not to be confused
+/// with `Instruction::BinaryOps`. Float operations reuse the same codes. A reader picks the
+/// floating-point variant when the operands are floats, so `ADD` on floats is `fadd` and `UDIV`
+/// on floats is `fdiv`, etc.
 pub mod binop {
     pub const ADD: u32 = 0;
     pub const SUB: u32 = 1;
@@ -114,8 +115,7 @@ pub enum Val {
     Inst(u32),
 }
 
-/// One instruction. Result numbering is implicit: value-producing instructions take
-/// the next result number in program order.
+/// An instruction. Result numbering is implicit.
 #[derive(Clone, Debug)]
 pub enum Inst {
     BinOp {
@@ -127,6 +127,10 @@ pub enum Inst {
         op: u32,
         val: Val,
         to: Ty,
+    },
+    UnOp {
+        op: u32,
+        val: Val,
     },
     Cmp {
         pred: u32,
@@ -207,8 +211,8 @@ impl Inst {
     }
 }
 
-/// A function definition's body. Instructions are held in one flat list; `blocks`
-/// records how many basic blocks they form (branch targets are block indices).
+/// A function definition's body. Instructions are held in one flat list. `num_blocks` records
+/// how many basic blocks they form. Branch targets are block indices.
 #[derive(Default)]
 pub struct Body {
     pub insts: Vec<Inst>,
@@ -218,9 +222,9 @@ pub struct Body {
     /// (instruction index, metadata kind id, node). Used for `!llvm.loop` on a latch
     /// branch, which is how the unroll count reaches the backend.
     attachments: Vec<(u32, u32, MdId)>,
-    /// (instruction index, unroll count) for terminators carrying an unroll hint.
-    /// Recorded while translating, since only then are instruction indices known;
-    /// turned into `!llvm.loop` attachments once the module's metadata exists.
+    /// (instruction index, unroll count) for terminators carrying an unroll hint. Recorded
+    /// while translating, since only then are instruction indices known. Turned into
+    /// `!llvm.loop` attachments once the module's metadata exists.
     pub loop_hints: Vec<(u32, u32)>,
 }
 
@@ -263,9 +267,8 @@ impl Body {
 
     /// Attach metadata to the instruction most recently pushed.
     ///
-    /// The index counts every instruction in program order, not just the
-    /// value-producing ones - a terminator is a valid target, which is exactly what
-    /// `!llvm.loop` needs.
+    /// The index counts every instruction in program order, not just the value-producing
+    /// ones. A terminator is a valid target, which is exactly what `!llvm.loop` needs.
     pub fn attach_to_last(&mut self, kind: u32, node: MdId) {
         let idx = self.insts.len().saturating_sub(1) as u32;
         self.attachments.push((idx, kind, node));
@@ -275,7 +278,7 @@ impl Body {
         let produces = i.produces_value();
         let n = self.insts.iter().filter(|x| x.produces_value()).count() as u32;
         self.insts.push(i);
-        // Non-producing instructions have no result; callers should ignore this.
+        // Non-producing instructions have no result. Callers should ignore this.
         Val::Inst(if produces { n } else { u32::MAX })
     }
 
@@ -291,8 +294,8 @@ impl Body {
 
     /// Absolute value id for `v`.
     ///
-    /// `mod_values` is the number of module-level values (globals + functions +
-    /// module constants), `func_base` the id of the function's first argument.
+    /// `num_globals` is the count of module globals, `const_base` the id where module
+    /// constants start, and `func_base` the id of the function's first argument.
     fn abs(&self, v: &Val, num_globals: u32, const_base: u32, func_base: u32) -> u64 {
         match v {
             Val::Global(i) => *i as u64,
@@ -336,6 +339,11 @@ impl Body {
                 }
                 Inst::Cast { op, val, to } => {
                     w.record(FUNC_CODE_INST_CAST, &[rel(val, cur), ty_of(to), *op as u64]);
+                }
+                Inst::UnOp { op, val } => {
+                    // `INST_UNOP` decodes [opval, (ty), opcode]. The value comes first, the
+                    // code last, the opposite of `INST_BINOP`'s trailing op order.
+                    w.record(FUNC_CODE_INST_UNOP, &[rel(val, cur), *op as u64]);
                 }
                 Inst::Cmp { pred, lhs, rhs } => {
                     w.record(
@@ -401,8 +409,8 @@ impl Body {
                     fast,
                     ..
                 } => {
-                    // 1<<15 marks an explicit function type; 1<<17 says a fast-math
-                    // operand follows. 254 is the flag bundle `fast` expands to.
+                    // 1<<15 marks an explicit function type. 1<<17 says a fast-math operand
+                    // follows. 254 is the flag bundle `fast` expands to.
                     let flags = (1u64 << 15) | if *fast { 1 << 17 } else { 0 };
                     let mut ops = vec![0, flags];
                     if *fast {
@@ -416,9 +424,9 @@ impl Body {
                     w.record(FUNC_CODE_INST_CALL, &ops);
                 }
                 Inst::Alloca { ty, count, align } => {
-                    // The size operand is an ABSOLUTE value id here, unlike every
-                    // other instruction's relative operands. Bit 6 of the align field
-                    // flags that the allocated type is given explicitly.
+                    // The size operand is an absolute value id here, unlike every other
+                    // instruction's relative operands. Bit 6 of the align field flags that
+                    // the allocated type is given explicitly.
                     w.record(
                         FUNC_CODE_INST_ALLOCA,
                         &[
@@ -504,7 +512,7 @@ mod tests {
         });
         assert!(
             matches!(c, Val::Inst(1)),
-            "the store must not consume a result number"
+            "store must not consume a result number"
         );
     }
 
