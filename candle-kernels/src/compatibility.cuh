@@ -5,9 +5,13 @@
 // Table showing which features are supported on which compute capability
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/#features-and-technical-specifications
 
-// FIXME: the minimum compute capabilities are just guesses since the table is not specific enough
-
-#if __CUDA_ARCH__ < 800
+// NVIDIA's cuda_fp16.h started providing __hmax_nan/__hmin_nan for pre-Ampere
+// targets (__CUDA_ARCH__ < 800) in CUDA 12.2: in 12.1 and earlier these are
+// gated behind `__CUDA_ARCH__ >= 800`, in 12.2+ they are defined unconditionally.
+// So only define the fallback for toolkits strictly older than 12.2, otherwise
+// it collides with the native definition. Verified against the 12.1.105 and
+// 12.2.140 cuda_fp16.hpp headers.
+#if (__CUDACC_VER_MAJOR__ < 12 || (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ < 2)) && __CUDA_ARCH__ < 800
 __device__ __forceinline__ __half __hmax_nan(__half a, __half b) {
     return __hisnan(a) ? a : (__hisnan(b) ? b : __hmax(a, b));
 }
