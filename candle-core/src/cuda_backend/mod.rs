@@ -354,17 +354,6 @@ impl Map1Any for FastReduce<'_> {
             stride.push(src_stride[dim_idx]);
         }
         let el_to_sum_per_block = src_el / dst_el;
-        // The reduction loop requires the shared array to be properly initialized and for
-        // this we want the number of threads to be a power of two.
-        let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
-        let cfg = LaunchConfig {
-            // TODO: Maybe use grid_y if the output is too large?
-            // TODO: Specialized implementation when reducing on no or all dimensions or when
-            // reducing only aggregate a small number of elements together.
-            grid_dim: (dst_el as u32, 1, 1),
-            block_dim: (block_dim as u32, 1, 1),
-            shared_mem_bytes: 0,
-        };
         let ds =
             SlicePtrOrNull::params_from_vec(dev, [dims.as_slice(), stride.as_slice()].concat())?;
         let src = &src.slice(layout.start_offset()..);
@@ -375,15 +364,41 @@ impl Map1Any for FastReduce<'_> {
             ReduceOp::ArgMin => ("fast_argmin", true, true),
             ReduceOp::ArgMax => ("fast_argmax", true, true),
         };
+        // For small reductions (e.g. MoE topk sum with el_to_sum=8), use a one-thread-per-output
+        // kernel to avoid launching millions of blocks each doing almost nothing.
+        let use_small_reduce = el_to_sum_per_block <= 32 && !return_index && name == "fast_sum";
+        let (cfg, kernel_name_str) = if use_small_reduce {
+            let threads = 256usize;
+            let blocks = (dst_el + threads - 1) / threads;
+            (
+                LaunchConfig {
+                    grid_dim: (blocks as u32, 1, 1),
+                    block_dim: (threads as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                "fast_sum_small",
+            )
+        } else {
+            let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
+            (
+                LaunchConfig {
+                    grid_dim: (dst_el as u32, 1, 1),
+                    block_dim: (block_dim as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                name,
+            )
+        };
         if check_empty && layout.shape().elem_count() == 0 {
             Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
         }
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::REDUCE)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(kernel_name_str), &kernels::REDUCE)?;
+        let kernel_numel = if use_small_reduce { dst_el } else { src_el };
         if return_index {
             // SAFETY: filled in by the follow up kernel.
             let out = unsafe { dev.alloc::<u32>(dst_el)? };
             let mut builder = func.builder();
-            barg!(builder, src_el);
+            barg!(builder, kernel_numel);
             barg!(builder, el_to_sum_per_block);
             barg!(builder, src_dims.len());
             ds.builder_arg(&mut builder);
@@ -396,7 +411,7 @@ impl Map1Any for FastReduce<'_> {
             // SAFETY: filled in by the follow up kernel.
             let out = unsafe { dev.alloc::<T>(dst_el)? };
             let mut builder = func.builder();
-            barg!(builder, src_el);
+            barg!(builder, kernel_numel);
             barg!(builder, el_to_sum_per_block);
             barg!(builder, src_dims.len());
             ds.builder_arg(&mut builder);
