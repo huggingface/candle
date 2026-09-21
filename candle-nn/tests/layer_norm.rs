@@ -5,8 +5,9 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::Result;
-use candle::{test_utils, Device, Tensor};
-use candle_nn::{LayerNorm, Module};
+use candle::{test_utils, DType, Device, Tensor};
+use candle_nn::{LayerNorm, LayerNormConfig, Module, VarBuilder};
+use std::collections::HashMap;
 
 #[test]
 fn layer_norm() -> Result<()> {
@@ -58,6 +59,36 @@ fn layer_norm() -> Result<()> {
     let rms = LayerNorm::rms_norm(Tensor::new(&[1f32], device)?, 1e-5);
     assert_eq!(rms.eps(), 1e-5);
     assert!(!rms.remove_mean());
+
+    Ok(())
+}
+
+#[test]
+fn layer_norm_from_var_builder() -> Result<()> {
+    let device = &Device::Cpu;
+    let weight = Tensor::new(&[3f32, 3f32], device)?;
+    let bias = Tensor::new(&[0.5f32, 0.5f32], device)?;
+
+    // A checkpoint that ships no bias still loads when the norm does not use one.
+    let tensors = HashMap::from([("weight".to_string(), weight.clone())]);
+    let vb = VarBuilder::from_tensors(tensors, DType::F32, device);
+    let ln = candle_nn::layer_norm_no_bias(2, 1e-8, vb)?;
+    assert!(ln.bias().is_none());
+
+    // The gamma and beta spelling is still picked up for an affine norm.
+    let tensors = HashMap::from([
+        ("gamma".to_string(), weight.clone()),
+        ("beta".to_string(), bias.clone()),
+    ]);
+    let vb = VarBuilder::from_tensors(tensors, DType::F32, device);
+    let ln = candle_nn::layer_norm(2, LayerNormConfig::default(), vb)?;
+    assert_eq!(ln.weight().to_vec1::<f32>()?, [3f32, 3f32]);
+    assert_eq!(ln.bias().unwrap().to_vec1::<f32>()?, [0.5f32, 0.5f32]);
+
+    // An affine norm still reports a missing bias rather than silently dropping it.
+    let tensors = HashMap::from([("weight".to_string(), weight)]);
+    let vb = VarBuilder::from_tensors(tensors, DType::F32, device);
+    assert!(candle_nn::layer_norm(2, LayerNormConfig::default(), vb).is_err());
 
     Ok(())
 }
