@@ -40,16 +40,19 @@ pub(crate) enum PackedX86 {
     Q8_0(Vec<TileQ8_0>),
 }
 
-pub(crate) fn select(dtype: super::GgmlDType, n: usize, k: usize) -> bool {
+pub(crate) fn select(dtype: super::GgmlDType, m: usize, n: usize, k: usize) -> bool {
     use super::GgmlDType as D;
     let Some(lv) = level() else {
         return false;
     };
-    if !n.is_multiple_of(TILE_N) || !k.is_multiple_of(QK_K) {
+    if k == 0 || !n.is_multiple_of(TILE_N) || !k.is_multiple_of(QK_K) {
         return false;
     }
     match dtype {
-        D::Q4K | D::Q6K => true,
+        D::Q4K => true,
+        // Keep Q6K GEMV on compact weights; expanded tiles cost bandwidth
+        // without reuse across multiple activation rows.
+        D::Q6K => m > 1,
         // pure avx2 maddubs overflows on the +128 u8 range; q8_0 needs real dpbusd
         D::Q8_0 => lv != X86Level::Avx2,
         _ => false,
@@ -484,14 +487,14 @@ pub(crate) fn pack(
     }
 }
 
-// Quantize lhs rows to BlockQ8K in parallel.
+// Quantize lhs rows to BlockQ8K, parallelizing only when there are multiple rows.
 pub(crate) fn quantize_lhs(lhs: &[f32], m: usize, k: usize) -> Vec<BlockQ8K> {
     let kb = k / QK_K;
-    let mut out: Vec<BlockQ8K> = Vec::with_capacity(m * kb);
-    #[allow(clippy::uninit_vec)]
-    unsafe {
-        out.set_len(m * kb)
-    };
+    let mut out = vec![BlockQ8K::zeros(); m * kb];
+    if m == 1 {
+        BlockQ8K::from_float(&lhs[..k], &mut out);
+        return out;
+    }
     let out_ptr = out.as_mut_ptr() as usize;
     crate::utils::barrier_pool().execute_chunked(m, |range| {
         let out_ptr = out_ptr as *mut BlockQ8K;

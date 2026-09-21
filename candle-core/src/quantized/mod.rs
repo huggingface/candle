@@ -973,14 +973,21 @@ impl QTensor {
             let Some((&k, batch)) = dims.split_last() else {
                 return Ok(None);
             };
-            let m: usize = batch.iter().product::<usize>().max(1);
+            let m: usize = batch.iter().product();
+            if m == 0 {
+                return Ok(None);
+            }
             let dtype = ts[0].dtype();
             let mut shapes = Vec::with_capacity(ts.len());
             for t in ts {
                 let Ok((n, tk)) = t.shape.dims2() else {
                     return Ok(None);
                 };
-                if tk != k || t.dtype() != dtype || !repack_x86::select(dtype, n, k) {
+                if tk != k
+                    || t.dtype() != dtype
+                    || !matches!(&t.storage, QStorage::Cpu(_))
+                    || !repack_x86::select(dtype, m, n, k)
+                {
                     return Ok(None);
                 }
                 shapes.push(n);

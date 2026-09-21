@@ -2048,6 +2048,19 @@ impl GgmlType for BlockQ6K {
         xs3: &[Self],
         ys: &[Self::VecDotType],
     ) -> (f32, f32, f32, f32) {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if has_avx2_fma() {
+            // Check the runtime feature set once for the whole output quad.
+            return unsafe {
+                (
+                    super::avx::vec_dot_q6k_q8k(n, xs0, ys),
+                    super::avx::vec_dot_q6k_q8k(n, xs1, ys),
+                    super::avx::vec_dot_q6k_q8k(n, xs2, ys),
+                    super::avx::vec_dot_q6k_q8k(n, xs3, ys),
+                )
+            };
+        }
+
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_4_q6k_q8k(n, xs0, xs1, xs2, xs3, ys);
 
@@ -2364,7 +2377,8 @@ impl GgmlType for BlockQ8K {
             }
             if amax == 0f32 {
                 y.d = 0f32;
-                y.qs.fill(0)
+                y.qs.fill(0);
+                y.bsums.fill(0)
             } else {
                 let iscale = -127f32 / max;
                 for (j, q) in y.qs.iter_mut().enumerate() {
@@ -2465,7 +2479,7 @@ pub fn matmul<T: GgmlType>(
             let (main, tail) = dst_row.split_at_mut(n_quad);
             let main_ptr = main.as_mut_ptr() as usize;
 
-            pool.execute_chunked(quads_total, |range| {
+            let dot_range = |range: std::ops::Range<usize>| {
                 let main_ptr = main_ptr as *mut f32;
                 for quad_idx in range {
                     let col = quad_idx * 4;
@@ -2485,7 +2499,14 @@ pub fn matmul<T: GgmlType>(
                         *base.add(3) = d3;
                     }
                 }
-            });
+            };
+            if cfg!(target_arch = "x86_64") && T::DTYPE == GgmlDType::Q6K && m == 1 {
+                // Compact Q6K GEMV has equal-sized dot products; static ranges
+                // avoid the shared cursor overhead on this short decode path.
+                pool.execute_static(quads_total, dot_range);
+            } else {
+                pool.execute_chunked(quads_total, dot_range);
+            }
             if n_tail >= 2 {
                 let col = n_quad;
                 let (d0, d1) = T::vec_dot_2(

@@ -236,7 +236,7 @@ pub(crate) fn try_matmul_f32(
     #[cfg(target_arch = "x86_64")]
     {
         let (m, k, n) = mkn;
-        if !super::repack_x86::select(storage.dtype(), n, k) {
+        if !super::repack_x86::select(storage.dtype(), m, n, k) {
             return Ok(false);
         }
         let dtype = storage.dtype();

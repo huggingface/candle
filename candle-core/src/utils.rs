@@ -291,6 +291,29 @@ impl BarrierPool {
         // _guard drops here, waiting for root workers.
     }
 
+    // Uniform, short work units can avoid shared-cursor contention by assigning
+    // one contiguous range per thread.
+    pub(crate) fn execute_static<F: Fn(std::ops::Range<usize>) + Sync>(
+        &self,
+        n_items: usize,
+        f: F,
+    ) {
+        if n_items == 0 {
+            return;
+        }
+        if IN_BARRIER_POOL.with(|f| f.get()) {
+            f(0..n_items);
+            return;
+        }
+        let chunk = n_items.div_ceil(self.threads.len() + 1);
+        self.execute(|tid| {
+            let start = tid * chunk;
+            if start < n_items {
+                f(start..n_items.min(start + chunk));
+            }
+        });
+    }
+
     // Static per-tid slices make every op wait for the slowest thread; a shared cursor
     // lets fast threads absorb a straggler's work instead of spinning at the barrier.
     pub fn execute_chunked<F: Fn(std::ops::Range<usize>) + Sync>(&self, n_items: usize, f: F) {
