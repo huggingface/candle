@@ -390,7 +390,7 @@ pub struct Sign;
 // The optional `$vec_op` names a method on `crate::cpu::kernels::VecOps` that overrides
 // f32_vec/f64_vec with an optimised implementation (MKL / Accelerate / SIMD).
 macro_rules! bin_op {
-    ($op:ident, $name:ident, $e:expr $(, $vec_op:ident)?) => {
+    ($op:ident, $name:ident, $e:expr $(, $vec_op:ident, $scalar_op:ident)?) => {
         impl BinaryOpT for $op {
             const NAME: &'static str = stringify!($name);
             const KERNEL: &'static str = concat!("b", stringify!($name));
@@ -434,28 +434,28 @@ macro_rules! bin_op {
                 }
                 #[inline(always)]
                 fn bf16_scalar_vec(scalar: bf16, xs: &[bf16], ys: &mut [bf16]) {
-                    <bf16 as crate::cpu::kernels::VecOps>::scalar_add(scalar, xs, ys)
+                    <bf16 as crate::cpu::kernels::VecOps>::$scalar_op(scalar, xs, ys)
                 }
                 #[inline(always)]
                 fn f16_scalar_vec(scalar: f16, xs: &[f16], ys: &mut [f16]) {
-                    <f16 as crate::cpu::kernels::VecOps>::scalar_add(scalar, xs, ys)
+                    <f16 as crate::cpu::kernels::VecOps>::$scalar_op(scalar, xs, ys)
                 }
                 #[inline(always)]
                 fn f32_scalar_vec(scalar: f32, xs: &[f32], ys: &mut [f32]) {
-                    <f32 as crate::cpu::kernels::VecOps>::scalar_add(scalar, xs, ys)
+                    <f32 as crate::cpu::kernels::VecOps>::$scalar_op(scalar, xs, ys)
                 }
                 #[inline(always)]
                 fn f64_scalar_vec(scalar: f64, xs: &[f64], ys: &mut [f64]) {
-                    <f64 as crate::cpu::kernels::VecOps>::scalar_add(scalar, xs, ys)
+                    <f64 as crate::cpu::kernels::VecOps>::$scalar_op(scalar, xs, ys)
                 }
             )?
         }
     };
 }
 
-bin_op!(Add, add, |v1, v2| v1 + v2, vec_add);
+bin_op!(Add, add, |v1, v2| v1 + v2, vec_add, scalar_add);
 bin_op!(Sub, sub, |v1, v2| v1 - v2);
-bin_op!(Mul, mul, |v1, v2| v1 * v2);
+bin_op!(Mul, mul, |v1, v2| v1 * v2, vec_mul, scalar_mul);
 bin_op!(Div, div, |v1, v2| v1 / v2);
 bin_op!(Minimum, minimum, |v1, v2| if v1 > v2 { v2 } else { v1 });
 bin_op!(Maximum, maximum, |v1, v2| if v1 < v2 { v2 } else { v1 });
