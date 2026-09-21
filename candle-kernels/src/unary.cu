@@ -99,9 +99,8 @@ __device__ T sign_(T t) {
 
 // Vectorized bf16 unary op — 8 elements per float4 load, promotes to f32 for computation.
 // FLOAT_FUNC: expression using xf (float) that produces the result float (e.g. xf / (1.0f + expf(-xf)))
-// SCALAR_FUNC: scalar fallback expression using x (__nv_bfloat16) (e.g. silu_fwd(x))
 #if __CUDA_ARCH__ >= 800
-#define UNARY_OP_BF16_VEC(FN_NAME, FLOAT_FUNC, SCALAR_FUNC) \
+#define UNARY_OP_BF16_VEC(FN_NAME, FLOAT_FUNC) \
 extern "C" __global__ void FN_NAME( \
     const size_t numel, \
     const size_t num_dims, \
@@ -128,20 +127,20 @@ extern "C" __global__ void FN_NAME( \
             } \
             const size_t tail_start = vec_numel * 8; \
             for (unsigned int i = tail_start + blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
-                __nv_bfloat16 x = inp ? inp[i] : out[i]; \
-                out[i] = SCALAR_FUNC; \
+                float xf = __bfloat162float(inp ? inp[i] : out[i]); \
+                out[i] = __float2bfloat16(FLOAT_FUNC); \
             } \
         } else { \
             for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
-                __nv_bfloat16 x = inp ? inp[i] : out[i]; \
-                out[i] = SCALAR_FUNC; \
+                float xf = __bfloat162float(inp ? inp[i] : out[i]); \
+                out[i] = __float2bfloat16(FLOAT_FUNC); \
             } \
         } \
     } else { \
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
             unsigned strided_i = get_strided_index(i, num_dims, dims, strides); \
-            __nv_bfloat16 x = inp ? inp[strided_i] : out[i]; \
-            out[i] = SCALAR_FUNC; \
+            float xf = __bfloat162float(inp ? inp[strided_i] : out[i]); \
+            out[i] = __float2bfloat16(FLOAT_FUNC); \
         } \
     } \
 }
@@ -181,8 +180,8 @@ extern "C" __global__ void ucopy_bf16(
     }
 }
 
-UNARY_OP_BF16_VEC(usilu_bf16, xf / (1.0f + expf(-xf)), silu_fwd(x))
-UNARY_OP_BF16_VEC(usigmoid_bf16, 1.0f / (1.0f + expf(-xf)), sigmoid_fwd(x))
+UNARY_OP_BF16_VEC(usilu_bf16, xf / (1.0f + expf(-xf)))
+UNARY_OP_BF16_VEC(usigmoid_bf16, 1.0f / (1.0f + expf(-xf)))
 
 UNARY_OP(__nv_bfloat16, uneg_bf16, -x)
 UNARY_OP(__nv_bfloat16, urecip_bf16, recipg(x))

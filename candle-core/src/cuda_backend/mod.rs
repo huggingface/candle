@@ -354,17 +354,6 @@ impl Map1Any for FastReduce<'_> {
             stride.push(src_stride[dim_idx]);
         }
         let el_to_sum_per_block = src_el / dst_el;
-        // The reduction loop requires the shared array to be properly initialized and for
-        // this we want the number of threads to be a power of two.
-        let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
-        let cfg = LaunchConfig {
-            // TODO: Maybe use grid_y if the output is too large?
-            // TODO: Specialized implementation when reducing on no or all dimensions or when
-            // reducing only aggregate a small number of elements together.
-            grid_dim: (dst_el as u32, 1, 1),
-            block_dim: (block_dim as u32, 1, 1),
-            shared_mem_bytes: 0,
-        };
         let ds =
             SlicePtrOrNull::params_from_vec(dev, [dims.as_slice(), stride.as_slice()].concat())?;
         let src = &src.slice(layout.start_offset()..);
@@ -410,7 +399,11 @@ impl Map1Any for FastReduce<'_> {
             // SAFETY: filled in by the follow up kernel.
             let out = unsafe { dev.alloc::<u32>(dst_el)? };
             let mut builder = func.builder();
-            barg!(builder, src_el);
+            if use_small_reduce {
+                barg!(builder, dst_el);
+            } else {
+                barg!(builder, src_el);
+            }
             barg!(builder, el_to_sum_per_block);
             barg!(builder, src_dims.len());
             ds.builder_arg(&mut builder);
@@ -423,7 +416,11 @@ impl Map1Any for FastReduce<'_> {
             // SAFETY: filled in by the follow up kernel.
             let out = unsafe { dev.alloc::<T>(dst_el)? };
             let mut builder = func.builder();
-            barg!(builder, src_el);
+            if use_small_reduce {
+                barg!(builder, dst_el);
+            } else {
+                barg!(builder, src_el);
+            }
             barg!(builder, el_to_sum_per_block);
             barg!(builder, src_dims.len());
             ds.builder_arg(&mut builder);

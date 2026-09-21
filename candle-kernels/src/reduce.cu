@@ -728,15 +728,18 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
 // Eliminates massive block-count overhead when reducing over tiny dimensions (e.g., MoE topk=8).
 template <typename T>
 __device__ void
-fast_sum_small_impl(const size_t src_numel, const size_t el_to_sum_per_block,
+fast_sum_small_impl(const size_t dst_el, const size_t el_to_sum_per_block,
                     const size_t num_dims, const size_t *info, const T *src, T *dst) {
   const size_t *dims = info;
   const size_t *strides = info + num_dims;
-  const size_t dst_el = src_numel / el_to_sum_per_block;
   size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
   if (gid >= dst_el) return;
 
   T sum = 0;
+  if (el_to_sum_per_block == 0) {
+    dst[gid] = sum;
+    return;
+  }
 
   if (is_contiguous(num_dims, dims, strides)) {
     size_t start = gid * el_to_sum_per_block;
@@ -754,16 +757,19 @@ fast_sum_small_impl(const size_t src_numel, const size_t el_to_sum_per_block,
 
 #if __CUDA_ARCH__ >= 800
 extern "C" __global__ void fast_sum_small_bf16(
-    const size_t src_numel, const size_t el_to_sum_per_block,
+    const size_t dst_el, const size_t el_to_sum_per_block,
     const size_t num_dims, const size_t *info, const __nv_bfloat16 *src,
     __nv_bfloat16 *dst) {
   const size_t *dims = info;
   const size_t *strides = info + num_dims;
-  const size_t dst_el = src_numel / el_to_sum_per_block;
   size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
   if (gid >= dst_el) return;
 
   float sum = 0.0f;
+  if (el_to_sum_per_block == 0) {
+    dst[gid] = __float2bfloat16(sum);
+    return;
+  }
 
   if (is_contiguous(num_dims, dims, strides)) {
     size_t start = gid * el_to_sum_per_block;
@@ -782,46 +788,68 @@ extern "C" __global__ void fast_sum_small_bf16(
 #endif
 
 extern "C" __global__ void fast_sum_small_f32(
-    const size_t src_numel, const size_t el_to_sum_per_block,
+    const size_t dst_el, const size_t el_to_sum_per_block,
     const size_t num_dims, const size_t *info, const float *src,
     float *dst) {
-  fast_sum_small_impl(src_numel, el_to_sum_per_block, num_dims, info, src, dst);
+  fast_sum_small_impl(dst_el, el_to_sum_per_block, num_dims, info, src, dst);
 }
 
 extern "C" __global__ void fast_sum_small_f64(
-    const size_t src_numel, const size_t el_to_sum_per_block,
+    const size_t dst_el, const size_t el_to_sum_per_block,
     const size_t num_dims, const size_t *info, const double *src,
     double *dst) {
-  fast_sum_small_impl(src_numel, el_to_sum_per_block, num_dims, info, src, dst);
+  fast_sum_small_impl(dst_el, el_to_sum_per_block, num_dims, info, src, dst);
 }
 
 extern "C" __global__ void fast_sum_small_u32(
-    const size_t src_numel, const size_t el_to_sum_per_block,
+    const size_t dst_el, const size_t el_to_sum_per_block,
     const size_t num_dims, const size_t *info, const uint32_t *src,
     uint32_t *dst) {
-  fast_sum_small_impl(src_numel, el_to_sum_per_block, num_dims, info, src, dst);
+  fast_sum_small_impl(dst_el, el_to_sum_per_block, num_dims, info, src, dst);
 }
 
 extern "C" __global__ void fast_sum_small_i64(
-    const size_t src_numel, const size_t el_to_sum_per_block,
+    const size_t dst_el, const size_t el_to_sum_per_block,
     const size_t num_dims, const size_t *info, const int64_t *src,
     int64_t *dst) {
-  fast_sum_small_impl(src_numel, el_to_sum_per_block, num_dims, info, src, dst);
+  fast_sum_small_impl(dst_el, el_to_sum_per_block, num_dims, info, src, dst);
 }
 
 extern "C" __global__ void fast_sum_small_u8(
-    const size_t src_numel, const size_t el_to_sum_per_block,
+    const size_t dst_el, const size_t el_to_sum_per_block,
     const size_t num_dims, const size_t *info, const uint8_t *src,
     uint8_t *dst) {
-  fast_sum_small_impl(src_numel, el_to_sum_per_block, num_dims, info, src, dst);
+  fast_sum_small_impl(dst_el, el_to_sum_per_block, num_dims, info, src, dst);
 }
 
 #if __CUDA_ARCH__ >= 530
 extern "C" __global__ void fast_sum_small_f16(
-    const size_t src_numel, const size_t el_to_sum_per_block,
+    const size_t dst_el, const size_t el_to_sum_per_block,
     const size_t num_dims, const size_t *info, const __half *src,
     __half *dst) {
-  fast_sum_small_impl(src_numel, el_to_sum_per_block, num_dims, info, src, dst);
+  const size_t *dims = info;
+  const size_t *strides = info + num_dims;
+  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (gid >= dst_el) return;
+
+  float sum = 0.0f;
+  if (el_to_sum_per_block == 0) {
+    dst[gid] = __float2half(sum);
+    return;
+  }
+
+  if (is_contiguous(num_dims, dims, strides)) {
+    size_t start = gid * el_to_sum_per_block;
+    for (size_t i = 0; i < el_to_sum_per_block; ++i) {
+      sum += __half2float(src[start + i]);
+    }
+  } else {
+    for (size_t i = 0; i < el_to_sum_per_block; ++i) {
+      size_t strided_i = get_strided_index(gid * el_to_sum_per_block + i, num_dims, dims, strides);
+      sum += __half2float(src[strided_i]);
+    }
+  }
+  dst[gid] = __float2half(sum);
 }
 #endif
 

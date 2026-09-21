@@ -601,6 +601,9 @@ fn sum(device: &Device) -> Result<()> {
         let tensor = Tensor::new(data.as_slice(), device)?;
         assert_eq!(tensor.sum_keepdim(0)?.to_vec1::<f64>()?, &[16_777_249.]);
     }
+
+    let empty = Tensor::new(&[[1f32, 2.]; 4], device)?.narrow(1, 0, 0)?;
+    assert_eq!(empty.sum(1)?.to_vec1::<f32>()?, &[0.; 0.; 0.; 0.]);
     Ok(())
 }
 
