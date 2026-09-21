@@ -61,7 +61,7 @@ pub fn process_items(items: &[syn::Item]) -> Result<Vec<TokenStream2>, Error> {
     Ok(out)
 }
 
-/// A function: entry-point validation, then rank instantiation or shadow dispatch.
+/// A function. Entry-point validation, then rank instantiation or shadow dispatch.
 ///
 /// The two are exclusive. A rank-polymorphic fn (`#[cuda_tile::variadic_op]`) is served entirely
 /// by the synthesized trait, so emitting per-rank free functions as well would only create

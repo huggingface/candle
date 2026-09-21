@@ -13,7 +13,7 @@ mod kernels {
         let row = get_tile_block_id().0;
         let t = x.partition(ts).load([row, 0i32]);
         let mut o: PartitionMut<f32, { [1, 32] }> = unsafe { out.partition_full_mut(ts) };
-        unsafe { o.store(t, [row, 0i32]) };
+        o.store(t, [row, 0i32]);
     }
 }
 

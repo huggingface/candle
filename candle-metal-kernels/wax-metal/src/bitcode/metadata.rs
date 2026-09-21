@@ -1,25 +1,22 @@
-//! METADATA_BLOCK: the `!air.kernel` / argument-description metadata that makes Metal
-//! recognise a function as a kernel at all.
+//! Metadata block. The `!air.kernel` / argument description metadata that makes Metal
+//! recognise a function as a kernel.
 //!
 //! # Index space
 //!
-//! All metadata shares one index space, laid out in the order the block emits it:
-//! strings first (all of them in a single `METADATA_STRINGS` record), then `VALUE`
-//! records, then `NODE` records. So a node's index is `nstrings + nvalues + node_pos`.
-//! Because that offset is only known once everything is collected, callers hold opaque
-//! [`MdId`] handles and the writer resolves them at the end.
+//! All metadata shares one index space. Block emission order.
+//! * `METADATA_STRINGS` blob. Indexed by plain [`MdId`] `slot`.
+//! * `VALUE` records. Indexed by `strings.len() + slot`.
+//! * `NODE` records. Indexed by `strings.len() + values.len() + slot`.
 //!
-//! Two encodings that differ and are easy to get backwards (both verified against
-//! `metal-as` output):
-//!
-//! * `NODE` operands are stored as **index + 1**, with 0 meaning a null operand.
-//! * `NAMED_NODE` operands are stored as **plain indices**.
+//! * `NODE` operands are stored as `index + 1`, with 0 meaning a null operand.
+//! * `NAMED_NODE` operands are stored as plain indices.
 
+use super::BLOCK_METADATA;
+use super::BLOCK_METADATA_KIND;
 use super::bitstream::BitWriter;
 use super::{ConstPool, Ty, TypeTable};
 
-const BLOCK_METADATA: u32 = 15;
-
+const METADATA_CODE_KIND: u32 = 6;
 const METADATA_CODE_VALUE: u32 = 2;
 const METADATA_CODE_NODE: u32 = 3;
 const METADATA_CODE_DISTINCT_NODE: u32 = 5;
@@ -27,7 +24,7 @@ const METADATA_CODE_NAME: u32 = 4;
 const METADATA_CODE_NAMED_NODE: u32 = 10;
 const METADATA_CODE_STRINGS: u32 = 35;
 
-/// Handle to a metadata item. Resolved to a real index when the block is written.
+/// Metadata handle. Resolved to index when block is written.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MdId(Slot);
 
@@ -38,16 +35,24 @@ enum Slot {
     Node(u32),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct NodeId(u32);
+
+impl From<NodeId> for MdId {
+    fn from(n: NodeId) -> Self {
+        MdId(Slot::Node(n.0))
+    }
+}
+
 /// Collects a module's metadata.
 #[derive(Default)]
 pub struct MetadataBuilder {
     strings: Vec<String>,
-    /// (type, absolute module value id)
+    /// (type, id)
     values: Vec<(Ty, u32)>,
     /// `None` operands are nulls.
     nodes: Vec<Vec<Option<MdId>>>,
-    /// Parallel to `nodes`: whether each one is `distinct` (not uniqued). A
-    /// self-referential node has to be distinct, since uniquing cannot hash a cycle.
+    /// Markes distinct `nodes`. Self-ref node has to be distinct, because uniquing cannot hash a cycle.
     distinct: Vec<bool>,
     named: Vec<(String, Vec<MdId>)>,
 }
@@ -57,7 +62,7 @@ impl MetadataBuilder {
         Self::default()
     }
 
-    /// `!"text"`, deduplicated.
+    /// `!"text"`. deduped.
     pub fn string(&mut self, s: &str) -> MdId {
         if let Some(i) = self.strings.iter().position(|x| x == s) {
             return MdId(Slot::Str(i as u32));
@@ -66,8 +71,7 @@ impl MetadataBuilder {
         MdId(Slot::Str((self.strings.len() - 1) as u32))
     }
 
-    /// A typed value operand such as `i32 7`, referring to an already-interned
-    /// module-level constant or function by its absolute value id.
+    /// Get or insert a typed value (like `i32 7`).
     pub fn value(&mut self, ty: Ty, value_id: u32) -> MdId {
         if let Some(i) = self
             .values
@@ -87,21 +91,23 @@ impl MetadataBuilder {
         MdId(Slot::Node((self.nodes.len() - 1) as u32))
     }
 
-    /// Reserve an empty `distinct` node whose operands are filled in later with
-    /// [`set_node`](Self::set_node). This is what `!llvm.loop` needs: its first operand
-    /// is the node itself, so the handle must exist before the operand list does.
-    pub fn distinct_node(&mut self) -> MdId {
+    /// Reserve a distinct node to be filled later with [`set_node`](Self::set_node).
+    /// Required by `!llvm.loop` as handle must exist before operand list does.
+    pub fn distinct_node(&mut self) -> NodeId {
         self.nodes.push(Vec::new());
         self.distinct.push(true);
-        MdId(Slot::Node((self.nodes.len() - 1) as u32))
+        NodeId((self.nodes.len() - 1) as u32)
+    }
+
+    /// All types in the metadata block.
+    // TODO: dedup?
+    pub fn value_types(&self) -> Vec<Ty> {
+        self.values.iter().map(|(t, _)| t.clone()).collect()
     }
 
     /// Fill in a node reserved by [`distinct_node`](Self::distinct_node).
-    pub fn set_node(&mut self, id: MdId, ops: &[MdId]) {
-        let Slot::Node(i) = id.0 else {
-            panic!("set_node on a non-node metadata handle");
-        };
-        self.nodes[i as usize] = ops.iter().map(|m| Some(*m)).collect();
+    pub fn set_node(&mut self, id: NodeId, ops: &[MdId]) {
+        self.nodes[id.0 as usize] = ops.iter().map(|m| Some(*m)).collect();
     }
 
     /// Convenience for a node with no null operands.
@@ -128,9 +134,9 @@ impl MetadataBuilder {
         }
     }
 
-    /// The `METADATA_STRINGS` payload: a bitstream of VBR6 lengths padded to a word
-    /// boundary, then the characters. The record carries the count and the byte offset
-    /// at which the characters start.
+    /// The `METADATA_STRINGS` blob.
+    /// Bitstream of VBR6 lengths padded to a word boundary, then the characters.
+    /// Returns offset at which strings start and the blob itself.
     fn strings_blob(&self) -> (u64, Vec<u8>) {
         let mut sizes = BitWriter::new();
         for s in &self.strings {
@@ -152,12 +158,12 @@ impl MetadataBuilder {
 
         if !self.strings.is_empty() {
             let (offset, blob) = self.strings_blob();
-            let abbrev = w.define_strings_abbrev(METADATA_CODE_STRINGS);
+            let abbrev = w.define_strings_abbr(METADATA_CODE_STRINGS);
             w.strings_record(abbrev, self.strings.len() as u64, offset, &blob);
         }
 
         for (ty, value_id) in &self.values {
-            let ti = types.get(ty).expect("metadata value type interned");
+            let ti = types.get(ty).expect("interned: Module::check_types");
             w.record(METADATA_CODE_VALUE, &[ti as u64, *value_id as u64]);
         }
 
@@ -177,7 +183,7 @@ impl MetadataBuilder {
 
         for (name, ops) in &self.named {
             w.record_str(METADATA_CODE_NAME, name);
-            // Named-node operands are plain indices, unlike NODE's index + 1.
+            // Named node operands are plain indices, unlike `NODE`'s index + 1.
             let ids: Vec<u64> = ops.iter().map(|o| self.resolve(*o) as u64).collect();
             w.record(METADATA_CODE_NAMED_NODE, &ids);
         }
@@ -186,19 +192,16 @@ impl MetadataBuilder {
     }
 }
 
-/// METADATA_KIND_BLOCK: names the metadata kinds instructions can carry. The block is
-/// self-describing - it defines the id/name mapping - so we only declare the kinds we
-/// actually attach and can number them from zero.
+/// Names the metadata kinds instructions can carry.
+/// Block is self-describing in that it defines the id/name mapping, so we only declare the
+/// kinds we actually have.
 #[derive(Default)]
 pub struct MdKinds {
     names: Vec<String>,
 }
 
-const BLOCK_METADATA_KIND: u32 = 22;
-const METADATA_CODE_KIND: u32 = 6;
-
 impl MdKinds {
-    /// Kind id for `name`, declaring it on first use.
+    /// Get or insert `name`, returns kind id.
     pub fn intern(&mut self, name: &str) -> u32 {
         if let Some(i) = self.names.iter().position(|n| n == name) {
             return i as u32;
@@ -225,13 +228,7 @@ impl MdKinds {
     }
 }
 
-/// Builds the metadata every AIR kernel module needs: the module flags Metal expects,
-/// the AIR/language versions, and `!air.kernel` describing the entry point.
-///
-/// `args` describes the kernel's parameters in order. Buffer arguments become
-/// `air.buffer` nodes with an index and address space; the thread-position builtins
-/// become their own node kinds. This mirrors what `metal-as` produces for a kernel
-/// compiled from Metal source.
+/// The metadata AIR kernel modules need.
 pub struct KernelMetadata<'a> {
     pub entry_value_id: u32,
     pub entry_fn_ptr_ty: Ty,
@@ -242,7 +239,7 @@ pub struct KernelMetadata<'a> {
     pub producer: &'a str,
 }
 
-/// How a buffer argument is accessed, which AIR records as a distinct key.
+/// AIR buffer access pattern.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Access {
     Read,
@@ -260,10 +257,10 @@ impl Access {
     }
 }
 
-/// One kernel parameter, as AIR metadata describes it.
+/// Kernel argument as AIR metadata describes it.
 #[derive(Clone, Debug)]
 pub enum KernelArg {
-    /// A `device`/`constant` buffer: `air.buffer` with a binding index.
+    /// A `device`/`constant` buffer. `air.buffer`.
     Buffer {
         index: u32,
         /// 1 = device, 2 = constant.
@@ -275,8 +272,8 @@ pub enum KernelArg {
         type_name: String,
         name: String,
     },
-    /// A scalar passed in a constant buffer, e.g. a dynamic stride. Distinguished by
-    /// carrying `air.buffer_size` instead of element size/alignment keys.
+    /// A scalar in a constant buffer, e.g. a dynamic stride. Distinguished by
+    /// having `air.buffer_size` instead of element size/alignment.
     ScalarBuffer {
         index: u32,
         byte_size: u32,
@@ -292,12 +289,9 @@ pub enum KernelArg {
 }
 
 impl KernelMetadata<'_> {
-    /// Populate `md`, interning any integer constants needed into `consts`, and return
-    /// the constants' value ids so the caller can keep the module consistent.
+    /// Populate `md` with the kernel metadata, interning the integer constants into `consts`.
     ///
-    /// `const_base` is the absolute value id of the first module constant (that is,
-    /// the number of globals plus functions), since metadata refers to constants by
-    /// absolute value id.
+    /// `const_base` is the id of the first module constant `mod.globals.len() + mod.funcs.len()`.
     pub fn build(
         &self,
         md: &mut MetadataBuilder,
@@ -312,7 +306,7 @@ impl KernelMetadata<'_> {
             md.value(i32t.clone(), const_base + idx)
         };
 
-        // Per-argument nodes, in parameter order.
+        // Process arguments
         let mut arg_nodes = Vec::new();
         for (i, a) in self.args.iter().enumerate() {
             let pos = int(md, consts, i as i64);
@@ -392,7 +386,7 @@ impl KernelMetadata<'_> {
         let kernel = md.tuple(&[entry, empty, arg_list]);
         md.named("air.kernel", &[kernel]);
 
-        // Module flags Metal looks for. Behaviour 1 = error, 2 = warning, 7 = max.
+        // AIR module flags. 1 = error, 2 = warning, 7 = max.
         let mut flags = Vec::new();
         let flag = |md: &mut MetadataBuilder,
                     consts: &mut ConstPool,
@@ -464,8 +458,6 @@ mod tests {
         assert_eq!(md.strings.len(), 1);
     }
 
-    /// The blob is VBR6 lengths, word-padded, then the characters; the offset points
-    /// at the characters.
     #[test]
     fn strings_blob_offset_points_at_chars() {
         let mut md = MetadataBuilder::new();

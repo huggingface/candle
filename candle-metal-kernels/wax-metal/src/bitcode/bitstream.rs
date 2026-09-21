@@ -1,17 +1,19 @@
-//! LLVM bitstream container writer: the bit-level layer under bitcode.
+//! LLVM bitstream writer.
 //!
-//! Little-endian bits packed into 32-bit words. Structure comes from abbreviation IDs at
-//! the current width (2 bits at top level, wider in blocks): `0` END_BLOCK,
-//! `1` ENTER_SUBBLOCK, `2` DEFINE_ABBREV, `3` UNABBREV_RECORD, `4..` application-defined.
+//! Little endian bits packed into 32-bit words. Structure comes from abbreviated ids at the
+//! current width (2 bits at top, wider in blocks).
+//! 0 END_BLOCK
+//! 1 ENTER_SUBBLOCK
+//! 2 DEFINE_ABBREV
+//! 3 UNABBREV_RECORD
+//! 4.. application-defined
 //!
-//! Records are UNABBREV_RECORD wherever possible: a reader must accept the unabbreviated
-//! form, so skipping abbreviations costs ~2x bytes and saves implementing BLOCKINFO. The
-//! exception is BLOBS, which have no unabbreviated spelling and which LLVM's reader
-//! insists on for records such as `STRTAB_BLOB` - see [`BitWriter::define_blob_abbrev`].
+//! Records are UNABBREV_RECORD wherever possible.
+//! Exception is blobs, which can not be unabbreviated ([`BitWriter::define_blob_abbr`]).
 //!
 //! Reference: LLVM "Bitcode File Format", bitstream container sections.
 
-/// Abbreviation IDs with fixed meanings in every block.
+/// Abbreviation IDs.
 pub const END_BLOCK: u32 = 0;
 pub const ENTER_SUBBLOCK: u32 = 1;
 pub const UNABBREV_RECORD: u32 = 3;
@@ -19,16 +21,16 @@ pub const UNABBREV_RECORD: u32 = 3;
 /// Bit-level writer. Bits fill each 32-bit word from the least significant end.
 pub struct BitWriter {
     words: Vec<u32>,
-    /// Bits not yet flushed into `words`, held in the low `cur_bits` positions.
+    /// Bits not yet flushed into `words`, held in low `cur_bits` positions.
     cur: u32,
     cur_bits: u32,
-    /// Width in bits of an abbreviation ID at the current nesting level.
-    abbrev_width: u32,
-    /// Saved (abbrev_width, length-placeholder word index, next_abbrev) per block.
+    /// Width in bits of an abbreviation id at the current nested level.
+    abbr_width: u32,
+    /// Block (`abbr_width`, `words.len()`, `next_abbr`).
     block_stack: Vec<(u32, usize, u32)>,
-    /// ID the next DEFINE_ABBREV in this block will get. The four builtin IDs
-    /// (END_BLOCK, ENTER_SUBBLOCK, DEFINE_ABBREV, UNABBREV_RECORD) come first.
-    next_abbrev: u32,
+    /// Next `DEFINE_ABBREV` id. `END_BLOCK`, `ENTER_SUBBLOCK`, `DEFINE_ABBREV`, and
+    /// `UNABBREV_RECORD` precede it.
+    next_abbr: u32,
 }
 
 impl Default for BitWriter {
@@ -43,10 +45,10 @@ impl BitWriter {
             words: Vec::new(),
             cur: 0,
             cur_bits: 0,
-            // The outermost level uses 2-bit abbreviation IDs.
-            abbrev_width: 2,
+            // Outermost level uses 2-bit abbreviation ids.
+            abbr_width: 2,
             block_stack: Vec::new(),
-            next_abbrev: 4,
+            next_abbr: 4,
         }
     }
 
@@ -66,7 +68,7 @@ impl BitWriter {
             self.cur |= val << self.cur_bits;
             self.cur_bits += width;
         } else {
-            // Fill the current word, flush, then keep the remainder.
+            // Fill current word, flush, keep remainder.
             self.cur |= val << self.cur_bits;
             self.words.push(self.cur);
             let consumed = room;
@@ -84,7 +86,6 @@ impl BitWriter {
         }
     }
 
-    /// Variable bit-rate: `width-1` payload bits per chunk, high bit set to continue.
     pub fn vbr(&mut self, mut val: u64, width: u32) {
         debug_assert!(width > 1);
         let payload = width - 1;
@@ -110,37 +111,37 @@ impl BitWriter {
         }
     }
 
-    /// Open a subblock. `abbrev_width` is the ID width used inside it.
-    pub fn enter_block(&mut self, block_id: u32, abbrev_width: u32) {
-        self.fixed(ENTER_SUBBLOCK, self.abbrev_width);
+    /// Open a subblock. `abbr_width` is the ID width used inside it.
+    pub fn enter_block(&mut self, block_id: u32, abbr_width: u32) {
+        self.fixed(ENTER_SUBBLOCK, self.abbr_width);
         self.vbr(block_id as u64, 8);
-        self.vbr(abbrev_width as u64, 4);
+        self.vbr(abbr_width as u64, 4);
         self.align32();
         // Block length in 32-bit words, patched by `end_block`.
         let len_pos = self.words.len();
         self.words.push(0);
         self.block_stack
-            .push((self.abbrev_width, len_pos, self.next_abbrev));
-        self.abbrev_width = abbrev_width;
-        self.next_abbrev = 4;
+            .push((self.abbr_width, len_pos, self.next_abbr));
+        self.abbr_width = abbr_width;
+        self.next_abbr = 4;
     }
 
     pub fn end_block(&mut self) {
-        self.fixed(END_BLOCK, self.abbrev_width);
+        self.fixed(END_BLOCK, self.abbr_width);
         self.align32();
-        let (outer, len_pos, outer_abbrev) = self
+        let (outer, len_pos, outer_abbr) = self
             .block_stack
             .pop()
             .expect("end_block without enter_block");
-        self.abbrev_width = outer;
-        self.next_abbrev = outer_abbrev;
+        self.abbr_width = outer;
+        self.next_abbr = outer_abbr;
         // Length excludes the placeholder word itself.
         self.words[len_pos] = (self.words.len() - len_pos - 1) as u32;
     }
 
     /// Emit `code` with `ops` as an UNABBREV_RECORD.
     pub fn record(&mut self, code: u32, ops: &[u64]) {
-        self.fixed(UNABBREV_RECORD, self.abbrev_width);
+        self.fixed(UNABBREV_RECORD, self.abbr_width);
         self.vbr(code as u64, 6);
         self.vbr(ops.len() as u64, 6);
         for &op in ops {
@@ -148,58 +149,56 @@ impl BitWriter {
         }
     }
 
-    /// Emit a record whose operands are the bytes of `s` (how LLVM stores strings in
-    /// records such as TRIPLE and DATALAYOUT).
+    /// Emit an LLVM string record.
     pub fn record_str(&mut self, code: u32, s: &str) {
         let ops: Vec<u64> = s.bytes().map(|b| b as u64).collect();
         self.record(code, &ops);
     }
 
-    /// Declare an abbreviation for `[literal(code), blob]` and return its ID.
-    ///
-    /// Blob-valued records are the one place abbreviations are not optional: a blob is
-    /// only representable through an abbreviation operand, and LLVM's reader requires
-    /// a genuine blob for records like `STRTAB_BLOB` (it checks the record has exactly
-    /// one operand plus blob data). Emitting the bytes as ordinary VBR6 operands
-    /// parses as a well-formed record but the reader rejects it.
-    pub fn define_blob_abbrev(&mut self, code: u32) -> u32 {
+    /// Declare abbreviation for `[literal(code), blob]` and return id.
+    pub fn define_blob_abbr(&mut self, code: u32) -> u32 {
         const DEFINE_ABBREV: u32 = 2;
-        self.fixed(DEFINE_ABBREV, self.abbrev_width);
-        self.vbr(2, 5); // two operands: the literal code, then the blob
-        // Operand 1: literal `code`.
+        self.fixed(DEFINE_ABBREV, self.abbr_width);
+        self.vbr(2, 5);
+        // literal(code)
         self.fixed(1, 1);
         self.vbr(code as u64, 8);
-        // Operand 2: Blob (encoding 5), which takes no extra parameter.
+        // blob
         self.fixed(0, 1);
         self.fixed(5, 3);
-        let id = self.next_abbrev;
-        self.next_abbrev += 1;
+
+        let id = self.next_abbr;
+        self.next_abbr += 1;
         id
     }
 
-    /// Declare an abbreviation for `[literal(code), vbr6, vbr6, blob]`, the shape
-    /// `METADATA_STRINGS` uses (count, char offset, then the packed blob).
-    pub fn define_strings_abbrev(&mut self, code: u32) -> u32 {
+    /// Declare abbreviation for `[literal(code), vbr6, vbr6, blob]`.
+    /// The `METADATA_STRINGS` shape.
+    pub fn define_strings_abbr(&mut self, code: u32) -> u32 {
         const DEFINE_ABBREV: u32 = 2;
-        self.fixed(DEFINE_ABBREV, self.abbrev_width);
+        self.fixed(DEFINE_ABBREV, self.abbr_width);
         self.vbr(4, 5);
+        // literal(code)
         self.fixed(1, 1);
         self.vbr(code as u64, 8);
+        // vbr6, vbr6
         for _ in 0..2 {
             self.fixed(0, 1);
-            self.fixed(2, 3); // VBR
-            self.vbr(6, 5); // width 6
+            self.fixed(2, 3);
+            self.vbr(6, 5);
         }
+        // blob
         self.fixed(0, 1);
-        self.fixed(5, 3); // Blob
-        let id = self.next_abbrev;
-        self.next_abbrev += 1;
+        self.fixed(5, 3);
+
+        let id = self.next_abbr;
+        self.next_abbr += 1;
         id
     }
 
-    /// Emit a record declared by [`Self::define_strings_abbrev`].
-    pub fn strings_record(&mut self, abbrev_id: u32, count: u64, offset: u64, blob: &[u8]) {
-        self.fixed(abbrev_id, self.abbrev_width);
+    /// Emit a record declared by [`BitWriter::define_strings_abbr`].
+    pub fn strings_record(&mut self, abbr_id: u32, count: u64, offset: u64, blob: &[u8]) {
+        self.fixed(abbr_id, self.abbr_width);
         self.vbr(count, 6);
         self.vbr(offset, 6);
         self.vbr(blob.len() as u64, 6);
@@ -210,15 +209,15 @@ impl BitWriter {
         self.align32();
     }
 
-    /// Emit a record previously declared by [`Self::define_blob_abbrev`].
-    pub fn blob_record(&mut self, abbrev_id: u32, bytes: &[u8]) {
-        self.fixed(abbrev_id, self.abbrev_width);
-        self.vbr(bytes.len() as u64, 6);
+    /// Emit a record using the abbreviation [`BitWriter::define_blob_abbr`] declares.
+    pub fn blob_record(&mut self, abbr_id: u32, blob: &[u8]) {
+        self.fixed(abbr_id, self.abbr_width);
+        self.vbr(blob.len() as u64, 6);
         self.align32();
-        for &b in bytes {
+        for &b in blob {
             self.fixed(b as u32, 8);
         }
-        // Blob payloads are padded to a word boundary.
+        // Blob payloads are padded to word boundary.
         self.align32();
     }
 
@@ -233,7 +232,7 @@ impl BitWriter {
         out
     }
 
-    /// Bit position, for callers that need to know where they are.
+    /// Current bit position.
     pub fn bit_pos(&self) -> usize {
         self.words.len() * 32 + self.cur_bits as usize
     }
@@ -263,7 +262,7 @@ mod tests {
         assert_eq!(b[4], 0b101);
     }
 
-    /// VBR6: values under 32 fit one chunk; larger ones set the continuation bit.
+    /// VBR6: values under 32 fit one chunk. Larger values set continuation bit.
     #[test]
     fn vbr_encodes_continuation() {
         let mut w = BitWriter::new();
@@ -271,7 +270,7 @@ mod tests {
         assert_eq!(w.finish()[0] & 0x3F, 5);
 
         let mut w = BitWriter::new();
-        w.vbr(32, 6); // 0b100000 -> chunk0 = 0 | cont, chunk1 = 1
+        w.vbr(32, 6);
         let b = w.finish();
         let first = b[0] & 0x3F;
         assert_eq!(
@@ -287,7 +286,7 @@ mod tests {
         w.record(1, &[2]);
         w.end_block();
         let bytes = w.finish();
-        // Word 0 holds the enter header; word 1 is the length; the block body follows.
+        // Word 0: header. Word 1: length. Then block body.
         let len = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
         assert_eq!(len, bytes.len() / 4 - 2, "length counts the body words");
     }

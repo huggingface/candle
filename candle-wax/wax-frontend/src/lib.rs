@@ -14,22 +14,13 @@ pub use cutile_frontend::specialization::{DivHint, SpecializationBits};
 
 use cutile_frontend::compiler::{CUDATileFunctionCompiler, CUDATileModules};
 
-/// The compiled kernel.
-///
-/// Materialized wax `ir` to be lowered by a backend, and the original cutile_ir `module`,
-/// which we keep as context in case lowering goes wrong.
+/// The compiled kernel: the cutile module the frontend produced.
 pub struct Compiled {
     pub module: cutile_ir::ir::Module,
-    pub ir: wax_ir::ir::WaxIr,
 }
 
 impl Compiled {
-    /// The same kernel as a pliron module in the `wax` dialect.
-    ///
-    /// Built on request rather than always, because a backend lowers from [`Self::ir`] and does
-    /// not need this. What does need it is our IR-level work - `cross_loop_reuse`,
-    /// `verify_operation`, and the passes plan section 8 has queued - all of which operate on
-    /// the dialect. Without it that layer is bypassed entirely on this path.
+    /// The same kernel as a pliron module in wax IR.
     pub fn to_wax_module(&self, name: &str) -> Result<wax_ir::Module, String> {
         let root = *self
             .module
@@ -102,10 +93,7 @@ impl<F: Fn() -> ast::Module> KernelCompiler<F> {
     }
 
     pub fn scalar_hints(mut self, hints: &[(&str, DivHint)]) -> Self {
-        self.scalar_hints = hints
-            .iter()
-            .map(|(n, h)| (n.to_string(), h.clone()))
-            .collect();
+        self.scalar_hints = hints.iter().map(|(n, h)| (n.to_string(), *h)).collect();
         self
     }
 
@@ -156,34 +144,6 @@ impl<F: Fn() -> ast::Module> KernelCompiler<F> {
         .map_err(|e| e.to_string())?;
 
         let module = compiler.compile().map_err(|e| e.to_string())?;
-        let root = *module
-            .functions
-            .first()
-            .ok_or("compiled module has no entry function")?;
-        // Route through the dialect rather than straight to the flat form: the IR-level
-        // passes operate on the pliron module, and materialising from their output is what
-        // carries their conclusions into what a backend lowers. Going direct - which this did
-        // until now - silently skipped every one of them.
-        let src = CutileSource::new(&module);
-        let params: Vec<_> = {
-            use wax_ir::source::WaxSource;
-            let r = src.regions(root);
-            let first = r.first().copied().ok_or("entry has no region")?;
-            let b = src.region_blocks(first);
-            let entry = b.first().copied().ok_or("entry has no block")?;
-            src.block_args(entry).into_iter().map(|(_, t)| t).collect()
-        };
-        let mut pm =
-            wax_ir::from_source::module_from_source(&self.function_name, &src, root, &params)
-                .map_err(|e| e.to_string())?;
-        let func = *pm.functions.first().ok_or("built module has no function")?;
-
-        let mut analyses = wax_ir::passes::AnalysisManager::default();
-        // A pass failing is an analysis result, not a compile error: the kernel is still
-        // correct, it just misses an optimisation. Same handling the backend gives it.
-        let _ = wax_ir::passes::cross_loop_reuse::annotate_with(&mut analyses, &pm.ctx, func);
-
-        let ir = wax_ir::ir::from_source(&pm, func);
-        Ok(Compiled { module, ir })
+        Ok(Compiled { module })
     }
 }

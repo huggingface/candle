@@ -15,15 +15,14 @@ fn tv(elem: ScalarType, shape: Vec<i64>, strides: Vec<i64>) -> TensorViewType {
 
 fn cases() -> Vec<Type> {
     let mut v = vec![
-        Type::Token,
-        Type::Scalar(ScalarType::F32),
+        Type::Scalar(ScalarType::I1),
+        Type::Scalar(ScalarType::I64),
         Type::Scalar(ScalarType::F16),
         Type::Scalar(ScalarType::BF16),
+        Type::Scalar(ScalarType::F32),
         Type::Scalar(ScalarType::TF32),
         Type::Scalar(ScalarType::F8E4M3FN),
         Type::Scalar(ScalarType::F8E5M2),
-        Type::Scalar(ScalarType::I1),
-        Type::Scalar(ScalarType::I64),
         Type::Pointer(PointerType {
             pointee: ScalarType::F32,
         }),
@@ -32,12 +31,12 @@ fn cases() -> Vec<Type> {
             element_type: TileElementType::Scalar(ScalarType::I32),
         }),
         Type::Tile(TileType {
-            shape: vec![1, 32],
-            element_type: TileElementType::Scalar(ScalarType::F32),
-        }),
-        Type::Tile(TileType {
             shape: vec![8, 8],
             element_type: TileElementType::Scalar(ScalarType::BF16),
+        }),
+        Type::Tile(TileType {
+            shape: vec![1, 32],
+            element_type: TileElementType::Scalar(ScalarType::F32),
         }),
         Type::TensorView(tv(ScalarType::F32, vec![1, 32], vec![32, 1])),
         // Dynamic extents (runtime shaped tensor).
@@ -46,6 +45,7 @@ fn cases() -> Vec<Type> {
             vec![wax_ir::DYNAMIC, wax_ir::DYNAMIC],
             vec![32, 1],
         )),
+        Type::Token,
     ];
     for pad in [None, Some(PaddingValue::Zero), Some(PaddingValue::NegInf)] {
         v.push(Type::PartitionView(PartitionViewType {
@@ -66,10 +66,8 @@ fn all_types_round_trip() {
         let back = from_pliron(ctx, h).unwrap_or_else(|| panic!("{t:?} did not map back"));
         assert_eq!(back, t, "{t:?} changed across the dialect");
     }
-    println!("{} types round-tripped exactly", cases().len());
 }
 
-/// A function type is module structure, not a value type.
 #[test]
 fn function_type_does_not_map() {
     let ctx = &mut Context::new();

@@ -1,24 +1,21 @@
-//! The target-dependent slice of what we emit: target triple, AIR / Metal-language
-//! versions, the resource limits in `!llvm.module.flags`, and the platform fields in
-//! the `.metallib` container header.
+//! The target profile.
+//! Target triple, AIR / Metal-language versions, the resource limits in `!llvm.module.flags`,
+//! and the platform fields in the `.metallib` container header.
 //!
-//! BAKED IN, not probed: the point of the in-process bitcode writer is to compile where
-//! no Metal toolchain exists, which is exactly where a probe cannot run. Resolved at build
-//! time from Cargo's target triple. Measured on toolchain 32023.864 (Xcode SDK 26.2);
-//! `wax-metal benches/tests/target_profile.rs` fails if the table drifts from the local
-//! toolchain.
+//! Resolved at build time from Cargo's target triple.
+//! Measured on toolchain 32023.864 (Xcode SDK 26.2). The tests in this file pin those
+//! measurements.
 //!
-//! Why a small table suffices: the datalayout and the `air.max_*` limits are identical
-//! everywhere measured; the AIR version, language version and container format code are a
-//! function of the DEPLOYMENT TARGET, not the SDK or GPU; and the platform appears only in
+//! A relatively small table suffices because the datalayout and the `air.max_*` limits are
+//! identical everywhere measured. The AIR version, language version and container format code
+//! are a function of the deployment target, not the SDK or GPU. And the platform appears only in
 //! the triple's OS name and two container-header fields.
 
 /// The Apple platform the AIR is built for.
 ///
 /// Only the OS name in the triple and the container's platform fields differ between
-/// these; the emitted code does not. Apple Silicon only - the SGMMA and SIMD-reduce
-/// intrinsics the lowering emits are Apple-GPU features, so Intel Macs are out of
-/// scope.
+/// these. The emitted code does not. Apple Silicon only. The SGMMA and SIMD-reduce
+/// intrinsics the lowering emits are Apple-GPU features, so Intel Macs are out of scope.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Platform {
     MacOS,
@@ -54,9 +51,9 @@ impl Platform {
         )
     }
 
-    /// Whether the platform numbers its releases like iOS (iOS/tvOS: 15, 16, 17, 18,
-    /// 26) or like macOS (12, 13, 14, 15, 26). watchOS and visionOS number differently
-    /// again and were only measured at 26, so they read the newest era; see
+    /// Whether the platform numbers its releases like iOS (iOS/tvOS: 15, 16, 17, 18, 26) or
+    /// like macOS (12, 13, 14, 15, 26). watchOS and visionOS number differently again and
+    /// were only measured at 26, so they read the newest era. See
     /// [`TargetProfile::with_versions`] to pin an older one by hand.
     fn numbers_like_ios(self) -> bool {
         !matches!(self, MacOS)
@@ -77,9 +74,9 @@ impl Platform {
         }
     }
 
-    /// The container header's first word (offset 0x04). macOS sets the high bit; every
-    /// other platform measured leaves it clear. Purpose unknown - copied from
-    /// `xcrun metallib` output, which is the only thing the loader agrees with.
+    /// The container header's first word (offset 0x04). macOS sets the high bit. Every other
+    /// platform measured leaves it clear. Purpose unknown. Copied from `xcrun metallib`
+    /// output, which is the only thing the loader agrees with.
     fn container_kind(self) -> u16 {
         match self {
             MacOS => 0x8001,
@@ -92,7 +89,7 @@ impl Platform {
     /// has no local Metal to run it on).
     pub fn host() -> Option<Self> {
         // `target_abi = "sim"` is what distinguishes aarch64-apple-ios-sim from
-        // aarch64-apple-ios; both report target_os = "ios".
+        // aarch64-apple-ios. Both report target_os = "ios".
         let sim = cfg!(target_abi = "sim");
         Some(match () {
             _ if cfg!(target_os = "macos") => MacOS,
@@ -117,7 +114,7 @@ struct Era {
     macos: u32,
     /// First iOS/tvOS major version in this era.
     ios: u32,
-    /// `!air.version` minor - the major has been 2 throughout.
+    /// `!air.version` minor. The major has been 2 throughout.
     air_minor: u32,
     /// `!air.language_version` major.minor.
     lang: (u32, u32),
@@ -176,7 +173,7 @@ pub const DATALAYOUT: &str = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64
 -v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32";
 
 /// Resource limits, emitted as `air.max_*` module flags. Device-family dependent in
-/// principle; identical across everything measured here.
+/// principle. Identical across everything measured here.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Limits {
     pub device_buffers: i64,
@@ -257,9 +254,9 @@ impl TargetProfile {
         }
     }
 
-    /// Override the versions the era table would pick - for a platform whose release
-    /// numbering is not in the table, or to reproduce a specific toolchain's output.
-    /// The container's format code follows the AIR version.
+    /// Override the versions the era table would pick. For a platform whose release numbering
+    /// is not in the table, or to reproduce a specific toolchain's output. The container's
+    /// format code follows the AIR version.
     pub fn with_versions(
         mut self,
         air_version: (u32, u32, u32),
@@ -278,13 +275,13 @@ impl TargetProfile {
     /// The profile for the platform this crate was compiled for.
     ///
     /// The deployment target comes from `METAL_TILE_DEPLOYMENT_TARGET` ("18.0") or the
-    /// platform's standard Apple variable (`IPHONEOS_DEPLOYMENT_TARGET` and friends) as
-    /// they were set when this crate was compiled - see `build.rs` - else the newest
-    /// era. Set one when shipping to an older OS, whose Metal runtime will refuse a
-    /// library claiming a newer AIR version than it knows.
+    /// platform's standard Apple variable (`IPHONEOS_DEPLOYMENT_TARGET` and friends) as they
+    /// were set when this crate was compiled (see `build.rs`), else the newest era. Set one
+    /// when shipping to an older OS, whose Metal runtime will refuse a library claiming a
+    /// newer AIR version than it knows.
     ///
-    /// Falls back to macOS when the host is not an Apple platform, so that a
-    /// cross-build of the emitter still produces loadable AIR for the obvious target.
+    /// Falls back to macOS when the host is not an Apple platform, so that a cross-build of
+    /// the emitter still produces loadable AIR for the obvious target.
     pub fn host() -> Self {
         let platform = Platform::host().unwrap_or(MacOS);
         let (major, minor) = option_env!("METAL_TILE_DEPLOYMENT_TARGET")
@@ -318,10 +315,10 @@ impl TargetProfile {
         DATALAYOUT
     }
 
-    /// The `SDK Version` module flag. Informational - the bitcode path omits the flag
-    /// entirely and Metal loads those libraries fine - so it reports the deployment
-    /// target rather than pretending to know which SDK is installed on the machine
-    /// that will run the emitter.
+    /// The `SDK Version` module flag. Informational. The bitcode path omits the flag
+    /// entirely and Metal loads those libraries fine, so it reports the deployment target
+    /// rather than pretending to know which SDK is installed on the machine that will run
+    /// the emitter.
     pub fn sdk_version(&self) -> (u32, u32) {
         self.os
     }

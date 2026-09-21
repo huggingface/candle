@@ -1,21 +1,16 @@
-//! Types of the `air` dialect: what [`crate::ir_builder::LlType`] models, as pliron types.
+//! Types of the `air` dialect, and the helper constructors the lowering spells them with.
 //!
-//! Three are defined here because pliron has no equivalent:
-//!   `air.ptr`   TYPED pointer with an address space. pliron's `llvm.ptr` is
-//!               opaque-pointer only (LLVM 22), but Apple's AIR reader is
-//!               pre-opaque-pointer and needs `POINTER(pointee, addrspace)` records.
-//!   `air.vec`   `<N x T>`; pliron has no vector type.
-//!   `air.bf16`  pliron's builtin floats stop at fp16/fp32/fp64.
-//! Integers and fp16/fp32/fp64 reuse `builtin`.
+//! Most types are simply re-exports of pliron's llvm types. The only type we define ourselves
+//! is the typed pointer `air.ptr`, because pliron's `llvm.ptr` is an opaque pointer (>=LLVM 22),
+//! and AIR's intrinsics require typed pointers.
 
 use pliron::builtin::type_interfaces::FloatTypeInterface;
-use pliron::builtin::types::{FP16Type, FP32Type, FP64Type, IntegerType, Signedness, UnitType};
+use pliron::builtin::types::{
+    BF16Type, FP16Type, FP32Type, FP64Type, IntegerType, Signedness, UnitType,
+};
 use pliron::context::Context;
-use pliron::derive::{pliron_type, type_interface_impl};
+use pliron::derive::pliron_type;
 use pliron::r#type::TypeHandle;
-use pliron::utils::apfloat::{self, GetSemantics, Semantics};
-
-use crate::ir_builder::LlType;
 
 /// A pointer that knows its pointee and address space (1 device, 2 constant, 3 threadgroup).
 #[pliron_type(
@@ -39,120 +34,56 @@ impl AirPtrType {
     }
 }
 
-/// `<N x T>`.
-#[pliron_type(
-    name = "air.vec",
-    generate_get = true,
-    format = "`<` $n ` x ` $elem `>`",
-    verifier = "succ"
-)]
-#[derive(Hash, PartialEq, Eq, Debug)]
-pub struct AirVecType {
-    n: u32,
-    elem: TypeHandle,
-}
-
-impl AirVecType {
-    pub fn n(&self) -> u32 {
-        self.n
-    }
-    pub fn elem(&self) -> TypeHandle {
-        self.elem
-    }
-}
-
-/// bfloat16. Same exponent range as f32, 8 fewer mantissa bits.
-#[pliron_type(name = "air.bf16", format, generate_get = true, verifier = "succ")]
-#[derive(Hash, PartialEq, Eq, Debug)]
-pub struct AirBF16Type;
-
-#[type_interface_impl]
-impl FloatTypeInterface for AirBF16Type {
-    fn get_semantics(&self) -> Semantics {
-        apfloat::BFloat::get_semantics()
-    }
-}
-
-/// Translate an [`LlType`] into the `air` dialect.
+/// Named constructors for the `air` scalar types.
 ///
-/// One direction only: the emitter reads pliron types back through the accessors above,
-/// so a round trip would just be re-deriving what the ops already carry.
-pub fn to_pliron(ctx: &mut Context, ty: &LlType) -> TypeHandle {
-    match ty {
-        LlType::I1 => IntegerType::get(ctx, 1, Signedness::Signless).into(),
-        LlType::I8 => IntegerType::get(ctx, 8, Signedness::Signless).into(),
-        LlType::I16 => IntegerType::get(ctx, 16, Signedness::Signless).into(),
-        LlType::I32 => IntegerType::get(ctx, 32, Signedness::Signless).into(),
-        LlType::I64 => IntegerType::get(ctx, 64, Signedness::Signless).into(),
-        LlType::Half => FP16Type::get(ctx).into(),
-        LlType::BFloat => AirBF16Type::get(ctx).into(),
-        LlType::Float => FP32Type::get(ctx).into(),
-        LlType::Double => FP64Type::get(ctx).into(),
-        LlType::Void => UnitType::get(ctx).into(),
-        LlType::Vec(n, e) => {
-            let elem = to_pliron(ctx, e);
-            AirVecType::get(ctx, *n, elem).into()
-        }
-        LlType::Ptr { pointee, addrspace } => {
-            let p = to_pliron(ctx, pointee);
-            AirPtrType::get(ctx, p, *addrspace).into()
-        }
-    }
+/// Here simply because `IntegerType::get(ctx, 32, Signedness::Signless)` is incredibly verbose.
+pub fn i1_ty(ctx: &Context) -> TypeHandle {
+    IntegerType::get(ctx, 1, Signedness::Signless).into()
+}
+pub fn i8_ty(ctx: &Context) -> TypeHandle {
+    IntegerType::get(ctx, 8, Signedness::Signless).into()
+}
+pub fn i16_ty(ctx: &Context) -> TypeHandle {
+    IntegerType::get(ctx, 16, Signedness::Signless).into()
+}
+pub fn i32_ty(ctx: &Context) -> TypeHandle {
+    IntegerType::get(ctx, 32, Signedness::Signless).into()
+}
+pub fn i64_ty(ctx: &Context) -> TypeHandle {
+    IntegerType::get(ctx, 64, Signedness::Signless).into()
+}
+pub fn f16_ty(ctx: &Context) -> TypeHandle {
+    FP16Type::get(ctx).into()
+}
+pub fn bf16_ty(ctx: &Context) -> TypeHandle {
+    BF16Type::get(ctx).into()
+}
+pub fn f32_ty(ctx: &Context) -> TypeHandle {
+    FP32Type::get(ctx).into()
+}
+pub fn f64_ty(ctx: &Context) -> TypeHandle {
+    FP64Type::get(ctx).into()
+}
+pub fn void_ty(ctx: &Context) -> TypeHandle {
+    UnitType::get(ctx).into()
+}
+pub fn vec_ty(ctx: &Context, n: u32, elem: TypeHandle) -> TypeHandle {
+    pliron_llvm::types::VectorType::get(ctx, elem, n, pliron_llvm::types::VectorTypeKind::Fixed)
+        .into()
+}
+pub fn ptr_ty(ctx: &Context, pointee: TypeHandle, addrspace: u32) -> TypeHandle {
+    AirPtrType::get(ctx, pointee, addrspace).into()
+}
+/// Address space 1.
+pub fn device_ptr_ty(ctx: &Context, pointee: TypeHandle) -> TypeHandle {
+    ptr_ty(ctx, pointee, 1)
+}
+/// Address space 2, where a constant-space buffer parameter binds.
+pub fn const_ptr_ty(ctx: &Context, pointee: TypeHandle) -> TypeHandle {
+    ptr_ty(ctx, pointee, 2)
 }
 
-/// Translate an `air` type back to [`LlType`].
-///
-/// The bitcode emitter needs this direction: an op carries pliron type handles, but the
-/// bitcode type table is built from `LlType`. (An earlier note here claimed one direction
-/// sufficed - it does not, once the emitter reads types off ops rather than off `cfg.rs`.)
-pub fn from_pliron(ctx: &Context, h: TypeHandle) -> Option<LlType> {
-    use pliron::r#type::TypedHandle;
-    if let Ok(p) = TypedHandle::<AirPtrType>::from_handle(h, ctx) {
-        let p = p.deref(ctx);
-        let pointee = from_pliron(ctx, p.pointee())?;
-        return Some(LlType::Ptr {
-            pointee: Box::new(pointee),
-            addrspace: p.addrspace(),
-        });
-    }
-    if let Ok(v) = TypedHandle::<AirVecType>::from_handle(h, ctx) {
-        let v = v.deref(ctx);
-        let elem = from_pliron(ctx, v.elem())?;
-        return Some(LlType::Vec(v.n(), Box::new(elem)));
-    }
-    if TypedHandle::<AirBF16Type>::from_handle(h, ctx).is_ok() {
-        return Some(LlType::BFloat);
-    }
-    if TypedHandle::<FP16Type>::from_handle(h, ctx).is_ok() {
-        return Some(LlType::Half);
-    }
-    if TypedHandle::<FP32Type>::from_handle(h, ctx).is_ok() {
-        return Some(LlType::Float);
-    }
-    if TypedHandle::<FP64Type>::from_handle(h, ctx).is_ok() {
-        return Some(LlType::Double);
-    }
-    if TypedHandle::<UnitType>::from_handle(h, ctx).is_ok() {
-        return Some(LlType::Void);
-    }
-    if let Ok(i) = TypedHandle::<IntegerType>::from_handle(h, ctx) {
-        return match i.deref(ctx).width() {
-            1 => Some(LlType::I1),
-            8 => Some(LlType::I8),
-            16 => Some(LlType::I16),
-            32 => Some(LlType::I32),
-            64 => Some(LlType::I64),
-            _ => None,
-        };
-    }
-    None
-}
-
-/// Whether an `air` type is a floating-point type, which decides the constant form the
-/// bitcode emitter uses (`fconst` vs `iconst`).
+/// Check if an `air` type is a float
 pub fn is_float(ctx: &Context, h: TypeHandle) -> bool {
-    matches!(
-        from_pliron(ctx, h),
-        Some(LlType::Half | LlType::BFloat | LlType::Float | LlType::Double)
-    )
+    pliron::r#type::type_impls::<dyn FloatTypeInterface>(&*h.deref(ctx))
 }

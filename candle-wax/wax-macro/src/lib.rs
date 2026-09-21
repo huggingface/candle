@@ -55,7 +55,7 @@ fn emit_module(module_item: syn::ItemMod, raw_source: String) -> TokenStream {
     // Emit concrete kernel items (one per rank), plus dispatch scaffolding, so rustc can typecheck.
     let concrete_items: Vec<::proc_macro2::TokenStream> = match emitted_items(&module_item) {
         Ok(items) => items,
-        Err(err) => return err.into(),
+        Err(err) => return err,
     };
 
     // Create SHA-256 hash of source.

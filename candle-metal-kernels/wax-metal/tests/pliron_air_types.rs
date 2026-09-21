@@ -3,7 +3,6 @@
 //! Cheap gate for Phase A's foundation - if a type cannot be represented the emitter
 //! built on it cannot be either, and this fails long before the bitcode differential.
 
-#![cfg(feature = "pliron-air")]
 
 use pliron::context::Context;
 use pliron::printable::Printable;

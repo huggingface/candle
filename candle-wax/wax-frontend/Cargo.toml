@@ -9,8 +9,11 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-cutile-frontend = { git = "https://github.com/ivarflakstad/cutile-rs", branch = "main" }
-cutile-ir = { git = "https://github.com/ivarflakstad/cutile-rs", branch = "main" }
-cutile-dsl = { git = "https://github.com/ivarflakstad/cutile-rs", branch = "main" }
+cutile-frontend = { git = "https://github.com/ivarflakstad/cutile-rs", branch = "dev" }
+cutile-ir = { git = "https://github.com/ivarflakstad/cutile-rs", branch = "dev" }
+cutile-dsl = { git = "https://github.com/ivarflakstad/cutile-rs", branch = "dev" }
 wax-ir = { path = "../wax-ir" }
 syn = { workspace = true }
+
+[dev-dependencies]
+pliron = { workspace = true }

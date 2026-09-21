@@ -170,13 +170,6 @@ pub enum Attribute {
     DenseElements(DenseElements),
     /// Dense array of i32 values, matching MLIR's `DenseI32ArrayAttr`; the
     /// encoding of op attributes declared with that type (`permutation`).
-    ///
-    /// Not for `operandSegmentSizes`: the bytecode writer reads the operand
-    /// group sizes only from an [`Attribute::Array`] of [`Attribute::Integer`]s
-    /// (see `operand_segment_sizes` in `bytecode/op_writer.rs`), and the
-    /// attribute itself is never serialized — it only drives how the
-    /// operands are grouped. A `DenseI32Array` there is silently treated as
-    /// "one operand per group".
     DenseI32Array(Vec<i32>),
     DivBy(DivBy),
     SameElements(SameElements),
