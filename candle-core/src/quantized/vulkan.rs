@@ -7,8 +7,9 @@
 //! (Q6_K, Q8_0, Q5_0, Q5_K) dequantize to f32 on the fly and run the f32
 //! kernels.
 use crate::quantized::GgmlDType;
-use crate::vulkan_backend::{VBuf, VulkanDevice, VulkanStorage};
+use crate::vulkan_backend::VBuf;
 use crate::{DType, Layout, Result, Shape};
+use crate::{VulkanDevice, VulkanStorage};
 use vulkano::buffer::Subbuffer;
 pub struct QVulkanStorage {
     bytes: Subbuffer<[u8]>,
@@ -62,43 +63,55 @@ impl QVulkanStorage {
     /// Dequantize to f32 in VRAM: Q4_K/Q6_K/Q8_0/Q5_0/Q5_K through the
     /// GPU dequant kernels, f32 weights by reinterpreting the buffer (no
     /// copy).
-    pub fn dequantize_f32(&self, elem_count: usize) -> Result<VulkanStorage> {
-        match self.dtype {
-            GgmlDType::F32 => {
-                let buf = self.bytes.clone().reinterpret::<[f32]>();
-                Ok(VulkanStorage::new(
-                    VBuf::F32(buf),
-                    &self.device,
-                    elem_count,
-                    DType::F32,
-                ))
-            }
-            GgmlDType::Q4K
-            | GgmlDType::Q6K
-            | GgmlDType::Q8_0
-            | GgmlDType::Q5_0
-            | GgmlDType::Q5K => {
-                let device = self.device.clone();
-                let out = device.new_f32_buffer(elem_count)?;
-                let w = self.bytes.clone();
-                let o = out.clone();
-                let kernels = device.kernels();
-                let dtype = self.dtype;
-                device.execute(move |cbb| {
-                    dequant_dispatch(dtype, cbb, &kernels, &w, &o, elem_count)
-                })?;
-                Ok(VulkanStorage::new(
-                    VBuf::F32(out),
-                    &self.device,
-                    elem_count,
-                    DType::F32,
-                ))
-            }
-            other => {
-                crate::bail!("vulkan: dequantize of {:?} not implemented", other)
-            }
-        }
+    pub fn dequantize(&self, elem_count: usize) -> Result<VulkanStorage> {
+        todo!()
+        // match self.dtype {
+        //     GgmlDType::F32 => {
+        //         let buf = self.bytes.clone().reinterpret::<[f32]>();
+        //         Ok(VulkanStorage::new(
+        //             VBuf::F32(buf),
+        //             &self.device,
+        //             elem_count,
+        //             DType::F32,
+        //         ))
+        //     }
+        //     GgmlDType::Q4K
+        //     | GgmlDType::Q6K
+        //     | GgmlDType::Q8_0
+        //     | GgmlDType::Q5_0
+        //     | GgmlDType::Q5K => {
+        //         let device = self.device.clone();
+        //         let out = device.new_f32_buffer(elem_count)?;
+        //         let w = self.bytes.clone();
+        //         let o = out.clone();
+        //         let kernels = device.kernels();
+        //         let dtype = self.dtype;
+        //         device.execute(move |cbb| {
+        //             dequant_dispatch(dtype, cbb, &kernels, &w, &o, elem_count)
+        //         })?;
+        //         Ok(VulkanStorage::new(
+        //             VBuf::F32(out),
+        //             &self.device,
+        //             elem_count,
+        //             DType::F32,
+        //         ))
+        //     }
+        //     other => {
+        //         crate::bail!("vulkan: dequantize of {:?} not implemented", other)
+        //     }
+        // }
     }
+
+    pub fn embedding(
+        &self,
+        rows: usize,
+        hidden: usize,
+        ids_storage: &VulkanStorage,
+        layout: &Layout,
+    ) -> Result<VulkanStorage> {
+        todo!()
+    }
+
     /// Quantized matmul: `shape` is the weight shape `(n, k)`, `storage` is
     /// the input activation (f32, `rows * k` elements, contiguous). The
     /// output is f32 with the last dim replaced by `n`.
@@ -108,80 +121,81 @@ impl QVulkanStorage {
         storage: &VulkanStorage,
         layout: &Layout,
     ) -> Result<(VulkanStorage, Shape)> {
-        if !matches!(
-            self.dtype,
-            GgmlDType::Q4K | GgmlDType::Q6K | GgmlDType::Q8_0 | GgmlDType::Q5_0 | GgmlDType::Q5K
-        ) {
-            crate::bail!(
-                "vulkan: qmatmul only supports Q4_K/Q6_K/Q8_0/Q5_0/Q5_K (got {:?})",
-                self.dtype
-            );
-        }
-        let (n, k) = shape.dims2()?;
-        if !layout.is_contiguous() {
-            crate::bail!("vulkan: qmatmul requires a contiguous input");
-        }
-        let src_dims = layout.shape().dims();
-        if src_dims.is_empty() || *src_dims.last().unwrap() != k {
-            crate::bail!("vulkan: qmatmul input/weight shape mismatch");
-        }
-        let elems = layout.shape().elem_count();
-        let m = elems / k;
-        let offset = layout.start_offset();
-        let Some(input) = storage.as_f32() else {
-            crate::bail!("vulkan: qmatmul input must be f32");
-        };
-        // A view (e.g. `narrow` of the final position) shares the full
-        // buffer; slice it so the kernel reads from the view's start.
-        let input = if offset > 0 {
-            input.clone().slice(offset as u64..(offset + elems) as u64)
-        } else {
-            input.clone()
-        };
-        let device = self.device.clone();
-        let out = device.new_f32_buffer(m * n)?;
-        let w = self.bytes.clone();
-        let o = out.clone();
-        let in_buf = input.clone();
-        let kernels = device.kernels();
-        let dtype = self.dtype;
-        if m == 1 {
-            if dtype == GgmlDType::Q4K {
-                device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_q4k_qmatvec_f32(
-                        cbb, &kernels, &in_buf, &w, &o, k, n,
-                    )
-                    .map_err(|e| e.to_string())
-                })?;
-            } else {
-                let tmp = device.new_f32_buffer(n * k)?;
-                let t = tmp.clone();
-                device.execute(move |cbb| {
-                    dequant_dispatch(dtype, cbb, &kernels, &w, &t, n * k)?;
-                    candle_vulkan_kernels::call_gemv_f32(cbb, &kernels, &in_buf, &t, &o, k, n)
-                        .map_err(|e| e.to_string())
-                })?;
-            }
-        } else {
-            // Prefill: dequant the weight to f32 in VRAM, then f32 GEMM.
-            let tmp = device.new_f32_buffer(n * k)?;
-            let t = tmp.clone();
-            device.execute(move |cbb| {
-                dequant_dispatch(dtype, cbb, &kernels, &w, &t, n * k)?;
-                candle_vulkan_kernels::call_gemm_f32(
-                    cbb, &kernels, &in_buf, &t, &o, 1, m, n, k, true,
-                )
-                .map_err(|e| e.to_string())
-            })?;
-        }
-        let mut dst_dims = src_dims.to_vec();
-        dst_dims.pop();
-        dst_dims.push(n);
-        let dst_shape = Shape::from(dst_dims);
-        Ok((
-            VulkanStorage::new(VBuf::F32(out), &self.device, m * n, DType::F32),
-            dst_shape,
-        ))
+        // if !matches!(
+        //     self.dtype,
+        //     GgmlDType::Q4K | GgmlDType::Q6K | GgmlDType::Q8_0 | GgmlDType::Q5_0 | GgmlDType::Q5K
+        // ) {
+        //     crate::bail!(
+        //         "vulkan: qmatmul only supports Q4_K/Q6_K/Q8_0/Q5_0/Q5_K (got {:?})",
+        //         self.dtype
+        //     );
+        // }
+        // let (n, k) = shape.dims2()?;
+        // if !layout.is_contiguous() {
+        //     crate::bail!("vulkan: qmatmul requires a contiguous input");
+        // }
+        // let src_dims = layout.shape().dims();
+        // if src_dims.is_empty() || *src_dims.last().unwrap() != k {
+        //     crate::bail!("vulkan: qmatmul input/weight shape mismatch");
+        // }
+        // let elems = layout.shape().elem_count();
+        // let m = elems / k;
+        // let offset = layout.start_offset();
+        // let Some(input) = storage.as_f32() else {
+        //     crate::bail!("vulkan: qmatmul input must be f32");
+        // };
+        // // A view (e.g. `narrow` of the final position) shares the full
+        // // buffer; slice it so the kernel reads from the view's start.
+        // let input = if offset > 0 {
+        //     input.clone().slice(offset as u64..(offset + elems) as u64)
+        // } else {
+        //     input.clone()
+        // };
+        // let device = self.device.clone();
+        // let out = device.new_f32_buffer(m * n)?;
+        // let w = self.bytes.clone();
+        // let o = out.clone();
+        // let in_buf = input.clone();
+        // let kernels = device.kernels();
+        // let dtype = self.dtype;
+        // if m == 1 {
+        //     if dtype == GgmlDType::Q4K {
+        //         device.execute(move |cbb| {
+        //             candle_vulkan_kernels::call_q4k_qmatvec_f32(
+        //                 cbb, &kernels, &in_buf, &w, &o, k, n,
+        //             )
+        //             .map_err(|e| e.to_string())
+        //         })?;
+        //     } else {
+        //         let tmp = device.new_f32_buffer(n * k)?;
+        //         let t = tmp.clone();
+        //         device.execute(move |cbb| {
+        //             dequant_dispatch(dtype, cbb, &kernels, &w, &t, n * k)?;
+        //             candle_vulkan_kernels::call_gemv_f32(cbb, &kernels, &in_buf, &t, &o, k, n)
+        //                 .map_err(|e| e.to_string())
+        //         })?;
+        //     }
+        // } else {
+        //     // Prefill: dequant the weight to f32 in VRAM, then f32 GEMM.
+        //     let tmp = device.new_f32_buffer(n * k)?;
+        //     let t = tmp.clone();
+        //     device.execute(move |cbb| {
+        //         dequant_dispatch(dtype, cbb, &kernels, &w, &t, n * k)?;
+        //         candle_vulkan_kernels::call_gemm_f32(
+        //             cbb, &kernels, &in_buf, &t, &o, 1, m, n, k, true,
+        //         )
+        //         .map_err(|e| e.to_string())
+        //     })?;
+        // }
+        // let mut dst_dims = src_dims.to_vec();
+        // dst_dims.pop();
+        // dst_dims.push(n);
+        // let dst_shape = Shape::from(dst_dims);
+        // Ok((
+        //     VulkanStorage::new(VBuf::F32(out), &self.device, m * n, DType::F32),
+        //     dst_shape,
+        // ))
+        todo!()
     }
 }
 /// Records a dequant dispatch for the dtypes handled by this backend

@@ -480,19 +480,13 @@ impl ModelWeights {
         let rms_norm_eps = md_get("qwen3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
         let rope_freq_base = md_get("qwen3.rope.freq_base")?.to_f32()? as f64;
 
-        // The Vulkan backend is f32-only (VBuf has no f16), so compute in f32
-        // there; other backends follow the GGUF's general.dtype.
-        let dtype = if device.is_vulkan() {
-            DType::F32
-        } else {
-            match gg.metadata().get("general.dtype") {
-                Some(v) => match v.to_u32() {
-                    Ok(0) => DType::F32,
-                    Ok(1) => DType::F16,
-                    _ => DType::F16,
-                },
-                None => DType::F16,
-            }
+        let dtype = match gg.metadata().get("general.dtype") {
+            Some(v) => match v.to_u32() {
+                Ok(0) => DType::F32,
+                Ok(1) => DType::F16,
+                _ => DType::F16,
+            },
+            None => DType::F16,
         };
 
         let embed_tensor = gg.tensor("token_embd.weight")?;

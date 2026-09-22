@@ -255,7 +255,7 @@ impl QStorage {
         match self {
             QStorage::Cpu(storage) => Ok(Storage::Cpu(storage.dequantize(elem_count)?)),
             QStorage::Metal(storage) => Ok(Storage::Metal(storage.dequantize(elem_count)?)),
-            QStorage::Vulkan(storage) => Ok(Storage::Vulkan(storage.dequantize_f32(elem_count)?)),
+            QStorage::Vulkan(storage) => Ok(Storage::Vulkan(storage.dequantize(elem_count)?)),
             QStorage::Cuda(storage) => Ok(Storage::Cuda(storage.dequantize(elem_count)?)),
         }
     }
@@ -767,13 +767,12 @@ impl QTensor {
                 }
                 _ => unreachable!("ids were moved to the QTensor device"),
             },
-            QStorage::Vulkan(storage) => {
-                let deq = storage.dequantize_f32(rows * hidden)?;
-                let none = crate::op::BackpropOp::none();
-                let t =
-                    crate::tensor::from_storage(Storage::Vulkan(deq), (rows, hidden), none, false);
-                return Ok(t.index_select(&ids, 0)?);
-            }
+            QStorage::Vulkan(storage) => match &*ids.storage() {
+                Storage::Vulkan(ids_storage) => {
+                    Storage::Vulkan(storage.embedding(rows, hidden, ids_storage, ids.layout())?)
+                }
+                _ => unreachable!("ids were moved to the QTensor device"),
+            },
         };
         let none = crate::op::BackpropOp::none();
         Ok(crate::tensor::from_storage(storage, out_shape, none, false))

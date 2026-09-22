@@ -326,7 +326,7 @@ impl candle::CustomOp3 for RotaryEmb {
         s3: &candle::VulkanStorage,
         l3: &Layout,
     ) -> Result<(candle::VulkanStorage, Shape)> {
-        candle::vulkan_backend::rope_f32(s1, l1, s2, l2, s3, l3)
+        todo!()
     }
 
     fn cpu_fwd(

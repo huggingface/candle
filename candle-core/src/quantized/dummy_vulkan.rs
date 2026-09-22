@@ -32,11 +32,21 @@ impl QVulkanStorage {
         Err(Error::NotCompiledWithVulkanSupport)
     }
 
-    pub fn dequantize_f32(&self, _elem_count: usize) -> Result<VulkanStorage> {
+    pub fn dequantize(&self, _elem_count: usize) -> Result<VulkanStorage> {
         Err(Error::NotCompiledWithVulkanSupport)
     }
 
     pub fn device_ptr(&self) -> Result<*const u8> {
+        Err(Error::NotCompiledWithVulkanSupport)
+    }
+
+    pub fn embedding(
+        &self,
+        _rows: usize,
+        _hidden: usize,
+        _ids: &VulkanStorage,
+        _ids_l: &crate::Layout,
+    ) -> Result<VulkanStorage> {
         Err(Error::NotCompiledWithVulkanSupport)
     }
 

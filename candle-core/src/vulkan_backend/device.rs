@@ -2,7 +2,9 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::Arc;
 
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use half::f16;
+
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::{
     StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
 };
@@ -13,21 +15,22 @@ use vulkano::command_buffer::{
 use vulkano::descriptor_set::allocator::{
     StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo,
 };
-use vulkano::device::{Device, DeviceCreateInfo, QueueCreateInfo, QueueFlags};
+use vulkano::device::{Device, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::sync::fence::{Fence, FenceCreateInfo};
+use vulkano::sync::GpuFuture;
 use vulkano::VulkanLibrary;
 
 use candle_vulkan_kernels::Kernels;
 
-use crate::{DType, Error, Result};
+use crate::{Error, Result};
 
 /// A device that can be used to run computations with the Vulkan backend.
 pub struct VulkanDevice {
     instance: Arc<Instance>,
     device: Arc<Device>,
-    queue: Arc<vulkano::device::Queue>,
+    queue: Arc<Queue>,
     mem_alloc: Arc<StandardMemoryAllocator>,
     cbb_alloc: Arc<StandardCommandBufferAllocator>,
     dss_alloc: Arc<StandardDescriptorSetAllocator>,
@@ -183,6 +186,22 @@ impl VulkanDevice {
         })
     }
 
+    pub(crate) fn device(&self) -> &Arc<Device> {
+        &self.device
+    }
+
+    pub(crate) fn mem_alloc(&self) -> &Arc<StandardMemoryAllocator> {
+        &self.mem_alloc
+    }
+
+    pub(crate) fn cbb_alloc(&self) -> &Arc<StandardCommandBufferAllocator> {
+        &self.cbb_alloc
+    }
+
+    pub(crate) fn queue(&self) -> &Arc<Queue> {
+        &self.queue
+    }
+
     /// Allocation for the compute buffers: device-local (VRAM).
     /// Host-mapped allocations on this platform fall back to system
     /// RAM (the BAR aperture is small), which caps decode at the PCIe
@@ -198,9 +217,161 @@ impl VulkanDevice {
     /// Host-visible staging memory for uploads and readback.
     fn staging_alloc_info() -> AllocationCreateInfo {
         AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS,
+            memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                | MemoryTypeFilter::HOST_RANDOM_ACCESS,
             ..Default::default()
         }
+    }
+
+    pub fn copy_data_to_device<T: Default + Clone>(&self, data: &T) -> Result<Subbuffer<T>>
+    where
+        T: BufferContents,
+    {
+        // Create the staging buffer on the host with the data that needs to be copied to VRAM.
+        let source_buffer = Buffer::from_data(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            data.clone(),
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create source buffer: {error:?}").into())
+        })?;
+
+        // Create the VRAM buffer.
+        let vram_buffer = Buffer::from_data(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC
+                    | BufferUsage::TRANSFER_DST
+                    | BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+            T::default(),
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create vram buffer: {error:?}").into())
+        })?;
+
+        // Build the copy command
+        let mut builder = AutoCommandBufferBuilder::primary(
+            self.cbb_alloc.clone(),
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
+        })?;
+        builder
+            .copy_buffer(CopyBufferInfo::buffers(
+                source_buffer.clone(),
+                vram_buffer.clone(),
+            ))
+            .map_err(|error| {
+                Error::Vulkan(format!("Unable to set copy_buffer command: {error:?}").into())
+            })?;
+        let command_buffer = builder.build().map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer: {error:?}").into())
+        })?;
+
+        // Execute and flush the command buffer
+        let future = vulkano::sync::now(self.device.clone())
+            .then_execute(self.queue.clone(), command_buffer)
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .map_err(|error| {
+                Error::Vulkan(
+                    format!("Unable to execute and flush command buffer: {error:?}").into(),
+                )
+            })?;
+
+        // Block the CPU thread until the GPU finishes copying the data
+        future.wait(None).map_err(|error| {
+            Error::Vulkan(
+                format!("Failure occurred waiting for data to be uploaded: {error:?}").into(),
+            )
+        })?;
+        Ok(vram_buffer)
+    }
+
+    pub fn copy_data_from_device<T: Default + Clone>(&self, vram_buffer: &Subbuffer<T>) -> Result<T>
+    where
+        T: BufferContents,
+    {
+        // Create the buffer on the host that will receive the VRAM buffer data.
+        let destination_buffer = Buffer::from_data(
+            self.mem_alloc.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            T::default(),
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create destination buffer: {error:?}").into())
+        })?;
+
+        // Build the copy command
+        let mut builder = AutoCommandBufferBuilder::primary(
+            self.cbb_alloc.clone(),
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
+        })?;
+        builder
+            .copy_buffer(CopyBufferInfo::buffers(
+                vram_buffer.clone(),
+                destination_buffer.clone(),
+            ))
+            .map_err(|error| {
+                Error::Vulkan(format!("Unable to set copy_buffer command: {error:?}").into())
+            })?;
+        let command_buffer = builder.build().map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer: {error:?}").into())
+        })?;
+
+        // Execute and flush the command buffer
+        let future = vulkano::sync::now(self.device.clone())
+            .then_execute(self.queue.clone(), command_buffer)
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .map_err(|error| {
+                Error::Vulkan(
+                    format!("Unable to execute and flush command buffer: {error:?}").into(),
+                )
+            })?;
+
+        // Block the CPU thread until the GPU finishes copying the data
+        future.wait(None).map_err(|error| {
+            Error::Vulkan(
+                format!("Failure occurred waiting for data to be uploaded: {error:?}").into(),
+            )
+        })?;
+        let data = destination_buffer.read().map_err(|error| {
+            Error::Vulkan(
+                format!("Unable to acquire read lock to data in destination buffer: {error:?}")
+                    .into(),
+            )
+        })?;
+        Ok((*data).clone())
     }
 
     pub fn supports_bf16(&self) -> bool {
@@ -585,9 +756,9 @@ impl VulkanDevice {
     }
 }
 
-/// The underlying buffer of a `VulkanStorage`: f32 or u32 elements.
 #[derive(Clone)]
 pub enum VBuf {
+    F16(Subbuffer<[f16]>),
     F32(Subbuffer<[f32]>),
     U32(Subbuffer<[u32]>),
 }
@@ -595,6 +766,7 @@ pub enum VBuf {
 impl VBuf {
     pub fn as_f32(&self) -> Option<&Subbuffer<[f32]>> {
         match self {
+            VBuf::F16(_) => None,
             VBuf::F32(b) => Some(b),
             VBuf::U32(_) => None,
         }
@@ -602,66 +774,9 @@ impl VBuf {
 
     pub fn as_u32(&self) -> Option<&Subbuffer<[u32]>> {
         match self {
+            VBuf::F16(_) => None,
             VBuf::F32(_) => None,
             VBuf::U32(b) => Some(b),
         }
-    }
-}
-
-/// A Vulkan tensor: a device f32/u32 storage buffer plus its element count.
-#[derive(Clone)]
-pub struct VulkanStorage {
-    pub(super) buffer: VBuf,
-    pub(super) device: VulkanDevice,
-    pub(super) data_len: usize,
-    pub(super) dtype: DType,
-}
-
-impl std::fmt::Debug for VulkanStorage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VulkanStorage")
-            .field("data_len", &self.data_len)
-            .field("dtype", &self.dtype)
-            .finish()
-    }
-}
-
-impl VulkanStorage {
-    pub fn new(buffer: VBuf, device: &VulkanDevice, data_len: usize, dtype: DType) -> Self {
-        Self {
-            buffer,
-            device: device.clone(),
-            data_len,
-            dtype,
-        }
-    }
-
-    pub fn as_f32(&self) -> Option<&Subbuffer<[f32]>> {
-        self.buffer.as_f32()
-    }
-
-    pub fn as_u32(&self) -> Option<&Subbuffer<[u32]>> {
-        self.buffer.as_u32()
-    }
-
-    pub fn len(&self) -> usize {
-        self.data_len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.data_len == 0
-    }
-
-    /// Transfers this storage to `device`: a shallow clone when both
-    /// point at the same logical device (device clones share the
-    /// underlying vulkano `Device`), otherwise a full copy through the
-    /// host (download + upload).
-    pub fn transfer_to_device(&self, device: &VulkanDevice) -> Result<Self> {
-        if std::sync::Arc::ptr_eq(&self.device.device, &device.device) {
-            return Ok(self.clone());
-        }
-        let cpu = crate::backend::BackendStorage::to_cpu_storage(self)?;
-        let storage = crate::backend::BackendDevice::storage_from_cpu_storage(device, &cpu)?;
-        Ok(storage)
     }
 }
