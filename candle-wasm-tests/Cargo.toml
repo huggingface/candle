@@ -9,7 +9,7 @@ categories.workspace = true
 [dependencies]
 candle = { workspace = true }
 rand = { workspace = true }
-getrandom = { version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"], default-features = false }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.0"

@@ -3,7 +3,8 @@ use crate::worker::{ModelData, RunData, Worker, WorkerInput, WorkerOutput};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use yew::{html, Component, Context, Html};
-use yew_agent::{Bridge, Bridged};
+use yew_agent::worker::WorkerBridge;
+use yew_agent::Spawnable;
 
 async fn fetch_url(url: &str) -> Result<Vec<u8>, JsValue> {
     use web_sys::{Request, RequestCache, RequestInit, RequestMode, Response};
@@ -45,7 +46,7 @@ pub struct App {
     loaded: bool,
     generated: String,
     current_decode: Option<CurrentDecode>,
-    worker: Box<dyn Bridge<Worker>>,
+    worker: WorkerBridge<Worker>,
 }
 
 async fn model_data_load() -> Result<ModelData, JsValue> {
@@ -118,7 +119,7 @@ impl Component for App {
             let link = ctx.link().clone();
             move |e| link.send_message(Self::Message::WorkerOut(e))
         };
-        let worker = Worker::bridge(std::rc::Rc::new(cb));
+        let worker = Worker::spawner().callback(cb).spawn("./worker.js");
         Self {
             status,
             generated: String::new(),

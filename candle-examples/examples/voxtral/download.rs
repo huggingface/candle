@@ -14,9 +14,7 @@ pub fn model_files(model_id: &str) -> Result<((PathBuf, Vec<PathBuf>), PathBuf)>
     let revision = "main";
 
     let api = Api::new().unwrap();
-    let repo = api
-        .model(model_id.to_string())
-        .with_revision(revision.to_string());
+    let repo = api.model(model_id).with_revision(revision);
 
     let config = repo.get("config.json")?;
 

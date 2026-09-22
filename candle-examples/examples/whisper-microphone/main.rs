@@ -523,9 +523,9 @@ pub fn main() -> Result<()> {
                 _ => unimplemented!("no quantized support for {:?}", args.model),
             };
             (
-                repo.get(&format!("config-{ext}.json"))?,
-                repo.get(&format!("tokenizer-{ext}.json"))?,
-                repo.get(&format!("model-{ext}-q80.gguf"))?,
+                repo.get(format!("config-{ext}.json"))?,
+                repo.get(format!("tokenizer-{ext}.json"))?,
+                repo.get(format!("model-{ext}-q80.gguf"))?,
             )
         } else {
             let config = repo.get("config.json")?;
@@ -571,9 +571,7 @@ pub fn main() -> Result<()> {
     let host = cpal::default_host();
     let audio_device = match args.device.as_ref() {
         None => host.default_input_device(),
-        Some(device) => host
-            .input_devices()?
-            .find(|x| x.name().map_or(false, |y| &y == device)),
+        Some(device) => host.input_devices()?.find(|x| x.to_string() == *device),
     }
     .expect("failed to find the audio input device");
 
@@ -583,18 +581,19 @@ pub fn main() -> Result<()> {
     println!("audio config {audio_config:?}");
 
     let channel_count = audio_config.channels() as usize;
-    let in_sample_rate = audio_config.sample_rate().0 as usize;
+    let in_sample_rate = audio_config.sample_rate() as usize;
     let resample_ratio = 16000. / in_sample_rate as f64;
-    let mut resampler = rubato::FastFixedIn::new(
+    let mut resampler = rubato::Async::<f32>::new_poly(
         resample_ratio,
         10.,
         rubato::PolynomialDegree::Septic,
         1024,
         1,
+        rubato::FixedAsync::Input,
     )?;
     let (tx, rx) = std::sync::mpsc::channel();
     let stream = audio_device.build_input_stream(
-        &audio_config.config(),
+        audio_config.config(),
         move |pcm: &[f32], _: &cpal::InputCallbackInfo| {
             let pcm = pcm
                 .iter()
@@ -616,7 +615,12 @@ pub fn main() -> Result<()> {
     println!("transcribing audio...");
     let mut buffered_pcm = vec![];
     let mut language_token_set = false;
+    let mut resampler_out = {
+        use rubato::Resampler;
+        vec![0f32; resampler.output_frames_max()]
+    };
     while let Ok(pcm) = rx.recv() {
+        use rubato::audioadapter_buffers::direct::SequentialSlice;
         use rubato::Resampler;
 
         buffered_pcm.extend_from_slice(&pcm);
@@ -631,8 +635,12 @@ pub fn main() -> Result<()> {
         let remainder = buffered_pcm.len() % 1024;
         for chunk in 0..full_chunks {
             let buffered_pcm = &buffered_pcm[chunk * 1024..(chunk + 1) * 1024];
-            let pcm = resampler.process(&[&buffered_pcm], None)?;
-            resampled_pcm.extend_from_slice(&pcm[0]);
+            // Mono, so the interleaved and sequential layouts are the same.
+            let buffer_in = SequentialSlice::new(buffered_pcm, 1, buffered_pcm.len())?;
+            let out_frames = resampler_out.len();
+            let mut buffer_out = SequentialSlice::new_mut(&mut resampler_out, 1, out_frames)?;
+            let (_, out_len) = resampler.process_into_buffer(&buffer_in, &mut buffer_out, None)?;
+            resampled_pcm.extend_from_slice(&resampler_out[..out_len]);
         }
         let pcm = resampled_pcm;
         println!("{} {}", buffered_pcm.len(), pcm.len());

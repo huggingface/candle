@@ -91,10 +91,10 @@ mod variable;
 
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
+#[cfg(feature = "cutile")]
+pub use cuda_backend::cutile;
 
 pub use cpu_backend::{CpuStorage, CpuStorageRef};
-#[cfg(feature = "ug")]
-pub use custom_op::UgIOp1;
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
