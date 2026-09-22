@@ -116,6 +116,9 @@ We also provide some command line based examples using state of the art models:
 
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/sam_merged.jpg" width="200">
 
+- [segment-anything-2](./candle-examples/examples/segment-anything-2/): image
+  segmentation with prompt, using the Hiera based SAM 2 backbone.
+
 - [SegFormer](./candle-examples/examples/segformer/): transformer based semantic segmentation model.
 - [Whisper](./candle-examples/examples/whisper/): speech recognition model.
 - [EnCodec](./candle-examples/examples/encodec/): high-quality audio compression
@@ -255,7 +258,7 @@ If you have an addition to this list, please submit a pull request.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT,
           ConvNeXTv2, MobileOne, EfficientVit (MSRA), MobileNetv4, Hiera, FastViT.
         - yolo-v3, yolo-v8.
-        - Segment-Anything Model (SAM).
+        - Segment-Anything Model (SAM), Segment-Anything Model 2 (SAM 2, image only).
         - SegFormer.
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
 - Serverless (on CPU), small and fast deployments.

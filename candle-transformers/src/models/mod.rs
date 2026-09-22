@@ -120,6 +120,7 @@ pub mod rwkv_v6;
 pub mod rwkv_v7;
 pub mod segformer;
 pub mod segment_anything;
+pub mod segment_anything_2;
 pub mod siglip;
 pub mod smol;
 pub mod snac;
