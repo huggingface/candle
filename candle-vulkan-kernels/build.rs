@@ -77,7 +77,11 @@ fn main() {
                 }
             },
         };
-        println!("cargo:rerun-if-changed=shaders/{shader}.comp");
+        let ext = match lang {
+            ShaderLang::Slang => "slang",
+            _ => "comp",
+        };
+        println!("cargo:rerun-if-changed=shaders/{shader}.{ext}");
     }
 }
 

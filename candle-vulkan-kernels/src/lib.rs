@@ -13,5 +13,6 @@ pub use kernels::{
     call_reduce_sum_f32,
     call_rms_norm_f32,
     call_rope_f32, call_softmax_last_dim_f32,
+    call_test_fill_f16,
 };
 pub use source::Source;

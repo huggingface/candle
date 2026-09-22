@@ -51,6 +51,7 @@ pub enum KernelName {
     Q80DequantF32,
     Q50DequantF32,
     Q5KDequantF32,
+    TestFillF16,
 }
 
 impl AsRef<str> for KernelName {
@@ -84,7 +85,18 @@ impl AsRef<str> for KernelName {
             Self::Q80DequantF32 => "main_q80_dequant",
             Self::Q50DequantF32 => "main_q50_dequant",
             Self::Q5KDequantF32 => "main_q5k_dequant",
+            Self::TestFillF16 => "main",
         }
+    }
+}
+
+fn pipeline_error(e: vulkano::Validated<vulkano::VulkanError>) -> VulkanKernelError {
+    match e {
+        vulkano::Validated::Error(e) => VulkanKernelError::Pipeline(e.to_string()),
+        vulkano::Validated::ValidationError(e) => VulkanKernelError::Pipeline(format!(
+            "validation error: {} (requires: {}; vuids: {:?})",
+            e.problem, e.requires_one_of, e.vuids
+        )),
     }
 }
 
@@ -162,7 +174,7 @@ impl Kernels {
                 vulkano::shader::ShaderModuleCreateInfo::new(&words),
             )
         }
-        .map_err(|e| VulkanKernelError::Pipeline(e.to_string()))?;
+        .map_err(pipeline_error)?;
 
         let entry_point = shader
             .entry_point(name.as_ref())
@@ -183,28 +195,37 @@ impl Kernels {
                 ..Default::default()
             },
         )
-        .map_err(|e| VulkanKernelError::Pipeline(e.to_string()))?;
+        .map_err(pipeline_error)?;
 
         let layout = PipelineLayout::new(
             self.device.clone(),
             PipelineLayoutCreateInfo {
                 set_layouts: vec![set_layout.clone()],
-                push_constant_ranges: vec![PushConstantRange {
-                    stages: ShaderStages::COMPUTE,
-                    offset: 0,
-                    size: source.push_constant_size(name),
-                }],
+                // VUID-VkPushConstantRange-size-00296: size must be > 0, so omit
+                // the range entirely for kernels that use no push constants.
+                push_constant_ranges: {
+                    let size = source.push_constant_size(name);
+                    if size > 0 {
+                        vec![PushConstantRange {
+                            stages: ShaderStages::COMPUTE,
+                            offset: 0,
+                            size,
+                        }]
+                    } else {
+                        Vec::new()
+                    }
+                },
                 ..Default::default()
             },
         )
-        .map_err(|e| VulkanKernelError::Pipeline(e.to_string()))?;
+        .map_err(pipeline_error)?;
         let stage = PipelineShaderStageCreateInfo::new(entry_point);
         let pipeline = ComputePipeline::new(
             self.device.clone(),
             None,
             ComputePipelineCreateInfo::stage_layout(stage, layout.clone()),
         )
-        .map_err(|e| VulkanKernelError::Pipeline(e.to_string()))?;
+.map_err(pipeline_error)?;
 
         Ok(PipelineEntry {
             pipeline,
@@ -248,6 +269,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Q80DequantF32
         | KernelName::Q50DequantF32
         | KernelName::Q5KDequantF32 => 3,
+        KernelName::TestFillF16 => 1,
     }
 }
 

@@ -16,6 +16,7 @@ const GEMV_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv.spv"));
 const GEMV_T_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv_t.spv"));
 const Q4K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q4k.spv"));
 const Q5Q8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q5q8.spv"));
+const TEST_FILL_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test_fill_f16.spv"));
 
 /// The set of compiled compute shaders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,6 +35,7 @@ pub enum Source {
     GemvT,
     Q4k,
     Q5q8,
+    TestFillF16,
 }
 
 impl Source {
@@ -70,6 +72,7 @@ impl Source {
             KernelName::Q80DequantF32 => 8,
             KernelName::Q50DequantF32 => 8,
             KernelName::Q5KDequantF32 => 8,
+            KernelName::TestFillF16 => 0,
         }
     }
 
@@ -90,6 +93,7 @@ impl Source {
             Self::GemvT => GEMV_T_SPV,
             Self::Q4k => Q4K_SPV,
             Self::Q5q8 => Q5Q8_SPV,
+            Self::TestFillF16 => TEST_FILL_F16_SPV,
         };
         bytes
             .chunks_exact(4)
@@ -115,6 +119,7 @@ impl AsRef<str> for Source {
             Self::RmsNorm => "rms_norm",
             Self::Softmax => "softmax",
             Self::Rope => "rope",
+            Self::TestFillF16 => "test_fill_f16",
         }
     }
 }

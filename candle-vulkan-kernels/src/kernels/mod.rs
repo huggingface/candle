@@ -12,6 +12,7 @@ pub mod reduce;
 pub mod rms_norm;
 pub mod rope;
 pub mod softmax;
+pub mod test_fill_f16;
 
 pub use affine::call_affine_f32;
 pub use copy::call_copy_f32;
@@ -25,3 +26,4 @@ pub use reduce::{call_reduce_max_f32, call_reduce_sum_f32};
 pub use rms_norm::call_rms_norm_f32;
 pub use rope::call_rope_f32;
 pub use softmax::call_softmax_last_dim_f32;
+pub use test_fill_f16::call_test_fill_f16;

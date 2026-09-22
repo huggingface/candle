@@ -109,6 +109,8 @@ pub enum VulkanStorageBuffer {
 #[derive(Debug)]
 pub struct VulkanStorage {
     buffer: VulkanStorageBuffer,
+    device: VulkanDevice,
+    dtype: DType,
 }
 
 impl VulkanStorage {
@@ -135,7 +137,11 @@ impl VulkanStorage {
             DType::F4 => VulkanStorageBuffer::U8(Self::create_vram_buffer::<u8>(device, size)?),
             DType::F8E8M0 => VulkanStorageBuffer::U8(Self::create_vram_buffer::<u8>(device, size)?),
         };
-        Ok(Self { buffer: slice })
+        Ok(Self {
+            buffer: slice,
+            device: device.clone(),
+            dtype,
+        })
     }
 
     pub fn buffer(&self) -> &VulkanStorageBuffer {
@@ -174,7 +180,8 @@ impl VulkanStorage {
             BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_SRC
                     | BufferUsage::TRANSFER_DST
-                    | BufferUsage::UNIFORM_BUFFER,
+                    | BufferUsage::UNIFORM_BUFFER
+                    | BufferUsage::STORAGE_BUFFER,
                 ..Default::default()
             },
             AllocationCreateInfo {
@@ -229,6 +236,118 @@ impl VulkanStorage {
         })?;
         Ok(vram_buffer)
     }
+    /// Copies a device-local (VRAM) buffer to a host-visible buffer and
+    /// returns its contents as an owned `Vec<T>`.
+    fn copy_to_host<T: Default + Clone>(device: &VulkanDevice, vram: &Subbuffer<[T]>) -> Result<Vec<T>>
+    where
+        T: BufferContents,
+    {
+        let len = vram.len();
+        let destination_buffer = Buffer::new_slice::<T>(
+            device.mem_alloc().clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            len,
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create host readback buffer: {error:?}").into())
+        })?;
+        let mut builder = AutoCommandBufferBuilder::primary(
+            device.cbb_alloc().clone(),
+            device.queue().queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
+        })?;
+        builder
+            .copy_buffer(CopyBufferInfo::buffers(vram.clone(), destination_buffer.clone()))
+            .map_err(|error| {
+                Error::Vulkan(format!("Unable to set copy_buffer command: {error:?}").into())
+            })?;
+        let command_buffer = builder.build().map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer: {error:?}").into())
+        })?;
+        let future = vulkano::sync::now(device.device().clone())
+            .then_execute(device.queue().clone(), command_buffer)
+            .map_err(|error| {
+                Error::Vulkan(format!("Unable to execute command buffer: {error:?}").into())
+            })?
+            .then_signal_fence_and_flush()
+            .map_err(|error| {
+                Error::Vulkan(
+                    format!("Unable to signal fence and flush command buffer: {error:?}").into(),
+                )
+            })?;
+        future.wait(None).map_err(|error| {
+            Error::Vulkan(
+                format!("Failure occurred waiting for readback to finish: {error:?}").into(),
+            )
+        })?;
+        let data = destination_buffer.read().map_err(|error| {
+            Error::Vulkan(
+                format!("Unable to acquire read lock on readback buffer: {error:?}").into(),
+            )
+        })?;
+        Ok(data.to_vec())
+    }
+    /// Runs the `test_fill_f16` slang kernel over this storage: element `i`
+    /// is filled with the bits of `i` reinterpreted as an f16 value, so a
+    /// 65,536-element storage ends up holding every possible f16 value.
+    /// The storage must be F16.
+    pub fn fill_f16(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F16(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f16 requires F16 storage".to_string().into(),
+                ))
+            }
+        };
+        let device = self.device.clone();
+        let mut builder = AutoCommandBufferBuilder::primary(
+            device.cbb_alloc().clone(),
+            device.queue().queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
+        })?;
+        candle_vulkan_kernels::call_test_fill_f16(
+            &mut builder,
+            device.kernels().as_ref(),
+            buffer,
+            buffer.len() as usize,
+        )
+        .map_err(VulkanError::KernelError)?;
+        let command_buffer = builder.build().map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer: {error:?}").into())
+        })?;
+        let future = vulkano::sync::now(device.device().clone())
+            .then_execute(device.queue().clone(), command_buffer)
+            .map_err(|error| {
+                Error::Vulkan(format!("Unable to execute command buffer: {error:?}").into())
+            })?
+            .then_signal_fence_and_flush()
+            .map_err(|error| {
+                Error::Vulkan(
+                    format!("Unable to signal fence and flush command buffer: {error:?}").into(),
+                )
+            })?;
+        future.wait(None).map_err(|error| {
+            Error::Vulkan(
+                format!("Failure occurred waiting for fill_f16 to finish: {error:?}").into(),
+            )
+        })?;
+        Ok(())
+    }
 }
 
 impl BackendStorage for VulkanStorage {
@@ -239,15 +358,31 @@ impl BackendStorage for VulkanStorage {
     }
 
     fn dtype(&self) -> DType {
-        todo!()
+        self.dtype
     }
 
     fn device(&self) -> &Self::Device {
-        todo!()
+        &self.device
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
-        todo!()
+        let device = self.device.clone();
+        Ok(match &self.buffer {
+            VulkanStorageBuffer::U8(b) => CpuStorage::U8(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::U32(b) => CpuStorage::U32(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::I16(b) => CpuStorage::I16(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::I32(b) => CpuStorage::I32(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::I64(b) => CpuStorage::I64(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::BF16(b) => CpuStorage::BF16(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::F16(b) => CpuStorage::F16(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::F32(b) => CpuStorage::F32(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::F64(b) => CpuStorage::F64(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::F8E4M3(b) => CpuStorage::F8E4M3(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::F6E2M3(b) => CpuStorage::F6E2M3(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::F6E3M2(b) => CpuStorage::F6E3M2(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::F4(b) => CpuStorage::F4(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::F8E8M0(b) => CpuStorage::F8E8M0(Self::copy_to_host(&device, b)?),
+        })
     }
 
     fn affine(&self, _: &Layout, _: f64, _: f64) -> Result<Self> {

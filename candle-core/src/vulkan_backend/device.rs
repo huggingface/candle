@@ -15,7 +15,10 @@ use vulkano::command_buffer::{
 use vulkano::descriptor_set::allocator::{
     StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo,
 };
-use vulkano::device::{Device, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags};
+use vulkano::device::{
+    Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo,
+    QueueFlags,
+};
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::sync::fence::{Fence, FenceCreateInfo};
@@ -140,6 +143,20 @@ impl VulkanDevice {
                     queues: vec![1.0],
                     ..Default::default()
                 }],
+                // f16/bf16 compute kernels need 16-bit storage buffers
+                // and 16-bit integer/float shader types.
+                enabled_extensions: DeviceExtensions {
+                    khr_16bit_storage: true,
+                    khr_shader_float16_int8: true,
+                    ..Default::default()
+                },
+                enabled_features: DeviceFeatures {
+                    storage_buffer16_bit_access: true,
+                    uniform_and_storage_buffer16_bit_access: true,
+                    shader_float16: true,
+                    shader_int16: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         )
