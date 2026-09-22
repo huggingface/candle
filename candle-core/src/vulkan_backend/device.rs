@@ -288,11 +288,13 @@ impl VulkanDevice {
         // Execute and flush the command buffer
         let future = vulkano::sync::now(self.device.clone())
             .then_execute(self.queue.clone(), command_buffer)
-            .unwrap()
+            .map_err(|error| {
+                Error::Vulkan(format!("Unable to execute command buffer: {error:?}").into())
+            })?
             .then_signal_fence_and_flush()
             .map_err(|error| {
                 Error::Vulkan(
-                    format!("Unable to execute and flush command buffer: {error:?}").into(),
+                    format!("Unable to signal fence and flush command buffer: {error:?}").into(),
                 )
             })?;
 
@@ -351,11 +353,13 @@ impl VulkanDevice {
         // Execute and flush the command buffer
         let future = vulkano::sync::now(self.device.clone())
             .then_execute(self.queue.clone(), command_buffer)
-            .unwrap()
+            .map_err(|error| {
+                Error::Vulkan(format!("Unable to execute command buffer: {error:?}").into())
+            })?
             .then_signal_fence_and_flush()
             .map_err(|error| {
                 Error::Vulkan(
-                    format!("Unable to execute and flush command buffer: {error:?}").into(),
+                    format!("Unable to signal fence and flush command buffer: {error:?}").into(),
                 )
             })?;
 
@@ -375,22 +379,11 @@ impl VulkanDevice {
     }
 
     pub fn supports_bf16(&self) -> bool {
-        let supports_bf16 = self
-            .device
+        self.device
             .physical_device()
             .extension_properties()
             .iter()
-            .any(|property| property.extension_name.eq("VK_KHR_shader_bfloat16"));
-        // TODO: Need to support bfloat16 eventually. For now, just log if the GPU supports it or not.
-        if supports_bf16 {
-            tracing::debug!("Vulkan device {} has bfloat16 support.", self._gpu_id);
-        } else {
-            tracing::debug!(
-                "Vulkan device {} does not have bfloat16 support.",
-                self._gpu_id
-            );
-        }
-        false
+            .any(|property| property.extension_name.eq("VK_KHR_shader_bfloat16"))
     }
 
     /// Uploads `data` into a device f32 storage buffer in VRAM. A

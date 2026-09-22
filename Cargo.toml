@@ -69,7 +69,7 @@ half = { version = "2.5.0", features = [
     "rand_distr",
     "zerocopy"
 ] }
-float8 = { version = "0.7.0", features = ["num-traits", "rand_distr"] }
+float8 = { version = "0.7.0", features = ["bytemuck", "num-traits", "rand_distr"] }
 hound = "3.5.1"
 image = { version = "0.25.2", default-features = false, features = [
     "jpeg",

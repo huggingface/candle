@@ -128,7 +128,23 @@ impl QStorage {
                 GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
             },
-            Device::Vulkan(d) => vulkan::load_quantized(d, data, dtype),
+            Device::Vulkan(_) => match dtype {
+                GgmlDType::F32 => todo!(),
+                GgmlDType::F16 => todo!(),
+                GgmlDType::BF16 => todo!(),
+                GgmlDType::Q4_0 => todo!(),
+                GgmlDType::Q4_1 => todo!(),
+                GgmlDType::Q5_0 => todo!(),
+                GgmlDType::Q5_1 => todo!(),
+                GgmlDType::Q8_0 => todo!(),
+                GgmlDType::Q8_1 => todo!(),
+                GgmlDType::Q2K => todo!(),
+                GgmlDType::Q3K => todo!(),
+                GgmlDType::Q4K => todo!(),
+                GgmlDType::Q5K => todo!(),
+                GgmlDType::Q6K => todo!(),
+                GgmlDType::Q8K => todo!(),
+            },
             Device::Cuda(d) => match dtype {
                 GgmlDType::F32 => cuda::load_quantized(d, as_t_slice::<f32>(data)),
                 GgmlDType::F16 => cuda::load_quantized(d, as_t_slice::<f16>(data)),
@@ -180,7 +196,7 @@ impl QStorage {
         match self {
             QStorage::Cpu(storage) => storage.storage_size_in_bytes(),
             QStorage::Metal(storage) => storage.storage_size_in_bytes(),
-            QStorage::Vulkan(storage) => storage.size_in_bytes(),
+            QStorage::Vulkan(storage) => storage.storage_size_in_bytes(),
             QStorage::Cuda(storage) => storage.storage_size_in_bytes(),
         }
     }

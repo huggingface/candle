@@ -1,3 +1,5 @@
+//! Implementation of the Vulkan backend when Vulkan support has not been compiled in.
+//!
 #![allow(dead_code)]
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
@@ -7,6 +9,12 @@ pub struct VulkanDevice;
 
 #[derive(Debug)]
 pub struct VulkanStorage;
+
+impl VulkanStorage {
+    pub fn transfer_to_device(&self, _dst: &VulkanDevice) -> Result<Self> {
+        Err(Error::NotCompiledWithVulkanSupport)
+    }
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum VulkanError {

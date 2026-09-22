@@ -279,11 +279,10 @@ impl Tensor {
                         return Err(Error::Msg("Metal support not compiled".to_string()));
                     }
                     #[cfg(feature = "vulkan")]
-                    Device::Vulkan(_) => {
-                        return Err(Error::Msg(
-                            "vulkan: raw-bytes sub-8-bit-float storage is not supported"
-                                .to_string(),
-                        ));
+                    Device::Vulkan(device) => {
+                        let storage =
+                            crate::vulkan_backend::VulkanStorage::new(device, shape.len(), dtype)?;
+                        Storage::Vulkan(storage)
                     }
                     #[cfg(not(feature = "vulkan"))]
                     Device::Vulkan(_) => {
@@ -390,10 +389,9 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
             return Err(Error::Msg("Metal support not compiled".to_string()));
         }
         #[cfg(feature = "vulkan")]
-        Device::Vulkan(_) => {
-            return Err(Error::Msg(
-                "vulkan: raw-bytes sub-8-bit-float storage is not supported".to_string(),
-            ));
+        Device::Vulkan(device) => {
+            let storage = crate::vulkan_backend::VulkanStorage::new(device, shape.len(), dtype)?;
+            Storage::Vulkan(storage)
         }
         #[cfg(not(feature = "vulkan"))]
         Device::Vulkan(_) => {
