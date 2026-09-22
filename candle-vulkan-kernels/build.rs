@@ -1,6 +1,13 @@
 use std::fs;
 use std::path::Path;
 
+#[derive(PartialEq)]
+enum ShaderLang {
+    Glsl,
+    Wgsl,
+    Slang,
+}
+
 fn main() {
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let src_dir = Path::new("shaders");
@@ -8,33 +15,68 @@ fn main() {
     // which naga's GLSL frontend cannot express); `affine` and `reduce` are
     // GLSL. All sources live under the `.comp` extension.
     for (shader, lang) in [
-        ("affine", "glsl"),
-        ("reduce", "glsl"),
-        ("reduce_max", "glsl"),
-        ("gather", "glsl"),
-        ("copy", "glsl"),
-        ("rms_norm", "wgsl"),
-        ("softmax", "wgsl"),
-        ("rope", "wgsl"),
-        ("gemv", "wgsl"),
-        ("gemv_t", "wgsl"),
-        ("elementwise", "wgsl"),
-        ("gemm", "wgsl"),
-        ("q4k", "wgsl"),
-        ("q5q8", "wgsl"),
+        ("affine", ShaderLang::Glsl),
+        ("reduce", ShaderLang::Glsl),
+        ("reduce_max", ShaderLang::Glsl),
+        ("gather", ShaderLang::Glsl),
+        ("copy", ShaderLang::Glsl),
+        ("rms_norm", ShaderLang::Wgsl),
+        ("softmax", ShaderLang::Wgsl),
+        ("rope", ShaderLang::Wgsl),
+        ("gemv", ShaderLang::Wgsl),
+        ("gemv_t", ShaderLang::Wgsl),
+        ("elementwise", ShaderLang::Wgsl),
+        ("gemm", ShaderLang::Wgsl),
+        ("q4k", ShaderLang::Wgsl),
+        ("q5q8", ShaderLang::Wgsl),
+        ("test_fill_f16", ShaderLang::Slang),
     ] {
-        let source_path = src_dir.join(format!("{shader}.comp"));
-        let source = fs::read_to_string(&source_path)
-            .unwrap_or_else(|e| panic!("failed to read shaders/{shader}.comp: {e}"));
-        let module = if lang == "wgsl" {
-            parse_wgsl(&source)
-        } else {
-            parse_glsl(&source)
+        let source_path = match lang {
+            ShaderLang::Slang => src_dir.join(format!("{shader}.slang")),
+            _ => src_dir.join(format!("{shader}.comp")),
         };
-        let words = to_spv(&module);
         let out_path = Path::new(&out_dir).join(format!("{shader}.spv"));
-        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        fs::write(&out_path, &bytes).expect("failed to write SPIR-V");
+        match lang {
+            ShaderLang::Glsl | ShaderLang::Wgsl => {
+                let source = fs::read_to_string(&source_path)
+                    .unwrap_or_else(|e| panic!("failed to read shaders/{shader}.comp: {e}"));
+                let module = if ShaderLang::Glsl.eq(&lang) {
+                    parse_glsl(&source)
+                } else {
+                    parse_wgsl(&source)
+                };
+                let spirv_ir = to_spv(&module);
+                let bytes: Vec<u8> = spirv_ir.iter().flat_map(|w| w.to_le_bytes()).collect();
+                fs::write(&out_path, &bytes).expect("failed to write SPIR-V");
+            },
+            ShaderLang::Slang => {
+                let exe = if cfg!(windows) {
+                    ".exe"
+                } else {
+                    ""
+                };
+                let slangc = format!("slangc{exe}");
+                let status = std::process::Command::new(&slangc)
+                    .args(&[
+                        source_path.to_string_lossy().into_owned().as_str(),
+                        "-profile",
+                        "glsl_450",
+                        "-target",
+                        "spirv",
+                        "-o",
+                        out_path.to_string_lossy().into_owned().as_str(),
+                        "-entry",
+                        "main",
+                    ])
+                    .stdout(std::process::Stdio::piped())
+                    .status()
+                    .unwrap();
+
+                if !status.success() {
+                    panic!("slangc failed compiling source '{source_path:?}'.");
+                }
+            },
+        };
         println!("cargo:rerun-if-changed=shaders/{shader}.comp");
     }
 }
