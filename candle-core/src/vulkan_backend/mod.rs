@@ -100,12 +100,12 @@ pub enum VulkanStorageBuffer {
     F16(Subbuffer<[half::f16]>),
     F32(Subbuffer<[f32]>),
     F64(Subbuffer<[f64]>),
-    F8E4M3(Subbuffer<[float8::F8E4M3]>),
+    F8E4M3(Subbuffer<[microfloat::f8e4m3]>),
     // Dummy types that store raw bytes
-    F6E2M3(Subbuffer<[u8]>),
-    F6E3M2(Subbuffer<[u8]>),
-    F4(Subbuffer<[u8]>),
-    F8E8M0(Subbuffer<[u8]>),
+    F6E2M3(Subbuffer<[microfloat::f6e2m3fn]>),
+    F6E3M2(Subbuffer<[microfloat::f6e3m2fn]>),
+    F4(Subbuffer<[microfloat::f4e2m1fn]>),
+    F8E8M0(Subbuffer<[microfloat::f8e8m0fnu]>),
 }
 
 #[derive(Debug)]
@@ -131,13 +131,21 @@ impl VulkanStorage {
             }
             DType::F32 => VulkanStorageBuffer::F32(Self::create_vram_buffer::<f32>(device, size)?),
             DType::F64 => VulkanStorageBuffer::F64(Self::create_vram_buffer::<f64>(device, size)?),
-            DType::F8E4M3 => VulkanStorageBuffer::F8E4M3(
-                Self::create_vram_buffer::<float8::F8E4M3>(device, size)?,
-            ),
-            DType::F6E2M3 => VulkanStorageBuffer::U8(Self::create_vram_buffer::<u8>(device, size)?),
-            DType::F6E3M2 => VulkanStorageBuffer::U8(Self::create_vram_buffer::<u8>(device, size)?),
-            DType::F4 => VulkanStorageBuffer::U8(Self::create_vram_buffer::<u8>(device, size)?),
-            DType::F8E8M0 => VulkanStorageBuffer::U8(Self::create_vram_buffer::<u8>(device, size)?),
+            DType::F8E4M3 => VulkanStorageBuffer::F8E4M3(Self::create_vram_buffer::<
+                microfloat::f8e4m3,
+            >(device, size)?),
+            DType::F6E2M3 => VulkanStorageBuffer::F6E2M3(Self::create_vram_buffer::<
+                microfloat::f6e2m3fn,
+            >(device, size)?),
+            DType::F6E3M2 => VulkanStorageBuffer::F6E3M2(Self::create_vram_buffer::<
+                microfloat::f6e3m2fn,
+            >(device, size)?),
+            DType::F4 => VulkanStorageBuffer::F4(Self::create_vram_buffer::<microfloat::f4e2m1fn>(
+                device, size,
+            )?),
+            DType::F8E8M0 => VulkanStorageBuffer::F8E8M0(Self::create_vram_buffer::<
+                microfloat::f8e8m0fnu,
+            >(device, size)?),
         };
         Ok(Self {
             buffer: slice,
@@ -563,6 +571,96 @@ impl VulkanStorage {
         let total = buffer.len() as usize;
         self.run_fill("fill_f64", move |cbb| {
             candle_vulkan_kernels::call_test_fill_f64(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+
+    /// Fills this F4 (4-bit) storage with all possible raw byte values:
+    /// element `i` holds the bit pattern `i`. The storage must be F4.
+    pub fn fill_f4(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F4(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f4 requires F4 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f4", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f4(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+
+    /// Fills this F6E2M3 (6-bit) storage with all possible raw byte values:
+    /// element `i` holds the bit pattern `i`. The storage must be F6E2M3.
+    pub fn fill_f6e2m3(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F6E2M3(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f6e2m3 requires F6E2M3 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f6e2m3", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f6e2m3(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+
+    /// Fills this F6E3M2 (6-bit) storage with all possible raw byte values:
+    /// element `i` holds the bit pattern `i`. The storage must be F6E3M2.
+    pub fn fill_f6e3m2(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F6E3M2(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f6e3m2 requires F6E3M2 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f6e3m2", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f6e3m2(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+
+    /// Fills this F8E4M3 (FP8 E4M3 (emulated as raw bytes)) storage with all possible raw byte values:
+    /// element `i` holds the bit pattern `i`. The storage must be F8E4M3.
+    pub fn fill_f8e4m3(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F8E4M3(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f8e4m3 requires F8E4M3 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f8e4m3", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f8e4m3(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+
+    /// Fills this F8E8M0 (FP8 E8M0 scale (emulated as raw bytes)) storage with all possible raw byte values:
+    /// element `i` holds the bit pattern `i`. The storage must be F8E8M0.
+    pub fn fill_f8e8m0(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F8E8M0(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f8e8m0 requires F8E8M0 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f8e8m0", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f8e8m0(cbb, kernels.as_ref(), buffer, total)
         })
     }
 }

@@ -22,7 +22,7 @@ cudarc = { workspace = true, optional = true }
 cutile = { workspace = true, optional = true }
 gemm = { workspace = true }
 half = { workspace = true, features = ["zerocopy"] }
-float8 = { workspace = true }
+microfloat = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 libc = { workspace = true }
 libm = { workspace = true }

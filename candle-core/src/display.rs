@@ -66,7 +66,7 @@ impl std::fmt::Debug for Tensor {
             DType::F16 => self.fmt_dt::<f16>(f),
             DType::F32 => self.fmt_dt::<f32>(f),
             DType::F64 => self.fmt_dt::<f64>(f),
-            DType::F8E4M3 => self.fmt_dt::<float8::F8E4M3>(f),
+            DType::F8E4M3 => self.fmt_dt::<microfloat::f8e4m3>(f),
             DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
                 write!(
                     f,
@@ -308,7 +308,7 @@ struct FloatFormatter<S: WithDType> {
 
 impl<S> FloatFormatter<S>
 where
-    S: WithDType + num_traits::Float + std::fmt::Display,
+    S: WithDType + num_traits::float::FloatCore + num_traits::FromPrimitive + std::fmt::Display,
 {
     fn new(t: &Tensor, po: &PrinterOptions) -> Result<Self> {
         let mut int_mode = true;
@@ -367,7 +367,7 @@ where
 
 impl<S> TensorFormatter for FloatFormatter<S>
 where
-    S: WithDType + num_traits::Float + std::fmt::Display + std::fmt::LowerExp,
+    S: WithDType + num_traits::float::FloatCore + std::fmt::Display + std::fmt::LowerExp,
 {
     type Elem = S;
 
@@ -525,7 +525,7 @@ impl std::fmt::Display for Tensor {
                 }
             }
             DType::F8E4M3 => {
-                if let Ok(tf) = FloatFormatter::<float8::F8E4M3>::new(&to_display, &po) {
+                if let Ok(tf) = FloatFormatter::<microfloat::f8e4m3>::new(&to_display, &po) {
                     let max_w = tf.max_width(&to_display);
                     tf.fmt_tensor(self, 1, max_w, summarize, &po, f)?;
                     writeln!(f)?;

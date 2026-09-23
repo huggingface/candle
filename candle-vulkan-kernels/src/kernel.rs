@@ -61,6 +61,11 @@ pub enum KernelName {
     TestFillF32,
     TestFillI64,
     TestFillF64,
+    TestFillF4,
+    TestFillF6e2m3,
+    TestFillF6e3m2,
+    TestFillF8e4m3,
+    TestFillF8e8m0,
 }
 
 impl AsRef<str> for KernelName {
@@ -103,6 +108,11 @@ impl AsRef<str> for KernelName {
             | Self::TestFillI32
             | Self::TestFillF32
             | Self::TestFillI64
+            | Self::TestFillF4
+            | Self::TestFillF6e2m3
+            | Self::TestFillF6e3m2
+            | Self::TestFillF8e4m3
+            | Self::TestFillF8e8m0
             | Self::TestFillF64 => "main",
         }
     }
@@ -296,6 +306,11 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::TestFillI32
         | KernelName::TestFillF32
         | KernelName::TestFillI64
+        | KernelName::TestFillF4
+        | KernelName::TestFillF6e2m3
+        | KernelName::TestFillF6e3m2
+        | KernelName::TestFillF8e4m3
+        | KernelName::TestFillF8e8m0
         | KernelName::TestFillF64 => 1,
     }
 }

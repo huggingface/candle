@@ -1,8 +1,8 @@
 //! TensorScalar Enum and Trait
 //!
 use crate::{DType, Result, Tensor, WithDType};
-use float8::F8E4M3 as f8e4m3;
 use half::{bf16, f16};
+use microfloat::f8e4m3;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Scalar {

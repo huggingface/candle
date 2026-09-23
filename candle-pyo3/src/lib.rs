@@ -1,7 +1,7 @@
 #![allow(clippy::redundant_closure_call)]
 #![allow(clippy::useless_conversion)]
-use float8::F8E4M3;
 use half::{bf16, f16};
+use microfloat::f8e4m3;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::CompareOp;
@@ -179,7 +179,7 @@ pydtype!(f16, f32::from);
 pydtype!(bf16, f32::from);
 pydtype!(f32, |v| v);
 pydtype!(f64, |v| v);
-pydtype!(F8E4M3, f32::from);
+pydtype!(f8e4m3, |v: f8e4m3| v.to_f32());
 
 fn actual_index(t: &Tensor, dim: usize, index: i64) -> ::candle::Result<usize> {
     let dim = t.dim(dim)?;

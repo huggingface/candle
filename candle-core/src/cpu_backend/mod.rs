@@ -2,8 +2,8 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{DType, Error, IntDType, Layout, NdIter, Result, Shape, WithDType};
-use float8::F8E4M3;
 use half::{bf16, f16, slice::HalfFloatSliceExt, vec::HalfFloatVecExt};
+use microfloat::f8e4m3;
 use rayon::prelude::*;
 
 mod utils;
@@ -30,12 +30,12 @@ pub enum CpuStorage {
     F16(Vec<f16>),
     F32(Vec<f32>),
     F64(Vec<f64>),
-    F8E4M3(Vec<F8E4M3>),
+    F8E4M3(Vec<f8e4m3>),
     // Dummy types that store raw bytes
-    F6E2M3(Vec<u8>),
-    F6E3M2(Vec<u8>),
-    F4(Vec<u8>),
-    F8E8M0(Vec<u8>),
+    F6E2M3(Vec<microfloat::f6e2m3fn>),
+    F6E3M2(Vec<microfloat::f6e3m2fn>),
+    F4(Vec<microfloat::f4e2m1fn>),
+    F8E8M0(Vec<microfloat::f8e8m0fnu>),
 }
 
 #[derive(Debug, Clone)]
@@ -49,12 +49,12 @@ pub enum CpuStorageRef<'a> {
     F16(&'a [f16]),
     F32(&'a [f32]),
     F64(&'a [f64]),
-    F8E4M3(&'a [F8E4M3]),
+    F8E4M3(&'a [f8e4m3]),
     // Dummy types that store raw bytes
-    F6E2M3(&'a [u8]),
-    F6E3M2(&'a [u8]),
-    F4(&'a [u8]),
-    F8E8M0(&'a [u8]),
+    F6E2M3(&'a [microfloat::f6e2m3fn]),
+    F6E3M2(&'a [microfloat::f6e3m2fn]),
+    F4(&'a [microfloat::f4e2m1fn]),
+    F8E8M0(&'a [microfloat::f8e8m0fnu]),
 }
 
 #[derive(Debug, Clone)]
@@ -2131,40 +2131,40 @@ impl BackendStorage for CpuStorage {
                 let data = unary_map(storage, layout, |v| v);
                 Ok(Self::F64(data))
             }
-            // Conversions to F8E4M3
+            // Conversions to f8e4m3
             (Self::U8(storage), DType::F8E4M3) => {
-                let data = unary_map(storage, layout, |v| F8E4M3::from_f32(v as f32));
+                let data = unary_map(storage, layout, |v| f8e4m3::from_f32(v as f32));
                 Ok(Self::F8E4M3(data))
             }
             (Self::U32(storage), DType::F8E4M3) => {
-                let data = unary_map(storage, layout, |v| F8E4M3::from_f32(v as f32));
+                let data = unary_map(storage, layout, |v| f8e4m3::from_f32(v as f32));
                 Ok(Self::F8E4M3(data))
             }
             (Self::I64(storage), DType::F8E4M3) => {
-                let data = unary_map(storage, layout, |v| F8E4M3::from_f32(v as f32));
+                let data = unary_map(storage, layout, |v| f8e4m3::from_f32(v as f32));
                 Ok(Self::F8E4M3(data))
             }
             (Self::BF16(storage), DType::F8E4M3) => {
-                let data = unary_map(storage, layout, |v| F8E4M3::from_f32(v.to_f32()));
+                let data = unary_map(storage, layout, |v| f8e4m3::from_f32(v.to_f32()));
                 Ok(Self::F8E4M3(data))
             }
             (Self::F16(storage), DType::F8E4M3) => {
-                let data = unary_map(storage, layout, |v| F8E4M3::from_f32(v.to_f32()));
+                let data = unary_map(storage, layout, |v| f8e4m3::from_f32(v.to_f32()));
                 Ok(Self::F8E4M3(data))
             }
             (Self::F32(storage), DType::F8E4M3) => {
-                let data = unary_map(storage, layout, F8E4M3::from_f32);
+                let data = unary_map(storage, layout, f8e4m3::from_f32);
                 Ok(Self::F8E4M3(data))
             }
             (Self::F64(storage), DType::F8E4M3) => {
-                let data = unary_map(storage, layout, F8E4M3::from_f64);
+                let data = unary_map(storage, layout, f8e4m3::from_f64);
                 Ok(Self::F8E4M3(data))
             }
             (Self::F8E4M3(storage), DType::F8E4M3) => {
                 let data = unary_map(storage, layout, |v| v);
                 Ok(Self::F8E4M3(data))
             }
-            // Conversions from F8E4M3
+            // Conversions from f8e4m3
             (Self::F8E4M3(storage), DType::U8) => {
                 let data = unary_map(storage, layout, |v| v.to_f32() as u8);
                 Ok(Self::U8(data))
@@ -2305,7 +2305,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F64(data))
             }
             (Self::I16(storage), DType::F8E4M3) => {
-                let data = unary_map(storage, layout, |v| F8E4M3::from_f32(v as f32));
+                let data = unary_map(storage, layout, |v| f8e4m3::from_f32(v as f32));
                 Ok(Self::F8E4M3(data))
             }
             // Conversions from I32
@@ -2338,7 +2338,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F64(data))
             }
             (Self::I32(storage), DType::F8E4M3) => {
-                let data = unary_map(storage, layout, |v| F8E4M3::from_f32(v as f32));
+                let data = unary_map(storage, layout, |v| f8e4m3::from_f32(v as f32));
                 Ok(Self::F8E4M3(data))
             }
             // Dummy types - return error for all conversions to/from dummy types
@@ -2484,7 +2484,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F64(data))
             }
             Self::F8E4M3(storage) => {
-                let data = unary_map(storage, layout, |v| v.powf(F8E4M3::from_f64(e)));
+                let data = unary_map(storage, layout, |v| v.powf(f8e4m3::from_f64(e)));
                 Ok(Self::F8E4M3(data))
             }
             Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "powf").bt()),
@@ -2519,7 +2519,14 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F64(data))
             }
             Self::F8E4M3(storage) => {
-                let data = unary_map(storage, layout, |v| elu(v, F8E4M3::from_f64(alpha)));
+                let a = f8e4m3::from_f64(alpha);
+                let data = unary_map(storage, layout, |v| {
+                    if v >= f8e4m3::ZERO {
+                        v
+                    } else {
+                        (v.exp() - f8e4m3::ONE) * a
+                    }
+                });
                 Ok(Self::F8E4M3(data))
             }
             Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu").bt()),
@@ -3219,11 +3226,9 @@ impl BackendDevice for CpuDevice {
             }
             DType::F8E4M3 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform =
-                    rand::distr::Uniform::new(F8E4M3::from_f64(min), F8E4M3::from_f64(max))
-                        .map_err(Error::wrap)?;
+                let uniform = rand::distr::Uniform::new(min, max).map_err(Error::wrap)?;
                 for _i in 0..elem_count {
-                    data.push(rng.sample::<F8E4M3, _>(uniform))
+                    data.push(f8e4m3::from_f64(rng.sample::<f64, _>(uniform)))
                 }
                 Ok(CpuStorage::F8E4M3(data))
             }
@@ -3282,10 +3287,9 @@ impl BackendDevice for CpuDevice {
             }
             DType::F8E4M3 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let normal = rand_distr::Normal::new(F8E4M3::from_f64(mean), F8E4M3::from_f64(std))
-                    .map_err(Error::wrap)?;
+                let normal = rand_distr::Normal::new(mean, std).map_err(Error::wrap)?;
                 for _i in 0..elem_count {
-                    data.push(normal.sample(&mut rng))
+                    data.push(f8e4m3::from_f64(normal.sample(&mut rng)))
                 }
                 Ok(CpuStorage::F8E4M3(data))
             }
@@ -3386,7 +3390,7 @@ impl BackendDevice for CpuDevice {
             DType::F16 => CpuStorage::F16(vec![f16::ZERO; elem_count]),
             DType::F32 => CpuStorage::F32(vec![0f32; elem_count]),
             DType::F64 => CpuStorage::F64(vec![0f64; elem_count]),
-            DType::F8E4M3 => CpuStorage::F8E4M3(vec![F8E4M3::ZERO; elem_count]),
+            DType::F8E4M3 => CpuStorage::F8E4M3(vec![f8e4m3::ZERO; elem_count]),
             DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
                 return Err(Error::UnsupportedDTypeForOp(dtype, "zeros").bt())
             }

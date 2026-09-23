@@ -109,12 +109,12 @@ pub enum CudaStorageSlice {
     F16(CudaSlice<f16>),
     F32(CudaSlice<f32>),
     F64(CudaSlice<f64>),
-    F8E4M3(CudaSlice<float8::F8E4M3>),
+    F8E4M3(CudaSlice<microfloat::f8e4m3>),
     // Dummy types that store raw bytes
-    F6E2M3(CudaSlice<u8>),
-    F6E3M2(CudaSlice<u8>),
-    F4(CudaSlice<u8>),
-    F8E8M0(CudaSlice<u8>),
+    F6E2M3(CudaSlice<microfloat::f6e2m3fn>),
+    F6E3M2(CudaSlice<microfloat::f6e3m2fn>),
+    F4(CudaSlice<microfloat::f4e2m1fn>),
+    F8E8M0(CudaSlice<microfloat::f8e8m0fnu>),
 }
 
 struct Clone;
@@ -1296,7 +1296,7 @@ cuda_dtype!(f16, F16);
 cuda_dtype!(bf16, BF16);
 cuda_dtype!(f32, F32);
 cuda_dtype!(f64, F64);
-cuda_dtype!(float8::F8E4M3, F8E4M3);
+cuda_dtype!(microfloat::f8e4m3, F8E4M3);
 
 impl CudaStorage {
     pub fn wrap_cuda_slice<T: CudaDType>(slice: CudaSlice<T>, device: CudaDevice) -> CudaStorage {
@@ -1360,7 +1360,7 @@ impl CudaStorage {
                 CudaStorageSlice::F64(result)
             }
             DType::F8E4M3 => {
-                let cuda_slice = self.as_cuda_slice::<float8::F8E4M3>()?;
+                let cuda_slice = self.as_cuda_slice::<microfloat::f8e4m3>()?;
                 let result = dst_stream.clone_dtod(cuda_slice).w()?;
                 CudaStorageSlice::F8E4M3(result)
             }
@@ -1673,7 +1673,7 @@ impl BackendStorage for CudaStorage {
                 CudaStorageSlice::F64(out)
             }
             DType::F8E4M3 => {
-                let out = unsafe { dev.alloc::<float8::F8E4M3>(el)? };
+                let out = unsafe { dev.alloc::<microfloat::f8e4m3>(el)? };
                 let mut builder = func.builder();
                 barg!(builder, el);
                 barg!(builder, dims.len());

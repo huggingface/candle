@@ -11,7 +11,9 @@ pub use kernels::{
     call_q50_dequant_f32, call_q5k_dequant_f32, call_q6k_dequant_f32, call_q80_dequant_f32,
     call_reduce_max_f32, call_reduce_sum_f32, call_rms_norm_f32, call_rope_f32,
     call_softmax_last_dim_f32, call_test_fill_bf16_emulated, call_test_fill_bf16_native,
-    call_test_fill_f16, call_test_fill_f32, call_test_fill_f64, call_test_fill_i16,
-    call_test_fill_i32, call_test_fill_i64, call_test_fill_u32, call_test_fill_u8,
+    call_test_fill_f16, call_test_fill_f32, call_test_fill_f4, call_test_fill_f64,
+    call_test_fill_f6e2m3, call_test_fill_f6e3m2, call_test_fill_f8e4m3, call_test_fill_f8e8m0,
+    call_test_fill_i16, call_test_fill_i32, call_test_fill_i64, call_test_fill_u32,
+    call_test_fill_u8,
 };
 pub use source::Source;

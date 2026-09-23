@@ -28,6 +28,15 @@ const TEST_FILL_I32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/
 const TEST_FILL_F32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f32.spv"));
 const TEST_FILL_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_i64.spv"));
 const TEST_FILL_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f64.spv"));
+const TEST_FILL_F4_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f4.spv"));
+const TEST_FILL_F6E2M3_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f6e2m3.spv"));
+const TEST_FILL_F6E3M2_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f6e3m2.spv"));
+const TEST_FILL_F8E4M3_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f8e4m3.spv"));
+const TEST_FILL_F8E8M0_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f8e8m0.spv"));
 
 /// The set of compiled compute shaders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -56,6 +65,11 @@ pub enum Source {
     TestFillF32,
     TestFillI64,
     TestFillF64,
+    TestFillF4,
+    TestFillF6e2m3,
+    TestFillF6e3m2,
+    TestFillF8e4m3,
+    TestFillF8e8m0,
 }
 
 impl Source {
@@ -101,6 +115,11 @@ impl Source {
             | KernelName::TestFillI32
             | KernelName::TestFillF32
             | KernelName::TestFillI64
+            | KernelName::TestFillF4
+            | KernelName::TestFillF6e2m3
+            | KernelName::TestFillF6e3m2
+            | KernelName::TestFillF8e4m3
+            | KernelName::TestFillF8e8m0
             | KernelName::TestFillF64 => 0,
         }
     }
@@ -132,6 +151,11 @@ impl Source {
             Self::TestFillF32 => TEST_FILL_F32_SPV,
             Self::TestFillI64 => TEST_FILL_I64_SPV,
             Self::TestFillF64 => TEST_FILL_F64_SPV,
+            Self::TestFillF4 => TEST_FILL_F4_SPV,
+            Self::TestFillF6e2m3 => TEST_FILL_F6E2M3_SPV,
+            Self::TestFillF6e3m2 => TEST_FILL_F6E3M2_SPV,
+            Self::TestFillF8e4m3 => TEST_FILL_F8E4M3_SPV,
+            Self::TestFillF8e8m0 => TEST_FILL_F8E8M0_SPV,
         };
         bytes
             .chunks_exact(4)
@@ -167,6 +191,11 @@ impl AsRef<str> for Source {
             Self::TestFillF32 => "test_fill_f32",
             Self::TestFillI64 => "test_fill_i64",
             Self::TestFillF64 => "test_fill_f64",
+            Self::TestFillF4 => "test_fill_f4",
+            Self::TestFillF6e2m3 => "test_fill_f6e2m3",
+            Self::TestFillF6e3m2 => "test_fill_f6e3m2",
+            Self::TestFillF8e4m3 => "test_fill_f8e4m3",
+            Self::TestFillF8e8m0 => "test_fill_f8e8m0",
         }
     }
 }

@@ -296,3 +296,171 @@ fn test_vulkan_device_fill_f64() {
     );
     tracing::debug!("Vulkan device {gpu_id} fill_f64 round-tripped OK");
 }
+
+#[test]
+fn test_vulkan_device_fill_f4() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    // 16 elements: one slot for every possible raw value.
+    let shape = candle_core::Shape::from(16);
+    let storage = device.zeros_impl(&shape, candle_core::DType::F4).unwrap();
+    storage.fill_f4().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = match cpu {
+        candle_core::CpuStorage::F4(data) => data,
+        _ => panic!("expected F4 storage"),
+    };
+    assert_eq!(data.len(), 16);
+    // Every element must be a raw byte matching its index.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u8,
+            "fill_f4 mismatch at index {index}"
+        );
+    }
+    // All values must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 16, "fill_f4 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f4 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_f6e2m3() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    // 64 elements: one slot for every possible raw value.
+    let shape = candle_core::Shape::from(64);
+    let storage = device
+        .zeros_impl(&shape, candle_core::DType::F6E2M3)
+        .unwrap();
+    storage.fill_f6e2m3().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = match cpu {
+        candle_core::CpuStorage::F6E2M3(data) => data,
+        _ => panic!("expected F6E2M3 storage"),
+    };
+    assert_eq!(data.len(), 64);
+    // Every element must be a raw byte matching its index.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u8,
+            "fill_f6e2m3 mismatch at index {index}"
+        );
+    }
+    // All values must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 64, "fill_f6e2m3 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f6e2m3 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_f6e3m2() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    // 64 elements: one slot for every possible raw value.
+    let shape = candle_core::Shape::from(64);
+    let storage = device
+        .zeros_impl(&shape, candle_core::DType::F6E3M2)
+        .unwrap();
+    storage.fill_f6e3m2().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = match cpu {
+        candle_core::CpuStorage::F6E3M2(data) => data,
+        _ => panic!("expected F6E3M2 storage"),
+    };
+    assert_eq!(data.len(), 64);
+    // Every element must be a raw byte matching its index.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u8,
+            "fill_f6e3m2 mismatch at index {index}"
+        );
+    }
+    // All values must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 64, "fill_f6e3m2 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f6e3m2 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_f8e4m3() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    // 256 elements: one slot for every possible raw value.
+    let shape = candle_core::Shape::from(256);
+    let storage = device
+        .zeros_impl(&shape, candle_core::DType::F8E4M3)
+        .unwrap();
+    storage.fill_f8e4m3().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = match cpu {
+        candle_core::CpuStorage::F8E4M3(data) => data,
+        _ => panic!("expected F8E4M3 storage"),
+    };
+    assert_eq!(data.len(), 256);
+    // Every element must be a raw byte matching its index.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u8,
+            "fill_f8e4m3 mismatch at index {index}"
+        );
+    }
+    // All values must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_f8e4m3 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f8e4m3 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_f8e8m0() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    // 256 elements: one slot for every possible raw value.
+    let shape = candle_core::Shape::from(256);
+    let storage = device
+        .zeros_impl(&shape, candle_core::DType::F8E8M0)
+        .unwrap();
+    storage.fill_f8e8m0().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = match cpu {
+        candle_core::CpuStorage::F8E8M0(data) => data,
+        _ => panic!("expected F8E8M0 storage"),
+    };
+    assert_eq!(data.len(), 256);
+    // Every element must be a raw byte matching its index.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u8,
+            "fill_f8e8m0 mismatch at index {index}"
+        );
+    }
+    // All values must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_f8e8m0 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f8e8m0 round-tripped OK");
+}
