@@ -66,8 +66,12 @@ fn main() {
 }
 
 fn compile_slang(source_path: &Path, out_path: &Path) {
-    let exe = if cfg!(windows) { ".exe" } else { "" };
-    let slangc = format!("slangc{exe}");
+    // `SLANGC` overrides the slangc executable (e.g. a specific installation
+    // or version); unset or empty falls back to `slangc` from the PATH.
+    let slangc = match std::env::var("SLANGC") {
+        Ok(value) if !value.is_empty() => value,
+        _ => format!("slangc{}", if cfg!(windows) { ".exe" } else { "" }),
+    };
     let status = std::process::Command::new(&slangc)
         .args(&[
             source_path.to_string_lossy().into_owned().as_str(),
