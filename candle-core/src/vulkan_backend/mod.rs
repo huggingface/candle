@@ -1,6 +1,8 @@
 //! The Vulkan backend: storage + device trait implementations.
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo};
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer,
+};
 
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::sync::GpuFuture;
@@ -347,6 +349,221 @@ impl VulkanStorage {
             )
         })?;
         Ok(())
+    }
+    /// Shared machinery for the `fill_*` test methods: build a one-time compute
+    /// command buffer, run `dispatch` inside it, then execute and wait.
+    fn run_fill(
+        &self,
+        label: &str,
+        dispatch: impl FnOnce(
+            &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        )
+            -> std::result::Result<(), candle_vulkan_kernels::VulkanKernelError>,
+    ) -> Result<()> {
+        let device = self.device.clone();
+        let mut builder = AutoCommandBufferBuilder::primary(
+            device.cbb_alloc().clone(),
+            device.queue().queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
+        })?;
+        dispatch(&mut builder).map_err(VulkanError::KernelError)?;
+        let command_buffer = builder.build().map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer: {error:?}").into())
+        })?;
+        let future = vulkano::sync::now(device.device().clone())
+            .then_execute(device.queue().clone(), command_buffer)
+            .map_err(|error| {
+                Error::Vulkan(format!("Unable to execute command buffer: {error:?}").into())
+            })?
+            .then_signal_fence_and_flush()
+            .map_err(|error| {
+                Error::Vulkan(
+                    format!("Unable to signal fence and flush command buffer: {error:?}").into(),
+                )
+            })?;
+        future.wait(None).map_err(|error| {
+            Error::Vulkan(
+                format!("Failure occurred waiting for {label} to finish: {error:?}").into(),
+            )
+        })?;
+        Ok(())
+    }
+    /// Fills this u8 storage with all 256 possible byte values: element `i`
+    /// holds `i`. The storage must be U8.
+    pub fn fill_u8(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::U8(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_u8 requires U8 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_u8", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_u8(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this i16 storage with all 65,536 possible 16-bit bit patterns:
+    /// element `i` holds the bit pattern of `i`. The storage must be I16.
+    pub fn fill_i16(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::I16(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_i16 requires I16 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_i16", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_i16(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this bf16 storage with all 65,536 possible 16-bit bit patterns:
+    /// element `i` holds the bit pattern of `i`. The storage must be BF16.
+    ///
+    /// Uses the emulated (raw 16-bit) fill path. vulkano 0.35.2 does not
+    /// expose `VK_KHR_shader_bfloat16`, so native bfloat16 compute cannot be
+    /// enabled on the device; the raw 16-bit store path round-trips the exact
+    /// same BF16 bit patterns and is the path that is verifiable today. The
+    /// native shader (`fill_native_bf16.slang`) and
+    /// `call_test_fill_bf16_native` are kept for a vulkano release that can
+    /// enable bfloat16.
+    pub fn fill_bf16(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::BF16(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_bf16 requires BF16 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_bf16", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_bf16_emulated(
+                cbb,
+                kernels.as_ref(),
+                buffer,
+                total,
+            )
+        })
+    }
+    /// Fills this bf16 storage with all 65,536 possible 16-bit bit patterns
+    /// using the emulated (raw 16-bit) path, regardless of native support.
+    /// The storage must be BF16.
+    pub fn fill_bf16_emulated(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::BF16(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_bf16_emulated requires BF16 storage"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_bf16_emulated", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_bf16_emulated(
+                cbb,
+                kernels.as_ref(),
+                buffer,
+                total,
+            )
+        })
+    }
+    /// Fills this u32 storage with 256 distinct values, each beyond the 16-bit
+    /// unsigned range. The storage must be U32.
+    pub fn fill_u32(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::U32(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_u32 requires U32 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_u32", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_u32(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this i32 storage with 256 distinct signed values straddling the
+    /// 16-bit range. The storage must be I32.
+    pub fn fill_i32(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::I32(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_i32 requires I32 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_i32", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_i32(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this f32 storage with 256 distinct values, some beyond the f16
+    /// range. The storage must be F32.
+    pub fn fill_f32(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F32(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f32 requires F32 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f32", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f32(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this i64 storage with 256 distinct values, each beyond the 32-bit
+    /// signed range. The storage must be I64.
+    pub fn fill_i64(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::I64(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_i64 requires I64 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_i64", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_i64(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this f64 storage with 256 distinct values not exactly
+    /// representable in f32. The storage must be F64.
+    pub fn fill_f64(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F64(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f64 requires F64 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f64", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f64(cbb, kernels.as_ref(), buffer, total)
+        })
     }
 }
 

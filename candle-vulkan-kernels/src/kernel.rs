@@ -52,6 +52,15 @@ pub enum KernelName {
     Q50DequantF32,
     Q5KDequantF32,
     TestFillF16,
+    TestFillU8,
+    TestFillI16,
+    TestFillBf16Native,
+    TestFillBf16Emulated,
+    TestFillU32,
+    TestFillI32,
+    TestFillF32,
+    TestFillI64,
+    TestFillF64,
 }
 
 impl AsRef<str> for KernelName {
@@ -86,6 +95,15 @@ impl AsRef<str> for KernelName {
             Self::Q50DequantF32 => "main_q50_dequant",
             Self::Q5KDequantF32 => "main_q5k_dequant",
             Self::TestFillF16 => "main",
+            Self::TestFillU8
+            | Self::TestFillI16
+            | Self::TestFillBf16Native
+            | Self::TestFillBf16Emulated
+            | Self::TestFillU32
+            | Self::TestFillI32
+            | Self::TestFillF32
+            | Self::TestFillI64
+            | Self::TestFillF64 => "main",
         }
     }
 }
@@ -225,7 +243,7 @@ impl Kernels {
             None,
             ComputePipelineCreateInfo::stage_layout(stage, layout.clone()),
         )
-.map_err(pipeline_error)?;
+        .map_err(pipeline_error)?;
 
         Ok(PipelineEntry {
             pipeline,
@@ -270,6 +288,15 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Q50DequantF32
         | KernelName::Q5KDequantF32 => 3,
         KernelName::TestFillF16 => 1,
+        KernelName::TestFillU8
+        | KernelName::TestFillI16
+        | KernelName::TestFillBf16Native
+        | KernelName::TestFillBf16Emulated
+        | KernelName::TestFillU32
+        | KernelName::TestFillI32
+        | KernelName::TestFillF32
+        | KernelName::TestFillI64
+        | KernelName::TestFillF64 => 1,
     }
 }
 

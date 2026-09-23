@@ -1,11 +1,11 @@
 //! Fused RMSNorm over the last (contiguous) axis for f32 tensors.
+use crate::err::VulkanKernelError;
+use crate::kernel::{KernelName, Kernels};
+use crate::source::Source;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
-use crate::err::VulkanKernelError;
-use crate::kernel::{KernelName, Kernels};
-use crate::source::Source;
 /// Records a fused `rms_norm_f32` dispatch: one workgroup per row of the
 /// input, `weight` has `cols` elements and is applied elementwise.
 pub fn call_rms_norm_f32(
@@ -35,8 +35,12 @@ pub fn call_rms_norm_f32(
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
-    cbb.push_constants(entry.layout.clone(), 0, [rows as u32, cols as u32, eps.to_bits()])
-        .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
+    cbb.push_constants(
+        entry.layout.clone(),
+        0,
+        [rows as u32, cols as u32, eps.to_bits()],
+    )
+    .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     let workgroups = rows as u32;
     unsafe { cbb.dispatch([workgroups, 1, 1]) }
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;

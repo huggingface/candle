@@ -2,6 +2,7 @@
 
 pub mod affine;
 pub mod copy;
+pub mod dispatch;
 pub mod elementwise;
 pub mod gather;
 pub mod gemm;
@@ -12,7 +13,15 @@ pub mod reduce;
 pub mod rms_norm;
 pub mod rope;
 pub mod softmax;
+pub mod test_fill_bf16;
 pub mod test_fill_f16;
+pub mod test_fill_f32;
+pub mod test_fill_f64;
+pub mod test_fill_i16;
+pub mod test_fill_i32;
+pub mod test_fill_i64;
+pub mod test_fill_u32;
+pub mod test_fill_u8;
 
 pub use affine::call_affine_f32;
 pub use copy::call_copy_f32;
@@ -26,4 +35,12 @@ pub use reduce::{call_reduce_max_f32, call_reduce_sum_f32};
 pub use rms_norm::call_rms_norm_f32;
 pub use rope::call_rope_f32;
 pub use softmax::call_softmax_last_dim_f32;
+pub use test_fill_bf16::{call_test_fill_bf16_emulated, call_test_fill_bf16_native};
 pub use test_fill_f16::call_test_fill_f16;
+pub use test_fill_f32::call_test_fill_f32;
+pub use test_fill_f64::call_test_fill_f64;
+pub use test_fill_i16::call_test_fill_i16;
+pub use test_fill_i32::call_test_fill_i32;
+pub use test_fill_i64::call_test_fill_i64;
+pub use test_fill_u32::call_test_fill_u32;
+pub use test_fill_u8::call_test_fill_u8;

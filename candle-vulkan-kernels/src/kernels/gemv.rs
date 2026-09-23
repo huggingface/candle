@@ -1,11 +1,11 @@
 //! GEMV for the m=1 matmul case: `(1, k) @ (k, n) -> (1, n)`.
+use crate::err::VulkanKernelError;
+use crate::kernel::{KernelName, Kernels, GEMV_T_TILE_N};
+use crate::source::Source;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
-use crate::err::VulkanKernelError;
-use crate::kernel::{GEMV_T_TILE_N, KernelName, Kernels};
-use crate::source::Source;
 /// Records a `gemv_f32` dispatch: `a` has `k` elements, `w` is the
 /// row-major `(k, n)` weight, `output` has `n` elements.
 pub fn call_gemv_f32(
@@ -71,8 +71,12 @@ pub fn call_gemv_t_f32(
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
-    cbb.push_constants(entry.layout.clone(), 0, [n as u32, k as u32, w_stride as u32])
-        .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
+    cbb.push_constants(
+        entry.layout.clone(),
+        0,
+        [n as u32, k as u32, w_stride as u32],
+    )
+    .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     let grid_x = (n as u32 + GEMV_T_TILE_N as u32 - 1) / GEMV_T_TILE_N as u32;
     unsafe { cbb.dispatch([grid_x, 1, 1]) }
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;

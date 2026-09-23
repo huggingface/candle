@@ -17,6 +17,17 @@ const GEMV_T_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv_t.spv")
 const Q4K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q4k.spv"));
 const Q5Q8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q5q8.spv"));
 const TEST_FILL_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f16.spv"));
+const TEST_FILL_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_u8.spv"));
+const TEST_FILL_I16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_i16.spv"));
+const TEST_FILL_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_native_bf16.spv"));
+const TEST_FILL_BF16_EMULATED_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_emulated_bf16.spv"));
+const TEST_FILL_U32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_u32.spv"));
+const TEST_FILL_I32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_i32.spv"));
+const TEST_FILL_F32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f32.spv"));
+const TEST_FILL_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_i64.spv"));
+const TEST_FILL_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f64.spv"));
 
 /// The set of compiled compute shaders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,6 +47,15 @@ pub enum Source {
     Q4k,
     Q5q8,
     TestFillF16,
+    TestFillU8,
+    TestFillI16,
+    TestFillBf16Native,
+    TestFillBf16Emulated,
+    TestFillU32,
+    TestFillI32,
+    TestFillF32,
+    TestFillI64,
+    TestFillF64,
 }
 
 impl Source {
@@ -73,6 +93,15 @@ impl Source {
             KernelName::Q50DequantF32 => 8,
             KernelName::Q5KDequantF32 => 8,
             KernelName::TestFillF16 => 0,
+            KernelName::TestFillU8
+            | KernelName::TestFillI16
+            | KernelName::TestFillBf16Native
+            | KernelName::TestFillBf16Emulated
+            | KernelName::TestFillU32
+            | KernelName::TestFillI32
+            | KernelName::TestFillF32
+            | KernelName::TestFillI64
+            | KernelName::TestFillF64 => 0,
         }
     }
 
@@ -94,6 +123,15 @@ impl Source {
             Self::Q4k => Q4K_SPV,
             Self::Q5q8 => Q5Q8_SPV,
             Self::TestFillF16 => TEST_FILL_F16_SPV,
+            Self::TestFillU8 => TEST_FILL_U8_SPV,
+            Self::TestFillI16 => TEST_FILL_I16_SPV,
+            Self::TestFillBf16Native => TEST_FILL_BF16_NATIVE_SPV,
+            Self::TestFillBf16Emulated => TEST_FILL_BF16_EMULATED_SPV,
+            Self::TestFillU32 => TEST_FILL_U32_SPV,
+            Self::TestFillI32 => TEST_FILL_I32_SPV,
+            Self::TestFillF32 => TEST_FILL_F32_SPV,
+            Self::TestFillI64 => TEST_FILL_I64_SPV,
+            Self::TestFillF64 => TEST_FILL_F64_SPV,
         };
         bytes
             .chunks_exact(4)
@@ -120,6 +158,15 @@ impl AsRef<str> for Source {
             Self::Softmax => "softmax",
             Self::Rope => "rope",
             Self::TestFillF16 => "test_fill_f16",
+            Self::TestFillU8 => "test_fill_u8",
+            Self::TestFillI16 => "test_fill_i16",
+            Self::TestFillBf16Native => "test_fill_bf16_native",
+            Self::TestFillBf16Emulated => "test_fill_bf16_emulated",
+            Self::TestFillU32 => "test_fill_u32",
+            Self::TestFillI32 => "test_fill_i32",
+            Self::TestFillF32 => "test_fill_f32",
+            Self::TestFillI64 => "test_fill_i64",
+            Self::TestFillF64 => "test_fill_f64",
         }
     }
 }

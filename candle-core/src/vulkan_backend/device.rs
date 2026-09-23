@@ -132,6 +132,18 @@ impl VulkanDevice {
             .iter()
             .position(|q| q.queue_flags.contains(QueueFlags::COMPUTE))
             .ok_or_else(|| Error::Vulkan("no compute queue family".to_string().into()))?;
+        // Copy the supported-feature flags into locals before `physical` is
+        // moved into `Device::new`, then enable exactly that subset.
+        let supported = physical.supported_features();
+        let fb8 = supported.storage_buffer8_bit_access;
+        let fb8u = supported.uniform_and_storage_buffer8_bit_access;
+        let fb16 = supported.storage_buffer16_bit_access;
+        let fb16u = supported.uniform_and_storage_buffer16_bit_access;
+        let f16 = supported.shader_float16;
+        let i8 = supported.shader_int8;
+        let i16 = supported.shader_int16;
+        let i64 = supported.shader_int64;
+        let f64 = supported.shader_float64;
         let (device, queues) = Device::new(
             physical,
             DeviceCreateInfo {
@@ -141,18 +153,25 @@ impl VulkanDevice {
                     queues: vec![1.0],
                     ..Default::default()
                 }],
-                // f16/bf16 compute kernels need 16-bit storage buffers
-                // and 16-bit integer/float shader types.
+                // Compute kernels need 8/16-bit storage buffers, 16-bit
+                // integer/float shader types, and 64-bit integer/float shader
+                // types for the full u8..f64 dtype coverage. Enable exactly
+                // the subset the device reports as supported.
                 enabled_extensions: DeviceExtensions {
                     khr_16bit_storage: true,
                     khr_shader_float16_int8: true,
                     ..Default::default()
                 },
                 enabled_features: DeviceFeatures {
-                    storage_buffer16_bit_access: true,
-                    uniform_and_storage_buffer16_bit_access: true,
-                    shader_float16: true,
-                    shader_int16: true,
+                    storage_buffer8_bit_access: fb8,
+                    uniform_and_storage_buffer8_bit_access: fb8u,
+                    storage_buffer16_bit_access: fb16,
+                    uniform_and_storage_buffer16_bit_access: fb16u,
+                    shader_float16: f16,
+                    shader_int8: i8,
+                    shader_int16: i16,
+                    shader_int64: i64,
+                    shader_float64: f64,
                     ..Default::default()
                 },
                 ..Default::default()

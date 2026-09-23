@@ -1,13 +1,13 @@
 //! Q8_0, Q5_0 and Q5_K dequant dispatches (raw quantized bytes -> f32).
 //! Used by the prefill path (dequant + f32 GEMM) and by the m == 1 decode
 //! path (dequant + f32 GEMV).
+use crate::err::VulkanKernelError;
+use crate::kernel::{KernelName, Kernels};
+use crate::source::Source;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
-use crate::err::VulkanKernelError;
-use crate::kernel::{KernelName, Kernels};
-use crate::source::Source;
 
 /// Records a Q8_0 dequant dispatch: `w` is raw Q8_0 bytes holding
 /// `elem_count` elements (34 bytes per 32 elements), `output` has

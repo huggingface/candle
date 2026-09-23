@@ -1,12 +1,12 @@
 //! Q4_K quantized ops: GEMV for the m == 1 decode case and full dequant
 //! (raw Q4_K bytes -> f32) for prefill and load-time paths.
+use crate::err::VulkanKernelError;
+use crate::kernel::{KernelName, Kernels};
+use crate::source::Source;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
-use crate::err::VulkanKernelError;
-use crate::kernel::{KernelName, Kernels};
-use crate::source::Source;
 /// Records a Q4_K GEMV dispatch: `a` has `k` elements (the single input
 /// row, f32), `w` is the raw Q4_K weight of shape `(n, k)` (row-major,
 /// 144 bytes per 256 elements), `output` has `n` elements.

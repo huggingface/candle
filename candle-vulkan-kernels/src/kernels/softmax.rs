@@ -1,12 +1,12 @@
 //! Numerically stable softmax over the last (contiguous) axis for f32
 //! tensors.
+use crate::err::VulkanKernelError;
+use crate::kernel::{KernelName, Kernels};
+use crate::source::Source;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
-use crate::err::VulkanKernelError;
-use crate::kernel::{KernelName, Kernels};
-use crate::source::Source;
 /// Records a `softmax_last_dim_f32` dispatch: one workgroup per row of the
 /// input.
 pub fn call_softmax_last_dim_f32(
