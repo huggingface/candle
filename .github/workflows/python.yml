@@ -11,8 +11,12 @@ on:
     paths:
       - candle-pyo3/**
 
+permissions: {}
+
 jobs:
   build_and_test:
+    permissions:
+      contents: read
     name: Check everything builds & tests
     runs-on: ${{ matrix.os }}
     strategy:

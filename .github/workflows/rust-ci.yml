@@ -10,8 +10,12 @@ env:
   # Incremental compilation would just be overhead, so we can disable it entirely.
   CARGO_INCREMENTAL: 0
 
+permissions: {}
+
 jobs:
   check:
+    permissions:
+      contents: read
     name: Check
     runs-on: ${{ matrix.os }}
     strategy:
@@ -54,6 +58,8 @@ jobs:
           cargo check --workspace --all-targets
 
   test:
+    permissions:
+      contents: read
     name: Test Suite
     runs-on: ${{ matrix.os }}
     strategy:
@@ -98,6 +104,8 @@ jobs:
           cargo test --workspace --doc
 
   fmt:
+    permissions:
+      contents: read
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
@@ -108,6 +116,8 @@ jobs:
       - run: cargo fmt --all -- --check
 
   clippy:
+    permissions:
+      contents: read
     name: Clippy
     runs-on: ubuntu-latest
     steps:
