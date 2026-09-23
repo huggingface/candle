@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::{test_device, test_utils::to_vec3_round, Device, IndexOp, Result, Tensor};
+use candle::{test_device, test_utils::to_vec3_round, Device, IndexOp, Result, Tensor, Var, D};
 
 fn softmax(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
@@ -365,6 +365,41 @@ fn sigmoid(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn softmax_last_dim_grad(device: &Device) -> Result<()> {
+    // `softmax_last_dim` is a fused custom op. Check that its backward pass propagates a
+    // gradient to its input and that the gradient matches the reference `softmax(_, D::Minus1)`
+    // path, which is built from already-differentiable primitives.
+    let data = &[[3f32, 1., 4., 1.], [5., 9., 2., 6.]];
+
+    let x = Var::new(data, device)?;
+    let x = x.as_tensor();
+    let y = candle_nn::ops::softmax_last_dim(x)?;
+    let loss = y.sqr()?.sum_all()?;
+    let grads = loss.backward()?;
+    let grad_fused = grads
+        .get(x)
+        .expect("softmax_last_dim did not propagate a gradient to its input");
+
+    let xr = Var::new(data, device)?;
+    let xr = xr.as_tensor();
+    let yr = candle_nn::ops::softmax(xr, D::Minus1)?;
+    let loss_ref = yr.sqr()?.sum_all()?;
+    let grads_ref = loss_ref.backward()?;
+    let grad_ref = grads_ref
+        .get(xr)
+        .expect("no reference gradient for softmax");
+
+    let diff = (grad_fused - grad_ref)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert!(
+        diff < 1e-5,
+        "softmax_last_dim backward mismatch vs reference softmax: {diff}"
+    );
+    Ok(())
+}
+
 test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal);
 test_device!(rope, rope_cpu, rope_gpu, rope_metal);
 test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
@@ -380,3 +415,9 @@ test_device!(
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);
+test_device!(
+    softmax_last_dim_grad,
+    softmax_last_dim_grad_cpu,
+    softmax_last_dim_grad_gpu,
+    softmax_last_dim_grad_metal
+);
