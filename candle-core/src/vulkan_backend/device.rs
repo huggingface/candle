@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use half::f16;
 
-use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::{
     StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
 };
@@ -16,13 +16,11 @@ use vulkano::descriptor_set::allocator::{
     StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo,
 };
 use vulkano::device::{
-    Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo,
-    QueueFlags,
+    Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
 };
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::sync::fence::{Fence, FenceCreateInfo};
-use vulkano::sync::GpuFuture;
 use vulkano::VulkanLibrary;
 
 use candle_vulkan_kernels::Kernels;
@@ -240,161 +238,6 @@ impl VulkanDevice {
         }
     }
 
-    pub fn copy_data_to_device<T: Default + Clone>(&self, data: &T) -> Result<Subbuffer<T>>
-    where
-        T: BufferContents,
-    {
-        // Create the staging buffer on the host with the data that needs to be copied to VRAM.
-        let source_buffer = Buffer::from_data(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_SRC,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            data.clone(),
-        )
-        .map_err(|error| {
-            Error::Vulkan(format!("Unable to create source buffer: {error:?}").into())
-        })?;
-
-        // Create the VRAM buffer.
-        let vram_buffer = Buffer::from_data(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_SRC
-                    | BufferUsage::TRANSFER_DST
-                    | BufferUsage::UNIFORM_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-                ..Default::default()
-            },
-            T::default(),
-        )
-        .map_err(|error| {
-            Error::Vulkan(format!("Unable to create vram buffer: {error:?}").into())
-        })?;
-
-        // Build the copy command
-        let mut builder = AutoCommandBufferBuilder::primary(
-            self.cbb_alloc.clone(),
-            self.queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )
-        .map_err(|error| {
-            Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
-        })?;
-        builder
-            .copy_buffer(CopyBufferInfo::buffers(
-                source_buffer.clone(),
-                vram_buffer.clone(),
-            ))
-            .map_err(|error| {
-                Error::Vulkan(format!("Unable to set copy_buffer command: {error:?}").into())
-            })?;
-        let command_buffer = builder.build().map_err(|error| {
-            Error::Vulkan(format!("Unable to create command buffer: {error:?}").into())
-        })?;
-
-        // Execute and flush the command buffer
-        let future = vulkano::sync::now(self.device.clone())
-            .then_execute(self.queue.clone(), command_buffer)
-            .map_err(|error| {
-                Error::Vulkan(format!("Unable to execute command buffer: {error:?}").into())
-            })?
-            .then_signal_fence_and_flush()
-            .map_err(|error| {
-                Error::Vulkan(
-                    format!("Unable to signal fence and flush command buffer: {error:?}").into(),
-                )
-            })?;
-
-        // Block the CPU thread until the GPU finishes copying the data
-        future.wait(None).map_err(|error| {
-            Error::Vulkan(
-                format!("Failure occurred waiting for data to be uploaded: {error:?}").into(),
-            )
-        })?;
-        Ok(vram_buffer)
-    }
-
-    pub fn copy_data_from_device<T: Default + Clone>(&self, vram_buffer: &Subbuffer<T>) -> Result<T>
-    where
-        T: BufferContents,
-    {
-        // Create the buffer on the host that will receive the VRAM buffer data.
-        let destination_buffer = Buffer::from_data(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_DST,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            T::default(),
-        )
-        .map_err(|error| {
-            Error::Vulkan(format!("Unable to create destination buffer: {error:?}").into())
-        })?;
-
-        // Build the copy command
-        let mut builder = AutoCommandBufferBuilder::primary(
-            self.cbb_alloc.clone(),
-            self.queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )
-        .map_err(|error| {
-            Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
-        })?;
-        builder
-            .copy_buffer(CopyBufferInfo::buffers(
-                vram_buffer.clone(),
-                destination_buffer.clone(),
-            ))
-            .map_err(|error| {
-                Error::Vulkan(format!("Unable to set copy_buffer command: {error:?}").into())
-            })?;
-        let command_buffer = builder.build().map_err(|error| {
-            Error::Vulkan(format!("Unable to create command buffer: {error:?}").into())
-        })?;
-
-        // Execute and flush the command buffer
-        let future = vulkano::sync::now(self.device.clone())
-            .then_execute(self.queue.clone(), command_buffer)
-            .map_err(|error| {
-                Error::Vulkan(format!("Unable to execute command buffer: {error:?}").into())
-            })?
-            .then_signal_fence_and_flush()
-            .map_err(|error| {
-                Error::Vulkan(
-                    format!("Unable to signal fence and flush command buffer: {error:?}").into(),
-                )
-            })?;
-
-        // Block the CPU thread until the GPU finishes copying the data
-        future.wait(None).map_err(|error| {
-            Error::Vulkan(
-                format!("Failure occurred waiting for data to be uploaded: {error:?}").into(),
-            )
-        })?;
-        let data = destination_buffer.read().map_err(|error| {
-            Error::Vulkan(
-                format!("Unable to acquire read lock to data in destination buffer: {error:?}")
-                    .into(),
-            )
-        })?;
-        Ok((*data).clone())
-    }
-
     pub fn supports_bf16(&self) -> bool {
         self.device
             .physical_device()
@@ -598,37 +441,6 @@ impl VulkanDevice {
 
     /// Copies a device f32 buffer (VRAM) back to the host via a
     /// host-visible staging buffer, then returns the data.
-    pub fn download_f32(&self, buffer: &Subbuffer<[f32]>) -> Result<Vec<f32>> {
-        let staging = Buffer::new_slice(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_DST,
-                ..Default::default()
-            },
-            Self::staging_alloc_info(),
-            buffer
-                .len()
-                .try_into()
-                .map_err(|_| Error::Vulkan("f32 buffer length".to_string().into()))?,
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let src = buffer.clone();
-        let dst = staging.clone();
-        self.execute(move |cbb| {
-            cbb.copy_buffer(CopyBufferInfo::buffers(src, dst))
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })?;
-        self.synchronize()?;
-        let guard = staging
-            .read()
-            .map_err(|e| Error::Vulkan(format!("buffer read: {e}").into()))?;
-        Ok((*guard).to_vec())
-    }
-
-    /// Uploads `data` into a device u8 storage buffer in VRAM. A
-    /// host-visible staging copy is recorded onto the pending batch
-    /// and runs at the next `synchronize`.
     pub fn upload_u8(&self, data: &[u8]) -> Result<Subbuffer<[u8]>> {
         let buffer = Buffer::new_slice(
             self.mem_alloc.clone(),
@@ -663,34 +475,6 @@ impl VulkanDevice {
         Ok(buffer)
     }
     /// Downloads a device u8 storage buffer to the host.
-    pub fn download_u8(&self, buffer: &Subbuffer<[u8]>) -> Result<Vec<u8>> {
-        let staging = Buffer::new_slice(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_DST,
-                ..Default::default()
-            },
-            Self::staging_alloc_info(),
-            buffer
-                .len()
-                .try_into()
-                .map_err(|_| Error::Vulkan("u8 buffer length".to_string().into()))?,
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let src = buffer.clone();
-        let dst = staging.clone();
-        self.execute(move |cbb| {
-            cbb.copy_buffer(CopyBufferInfo::buffers(src, dst))
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })?;
-        self.synchronize()?;
-        let guard = staging
-            .read()
-            .map_err(|e| Error::Vulkan(format!("buffer read: {e}").into()))?;
-        Ok((*guard).to_vec())
-    }
-    /// Uploads `data` into a device u32 storage buffer in VRAM.
     pub fn upload_u32(&self, data: &[u32]) -> Result<Subbuffer<[u32]>> {
         let buffer = Buffer::new_slice(
             self.mem_alloc.clone(),
@@ -726,33 +510,6 @@ impl VulkanDevice {
     }
 
     /// Copies a device u32 buffer (VRAM) back to the host.
-    pub fn download_u32(&self, buffer: &Subbuffer<[u32]>) -> Result<Vec<u32>> {
-        let staging = Buffer::new_slice(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_DST,
-                ..Default::default()
-            },
-            Self::staging_alloc_info(),
-            buffer
-                .len()
-                .try_into()
-                .map_err(|_| Error::Vulkan("u32 buffer length".to_string().into()))?,
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let src = buffer.clone();
-        let dst = staging.clone();
-        self.execute(move |cbb| {
-            cbb.copy_buffer(CopyBufferInfo::buffers(src, dst))
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })?;
-        self.synchronize()?;
-        let guard = staging
-            .read()
-            .map_err(|e| Error::Vulkan(format!("buffer read: {e}").into()))?;
-        Ok((*guard).to_vec())
-    }
     pub fn seed_atomic(&self) -> &AtomicU64 {
         &self.seed
     }

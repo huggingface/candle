@@ -148,12 +148,9 @@ impl VulkanStorage {
         &self.buffer
     }
 
-    fn create_vram_buffer<T: Default + Clone>(
-        device: &VulkanDevice,
-        size: usize,
-    ) -> Result<Subbuffer<[T]>>
+    fn create_vram_buffer<T>(device: &VulkanDevice, size: usize) -> Result<Subbuffer<[T]>>
     where
-        T: BufferContents,
+        T: BufferContents + Default + Clone,
     {
         let data = vec![T::default(); size];
         // Create the staging buffer on the host with the data that needs to be copied to VRAM.
@@ -238,9 +235,9 @@ impl VulkanStorage {
     }
     /// Copies a device-local (VRAM) buffer to a host-visible buffer and
     /// returns its contents as an owned `Vec<T>`.
-    fn copy_to_host<T: Default + Clone>(device: &VulkanDevice, vram: &Subbuffer<[T]>) -> Result<Vec<T>>
+    fn copy_to_host<T>(device: &VulkanDevice, vram: &Subbuffer<[T]>) -> Result<Vec<T>>
     where
-        T: BufferContents,
+        T: BufferContents + Default + Clone,
     {
         let len = vram.len();
         let destination_buffer = Buffer::new_slice::<T>(
@@ -268,7 +265,10 @@ impl VulkanStorage {
             Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
         })?;
         builder
-            .copy_buffer(CopyBufferInfo::buffers(vram.clone(), destination_buffer.clone()))
+            .copy_buffer(CopyBufferInfo::buffers(
+                vram.clone(),
+                destination_buffer.clone(),
+            ))
             .map_err(|error| {
                 Error::Vulkan(format!("Unable to set copy_buffer command: {error:?}").into())
             })?;

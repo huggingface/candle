@@ -24,15 +24,8 @@ impl std::fmt::Debug for QVulkanStorage {
     }
 }
 impl QVulkanStorage {
-    /// Allocate a zero-filled quantized buffer for `elem_count` elements.
-    pub fn zeros(device: &VulkanDevice, elem_count: usize, dtype: GgmlDType) -> Result<Self> {
-        let size = elem_count.div_ceil(dtype.block_size()) * dtype.type_size();
-        let bytes = device.upload_u8(&vec![0u8; size])?;
-        Ok(Self {
-            bytes,
-            device: device.clone(),
-            dtype,
-        })
+    pub fn zeros(_device: &VulkanDevice, _elem_count: usize, _dtype: GgmlDType) -> Result<Self> {
+        todo!()
     }
 
     /// Vulkan kernels take buffer handles; raw device pointers are not exposed.
@@ -53,7 +46,7 @@ impl QVulkanStorage {
     }
 
     pub fn data(&self) -> Result<Vec<u8>> {
-        self.device.download_u8(&self.bytes)
+        todo!()
     }
 
     pub fn dequantize(&self, _elem_count: usize) -> Result<VulkanStorage> {

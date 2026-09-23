@@ -4,8 +4,8 @@
 //! `CANDLE_VULKAN_TEST_GPU=<n> cargo test --features vulkan --test vulkan_integration_tests`
 //! (defaults to physical device 0).
 #![cfg(feature = "vulkan")]
-use std::sync::LazyLock;
 use candle_core::{backend::BackendDevice, backend::BackendStorage, VulkanDevice};
+use std::sync::LazyLock;
 static INIT: LazyLock<()> = LazyLock::new(|| {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::TRACE)
