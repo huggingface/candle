@@ -227,7 +227,7 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
 
 /// MLP layer with SwiGLU activation.
 #[derive(Debug, Clone)]
-struct Mlp {
+pub struct Mlp {
     gate_proj: Linear,
     up_proj: Linear,
     down_proj: Linear,
@@ -235,7 +235,7 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let intermediate_size = cfg.intermediate_size;
         // LFM2 uses w1 (gate), w3 (up), w2 (down) naming convention
@@ -250,7 +250,7 @@ impl Mlp {
         })
     }
 
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let gate = candle_nn::ops::silu(&self.gate_proj.forward(x)?)?;
         let up = self.up_proj.forward(x)?;
@@ -260,7 +260,7 @@ impl Mlp {
 
 /// Attention layer with per-head QK normalization and RoPE.
 #[derive(Debug, Clone)]
-struct Attention {
+pub struct Attention {
     q_proj: Linear,
     k_proj: Linear,
     v_proj: Linear,
@@ -276,7 +276,7 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let num_attention_heads = cfg.num_attention_heads;
         let num_key_value_heads = cfg.num_key_value_heads;
@@ -318,7 +318,7 @@ impl Attention {
         candle_nn::rotary_emb::rope(&x.contiguous()?, &cos, &sin)
     }
 
-    fn forward(
+    pub fn forward(
         &self,
         x: &Tensor,
         index_pos: usize,
@@ -407,7 +407,7 @@ impl Attention {
 
 /// Short convolution layer for efficient sequence processing.
 #[derive(Debug, Clone)]
-struct ShortConv {
+pub struct ShortConv {
     in_proj: Linear,
     out_proj: Linear,
     conv_weight: Tensor,
@@ -417,7 +417,7 @@ struct ShortConv {
 }
 
 impl ShortConv {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let l_cache = cfg.conv_l_cache;
 
@@ -438,7 +438,7 @@ impl ShortConv {
         })
     }
 
-    fn forward(&self, x: &Tensor, block_idx: usize, cache: &mut Cache) -> Result<Tensor> {
+    pub fn forward(&self, x: &Tensor, block_idx: usize, cache: &mut Cache) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (b_sz, seq_len, _) = x.dims3()?;
 
