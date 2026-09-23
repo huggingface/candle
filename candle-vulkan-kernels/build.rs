@@ -5,7 +5,6 @@ use std::path::Path;
 enum ShaderLang {
     Glsl,
     Wgsl,
-    Slang,
 }
 
 fn main() {
@@ -29,59 +28,64 @@ fn main() {
         ("gemm", ShaderLang::Wgsl),
         ("q4k", ShaderLang::Wgsl),
         ("q5q8", ShaderLang::Wgsl),
-        ("test_fill_f16", ShaderLang::Slang),
     ] {
-        let source_path = match lang {
-            ShaderLang::Slang => src_dir.join(format!("{shader}.slang")),
-            _ => src_dir.join(format!("{shader}.comp")),
+        let source_path = src_dir.join(format!("{shader}.comp"));
+        let source = fs::read_to_string(&source_path)
+            .unwrap_or_else(|e| panic!("failed to read shaders/{shader}.comp: {e}"));
+        let module = if ShaderLang::Glsl.eq(&lang) {
+            parse_glsl(&source)
+        } else {
+            parse_wgsl(&source)
         };
+        let spirv_ir = to_spv(&module);
+        let bytes: Vec<u8> = spirv_ir.iter().flat_map(|w| w.to_le_bytes()).collect();
         let out_path = Path::new(&out_dir).join(format!("{shader}.spv"));
-        match lang {
-            ShaderLang::Glsl | ShaderLang::Wgsl => {
-                let source = fs::read_to_string(&source_path)
-                    .unwrap_or_else(|e| panic!("failed to read shaders/{shader}.comp: {e}"));
-                let module = if ShaderLang::Glsl.eq(&lang) {
-                    parse_glsl(&source)
-                } else {
-                    parse_wgsl(&source)
-                };
-                let spirv_ir = to_spv(&module);
-                let bytes: Vec<u8> = spirv_ir.iter().flat_map(|w| w.to_le_bytes()).collect();
-                fs::write(&out_path, &bytes).expect("failed to write SPIR-V");
-            },
-            ShaderLang::Slang => {
-                let exe = if cfg!(windows) {
-                    ".exe"
-                } else {
-                    ""
-                };
-                let slangc = format!("slangc{exe}");
-                let status = std::process::Command::new(&slangc)
-                    .args(&[
-                        source_path.to_string_lossy().into_owned().as_str(),
-                        "-profile",
-                        "glsl_450",
-                        "-target",
-                        "spirv",
-                        "-o",
-                        out_path.to_string_lossy().into_owned().as_str(),
-                        "-entry",
-                        "main",
-                    ])
-                    .stdout(std::process::Stdio::piped())
-                    .status()
-                    .unwrap();
+        fs::write(&out_path, &bytes).expect("failed to write SPIR-V");
+        println!("cargo:rerun-if-changed=shaders/{shader}.comp");
+    }
+    // Test-only shaders live under `shaders/test/`. The SPIR-V output goes
+    // to `${OUT_DIR}/test/` so a test shader can never collide with a
+    // production shader of the same name.
+    let test_src_dir = Path::new("shaders/test");
+    let test_out_dir = Path::new(&out_dir).join("test");
+    fs::create_dir_all(&test_out_dir).expect("failed to create test SPIR-V directory");
+    for entry in fs::read_dir(test_src_dir).expect("failed to read shaders/test") {
+        let entry = entry.expect("failed to read shaders/test entry");
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("slang") {
+            continue;
+        }
+        let name = path
+            .file_stem()
+            .expect("slang shader without file stem")
+            .to_string_lossy();
+        let out_path = test_out_dir.join(format!("{name}.spv"));
+        compile_slang(&path, &out_path);
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
 
-                if !status.success() {
-                    panic!("slangc failed compiling source '{source_path:?}'.");
-                }
-            },
-        };
-        let ext = match lang {
-            ShaderLang::Slang => "slang",
-            _ => "comp",
-        };
-        println!("cargo:rerun-if-changed=shaders/{shader}.{ext}");
+fn compile_slang(source_path: &Path, out_path: &Path) {
+    let exe = if cfg!(windows) { ".exe" } else { "" };
+    let slangc = format!("slangc{exe}");
+    let status = std::process::Command::new(&slangc)
+        .args(&[
+            source_path.to_string_lossy().into_owned().as_str(),
+            "-profile",
+            "glsl_450",
+            "-target",
+            "spirv",
+            "-o",
+            out_path.to_string_lossy().into_owned().as_str(),
+            "-entry",
+            "main",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .status()
+        .unwrap();
+
+    if !status.success() {
+        panic!("slangc failed compiling source '{source_path:?}'.");
     }
 }
 
