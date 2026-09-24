@@ -15,7 +15,7 @@ default = []
 
 [dependencies]
 thiserror = "2"
-vulkano = "0.35.2"
+vulkano = { path = "/home/andres/workspace/vulkano/vulkano" }
 parking_lot = "0.12"
 
 [build-dependencies]

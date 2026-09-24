@@ -103,7 +103,7 @@ zip = { version = "8.6.0", default-features = false }
 zerocopy = "0.8"
 objc2-metal = { version = "0.3.1" }
 objc2-foundation = { version = "0.3.1" }
-vulkano = "0.35.2"
+vulkano = { path = "/home/andres/workspace/vulkano/vulkano" }
 
 [profile.release-with-debug]
 inherits = "release"
