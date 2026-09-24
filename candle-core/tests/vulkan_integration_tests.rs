@@ -68,6 +68,12 @@ fn test_vulkan_device_fill_f16() {
             index as u16
         );
     }
+    // All 65,536 bit patterns must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 65536, "fill_f16 produced duplicate values");
     tracing::debug!("Vulkan device {gpu_id} fill_f16 round-tripped OK");
 }
 
@@ -202,6 +208,9 @@ fn test_vulkan_device_fill_u32() {
         data.iter().all(|v| *v > u16::MAX as u32),
         "fill_u32 value not beyond the 16-bit range"
     );
+    // All 256 values must be distinct.
+    let unique = data.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_u32 produced duplicate values");
     tracing::debug!("Vulkan device {gpu_id} fill_u32 round-tripped OK");
 }
 #[test]
@@ -225,6 +234,9 @@ fn test_vulkan_device_fill_i32() {
         data.iter().any(|v| *v > i16::MAX as i32) && data.iter().any(|v| *v < i16::MIN as i32),
         "fill_i32 values do not straddle the 16-bit range"
     );
+    // All 256 values must be distinct.
+    let unique = data.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_i32 produced duplicate values");
     tracing::debug!("Vulkan device {gpu_id} fill_i32 round-tripped OK");
 }
 #[test]
@@ -248,6 +260,12 @@ fn test_vulkan_device_fill_f32() {
         data.iter().any(|v| *v > 65504.0),
         "fill_f32 no value above the f16 max"
     );
+    // All 256 values must be distinct (compared by bit pattern).
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_f32 produced duplicate values");
     tracing::debug!("Vulkan device {gpu_id} fill_f32 round-tripped OK");
 }
 #[test]
@@ -271,6 +289,9 @@ fn test_vulkan_device_fill_i64() {
         data.iter().any(|v| *v > i32::MAX as i64) && data.iter().any(|v| *v < i32::MIN as i64),
         "fill_i64 values do not straddle the 32-bit range"
     );
+    // All 256 values must be distinct.
+    let unique = data.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_i64 produced duplicate values");
     tracing::debug!("Vulkan device {gpu_id} fill_i64 round-tripped OK");
 }
 #[test]
@@ -294,6 +315,12 @@ fn test_vulkan_device_fill_f64() {
         data.iter().any(|v| (*v as f32) as f64 != *v),
         "fill_f64 all values exactly representable in f32"
     );
+    // All 256 values must be distinct (compared by bit pattern).
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_f64 produced duplicate values");
     tracing::debug!("Vulkan device {gpu_id} fill_f64 round-tripped OK");
 }
 
