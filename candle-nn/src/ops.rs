@@ -43,7 +43,133 @@ pub fn silu(xs: &Tensor) -> Result<Tensor> {
 
 pub fn swiglu(xs: &Tensor) -> Result<Tensor> {
     let xs = xs.chunk(2, D::Minus1)?;
-    &xs[0].silu()? * &xs[1]
+    silu_mul(&xs[0], &xs[1])
+}
+
+/// Fused SiLU(x) * y in a single kernel dispatch.
+///
+/// Equivalent to `silu(x) * y` but launches one Metal kernel instead of two
+/// (one unary `silu` + one binary `mul`). For SwiGLU MLP this halves the
+/// element-wise dispatch count in the gate path.
+///
+/// Both inputs must have the same shape and dtype (F32/F16/BF16/F64).
+pub fn silu_mul(x: &Tensor, y: &Tensor) -> Result<Tensor> {
+    if x.shape() != y.shape() {
+        candle::bail!(
+            "silu_mul shape mismatch: lhs {:?} vs rhs {:?}",
+            x.shape(),
+            y.shape()
+        );
+    }
+    if x.dtype() != y.dtype() {
+        candle::bail!(
+            "silu_mul dtype mismatch: lhs {:?} vs rhs {:?}",
+            x.dtype(),
+            y.dtype()
+        );
+    }
+    let x = x.contiguous()?;
+    let y = y.contiguous()?;
+    x.apply_op2_no_bwd(&y, &SiluMul)
+}
+
+#[derive(Debug, Clone)]
+struct SiluMul;
+
+impl candle::CustomOp2 for SiluMul {
+    fn name(&self) -> &'static str {
+        "silu-mul"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &CpuStorage,
+        l1: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        fn fwd<T: num_traits::Float + candle::WithDType + Send + Sync>(
+            xs: &[T],
+            ys: &[T],
+        ) -> Vec<T> {
+            xs.par_iter()
+                .zip(ys.par_iter())
+                .map(|(&x, &y)| {
+                    let one = T::one();
+                    let neg_x = T::zero() - x;
+                    (x / (one + neg_x.exp())) * y
+                })
+                .collect()
+        }
+
+        if !(l1.is_contiguous() && l2.is_contiguous()) {
+            candle::bail!("silu_mul requires contiguous inputs on cpu");
+        }
+        let (o1a, o1b) = l1.contiguous_offsets().expect("checked");
+        let (o2a, o2b) = l2.contiguous_offsets().expect("checked");
+        use CpuStorage as C;
+        let storage = match (s1, s2) {
+            (C::BF16(a), C::BF16(b)) => C::BF16(fwd::<half::bf16>(&a[o1a..o1b], &b[o2a..o2b])),
+            (C::F16(a), C::F16(b)) => C::F16(fwd::<half::f16>(&a[o1a..o1b], &b[o2a..o2b])),
+            (C::F32(a), C::F32(b)) => C::F32(fwd::<f32>(&a[o1a..o1b], &b[o2a..o2b])),
+            (C::F64(a), C::F64(b)) => C::F64(fwd::<f64>(&a[o1a..o1b], &b[o2a..o2b])),
+            _ => candle::bail!("silu_mul: unsupported dtype {:?}", s1.dtype()),
+        };
+        Ok((storage, l1.shape().clone()))
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        s1: &candle::MetalStorage,
+        l1: &Layout,
+        s2: &candle::MetalStorage,
+        l2: &Layout,
+    ) -> Result<(candle::MetalStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        if !(l1.is_contiguous() && l2.is_contiguous()) {
+            candle::bail!("silu_mul requires contiguous Metal inputs");
+        }
+        let device = s1.device();
+        let kernels = device.kernels();
+        let dtype = s1.dtype();
+        let kernel_name = match dtype {
+            DType::F32 => "bsilu_mul_f32",
+            DType::F16 => "bsilu_mul_f16",
+            DType::BF16 => "bsilu_mul_bf16",
+            d => candle::bail!("silu_mul: unsupported metal dtype {:?}", d),
+        };
+        let elem_count = l1.shape().elem_count();
+        let encoder = device.command_encoder()?;
+        let output = device
+            .new_buffer_builder()
+            .with_size_for(elem_count, dtype)
+            .with_label("silu_mul")
+            .build()?;
+        let left = candle_metal_kernels::BufferOffset {
+            buffer: s1.buffer(),
+            offset_in_bytes: l1.start_offset() * dtype.size_in_bytes(),
+        };
+        let right = candle_metal_kernels::BufferOffset {
+            buffer: s2.buffer(),
+            offset_in_bytes: l2.start_offset() * dtype.size_in_bytes(),
+        };
+        candle_metal_kernels::call_binary_contiguous(
+            device.metal_device(),
+            &encoder,
+            kernels,
+            kernel_name,
+            dtype.size_in_bytes(),
+            elem_count,
+            left,
+            right,
+            &output,
+        )
+        .map_err(candle::Error::wrap)?;
+        let storage = candle::MetalStorage::new(output, device.clone(), elem_count, dtype);
+        Ok((storage, l1.shape().clone()))
+    }
 }
 
 struct Sigmoid;
