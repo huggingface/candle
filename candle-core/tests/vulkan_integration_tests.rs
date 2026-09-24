@@ -28,6 +28,23 @@ fn test_vulkan_device_supports_bf16() {
     );
 }
 #[test]
+fn test_vulkan_device_supports_f8e4m3() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let f8 = device.supports_f8e4m3();
+    tracing::debug!(
+        "Vulkan device {gpu_id} has native float8 (VK_EXT_shader_float8) support?: {f8}"
+    );
+    // GPU 1 on the arch machine is known to support VK_EXT_shader_float8.
+    if gpu_id == 1 {
+        assert!(
+            f8,
+            "GPU 1 should support VK_EXT_shader_float8"
+        );
+    }
+}
+#[test]
 fn test_vulkan_device_storage() {
     (*INIT);
     let gpu_id = *GPU_ID;
