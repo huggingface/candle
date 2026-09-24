@@ -334,15 +334,22 @@ pub struct ModernBert {
 
 impl ModernBert {
     pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+        // A ModernBertForMaskedLM or ModernBertForSequenceClassification export keeps the
+        // backbone under a `model.` prefix, a bare ModernBertModel export does not.
+        let vb = if vb.contains_tensor("model.embeddings.tok_embeddings.weight") {
+            vb.pp("model")
+        } else {
+            vb
+        };
         let word_embeddings = embedding(
             config.vocab_size,
             config.hidden_size,
-            vb.pp("model.embeddings.tok_embeddings"),
+            vb.pp("embeddings.tok_embeddings"),
         )?;
         let norm = layer_norm_no_bias(
             config.hidden_size,
             config.layer_norm_eps,
-            vb.pp("model.embeddings.norm"),
+            vb.pp("embeddings.norm"),
         )?;
         let global_rotary_emb = Arc::new(RotaryEmbedding::new(
             vb.dtype(),
@@ -361,7 +368,7 @@ impl ModernBert {
         for layer_id in 0..config.num_hidden_layers {
             let layer_uses_local_attention = layer_id % config.global_attn_every_n_layers != 0;
             layers.push(ModernBertLayer::load(
-                vb.pp(format!("model.layers.{layer_id}")),
+                vb.pp(format!("layers.{layer_id}")),
                 config,
                 if layer_uses_local_attention {
                     local_rotary_emb.clone()
@@ -375,7 +382,7 @@ impl ModernBert {
         let final_norm = layer_norm_no_bias(
             config.hidden_size,
             config.layer_norm_eps,
-            vb.pp("model.final_norm"),
+            vb.pp("final_norm"),
         )?;
 
         Ok(Self {
