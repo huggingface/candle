@@ -15,8 +15,7 @@ fn main() -> Result<()> {
     println!("cargo::rerun-if-env-changed={LEGACY_BF16_FEATURE}");
 
     let compute_cap = detect_compute_cap().map(|arch| arch.base()).unwrap_or(80);
-    let legacy_bf16 =
-        compute_cap < 80 && env::var_os(LEGACY_BF16_FEATURE).is_some();
+    let legacy_bf16 = compute_cap < 80 && env::var_os(LEGACY_BF16_FEATURE).is_some();
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let ptx_path = out_dir.join("ptx.rs");
