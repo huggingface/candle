@@ -128,6 +128,40 @@ fn rejects_tensor_size_exceeding_file() {
 }
 
 #[test]
+fn read_tensor_into_reuses_scratch() {
+    // Single F32 tensor with 4 elements [1.0, 2.0, 3.0, 4.0]
+    let mut buf = header(1, 0);
+    buf.extend(length_prefixed(b"t"));
+    buf.extend_from_slice(&1u32.to_le_bytes()); // n dims
+    buf.extend_from_slice(&4u64.to_le_bytes()); // 4 elements
+    buf.extend_from_slice(&0u32.to_le_bytes()); // F32
+    buf.extend_from_slice(&0u64.to_le_bytes()); // offset = 0
+    // Pad to alignment (32 bytes default)
+    let header_len = buf.len();
+    let aligned_len = (header_len + 31) & !31;
+    buf.resize(aligned_len, 0);
+    // Data: 4 * f32 = 16 bytes
+    for f in [1.0f32, 2.0, 3.0, 4.0] {
+        buf.extend_from_slice(&f.to_le_bytes());
+    }
+
+    let mut cursor = Cursor::new(buf);
+    let content = Content::read(&mut cursor).expect("header should parse");
+
+    let mut scratch = Vec::new();
+    let qtensor = content
+        .tensor_into(&mut cursor, "t", &Device::Cpu, &mut scratch)
+        .expect("tensor should load");
+    assert_eq!(qtensor.shape().dims(), &[4]);
+    assert_eq!(scratch.len(), 16);
+    let dequant = qtensor.dequantize(&Device::Cpu).expect("dequantize");
+    assert_eq!(
+        dequant.to_vec1::<f32>().expect("to_vec"),
+        &[1.0, 2.0, 3.0, 4.0]
+    );
+}
+
+#[test]
 fn rejects_string_length_above_remaining_file_bytes() {
     let mut buf = header(1, 0);
     buf.extend_from_slice(&(1u64 << 20).to_le_bytes()); // 1 MB, below cap, above file size

@@ -20,9 +20,24 @@ impl VarBuilder {
     pub fn from_gguf<P: AsRef<std::path::Path>>(p: P, device: &Device) -> Result<Self> {
         let mut file = std::fs::File::open(p)?;
         let content = candle::quantized::gguf_file::Content::read(&mut file)?;
+        let max_tensor_bytes = content
+            .tensor_infos
+            .values()
+            .map(|ti| {
+                let elems = ti.shape.elem_count();
+                let bs = ti.ggml_dtype.block_size();
+                if bs == 0 {
+                    0
+                } else {
+                    elems / bs * ti.ggml_dtype.type_size()
+                }
+            })
+            .max()
+            .unwrap_or(0);
+        let mut scratch: Vec<u8> = Vec::with_capacity(max_tensor_bytes);
         let mut data = std::collections::HashMap::new();
         for tensor_name in content.tensor_infos.keys() {
-            let tensor = content.tensor(&mut file, tensor_name, device)?;
+            let tensor = content.tensor_into(&mut file, tensor_name, device, &mut scratch)?;
             data.insert(tensor_name.to_string(), Arc::new(tensor));
         }
         Ok(Self {
@@ -35,9 +50,24 @@ impl VarBuilder {
     pub fn from_gguf_buffer(buffer: &[u8], device: &Device) -> Result<Self> {
         let mut cursor = std::io::Cursor::new(buffer);
         let content = candle::quantized::gguf_file::Content::read(&mut cursor)?;
+        let max_tensor_bytes = content
+            .tensor_infos
+            .values()
+            .map(|ti| {
+                let elems = ti.shape.elem_count();
+                let bs = ti.ggml_dtype.block_size();
+                if bs == 0 {
+                    0
+                } else {
+                    elems / bs * ti.ggml_dtype.type_size()
+                }
+            })
+            .max()
+            .unwrap_or(0);
+        let mut scratch: Vec<u8> = Vec::with_capacity(max_tensor_bytes);
         let mut data = std::collections::HashMap::new();
         for tensor_name in content.tensor_infos.keys() {
-            let tensor = content.tensor(&mut cursor, tensor_name, device)?;
+            let tensor = content.tensor_into(&mut cursor, tensor_name, device, &mut scratch)?;
             data.insert(tensor_name.to_string(), Arc::new(tensor));
         }
         Ok(Self {
