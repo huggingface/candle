@@ -45,7 +45,7 @@ candle-onnx = { path = "./candle-onnx", version = "0.11.0" }
 candle-transformers = { path = "./candle-transformers", version = "0.11.0" }
 clap = { version = "4.2.4", features = ["derive"] }
 criterion = { version = "0.8", default-features = false }
-cudarc = { version = "0.19.8", features = [
+cudarc = { version = "0.19.10", features = [
     "std",
     "cublas",
     "cublaslt",
@@ -83,7 +83,7 @@ log = "0.4"
 memmap2 = { version = "0.9.3", features = ["stable_deref_trait"] }
 num_cpus = "1.15.0"
 num-traits = "0.2.15"
-parquet = "59"
+parquet = "60"
 rand = "0.9.0"
 rand_distr = "0.5.1"
 rayon = "1.7.0"

@@ -452,7 +452,9 @@ impl Tensor {
                     }
                     Op::IndexSelect(arg, indexes, dim) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.index_add(indexes, &grad, *dim)?;
+                        // index_select accepts strided ids but index_add requires contiguous ones.
+                        let indexes = indexes.contiguous()?;
+                        *sum_grad = sum_grad.index_add(&indexes, &grad, *dim)?;
                     }
                     Op::Matmul(lhs, rhs) => {
                         // Skipping checks, the op went ok, we can skip

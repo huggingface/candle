@@ -1276,6 +1276,62 @@ quantized_matmul!(
     quantized_matmul_q8_0_metal,
     GgmlDType::Q8_0
 );
+
+#[test]
+fn quantized_matmul_q4_0_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 4, 256), GgmlDType::Q4_0)
+}
+
+#[test]
+fn quantized_matmul_q8_0_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 4, 256), GgmlDType::Q8_0)
+}
+
+#[test]
+fn quantized_matmul_q6k_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 8, 256), GgmlDType::Q6K)
+}
+
+#[test]
+fn quantized_matmul_q5k_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 8, 256), GgmlDType::Q5K)
+}
+
+#[test]
+fn quantized_matmul_q4k_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 8, 256), GgmlDType::Q4K)
+}
+
+#[test]
+fn quantized_matmul_q4k_repacked_gemv_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 1, 8, 256), GgmlDType::Q4K)
+}
+
+#[test]
+fn quantized_matmul_q4_0_repacked_gemv_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 1, 4, 256), GgmlDType::Q4_0)
+}
+
+#[test]
+fn quantized_matmul_q5k_repacked_gemv_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 1, 8, 256), GgmlDType::Q5K)
+}
+
+#[test]
+fn quantized_matmul_q6k_repacked_gemv_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 1, 8, 256), GgmlDType::Q6K)
+}
+
+#[test]
+fn quantized_matmul_q8_0_repacked_gemv_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 1, 4, 256), GgmlDType::Q8_0)
+}
+
+#[test]
+fn quantized_matmul_q4k_repack_fallback_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 3, 8, 256), GgmlDType::Q4K)
+}
+
 quantized_matmul!(
     quantized_matmul_q8_1_bis,
     quantized_matmul_q8_1_cpu,
@@ -1513,3 +1569,103 @@ test_device!(
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cuda,
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
 );
+
+// Repacked aarch64 kernels must agree with the dequantized reference across the m tiers
+// that select different paths: 1 (gemv), 4/512 (tiled), 23 (generic fallback).
+#[test]
+fn qmatmul_repack_matches_reference_across_m() -> Result<()> {
+    let dev = Device::Cpu;
+    let (k, n) = (512, 256);
+    for dtype in [
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+        GgmlDType::Q8_0,
+    ] {
+        let weight = Tensor::rand(-1f32, 1f32, (n, k), &dev)?;
+        let qtensor = quantized::QTensor::quantize(&weight, dtype)?;
+        let wref = qtensor.dequantize(&dev)?;
+        let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
+        for m in [1usize, 4, 8, 23, 512] {
+            let lhs = Tensor::rand(-1f32, 1f32, (m, k), &dev)?;
+            let got = matmul.forward(&lhs)?;
+            let want = lhs.matmul(&wref.t()?)?;
+            let diff = (&got - &want)?.abs()?.max_all()?.to_scalar::<f32>()?;
+            let scale = want.abs()?.max_all()?.to_scalar::<f32>()?.max(1.0);
+            assert!(
+                diff / scale < 5e-2,
+                "{dtype:?} m={m}: rel diff {} too large",
+                diff / scale
+            );
+        }
+    }
+    Ok(())
+}
+
+// Indexed (MoE) gemv must match dequantize + per-pair matmul for stacked expert weights.
+// aarch64 only: x86 has no indexed path yet and falls back to dequantize-and-gather.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn indexed_gemv_matches_reference() -> Result<()> {
+    let dev = Device::Cpu;
+    let (n_experts, n_out, k) = (8usize, 64usize, 512usize);
+    for dtype in [GgmlDType::Q4K, GgmlDType::Q6K, GgmlDType::Q8_0] {
+        let w = Tensor::rand(-1f32, 1f32, (n_experts, n_out, k), &dev)?;
+        let qt = quantized::QTensor::quantize(&w, dtype)?;
+        let wref = qt.dequantize(&dev)?;
+        // 24x4 = 96 pairs exercises the bucketed per-expert matmul path; skewed ids
+        // land some experts with dozens of rows and others with none
+        for (batch, topk, x_t) in [(3usize, 4usize, 1usize), (2, 2, 2), (24, 4, 1)] {
+            let x = Tensor::rand(-1f32, 1f32, (batch, x_t, k), &dev)?;
+            let ids_v: Vec<u32> = (0..batch * topk)
+                .map(|i| ((i * i * 3 + 1) % n_experts) as u32)
+                .collect();
+            let ids = Tensor::from_vec(ids_v.clone(), (batch, topk), &dev)?;
+            let got = qt.indexed_gemv(&x, &ids)?.expect("indexed path supported");
+            for b in 0..batch {
+                for t in 0..topk {
+                    let e = ids_v[b * topk + t] as usize;
+                    let xr = x
+                        .narrow(0, b, 1)?
+                        .narrow(1, t.min(x_t - 1), 1)?
+                        .squeeze(0)?;
+                    let we = wref.narrow(0, e, 1)?.squeeze(0)?;
+                    let want = xr.matmul(&we.t()?)?.squeeze(0)?;
+                    let g = got
+                        .narrow(0, b, 1)?
+                        .narrow(1, t, 1)?
+                        .squeeze(0)?
+                        .squeeze(0)?;
+                    let diff = (&g - &want)?.abs()?.max_all()?.to_scalar::<f32>()?;
+                    let scale = want.abs()?.max_all()?.to_scalar::<f32>()?.max(1.0);
+                    assert!(
+                        diff / scale < 5e-2,
+                        "{dtype:?} b={b} t={t}: rel diff {}",
+                        diff / scale
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn bf16_lhs_matmul_matches_f32() -> Result<()> {
+    let dev = Device::Cpu;
+    let (n, k) = (64usize, 512usize);
+    for m in [1usize, 4, 9] {
+        let w = Tensor::rand(-1f32, 1f32, (n, k), &dev)?;
+        let qt = quantized::QTensor::quantize(&w, GgmlDType::Q4K)?;
+        let mm = quantized::QMatMul::from_qtensor(qt)?;
+        let x = Tensor::rand(-1f32, 1f32, (1, m, k), &dev)?;
+        let y32 = mm.forward(&x)?;
+        let ybf = mm
+            .forward(&x.to_dtype(DType::BF16)?)?
+            .to_dtype(DType::F32)?;
+        let diff = (&y32 - &ybf)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let scale = y32.abs()?.max_all()?.to_scalar::<f32>()?.max(1.0);
+        assert!(diff / scale < 3e-2, "m={m}: rel diff {}", diff / scale);
+    }
+    Ok(())
+}
