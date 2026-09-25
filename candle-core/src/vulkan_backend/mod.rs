@@ -1368,34 +1368,10 @@ impl BackendStorage for VulkanStorage {
         }
         let kernels = self.device.kernels();
         match op {
-            ReduceOp::Sum => {
-                let out_buf = match &out.buffer {
-                    VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
-                };
-                let input = input.clone();
-                self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_reduce_sum_f32(
-                        cbb, &kernels, &input, &out_buf, rows, cols,
-                    )
-                    .map_err(|e| e.to_string())
-                })?;
-            }
-            ReduceOp::Max => {
-                let out_buf = match &out.buffer {
-                    VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
-                };
-                let input = input.clone();
-                self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_reduce_max_f32(
-                        cbb, &kernels, &input, &out_buf, rows, cols,
-                    )
-                    .map_err(|e| e.to_string())
-                })?;
-            }
-            ReduceOp::Min | ReduceOp::ArgMin | ReduceOp::ArgMax => {
+            ReduceOp::Sum | ReduceOp::Max | ReduceOp::Min | ReduceOp::ArgMin | ReduceOp::ArgMax => {
                 let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumF32,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxF32,
                     ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinF32,
                     ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinF32,
                     _ => candle_vulkan_kernels::KernelName::ReduceArgMaxF32,

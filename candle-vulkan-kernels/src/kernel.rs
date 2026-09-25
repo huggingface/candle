@@ -114,8 +114,8 @@ impl AsRef<str> for KernelName {
     fn as_ref(&self) -> &str {
         match self {
             Self::AffineF32 => "main",
-            Self::ReduceSumF32 => "main",
-            Self::ReduceMaxF32 => "main",
+            Self::ReduceSumF32 => "main_reduce_sum",
+            Self::ReduceMaxF32 => "main_reduce_max",
             Self::GatherF32 => "main",
             Self::CopyF32 => "main",
             Self::ElemAddF32 => "main_add",
@@ -344,8 +344,6 @@ impl Kernels {
 fn descriptor_bindings(name: KernelName) -> u32 {
     match name {
         KernelName::AffineF32
-        | KernelName::ReduceSumF32
-        | KernelName::ReduceMaxF32
         | KernelName::CopyF32
         | KernelName::SoftmaxLastDimF32 => 2,
         KernelName::GatherF32
@@ -403,6 +401,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         KernelName::ReduceMinF32
         | KernelName::ReduceArgMinF32
         | KernelName::ReduceArgMaxF32
+        | KernelName::ReduceSumF32
+        | KernelName::ReduceMaxF32
         | KernelName::AvgPool2dF32
         | KernelName::MaxPool2dF32
         | KernelName::UpsampleNearest1dF32

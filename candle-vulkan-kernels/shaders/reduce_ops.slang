@@ -1,4 +1,6 @@
-// Last-axis reductions not covered by the WGSL kernels:
+// Last-axis reductions:
+// out[row] = sum_c in[row*cols + c]                      (main_reduce_sum)
+// out[row] = max_c in[row*cols + c]                      (main_reduce_max)
 // out[row] = min_c in[row*cols + c]                      (main_reduce_min)
 // out[row] = argmin_c in[row*cols + c]                   (main_reduce_argmin)
 // out[row] = argmax_c in[row*cols + c]                   (main_reduce_argmax)
@@ -78,4 +80,44 @@ void main_reduce_argmax(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
     }
     g_OutI[row] = besti;
+}
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void main_reduce_sum(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint row = dispatchThreadID.x;
+    uint rows = uint(g_Params[0]);
+    uint cols = uint(g_Params[1]);
+    if (row >= rows || cols == 0u)
+    {
+        return;
+    }
+    float acc = 0.0;
+    for (uint c = 0u; c < cols; c += 1u)
+    {
+        acc += g_In[row * cols + c];
+    }
+    g_OutF[row] = acc;
+}
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void main_reduce_max(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint row = dispatchThreadID.x;
+    uint rows = uint(g_Params[0]);
+    uint cols = uint(g_Params[1]);
+    if (row >= rows || cols == 0u)
+    {
+        return;
+    }
+    float acc = -3.402823466e+38;
+    for (uint c = 0u; c < cols; c += 1u)
+    {
+        float v = g_In[row * cols + c];
+        if (v > acc)
+        {
+            acc = v;
+        }
+    }
+    g_OutF[row] = acc;
 }

@@ -10,7 +10,7 @@ pub use kernels::{
     call_gather_f32,
     call_gemm_f32, call_gemv_f32, call_gemv_t_f32, call_q4k_dequant_f32, call_q4k_qmatvec_f32,
     call_q50_dequant_f32, call_q5k_dequant_f32, call_q6k_dequant_f32, call_q80_dequant_f32,
-    call_reduce_max_f32, call_reduce_sum_f32, call_rms_norm_f32, call_rope_f32,
+    call_rms_norm_f32, call_rope_f32,
     call_softmax_last_dim_f32, call_test_fill_bf16_emulated, call_test_fill_bf16_native,
     call_test_fill_f16, call_test_fill_f32, call_test_fill_f4, call_test_fill_f64,
     call_test_fill_f6e2m3, call_test_fill_f6e3m2, call_test_fill_f8e4m3, call_test_fill_f8e8m0,

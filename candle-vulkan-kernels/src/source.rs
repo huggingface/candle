@@ -5,8 +5,6 @@ use crate::kernel::KernelName;
 const AFFINE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine.spv"));
 const ELEMENTWISE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/elementwise.spv"));
 const GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm.spv"));
-const REDUCE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce.spv"));
-const REDUCE_MAX_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_max.spv"));
 const GATHER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather.spv"));
 const COPY_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy.spv"));
 const RMS_NORM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rms_norm.spv"));
@@ -57,8 +55,6 @@ pub enum Source {
     Affine,
     Elementwise,
     Gemm,
-    Reduce,
-    ReduceMax,
     Gather,
     Copy,
     RmsNorm,
@@ -104,8 +100,6 @@ impl Source {
     pub fn push_constant_size(self, name: KernelName) -> u32 {
         match name {
             KernelName::AffineF32 => 12,
-            KernelName::ReduceSumF32 => 8,
-            KernelName::ReduceMaxF32 => 8,
             KernelName::GatherF32 => 8,
             KernelName::CopyF32 => 64,
             KernelName::ElemAddF32
@@ -163,6 +157,8 @@ impl Source {
             | KernelName::ReduceMinF32
             | KernelName::ReduceArgMinF32
             | KernelName::ReduceArgMaxF32
+            | KernelName::ReduceSumF32
+            | KernelName::ReduceMaxF32
             | KernelName::AvgPool2dF32
             | KernelName::MaxPool2dF32
             | KernelName::UpsampleNearest1dF32
@@ -197,8 +193,6 @@ impl Source {
             Self::Affine => AFFINE_SPV,
             Self::Elementwise => ELEMENTWISE_SPV,
             Self::Gemm => GEMM_SPV,
-            Self::Reduce => REDUCE_SPV,
-            Self::ReduceMax => REDUCE_MAX_SPV,
             Self::Gather => GATHER_SPV,
             Self::Copy => COPY_SPV,
             Self::RmsNorm => RMS_NORM_SPV,
@@ -253,8 +247,6 @@ impl AsRef<str> for Source {
             Self::GemvT => "gemv_t",
             Self::Q4k => "q4k",
             Self::Q5q8 => "q5q8",
-            Self::Reduce => "reduce",
-            Self::ReduceMax => "reduce_max",
             Self::Gather => "gather",
             Self::Copy => "copy",
             Self::RmsNorm => "rms_norm",

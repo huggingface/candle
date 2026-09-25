@@ -15,8 +15,6 @@ fn main() {
     // GLSL. All sources live under the `.comp` extension.
     for (shader, lang) in [
         ("affine", ShaderLang::Glsl),
-        ("reduce", ShaderLang::Glsl),
-        ("reduce_max", ShaderLang::Glsl),
         ("gather", ShaderLang::Glsl),
         ("copy", ShaderLang::Glsl),
         ("rms_norm", ShaderLang::Wgsl),
