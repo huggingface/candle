@@ -3095,12 +3095,33 @@ impl BackendStorage for VulkanStorage {
             _ => unreachable!(),
         };
         let kernels = self.device.kernels();
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![
+                bsz as f32,
+                m as f32,
+                n as f32,
+                k as f32,
+                (rhs_transposed as u32) as f32,
+            ],
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[f32]> = params_buf;
         let input = input.clone();
         let rhs_buf = rhs_buf.clone();
         let out_buf = out_buf.clone();
         self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_gemm_f32(
-                cbb, &kernels, &input, &rhs_buf, &out_buf, bsz, m, n, k, rhs_transposed,
+            candle_vulkan_kernels::call_gemm_slang_f32(
+                cbb, &kernels, &input, &rhs_buf, &out_buf, &params, bsz, m, n,
             )
             .map_err(|e| e.to_string())
         })?;

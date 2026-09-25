@@ -42,7 +42,7 @@ pub use affine::call_affine_slang_f32;
 pub use const_set::call_const_set_f32;
 pub use copy::call_copy_f32;
 pub use gather::call_gather_f32;
-pub use gemm::call_gemm_f32;
+pub use gemm::call_gemm_slang_f32;
 pub use gemv::{call_gemv_f32, call_gemv_t_f32};
 pub use q4k::{call_q4k_dequant_f32, call_q4k_qmatvec_f32, call_q6k_dequant_f32};
 pub use q5q8::{call_q50_dequant_f32, call_q5k_dequant_f32, call_q80_dequant_f32};

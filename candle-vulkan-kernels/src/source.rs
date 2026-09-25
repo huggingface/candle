@@ -99,7 +99,6 @@ impl Source {
         match name {
             KernelName::GatherF32 => 8,
             KernelName::CopyF32 => 64,
-            KernelName::GemmF32 => 20,
             KernelName::RmsNormF32 => 12,
             KernelName::SoftmaxLastDimF32 => 8,
             KernelName::RopeF32 => 20,
@@ -156,6 +155,7 @@ impl Source {
             | KernelName::UnarySinF32
             | KernelName::UnaryCosF32
             | KernelName::UnaryNegF32
+            | KernelName::GemmF32
             | KernelName::AvgPool2dF32
             | KernelName::MaxPool2dF32
             | KernelName::UpsampleNearest1dF32

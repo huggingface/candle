@@ -117,7 +117,7 @@ impl AsRef<str> for KernelName {
             Self::ReduceMaxF32 => "main_reduce_max",
             Self::GatherF32 => "main",
             Self::CopyF32 => "main",
-            Self::GemmF32 => "main_gemm",
+            Self::GemmF32 => "main",
             Self::RmsNormF32 => "main",
             Self::SoftmaxLastDimF32 => "main",
             Self::RopeF32 => "main",
@@ -345,8 +345,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::SoftmaxLastDimF32 => 2,
         KernelName::AffineF32
         | KernelName::GatherF32
-        | KernelName::GemmF32
         | KernelName::RmsNormF32 => 3,
+        KernelName::GemmF32 => 4,
         KernelName::RopeF32 => 4,
         KernelName::GemvF32
         | KernelName::GemvTF32
