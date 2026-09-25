@@ -119,6 +119,7 @@ impl Tensor {
                     | Op::UpsampleNearest1D { arg: node, .. }
                     | Op::UpsampleNearest2D { arg: node, .. }
                     | Op::UpsampleBilinear2D { arg: node, .. }
+                    | Op::UpsampleBicubic2D { arg: node, .. }
                     | Op::AvgPool2D { arg: node, .. }
                     | Op::MaxPool2D { arg: node, .. }
                     | Op::Copy(node)
@@ -410,6 +411,9 @@ impl Tensor {
                     }
                     Op::UpsampleBilinear2D { .. } => {
                         crate::bail!("backward not supported for upsample_bilinear2d")
+                    }
+                    Op::UpsampleBicubic2D { .. } => {
+                        crate::bail!("backward not supported for upsample_bicubic2d")
                     }
                     Op::SliceScatter0(lhs, rhs, start_rhs) => {
                         let rhs_sum_grad = grads.or_insert(rhs)?;
