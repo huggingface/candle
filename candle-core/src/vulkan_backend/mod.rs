@@ -85,7 +85,7 @@ impl BackendDevice for VulkanDevice {
     }
 
     fn synchronize(&self) -> Result<()> {
-        todo!()
+        self.synchronize()
     }
 }
 
@@ -682,6 +682,9 @@ impl BackendStorage for VulkanStorage {
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         let device = self.device.clone();
+        // Drain any deferred encodes first: the readback copy is submitted
+        // on the same queue and must not land ahead of pending work.
+        device.synchronize()?;
         Ok(match &self.buffer {
             VulkanStorageBuffer::U8(b) => CpuStorage::U8(Self::copy_to_host(&device, b)?),
             VulkanStorageBuffer::U32(b) => CpuStorage::U32(Self::copy_to_host(&device, b)?),

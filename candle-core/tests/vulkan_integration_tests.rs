@@ -491,3 +491,18 @@ fn test_vulkan_device_fill_f8e8m0() {
     assert_eq!(unique.len(), 256, "fill_f8e8m0 produced duplicate values");
     tracing::debug!("Vulkan device {gpu_id} fill_f8e8m0 round-tripped OK");
 }
+
+/// `synchronize` must drain all deferred GPU work on the device.
+#[test]
+fn test_vulkan_device_synchronize() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let shape = candle_core::Shape::from((4, 4));
+    let storage = device.zeros_impl(&shape, candle_core::DType::F32).unwrap();
+    device.synchronize().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<f32>().unwrap();
+    assert!(data.iter().all(|value| *value == 0.0));
+    tracing::debug!("Vulkan device {gpu_id} synchronize drained OK");
+}
