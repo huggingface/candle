@@ -1324,3 +1324,40 @@ fn test_vulkan_conv1d() {
     }
     tracing::debug!("Vulkan device {gpu_id} conv1d OK");
 }
+
+/// `conv2d` vs the CPU backend.
+#[test]
+fn test_vulkan_conv2d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let b = 2usize;
+    let c_in = 2usize;
+    let i_h = 8usize;
+    let i_w = 10usize;
+    let c_out = 3usize;
+    let k_h = 3usize;
+    let k_w = 3usize;
+    let in_v: Vec<f32> = (0..b * c_in * i_h * i_w).map(|i| (i as f32) * 0.1 - 6.0).collect();
+    let w_v: Vec<f32> = (0..c_out * c_in * k_h * k_w).map(|i| (i as f32) * 0.05 - 0.5).collect();
+    let cases: Vec<(usize, usize, usize)> = vec![(0, 1, 1), (1, 2, 1), (0, 1, 2)];
+    for (padding, stride, dilation) in cases {
+        let gin = candle_core::Tensor::new(in_v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((b, c_in, i_h, i_w))).unwrap();
+        let gk = candle_core::Tensor::new(w_v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((c_out, c_in, k_h, k_w))).unwrap();
+        let cin = candle_core::Tensor::new(in_v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((b, c_in, i_h, i_w))).unwrap();
+        let ck = candle_core::Tensor::new(w_v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((c_out, c_in, k_h, k_w))).unwrap();
+        let gg = gin.conv2d(&gk, padding, stride, dilation, 1).unwrap();
+        let cc = cin.conv2d(&ck, padding, stride, dilation, 1).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+                "conv2d p={padding} s={stride} d={dilation} at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} conv2d OK");
+}
