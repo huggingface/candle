@@ -1485,7 +1485,12 @@ impl Map2 for MatMul {
         } else {
             Parallelism::None
         };
-        let (b, m, n, k) = if b_skip == 0 && a_skip == m * k {
+        // Stacking the batches of lhs into one (b * m, k) matrix is only valid when the
+        // batch skip is exactly m row steps, i.e. position(r, ci) = r * lhs_rs + ci * lhs_cs
+        // for r in 0..b * m. A per-batch contiguous (m, k) block that is not row-major
+        // (e.g. lhs_rs < k) fails this even though a_skip == m * k, and must not be
+        // folded: the row strides would then not be uniform across the batch boundary.
+        let (b, m, n, k) = if b_skip == 0 && a_skip == m * lhs_rs {
             // A batch-invariant rhs lets the batches of lhs stack into the rows of a single
             // (b * m, k) matrix, which the destination already matches row for row.
             // a_skip and c_skip should be updated but step is always 0 so

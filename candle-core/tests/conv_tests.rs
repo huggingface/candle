@@ -1019,3 +1019,37 @@ test_device!(
     conv2d_grad_noncontiguous_kernel_gpu,
     conv2d_grad_noncontiguous_kernel_metal
 );
+
+/// Regression: batched conv_transpose1d with padding=0 exercises the CPU matmul
+/// batch-fold path with a transposed (column-major per batch) lhs. The fold is only
+/// valid when the batch skip is exactly m row steps; a per-batch contiguous (m, k)
+/// block with lhs_rs < k must not be folded.
+#[test]
+fn conv_transpose1d_batched() -> Result<()> {
+    let dev = Device::Cpu;
+    let t = Tensor::new(
+        &[
+            1f32, 2., 3., 4., 10., 20., 30., 40., 5., 6., 7., 8., 50., 60., 70., 80.,
+        ],
+        &dev,
+    )?
+    .reshape((2, 2, 4))?;
+    let w = Tensor::new(
+        &[
+            1f32, 2., 3., 4., 5., 6., 10., 12., 14., 16., 18., 20.,
+        ],
+        &dev,
+    )?
+    .reshape((2, 3, 2))?;
+    let res = t.conv_transpose1d(&w, 0, 0, 1, 1, 1)?;
+    assert_eq!(res.dims(), [2, 3, 5]);
+    assert_eq!(
+        test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+        [
+            101., 324., 547., 770., 488., 143., 450., 757., 1064., 656., 185., 576., 967.,
+            1358., 824., 505., 1216., 1439., 1662., 976., 715., 1678., 1985., 2292., 1312.,
+            925., 2140., 2531., 2922., 1648.,
+        ]
+    );
+    Ok(())
+}
