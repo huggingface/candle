@@ -28,6 +28,7 @@ pub mod test_fill_i32;
 pub mod test_fill_i64;
 pub mod test_fill_u32;
 pub mod test_fill_u8;
+pub mod unary_slang;
 
 pub use affine::call_affine_f32;
 pub use const_set::call_const_set_f32;
@@ -56,3 +57,4 @@ pub use test_fill_i32::call_test_fill_i32;
 pub use test_fill_i64::call_test_fill_i64;
 pub use test_fill_u32::call_test_fill_u32;
 pub use test_fill_u8::call_test_fill_u8;
+pub use unary_slang::call_unary_slang_f32;

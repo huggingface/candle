@@ -52,6 +52,19 @@ pub enum KernelName {
     Q50DequantF32,
     Q5KDequantF32,
     ConstSetF32,
+    UnaryLogF32,
+    UnaryAbsF32,
+    UnaryRecipF32,
+    UnarySqrF32,
+    UnaryGeluF32,
+    UnaryGeluErfF32,
+    UnaryErfF32,
+    UnaryReluF32,
+    UnaryTanhF32,
+    UnaryFloorF32,
+    UnaryCeilF32,
+    UnaryRoundF32,
+    UnarySignF32,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -101,6 +114,19 @@ impl AsRef<str> for KernelName {
             Self::Q50DequantF32 => "main_q50_dequant",
             Self::Q5KDequantF32 => "main_q5k_dequant",
             Self::ConstSetF32 => "main",
+            Self::UnaryLogF32 => "main_log",
+            Self::UnaryAbsF32 => "main_abs",
+            Self::UnaryRecipF32 => "main_recip",
+            Self::UnarySqrF32 => "main_sqr",
+            Self::UnaryGeluF32 => "main_gelu",
+            Self::UnaryGeluErfF32 => "main_gelu_erf",
+            Self::UnaryErfF32 => "main_erf",
+            Self::UnaryReluF32 => "main_relu",
+            Self::UnaryTanhF32 => "main_tanh",
+            Self::UnaryFloorF32 => "main_floor",
+            Self::UnaryCeilF32 => "main_ceil",
+            Self::UnaryRoundF32 => "main_round",
+            Self::UnarySignF32 => "main_sign",
             Self::TestFillF16 => "main",
             Self::TestFillU8
             | Self::TestFillI16
@@ -289,7 +315,20 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Q80DequantF32
         | KernelName::Q50DequantF32
         | KernelName::Q5KDequantF32 => 3,
-        KernelName::ConstSetF32 => 2,
+        KernelName::ConstSetF32
+        | KernelName::UnaryLogF32
+        | KernelName::UnaryAbsF32
+        | KernelName::UnaryRecipF32
+        | KernelName::UnarySqrF32
+        | KernelName::UnaryGeluF32
+        | KernelName::UnaryGeluErfF32
+        | KernelName::UnaryErfF32
+        | KernelName::UnaryReluF32
+        | KernelName::UnaryTanhF32
+        | KernelName::UnaryFloorF32
+        | KernelName::UnaryCeilF32
+        | KernelName::UnaryRoundF32
+        | KernelName::UnarySignF32 => 3,
         KernelName::TestFillF16 => 1,
         KernelName::TestFillU8
         | KernelName::TestFillI16

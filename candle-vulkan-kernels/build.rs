@@ -97,8 +97,6 @@ fn compile_slang(source_path: &Path, out_path: &Path) {
             "spirv",
             "-o",
             out_path.to_string_lossy().into_owned().as_str(),
-            "-entry",
-            "main",
         ])
         .stdout(std::process::Stdio::piped())
         .status()

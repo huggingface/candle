@@ -637,3 +637,82 @@ fn test_vulkan_const_set() {
     assert!(data.iter().all(|x| *x == 3.5), "expected all 3.5, got {:?}", &data[..4]);
     tracing::debug!("Vulkan device {gpu_id} const_set OK");
 }
+
+/// All 19 `UnaryOp`s, compared element-wise against the CPU backend.
+#[test]
+fn test_vulkan_unary_ops() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    // Mix of positive/negative, in/out of the "interesting" ranges.
+    let xs: Vec<f32> = vec![
+        0.0, 1.0, -1.0, 0.5, -0.5, 2.5, -2.5, 10.0, -10.0, 0.25, -0.75, 3.7, -3.7,
+    ];
+    let t_cpu = candle_core::Tensor::new(xs.as_slice(), &cpu).unwrap();
+    let t = candle_core::Tensor::new(xs.as_slice(), &dev).unwrap();
+
+    let pairs: Vec<(&str, Vec<f32>)> = vec![
+        ("exp", t.exp().unwrap().to_vec1::<f32>().unwrap()),
+        ("log", t.log().unwrap().to_vec1::<f32>().unwrap()),
+        ("sin", t.sin().unwrap().to_vec1::<f32>().unwrap()),
+        ("cos", t.cos().unwrap().to_vec1::<f32>().unwrap()),
+        ("abs", t.abs().unwrap().to_vec1::<f32>().unwrap()),
+        ("neg", t.neg().unwrap().to_vec1::<f32>().unwrap()),
+        ("recip", t.recip().unwrap().to_vec1::<f32>().unwrap()),
+        ("sqr", t.sqr().unwrap().to_vec1::<f32>().unwrap()),
+        ("sqrt", t.sqrt().unwrap().to_vec1::<f32>().unwrap()),
+        ("gelu", t.gelu().unwrap().to_vec1::<f32>().unwrap()),
+        ("gelu_erf", t.gelu_erf().unwrap().to_vec1::<f32>().unwrap()),
+        ("erf", t.erf().unwrap().to_vec1::<f32>().unwrap()),
+        ("relu", t.relu().unwrap().to_vec1::<f32>().unwrap()),
+        ("silu", t.silu().unwrap().to_vec1::<f32>().unwrap()),
+        ("tanh", t.tanh().unwrap().to_vec1::<f32>().unwrap()),
+        ("floor", t.floor().unwrap().to_vec1::<f32>().unwrap()),
+        ("ceil", t.ceil().unwrap().to_vec1::<f32>().unwrap()),
+        ("round", t.round().unwrap().to_vec1::<f32>().unwrap()),
+        ("sign", t.sign().unwrap().to_vec1::<f32>().unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, gpu) in &pairs {
+        let cpu_t = match *name {
+            "exp" => t_cpu.exp().unwrap(),
+            "log" => t_cpu.log().unwrap(),
+            "sin" => t_cpu.sin().unwrap(),
+            "cos" => t_cpu.cos().unwrap(),
+            "abs" => t_cpu.abs().unwrap(),
+            "neg" => t_cpu.neg().unwrap(),
+            "recip" => t_cpu.recip().unwrap(),
+            "sqr" => t_cpu.sqr().unwrap(),
+            "sqrt" => t_cpu.sqrt().unwrap(),
+            "gelu" => t_cpu.gelu().unwrap(),
+            "gelu_erf" => t_cpu.gelu_erf().unwrap(),
+            "erf" => t_cpu.erf().unwrap(),
+            "relu" => t_cpu.relu().unwrap(),
+            "silu" => t_cpu.silu().unwrap(),
+            "tanh" => t_cpu.tanh().unwrap(),
+            "floor" => t_cpu.floor().unwrap(),
+            "ceil" => t_cpu.ceil().unwrap(),
+            "round" => t_cpu.round().unwrap(),
+            "sign" => t_cpu.sign().unwrap(),
+            _ => unreachable!(),
+        }
+        .to_vec1::<f32>()
+        .unwrap();
+        for (i, (g, c)) in gpu.iter().zip(cpu_t.iter()).enumerate() {
+            let tol = if g.is_infinite() || c.is_infinite() {
+                0.0
+            } else {
+                1e-5 * (1.0 + g.abs().max(c.abs()))
+            };
+            if (g - c).abs() > tol.max(1e-5) {
+                failures += 1;
+                tracing::debug!(
+                    "unary {name}: mismatch at {i}: gpu {g} cpu {c}"
+                );
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} unary mismatches");
+    tracing::debug!("Vulkan device {gpu_id} all 19 unary ops OK");
+}

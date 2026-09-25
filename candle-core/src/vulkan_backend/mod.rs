@@ -962,8 +962,101 @@ impl BackendStorage for VulkanStorage {
         todo!()
     }
 
-    fn unary_impl<B: UnaryOpT>(&self, _: &Layout) -> Result<Self> {
-        todo!()
+    fn unary_impl<B: UnaryOpT>(&self, l: &Layout) -> Result<Self> {
+        use candle_vulkan_kernels::KernelName;
+        if self.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "unary: only F32 supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unary: non-contiguous layout not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let input = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let out = self.device.zeros_impl(l.shape(), DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        if len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        // Existing WGSL kernels.
+        let wgsl: Option<KernelName> = match B::NAME {
+            "exp" => Some(KernelName::ElemExpF32),
+            "sin" => Some(KernelName::ElemSinF32),
+            "cos" => Some(KernelName::ElemCosF32),
+            "neg" => Some(KernelName::ElemNegF32),
+            "sqrt" => Some(KernelName::ElemSqrtF32),
+            "silu" => Some(KernelName::ElemSiluF32),
+            _ => None,
+        };
+        if let Some(name) = wgsl {
+            let input = input.clone();
+            let out_buf = out_buf.clone();
+            self.device.execute(move |cbb| {
+                candle_vulkan_kernels::call_elem_unary_f32(cbb, &kernels, name, &input, &out_buf)
+                    .map_err(|e| e.to_string())
+            })?;
+            return Ok(out);
+        }
+        // Slang kernels (params: [0] = element count).
+        let name = match B::NAME {
+            "log" => KernelName::UnaryLogF32,
+            "abs" => KernelName::UnaryAbsF32,
+            "recip" => KernelName::UnaryRecipF32,
+            "sqr" => KernelName::UnarySqrF32,
+            "gelu" => KernelName::UnaryGeluF32,
+            "gelu_erf" => KernelName::UnaryGeluErfF32,
+            "erf" => KernelName::UnaryErfF32,
+            "relu" => KernelName::UnaryReluF32,
+            "tanh" => KernelName::UnaryTanhF32,
+            "floor" => KernelName::UnaryFloorF32,
+            "ceil" => KernelName::UnaryCeilF32,
+            "round" => KernelName::UnaryRoundF32,
+            "sign" => KernelName::UnarySignF32,
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("unary: unsupported op {}", B::NAME).into(),
+                ))
+            }
+        };
+        let params_vec = vec![len as f32];
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            params_vec,
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[f32]> = params_buf;
+        let input = input.clone();
+        let out_buf = out_buf.clone();
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_unary_slang_f32(
+                cbb, &kernels, name, &input, &out_buf, &params, len,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(out)
     }
 
     fn binary_impl<B: BinaryOpT>(&self, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
