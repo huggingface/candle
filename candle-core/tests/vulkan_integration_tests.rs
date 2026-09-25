@@ -1546,3 +1546,52 @@ fn test_vulkan_scatter_add() {
     }
     tracing::debug!("Vulkan device {gpu_id} scatter_add OK");
 }
+/// `index_add` vs the CPU backend (host-side implementation on Vulkan).
+#[test]
+fn test_vulkan_index_add() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let b = 4usize;
+    let c = 5usize;
+    let base: Vec<f32> = (0..b * c).map(|i| (i as f32) * 0.25 - 2.0).collect();
+    // Duplicates on purpose: several indexes hit the same row/column.
+    let idx: Vec<u32> = vec![3, 0, 3, 1];
+    for dim in [0usize, 1usize] {
+        // source has the same shape as self except that dim, where its size
+        // is indexes.len(); index values address `self` along dim.
+        let (sb, sc) = if dim == 0 { (4usize, c) } else { (b, 4usize) };
+        let src: Vec<f32> = (0..sb * sc).map(|i| (i as f32) * -1.1 + 1.5).collect();
+        let gid = candle_core::Tensor::new(idx.as_slice(), &dev).unwrap();
+        let gsr = candle_core::Tensor::new(src.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((sb, sc)))
+            .unwrap();
+        let gdst = candle_core::Tensor::new(base.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c)))
+            .unwrap();
+        let cid = candle_core::Tensor::new(idx.as_slice(), &cpu).unwrap();
+        let csr = candle_core::Tensor::new(src.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((sb, sc)))
+            .unwrap();
+        let cdst = candle_core::Tensor::new(base.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c)))
+            .unwrap();
+        let gg = gdst.index_add(&gid, &gsr, dim).unwrap();
+        let cc = cdst.index_add(&cid, &csr, dim).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, bv)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - bv).abs() < 1e-5 * (1.0 + bv.abs()),
+                "index_add dim={dim} at {i}: gpu {a} cpu {bv}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} index_add OK");
+}
