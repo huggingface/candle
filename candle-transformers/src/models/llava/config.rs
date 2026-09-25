@@ -70,7 +70,7 @@ impl LLaVAConfig {
             vocab_size: self.vocab_size,
             num_hidden_layers: self.num_hidden_layers,
             num_attention_heads: self.num_attention_heads,
-            num_key_value_heads: self.num_key_value_heads,
+            num_key_value_heads: Some(self.num_key_value_heads),
             rms_norm_eps: self.rms_norm_eps as f64,
             rope_theta: self.rope_theta,
             bos_token_id: Some(self.bos_token_id as u32),
