@@ -26,20 +26,7 @@ pub enum KernelName {
     AffineF32,
     ReduceSumF32,
     ReduceMaxF32,
-    GatherF32,
-    CopyF32,
     GemmF32,
-    GemvTF32,
-    RmsNormF32,
-    SoftmaxLastDimF32,
-    RopeF32,
-    GemvF32,
-    Q4kQmatvecF32,
-    Q4kDequantF32,
-    Q6kDequantF32,
-    Q80DequantF32,
-    Q50DequantF32,
-    Q5KDequantF32,
     ConstSetF32,
     UnaryLogF32,
     UnaryAbsF32,
@@ -115,20 +102,7 @@ impl AsRef<str> for KernelName {
             Self::AffineF32 => "main",
             Self::ReduceSumF32 => "main_reduce_sum",
             Self::ReduceMaxF32 => "main_reduce_max",
-            Self::GatherF32 => "main",
-            Self::CopyF32 => "main",
             Self::GemmF32 => "main",
-            Self::RmsNormF32 => "main",
-            Self::SoftmaxLastDimF32 => "main",
-            Self::RopeF32 => "main",
-            Self::GemvF32 => "main",
-            Self::GemvTF32 => "main",
-            Self::Q4kQmatvecF32 => "main_qmatvec",
-            Self::Q4kDequantF32 => "main_dequant",
-            Self::Q6kDequantF32 => "main_q6k_dequant",
-            Self::Q80DequantF32 => "main_q80_dequant",
-            Self::Q50DequantF32 => "main_q50_dequant",
-            Self::Q5KDequantF32 => "main_q5k_dequant",
             Self::ConstSetF32 => "main",
             Self::UnaryLogF32 => "main_log",
             Self::UnaryAbsF32 => "main_abs",
@@ -341,21 +315,8 @@ impl Kernels {
 /// the other kernels use their input (+rhs) and output at bindings 0..N-1.
 fn descriptor_bindings(name: KernelName) -> u32 {
     match name {
-        KernelName::CopyF32
-        | KernelName::SoftmaxLastDimF32 => 2,
-        KernelName::AffineF32
-        | KernelName::GatherF32
-        | KernelName::RmsNormF32 => 3,
+        KernelName::AffineF32 => 3,
         KernelName::GemmF32 => 4,
-        KernelName::RopeF32 => 4,
-        KernelName::GemvF32
-        | KernelName::GemvTF32
-        | KernelName::Q4kQmatvecF32
-        | KernelName::Q4kDequantF32
-        | KernelName::Q6kDequantF32
-        | KernelName::Q80DequantF32
-        | KernelName::Q50DequantF32
-        | KernelName::Q5KDequantF32 => 3,
         KernelName::ConstSetF32
         | KernelName::UnaryLogF32
         | KernelName::UnaryAbsF32

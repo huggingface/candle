@@ -2,16 +2,8 @@
 
 pub mod affine;
 pub mod const_set;
-pub mod copy;
 pub mod dispatch;
-pub mod gather;
 pub mod gemm;
-pub mod gemv;
-pub mod q4k;
-pub mod q5q8;
-pub mod rms_norm;
-pub mod rope;
-pub mod softmax;
 pub mod test_fill_bf16;
 pub mod test_fill_f16;
 pub mod test_fill_f32;
@@ -40,15 +32,7 @@ pub mod unary_slang;
 
 pub use affine::call_affine_slang_f32;
 pub use const_set::call_const_set_f32;
-pub use copy::call_copy_f32;
-pub use gather::call_gather_f32;
 pub use gemm::call_gemm_slang_f32;
-pub use gemv::{call_gemv_f32, call_gemv_t_f32};
-pub use q4k::{call_q4k_dequant_f32, call_q4k_qmatvec_f32, call_q6k_dequant_f32};
-pub use q5q8::{call_q50_dequant_f32, call_q5k_dequant_f32, call_q80_dequant_f32};
-pub use rms_norm::call_rms_norm_f32;
-pub use rope::call_rope_f32;
-pub use softmax::call_softmax_last_dim_f32;
 pub use test_fill_bf16::{call_test_fill_bf16_emulated, call_test_fill_bf16_native};
 pub use test_fill_f16::call_test_fill_f16;
 pub use test_fill_f32::call_test_fill_f32;

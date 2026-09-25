@@ -6,12 +6,8 @@ pub mod source;
 pub use err::VulkanKernelError;
 pub use kernel::{trace_counts, KernelName, Kernels};
 pub use kernels::{
-    call_affine_slang_f32, call_const_set_f32, call_copy_f32,
-    call_gather_f32,
-    call_gemm_slang_f32, call_gemv_f32, call_gemv_t_f32, call_q4k_dequant_f32, call_q4k_qmatvec_f32,
-    call_q50_dequant_f32, call_q5k_dequant_f32, call_q6k_dequant_f32, call_q80_dequant_f32,
-    call_rms_norm_f32, call_rope_f32,
-    call_softmax_last_dim_f32, call_test_fill_bf16_emulated, call_test_fill_bf16_native,
+    call_affine_slang_f32, call_const_set_f32,
+    call_gemm_slang_f32, call_test_fill_bf16_emulated, call_test_fill_bf16_native,
     call_test_fill_f16, call_test_fill_f32, call_test_fill_f4, call_test_fill_f64,
     call_test_fill_f6e2m3, call_test_fill_f6e3m2, call_test_fill_f8e4m3, call_test_fill_f8e8m0,
     call_test_fill_i16, call_test_fill_i32, call_test_fill_i64, call_test_fill_u32,

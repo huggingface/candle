@@ -19,7 +19,6 @@ vulkano = { git = "https://github.com/amejia1/vulkano.git", branch = "master" }
 parking_lot = "0.12"
 
 [build-dependencies]
-naga = { version = "30.0.1", features = ["glsl-in", "spv-out", "wgsl-in"] }
 spirv = "0.3"
 
 [profile.profiling]

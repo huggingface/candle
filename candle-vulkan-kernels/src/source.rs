@@ -1,18 +1,9 @@
-//! Compiled SPIR-V binaries, generated from `shaders/*.comp` by `build.rs` via naga.
+//! Compiled SPIR-V binaries, generated from `shaders/*.slang` by `build.rs` via slangc.
 
 use crate::kernel::KernelName;
 
 const AFFINE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine.spv"));
 const GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm.spv"));
-const GATHER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather.spv"));
-const COPY_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy.spv"));
-const RMS_NORM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rms_norm.spv"));
-const SOFTMAX_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/softmax.spv"));
-const ROPE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rope.spv"));
-const GEMV_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv.spv"));
-const GEMV_T_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv_t.spv"));
-const Q4K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q4k.spv"));
-const Q5Q8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q5q8.spv"));
 const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
 const UNARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary.spv"));
 const BINARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary.spv"));
@@ -53,15 +44,6 @@ const TEST_FILL_F8E8M0_SPV: &[u8] =
 pub enum Source {
     Affine,
     Gemm,
-    Gather,
-    Copy,
-    RmsNorm,
-    Softmax,
-    Rope,
-    Gemv,
-    GemvT,
-    Q4k,
-    Q5q8,
     ConstSet,
     UnarySlang,
     BinarySlang,
@@ -97,19 +79,6 @@ impl Source {
     /// accesses, otherwise dispatch fails validation.
     pub fn push_constant_size(self, name: KernelName) -> u32 {
         match name {
-            KernelName::GatherF32 => 8,
-            KernelName::CopyF32 => 64,
-            KernelName::RmsNormF32 => 12,
-            KernelName::SoftmaxLastDimF32 => 8,
-            KernelName::RopeF32 => 20,
-            KernelName::GemvF32 => 8,
-            KernelName::GemvTF32 => 12,
-            KernelName::Q4kQmatvecF32 => 8,
-            KernelName::Q4kDequantF32 => 8,
-            KernelName::Q6kDequantF32 => 8,
-            KernelName::Q80DequantF32 => 8,
-            KernelName::Q50DequantF32 => 8,
-            KernelName::Q5KDequantF32 => 8,
             KernelName::ConstSetF32 => 0,
             KernelName::UnaryLogF32
             | KernelName::UnaryAbsF32
@@ -189,15 +158,6 @@ impl Source {
         let bytes: &[u8] = match self {
             Self::Affine => AFFINE_SPV,
             Self::Gemm => GEMM_SPV,
-            Self::Gather => GATHER_SPV,
-            Self::Copy => COPY_SPV,
-            Self::RmsNorm => RMS_NORM_SPV,
-            Self::Softmax => SOFTMAX_SPV,
-            Self::Rope => ROPE_SPV,
-            Self::Gemv => GEMV_SPV,
-            Self::GemvT => GEMV_T_SPV,
-            Self::Q4k => Q4K_SPV,
-            Self::Q5q8 => Q5Q8_SPV,
             Self::ConstSet => CONST_SET_SPV,
             Self::UnarySlang => UNARY_SLANG_SPV,
             Self::BinarySlang => BINARY_SLANG_SPV,
@@ -238,15 +198,6 @@ impl AsRef<str> for Source {
         match self {
             Self::Affine => "affine",
             Self::Gemm => "gemm",
-            Self::Gemv => "gemv",
-            Self::GemvT => "gemv_t",
-            Self::Q4k => "q4k",
-            Self::Q5q8 => "q5q8",
-            Self::Gather => "gather",
-            Self::Copy => "copy",
-            Self::RmsNorm => "rms_norm",
-            Self::Softmax => "softmax",
-            Self::Rope => "rope",
             Self::ConstSet => "const_set",
             Self::UnarySlang => "unary",
             Self::BinarySlang => "binary",
