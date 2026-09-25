@@ -89,7 +89,7 @@ impl BackendDevice for VulkanDevice {
         // Upload through a byte view so every element type works with one
         // code path.
         let bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(data.as_ptr() as *const u8, n * std::mem::size_of::<T>())
+            std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
         };
         upload_bytes(self, bytes, n, T::DTYPE)
     }
@@ -185,7 +185,7 @@ impl BackendDevice for VulkanDevice {
                 )
                 .map_err(Error::wrap)?;
                 let data: Vec<half::bf16> =
-                    (0..elem_count).map(|_| rng.sample(uniform.clone())).collect();
+                    (0..elem_count).map(|_| rng.sample(uniform)).collect();
                 CpuStorage::BF16(data)
             }
             DType::F16 => {
@@ -195,21 +195,21 @@ impl BackendDevice for VulkanDevice {
                 )
                 .map_err(Error::wrap)?;
                 let data: Vec<half::f16> =
-                    (0..elem_count).map(|_| rng.sample(uniform.clone())).collect();
+                    (0..elem_count).map(|_| rng.sample(uniform)).collect();
                 CpuStorage::F16(data)
             }
             DType::F32 => {
                 let uniform =
                     rand::distr::Uniform::new(min as f32, max as f32).map_err(Error::wrap)?;
                 let data: Vec<f32> =
-                    (0..elem_count).map(|_| rng.sample(uniform.clone())).collect();
+                    (0..elem_count).map(|_| rng.sample(uniform)).collect();
                 CpuStorage::F32(data)
             }
             DType::F64 => {
                 let uniform =
                     rand::distr::Uniform::new(min, max).map_err(Error::wrap)?;
                 let data: Vec<f64> =
-                    (0..elem_count).map(|_| rng.sample(uniform.clone())).collect();
+                    (0..elem_count).map(|_| rng.sample(uniform)).collect();
                 CpuStorage::F64(data)
             }
             DType::F8E4M3 => {
@@ -219,7 +219,7 @@ impl BackendDevice for VulkanDevice {
                 )
                 .map_err(Error::wrap)?;
                 let data: Vec<microfloat::f8e4m3> =
-                    (0..elem_count).map(|_| rng.sample(uniform.clone())).collect();
+                    (0..elem_count).map(|_| rng.sample(uniform)).collect();
                 CpuStorage::F8E4M3(data)
             }
         };
