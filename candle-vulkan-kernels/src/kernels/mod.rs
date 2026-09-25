@@ -37,6 +37,7 @@ pub mod reduce_slang;
 pub mod pool2d_slang;
 pub mod upsample_slang;
 pub mod conv_slang;
+pub mod scatter_slang;
 pub mod unary_slang;
 
 pub use affine::call_affine_f32;
@@ -75,4 +76,5 @@ pub use reduce_slang::call_reduce_slang_f32;
 pub use pool2d_slang::call_pool2d_slang_f32;
 pub use upsample_slang::call_upsample_slang_f32;
 pub use conv_slang::call_conv_slang_f32;
+pub use scatter_slang::call_scatter_slang_f32;
 pub use unary_slang::call_unary_slang_f32;

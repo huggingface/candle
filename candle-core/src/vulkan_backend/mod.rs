@@ -996,7 +996,133 @@ impl VulkanStorage {
         })?;
         Ok(out)
     }
+
+    /// GPU scatter-set: `dst[left, idx, right] = src[left, i, right]`.
+    fn scatter_set_impl(
+        &mut self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<()> {
+        if self.dtype != DType::F32 || src.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "scatter: only F32 data supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        if ids.dtype != DType::U32 {
+            return Err(Error::Vulkan(
+                "scatter: only U32 index tensors supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (dst_start, dst_len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "scatter: non-contiguous destinations not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (src_start, src_len) = match src_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "scatter: non-contiguous sources not supported on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let (ids_start, ids_len) = match ids_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "scatter: non-contiguous index tensors not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let dst_dims = l.dims();
+        let ids_dims = ids_l.dims();
+        if dst_dims.len() != ids_dims.len() || dim >= dst_dims.len() {
+            return Err(Error::Vulkan(
+                "scatter: rank mismatch on the Vulkan backend".to_string().into(),
+            ));
+        }
+        if dst_len != dst_dims.iter().product::<usize>()
+            || src_len != ids_len
+            || ids_len != ids_dims.iter().product::<usize>()
+        {
+            return Err(Error::Vulkan(
+                "scatter: size mismatch on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let ids_dim_len = ids_dims[dim];
+        let dst_dim_len = dst_dims[dim];
+        let ids_right_len = ids_dims[dim + 1..].iter().product::<usize>();
+        let dst_right_len = dst_dims[dim + 1..].iter().product::<usize>();
+        let ids_left_len = ids_dims[..dim].iter().product::<usize>();
+        let total = ids_left_len * ids_dim_len * ids_right_len;
+        let ids_sub: Subbuffer<[u32]> = match &ids.buffer {
+            VulkanStorageBuffer::U32(b) => b.clone().slice(ids_start as u64..(ids_start + ids_len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let src_sub: Subbuffer<[f32]> = match &src.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(src_start as u64..(src_start + src_len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let dst_sub: Subbuffer<[f32]> = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(dst_start as u64..(dst_start + dst_len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        if total == 0 {
+            return Ok(());
+        }
+        let kernels = self.device.kernels();
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![
+                dst_dim_len as f32,
+                dst_right_len as f32,
+                ids_dim_len as f32,
+                ids_right_len as f32,
+                ids_left_len as f32,
+            ],
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params_sub: Subbuffer<[f32]> = params_buf;
+        let ids_sub = ids_sub.clone();
+        let src_sub = src_sub.clone();
+        let dst_sub = dst_sub.clone();
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_scatter_slang_f32(
+                cbb,
+                &kernels,
+                candle_vulkan_kernels::KernelName::ScatterF32,
+                &src_sub,
+                &dst_sub,
+                &ids_sub,
+                &params_sub,
+                total,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(())
+    }
 }
+
 impl BackendStorage for VulkanStorage {
     type Device = VulkanDevice;
 
@@ -2591,7 +2717,6 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
-        let inner = inner;
         self.device.execute(move |cbb| {
             candle_vulkan_kernels::call_gather_idx_slang_f32(
                 cbb,
@@ -2610,26 +2735,119 @@ impl BackendStorage for VulkanStorage {
 
     fn scatter_set(
         &mut self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<()> {
-        todo!()
+        self.scatter_set_impl(l, ids, ids_l, src, src_l, dim)
     }
+
 
     fn scatter_add_set(
         &mut self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<()> {
-        todo!()
+        // Host-side: the add needs float atomics, which are not part of the
+        // Vulkan core (SPV_EXT_shader_atomic_float_add is device-dependent).
+        // Drain, apply the CPU scatter-add semantics in place on the contiguous
+        // blocks, and upload the full buffer back.
+        if self.dtype != DType::F32 || src.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "scatter_add: only F32 data supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let dst_dims = l.dims();
+        let ids_dims = ids_l.dims();
+        if dst_dims.len() != ids_dims.len() || dim >= dst_dims.len() {
+            return Err(Error::Vulkan(
+                "scatter_add: rank mismatch on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (dst_start, dst_len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "scatter_add: non-contiguous destinations not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (src_start, src_len) = match src_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "scatter_add: non-contiguous sources not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (ids_start, ids_len) = match ids_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "scatter_add: non-contiguous index tensors not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if dst_len != dst_dims.iter().product::<usize>()
+            || src_len != ids_len
+            || ids_len != ids_dims.iter().product::<usize>()
+        {
+            return Err(Error::Vulkan(
+                "scatter_add: size mismatch on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let dst_v: Vec<f32> = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
+            _ => unreachable!("dtype checked above"),
+        };
+        let src_v: Vec<f32> = match &src.buffer {
+            VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
+            _ => unreachable!("dtype checked above"),
+        };
+        let ids_cpu = match &ids.buffer {
+            VulkanStorageBuffer::U32(b) => {
+                let v: Vec<u32> = Self::copy_to_host(&self.device, b)?;
+                CpuStorage::U32(v)
+            }
+            VulkanStorageBuffer::I64(b) => {
+                let v: Vec<i64> = Self::copy_to_host(&self.device, b)?;
+                CpuStorage::I64(v)
+            }
+            VulkanStorageBuffer::U8(b) => {
+                let v: Vec<u8> = Self::copy_to_host(&self.device, b)?;
+                CpuStorage::U8(v)
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    "scatter_add: index dtype not supported on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let mut dst_cpu = CpuStorage::F32(dst_v);
+        let src_cpu = CpuStorage::F32(src_v);
+        let l_c = Layout::contiguous_with_offset(dst_dims.to_vec(), dst_start);
+        let s_c = Layout::contiguous_with_offset(ids_dims.to_vec(), src_start);
+        let i_c = Layout::contiguous_with_offset(ids_dims.to_vec(), ids_start);
+        dst_cpu.scatter_add_set(&l_c, &ids_cpu, &i_c, &src_cpu, &s_c, dim)?;
+        let CpuStorage::F32(v) = dst_cpu else {
+            unreachable!("scatter_add only handles F32 data")
+        };
+        let updated = self.device.storage_from_cpu_storage(&CpuStorage::F32(v))?;
+        self.buffer = updated.buffer;
+        Ok(())
     }
 
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
@@ -2748,14 +2966,98 @@ impl BackendStorage for VulkanStorage {
 
     fn index_add(
         &self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<Self> {
-        todo!()
+        // Host-side: needs float atomics for duplicate index positions, which
+        // are not part of the Vulkan core (SPV_EXT_shader_atomic_float_add is
+        // device-dependent). Drain, apply the CPU index-add semantics, upload.
+        if self.dtype != DType::F32 || src.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "index_add: only F32 data supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        if dim >= l.dims().len() {
+            return Err(Error::Vulkan(
+                "index_add: rank mismatch on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (dst_start, dst_len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "index_add: non-contiguous self tensors not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (src_start, src_len) = match src_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "index_add: non-contiguous sources not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (ids_start, ids_len) = match ids_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "index_add: non-contiguous index tensors not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if dst_len != l.dims().iter().product::<usize>()
+            || src_len != src_l.dims().iter().product::<usize>()
+            || ids_len != ids_l.dims().iter().product::<usize>()
+        {
+            return Err(Error::Vulkan(
+                "index_add: size mismatch on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let v1: Vec<f32> = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
+            _ => unreachable!("dtype checked above"),
+        };
+        let src_v: Vec<f32> = match &src.buffer {
+            VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
+            _ => unreachable!("dtype checked above"),
+        };
+        let ids_cpu = match &ids.buffer {
+            VulkanStorageBuffer::U32(b) => {
+                let v: Vec<u32> = Self::copy_to_host(&self.device, b)?;
+                CpuStorage::U32(v)
+            }
+            VulkanStorageBuffer::I64(b) => {
+                let v: Vec<i64> = Self::copy_to_host(&self.device, b)?;
+                CpuStorage::I64(v)
+            }
+            VulkanStorageBuffer::U8(b) => {
+                let v: Vec<u8> = Self::copy_to_host(&self.device, b)?;
+                CpuStorage::U8(v)
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    "index_add: index dtype not supported on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let v1_cpu = CpuStorage::F32(v1);
+        let src_cpu = CpuStorage::F32(src_v);
+        let l_c = Layout::contiguous_with_offset(l.dims().to_vec(), dst_start);
+        let s_c = Layout::contiguous_with_offset(src_l.dims().to_vec(), src_start);
+        let i_c = Layout::contiguous_with_offset(ids_l.dims().to_vec(), ids_start);
+        let out = v1_cpu.index_add(&l_c, &ids_cpu, &i_c, &src_cpu, &s_c, dim)?;
+        self.device.storage_from_cpu_storage(&out)
     }
 
     fn matmul(

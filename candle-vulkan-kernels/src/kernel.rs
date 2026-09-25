@@ -92,6 +92,7 @@ pub enum KernelName {
     Conv2dF32,
     ConvTranspose1dF32,
     ConvTranspose2dF32,
+    ScatterF32,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -181,6 +182,7 @@ impl AsRef<str> for KernelName {
             Self::Conv2dF32 => "main_conv2d",
             Self::ConvTranspose1dF32 => "main_conv_transpose1d",
             Self::ConvTranspose2dF32 => "main_conv_transpose2d",
+            Self::ScatterF32 => "main",
             Self::TestFillF16 => "main",
             Self::TestFillU8
             | Self::TestFillI16
@@ -410,6 +412,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Conv2dF32
         | KernelName::ConvTranspose1dF32
         | KernelName::ConvTranspose2dF32 => 4,
+        KernelName::ScatterF32 => 4,
         KernelName::TestFillF16 => 1,
         KernelName::TestFillU8
         | KernelName::TestFillI16
