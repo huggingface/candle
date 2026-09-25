@@ -14,7 +14,6 @@ fn main() {
     // which naga's GLSL frontend cannot express); `affine` and `reduce` are
     // GLSL. All sources live under the `.comp` extension.
     for (shader, lang) in [
-        ("affine", ShaderLang::Glsl),
         ("gather", ShaderLang::Glsl),
         ("copy", ShaderLang::Glsl),
         ("rms_norm", ShaderLang::Wgsl),

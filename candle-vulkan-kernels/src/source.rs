@@ -99,7 +99,6 @@ impl Source {
     /// accesses, otherwise dispatch fails validation.
     pub fn push_constant_size(self, name: KernelName) -> u32 {
         match name {
-            KernelName::AffineF32 => 12,
             KernelName::GatherF32 => 8,
             KernelName::CopyF32 => 64,
             KernelName::ElemAddF32
@@ -159,6 +158,7 @@ impl Source {
             | KernelName::ReduceArgMaxF32
             | KernelName::ReduceSumF32
             | KernelName::ReduceMaxF32
+            | KernelName::AffineF32
             | KernelName::AvgPool2dF32
             | KernelName::MaxPool2dF32
             | KernelName::UpsampleNearest1dF32

@@ -343,10 +343,10 @@ impl Kernels {
 /// the other kernels use their input (+rhs) and output at bindings 0..N-1.
 fn descriptor_bindings(name: KernelName) -> u32 {
     match name {
-        KernelName::AffineF32
-        | KernelName::CopyF32
+        KernelName::CopyF32
         | KernelName::SoftmaxLastDimF32 => 2,
-        KernelName::GatherF32
+        KernelName::AffineF32
+        | KernelName::GatherF32
         | KernelName::ElemAddF32
         | KernelName::ElemSubF32
         | KernelName::ElemMulF32

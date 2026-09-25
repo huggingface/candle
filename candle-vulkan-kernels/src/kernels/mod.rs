@@ -39,7 +39,7 @@ pub mod conv_slang;
 pub mod scatter_slang;
 pub mod unary_slang;
 
-pub use affine::call_affine_f32;
+pub use affine::call_affine_slang_f32;
 pub use const_set::call_const_set_f32;
 pub use copy::call_copy_f32;
 pub use elementwise::{call_elem_binary_f32, call_elem_unary_f32};

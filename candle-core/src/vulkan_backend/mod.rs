@@ -1190,13 +1190,30 @@ impl BackendStorage for VulkanStorage {
             return Ok(out);
         }
         let kernels = self.device.kernels();
-        let input = input.clone();
-        let out_buf = out_buf.clone();
         let mul = mul as f32;
         let add = add as f32;
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![len as f32, mul, add],
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[f32]> = params_buf;
+        let input = input.clone();
+        let out_buf = out_buf.clone();
         self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_affine_f32(cbb, &kernels, &input, &out_buf, mul, add)
-                .map_err(|e| e.to_string())
+            candle_vulkan_kernels::call_affine_slang_f32(
+                cbb, &kernels, &input, &out_buf, &params, len,
+            )
+            .map_err(|e| e.to_string())
         })?;
         Ok(out)
     }
