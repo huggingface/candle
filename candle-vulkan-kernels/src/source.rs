@@ -151,6 +151,7 @@ impl Source {
             | KernelName::Copy2dF32
             | KernelName::GatherIdxF32
             | KernelName::GatherRowsF32
+            | KernelName::IndexSelectF32
             | KernelName::ReduceMinF32
             | KernelName::ReduceArgMinF32
             | KernelName::ReduceArgMaxF32 => 0,

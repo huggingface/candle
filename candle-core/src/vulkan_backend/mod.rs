@@ -1879,8 +1879,118 @@ impl BackendStorage for VulkanStorage {
         todo!()
     }
 
-    fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self> {
-        todo!()
+    fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
+        if self.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "index_select: only F32 supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        if dim != 0 {
+            return Err(Error::Vulkan(
+                "index_select: only dim 0 supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let src_dims = l.dims();
+        if src_dims.len() != 2 {
+            return Err(Error::Vulkan(
+                "index_select: only 2D sources supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (rows, dim_len) = (src_dims[0], src_dims[1]);
+        let (src_start, src_len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "index_select: non-contiguous sources not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if src_len != rows * dim_len {
+            return Err(Error::Vulkan(
+                "index_select: source size mismatch on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let ids_u32 = match &ids.buffer {
+            VulkanStorageBuffer::U32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "index_select: only U32 ids supported on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let ids_dims = ids_l.dims();
+        if ids_dims.len() != 1 {
+            return Err(Error::Vulkan(
+                "index_select: only 1D ids supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let n_ids = ids_dims[0];
+        let (ids_start, ids_len) = match ids_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "index_select: non-contiguous ids not supported on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        if ids_len != n_ids {
+            return Err(Error::Vulkan(
+                "index_select: ids size mismatch on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let src_buf = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(src_start as u64..(src_start + src_len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let ids_buf = ids_u32.slice(ids_start as u64..(ids_start + ids_len) as u64);
+        let out = VulkanStorage::new(&self.device, n_ids * dim_len, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        if n_ids == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![
+                (n_ids * dim_len) as f32,
+                dim_len as f32,
+                dim_len as f32,
+                0.0f32,
+            ],
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[f32]> = params_buf;
+        let src_buf = src_buf.clone();
+        let ids_buf = ids_buf.clone();
+        let out_buf = out_buf.clone();
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_gather_idx_slang_f32(
+                cbb,
+                &kernels,
+                candle_vulkan_kernels::KernelName::IndexSelectF32,
+                &src_buf,
+                &out_buf,
+                &ids_buf,
+                &params,
+                n_ids * dim_len,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(out)
     }
 
     fn index_add(

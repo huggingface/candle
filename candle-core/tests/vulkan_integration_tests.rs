@@ -1132,3 +1132,24 @@ fn test_vulkan_gather() {
     assert_eq!(gv, cv);
     tracing::debug!("Vulkan device {gpu_id} gather OK");
 }
+
+/// `index_select` along dim 0 vs the CPU backend.
+#[test]
+fn test_vulkan_index_select() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let src_v: Vec<f32> = (0..64).map(|i| (i as f32) * 0.3 - 9.0).collect();
+    let src = candle_core::Tensor::new(src_v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((8, 8))).unwrap();
+    let src_c = candle_core::Tensor::new(src_v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((8, 8))).unwrap();
+    let ids_v: Vec<u32> = vec![5, 0, 7, 3, 3, 1, 6, 2];
+    let ids = candle_core::Tensor::new(ids_v.as_slice(), &dev).unwrap();
+    let ids_c = candle_core::Tensor::new(ids_v.as_slice(), &cpu).unwrap();
+    let g = src.clone().index_select(&ids, 0).unwrap();
+    let c = src_c.clone().index_select(&ids_c, 0).unwrap();
+    let gv: Vec<f32> = g.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    let cv: Vec<f32> = c.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    assert_eq!(gv, cv);
+    tracing::debug!("Vulkan device {gpu_id} index_select OK");
+}
