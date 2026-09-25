@@ -204,14 +204,26 @@ impl VisionAttention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim;
-        let q_proj =
-            candle_nn::linear_no_bias(cfg.hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj =
-            candle_nn::linear_no_bias(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj =
-            candle_nn::linear_no_bias(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
-        let o_proj =
-            candle_nn::linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?;
+        let q_proj = candle_nn::linear_no_bias(
+            cfg.hidden_size,
+            num_heads * head_dim,
+            vb.pp("q_proj").pp("linear"),
+        )?;
+        let k_proj = candle_nn::linear_no_bias(
+            cfg.hidden_size,
+            num_kv_heads * head_dim,
+            vb.pp("k_proj").pp("linear"),
+        )?;
+        let v_proj = candle_nn::linear_no_bias(
+            cfg.hidden_size,
+            num_kv_heads * head_dim,
+            vb.pp("v_proj").pp("linear"),
+        )?;
+        let o_proj = candle_nn::linear_no_bias(
+            num_heads * head_dim,
+            cfg.hidden_size,
+            vb.pp("o_proj").pp("linear"),
+        )?;
         let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
         let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
         Ok(Self {
@@ -284,12 +296,21 @@ struct VisionMlp {
 
 impl VisionMlp {
     fn new(cfg: &Gemma4VisionConfig, vb: VarBuilder) -> Result<Self> {
-        let gate_proj =
-            candle_nn::linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("gate_proj"))?;
-        let up_proj =
-            candle_nn::linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("up_proj"))?;
-        let down_proj =
-            candle_nn::linear_no_bias(cfg.intermediate_size, cfg.hidden_size, vb.pp("down_proj"))?;
+        let gate_proj = candle_nn::linear_no_bias(
+            cfg.hidden_size,
+            cfg.intermediate_size,
+            vb.pp("gate_proj").pp("linear"),
+        )?;
+        let up_proj = candle_nn::linear_no_bias(
+            cfg.hidden_size,
+            cfg.intermediate_size,
+            vb.pp("up_proj").pp("linear"),
+        )?;
+        let down_proj = candle_nn::linear_no_bias(
+            cfg.intermediate_size,
+            cfg.hidden_size,
+            vb.pp("down_proj").pp("linear"),
+        )?;
         Ok(Self {
             gate_proj,
             up_proj,
