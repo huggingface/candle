@@ -83,6 +83,8 @@ mod sort;
 mod storage;
 pub mod streaming;
 mod strided_index;
+#[cfg(feature = "sycl")]
+pub mod sycl_backend;
 mod tensor;
 mod tensor_cat;
 pub mod test_utils;
@@ -117,6 +119,16 @@ pub use cuda_backend as cuda;
 pub use dummy_cuda_backend as cuda;
 
 pub use cuda::{CudaDevice, CudaStorage};
+
+#[cfg(feature = "sycl")]
+pub use sycl_backend::{SyclDevice, SyclError, SyclStorage};
+
+/// Mirrors `candle::cuda`, so knobs like `set_gemm_reduced_precision_f16` are
+/// reachable at the same path shape on either backend. There is no
+/// `dummy_sycl_backend` counterpart: `Device::Sycl` / `Storage::Sycl` live behind
+/// the `sycl` feature, so a build without it never sees the variant.
+#[cfg(feature = "sycl")]
+pub use sycl_backend as sycl;
 
 #[cfg(feature = "metal")]
 pub use metal_backend::{MetalDevice, MetalError, MetalStorage};

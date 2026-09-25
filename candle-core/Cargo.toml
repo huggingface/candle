@@ -14,6 +14,7 @@ accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle-kernels = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
+candle-sycl-kernels = { workspace = true, optional = true }
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
@@ -48,6 +49,9 @@ criterion = { workspace = true }
 default = []
 cuda = ["cudarc", "dep:candle-kernels"]
 cutile = ["cuda", "dep:cutile"]
+# `candle-sycl-kernels` is excluded from the workspace (like `candle-kernels`),
+# so a plain `cargo build` never invokes `icpx` and never needs oneAPI.
+sycl = ["dep:candle-sycl-kernels"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
 mkl = ["dep:intel-mkl-src"]
@@ -74,3 +78,15 @@ required-features = ["cuda"]
 [[example]]
 name = "cutile"
 required-features = ["cutile"]
+
+[[example]]
+name = "sycl_basics"
+required-features = ["sycl"]
+
+[[example]]
+name = "sycl_qbench"
+required-features = ["sycl"]
+
+[[example]]
+name = "sycl_parity"
+required-features = ["sycl"]
