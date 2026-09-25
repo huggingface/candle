@@ -1,0 +1,17 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Questions & Help
+    url: https://github.com/huggingface/candle/discussions/new?category=q-a
+    about: Ask questions about using Candle
+  - name: 🤖 Model Implementation Request
+    url: https://github.com/huggingface/candle/discussions/new?category=model-requests
+    about: Request or discuss support for a new model architecture
+  - name: 💡 Ideas & Feature Requests
+    url: https://github.com/huggingface/candle/discussions/new?category=ideas
+    about: Share ideas for new features or improvements
+  - name: 📚 Documentation
+    url: https://huggingface.github.io/candle/
+    about: Check the official Candle documentation
+  - name: 🎯 Show and Tell
+    url: https://github.com/huggingface/candle/discussions/new?category=show-and-tell
+    about: Share projects you've built with Candle
