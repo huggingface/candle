@@ -526,3 +526,19 @@ fn test_vulkan_device_get_current_seed() {
     device.set_seed(42).unwrap();
     assert_eq!(device.get_current_seed().unwrap(), 42);
 }
+
+/// `storage_from_slice` must upload host data to the device.
+#[test]
+fn test_vulkan_device_storage_from_slice() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let data: Vec<f32> = (0..64).map(|i| i as f32 * 0.5 - 8.0).collect();
+    let storage = device.storage_from_slice(&data).unwrap();
+    assert_eq!(storage.dtype(), candle_core::DType::F32);
+    let cpu = storage.to_cpu_storage().unwrap();
+    let back = cpu.as_slice::<f32>().unwrap();
+    assert_eq!(back.len(), data.len());
+    assert!(back.iter().zip(&data).all(|(a, b)| a == b));
+    tracing::debug!("Vulkan device {gpu_id} storage_from_slice round-tripped OK");
+}

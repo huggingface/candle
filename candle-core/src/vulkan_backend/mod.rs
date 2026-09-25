@@ -56,8 +56,36 @@ impl BackendDevice for VulkanDevice {
         self.zeros_impl(shape, dtype)
     }
 
-    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<Self::Storage> {
-        todo!()
+    fn storage_from_slice<T: crate::WithDType>(&self, data: &[T]) -> Result<Self::Storage> {
+        let n = data.len();
+        let dtype = T::DTYPE;
+        // Upload through a byte view so every element type works with one
+        // code path.
+        let bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(data.as_ptr() as *const u8, n * std::mem::size_of::<T>())
+        };
+        let staging = Buffer::from_iter(
+            self.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            bytes.iter().copied(),
+        )
+        .map_err(|e| Error::Vulkan(format!("storage_from_slice staging: {e:?}").into()))?;
+        let storage = VulkanStorage::new(self, n, dtype)?;
+        let dst = storage.buffer().as_u8();
+        self.execute(move |cbb| {
+            cbb.copy_buffer(CopyBufferInfo::new(staging, dst))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+        Ok(storage)
     }
 
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
@@ -109,6 +137,34 @@ pub enum VulkanStorageBuffer {
     F8E8M0(Subbuffer<[microfloat::f8e8m0fnu]>),
 }
 
+impl VulkanStorageBuffer {
+    /// The underlying device buffer (regardless of element type).
+    pub fn buffer(&self) -> std::sync::Arc<vulkano::buffer::Buffer> {
+        match self {
+            Self::U8(b) => b.buffer().clone(),
+            Self::U32(b) => b.buffer().clone(),
+            Self::I16(b) => b.buffer().clone(),
+            Self::I32(b) => b.buffer().clone(),
+            Self::I64(b) => b.buffer().clone(),
+            Self::BF16(b) => b.buffer().clone(),
+            Self::F16(b) => b.buffer().clone(),
+            Self::F32(b) => b.buffer().clone(),
+            Self::F64(b) => b.buffer().clone(),
+            Self::F8E4M3(b) => b.buffer().clone(),
+            Self::F6E2M3(b) => b.buffer().clone(),
+            Self::F6E3M2(b) => b.buffer().clone(),
+            Self::F4(b) => b.buffer().clone(),
+            Self::F8E8M0(b) => b.buffer().clone(),
+        }
+    }
+    /// A byte view over the whole device buffer.
+    pub fn as_u8(&self) -> Subbuffer<[u8]> {
+        match self {
+            Self::U8(b) => b.clone(),
+            other => Subbuffer::<[u8]>::new(other.buffer().clone()),
+        }
+    }
+}
 #[derive(Debug)]
 pub struct VulkanStorage {
     buffer: VulkanStorageBuffer,
