@@ -1794,7 +1794,7 @@ impl BackendStorage for VulkanStorage {
                             | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                         ..Default::default()
                     },
-                    vec![total as f32, block_len as f32],
+                    vec![total as f32, block_len as f32, dst_offset as f32],
                 )
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
                 let params: Subbuffer<[f32]> = params_buf;
@@ -1817,15 +1817,66 @@ impl BackendStorage for VulkanStorage {
 
     fn copy2d(
         &self,
-        _: &mut Self,
-        _d1: usize,
-        _d2: usize,
-        _src_stride1: usize,
-        _dst_stride1: usize,
-        _src_offset: usize,
-        _dst_offset: usize,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_stride1: usize,
+        dst_stride1: usize,
+        src_offset: usize,
+        dst_offset: usize,
     ) -> Result<()> {
-        todo!()
+        if self.dtype != DType::F32 || dst.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "copy2d: only F32 supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let total = d1 * d2;
+        if total == 0 {
+            return Ok(());
+        }
+        let src_buf = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!("dtype checked above"),
+        };
+        let dst_buf = match &dst.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!("dtype checked above"),
+        };
+        let kernels = self.device.kernels();
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![
+                d1 as f32,
+                d2 as f32,
+                src_stride1 as f32,
+                dst_stride1 as f32,
+                src_offset as f32,
+                dst_offset as f32,
+            ],
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[f32]> = params_buf;
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_copy2d_slang_f32(
+                cbb,
+                &kernels,
+                &src_buf,
+                &dst_buf,
+                &params,
+                total,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(())
     }
 
     fn const_set(&mut self, scalar: crate::scalar::Scalar, l: &Layout) -> Result<()> {

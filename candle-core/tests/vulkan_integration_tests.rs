@@ -1010,3 +1010,32 @@ fn test_vulkan_copy_strided_src() {
     assert_eq!(gv, cv);
     tracing::debug!("Vulkan device {gpu_id} copy_strided_src OK");
 }
+
+/// `copy2d` via `Tensor::cat` on a non-contiguous (transposed) source.
+#[test]
+fn test_vulkan_copy2d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let a_v: Vec<f32> = (0..24).map(|i| i as f32).collect();
+    let b_v: Vec<f32> = (0..24).map(|i| 100.0 + i as f32).collect();
+    let a = candle_core::Tensor::new(a_v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((4, 6))).unwrap();
+    let b = candle_core::Tensor::new(b_v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((4, 6))).unwrap();
+    let ac = candle_core::Tensor::new(a_v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((4, 6))).unwrap();
+    let bc = candle_core::Tensor::new(b_v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((4, 6))).unwrap();
+    // cat along dim 0 (contiguous rows) and dim 1.
+    let g0 = candle_core::Tensor::cat(&[a.clone(), b.clone()], 0).unwrap();
+    let c0 = candle_core::Tensor::cat(&[ac.clone(), bc.clone()], 0).unwrap();
+    assert_eq!(g0.to_vec2::<f32>().unwrap(), c0.to_vec2::<f32>().unwrap());
+    let g1 = candle_core::Tensor::cat(&[a.clone(), b.clone()], 1).unwrap();
+    let c1 = candle_core::Tensor::cat(&[ac.clone(), bc.clone()], 1).unwrap();
+    assert_eq!(g1.to_vec2::<f32>().unwrap(), c1.to_vec2::<f32>().unwrap());
+    // Non-contiguous (transposed) source in a cat.
+    let at = a.t().unwrap();
+    let bt = b.t().unwrap();
+    let g2 = candle_core::Tensor::cat(&[at, bt], 0).unwrap();
+    let c2 = candle_core::Tensor::cat(&[ac.t().unwrap(), bc.t().unwrap()], 0).unwrap();
+    assert_eq!(g2.to_vec2::<f32>().unwrap(), c2.to_vec2::<f32>().unwrap());
+    tracing::debug!("Vulkan device {gpu_id} copy2d OK");
+}

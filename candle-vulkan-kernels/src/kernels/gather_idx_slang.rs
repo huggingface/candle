@@ -10,7 +10,7 @@ use crate::source::Source;
 
 /// Records an indexed copy onto `cbb`:
 /// `out[i] = src[idx[i / blen] + (i % blen)]`.
-/// `params` must hold `[total, block_len]`.
+/// `params` must hold `[total, block_len, dst_offset]`.
 pub fn call_gather_idx_slang_f32(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
