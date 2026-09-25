@@ -1066,3 +1066,46 @@ fn test_vulkan_reduce_op() {
     assert_eq!(gb.to_vec1::<u32>().unwrap(), cb.to_vec1::<u32>().unwrap());
     tracing::debug!("Vulkan device {gpu_id} reduce_op OK");
 }
+
+/// `matmul` (2D and 3D, standard and transposed rhs) vs the CPU backend.
+#[test]
+fn test_vulkan_matmul() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+
+    // 2D: (4,8) @ (8,6) and (4,8) @ (6,8)^T.
+    let a: Vec<f32> = (0..32).map(|i| (i as f32) * 0.2 - 3.0).collect();
+    let b: Vec<f32> = (0..48).map(|i| (i as f32) * 0.1 - 2.0).collect();
+    let ag = candle_core::Tensor::new(a.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((4, 8))).unwrap();
+    let ac = candle_core::Tensor::new(a.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((4, 8))).unwrap();
+    let bg = candle_core::Tensor::new(b.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((8, 6))).unwrap();
+    let bc = candle_core::Tensor::new(b.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((8, 6))).unwrap();
+    let g = ag.clone().matmul(&bg).unwrap();
+    let c = ac.clone().matmul(&bc).unwrap();
+    for (x, y) in g.to_vec2::<f32>().unwrap().into_iter().flatten().zip(c.to_vec2::<f32>().unwrap().into_iter().flatten()) {
+        assert!((x - y).abs() < 1e-3 * (1.0 + y.abs()), "matmul: gpu {x} cpu {y}");
+    }
+    // Transposed rhs: (4,8) @ (6,8)^T -> (4,6).
+    let bt_g = candle_core::Tensor::new(b.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((6, 8))).unwrap();
+    let bt_c = candle_core::Tensor::new(b.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((6, 8))).unwrap();
+    let g2 = ag.clone().matmul(&bt_g.t().unwrap()).unwrap();
+    let c2 = ac.clone().matmul(&bt_c.t().unwrap()).unwrap();
+    for (x, y) in g2.to_vec2::<f32>().unwrap().into_iter().flatten().zip(c2.to_vec2::<f32>().unwrap().into_iter().flatten()) {
+        assert!((x - y).abs() < 1e-3 * (1.0 + y.abs()), "matmul T: gpu {x} cpu {y}");
+    }
+    // 3D batched: (2,3,4) @ (2,4,5).
+    let a3: Vec<f32> = (0..24).map(|i| (i as f32) * 0.3 - 2.0).collect();
+    let b3: Vec<f32> = (0..40).map(|i| (i as f32) * 0.15 - 1.5).collect();
+    let a3g = candle_core::Tensor::new(a3.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((2, 3, 4))).unwrap();
+    let a3c = candle_core::Tensor::new(a3.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((2, 3, 4))).unwrap();
+    let b3g = candle_core::Tensor::new(b3.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((2, 4, 5))).unwrap();
+    let b3c = candle_core::Tensor::new(b3.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((2, 4, 5))).unwrap();
+    let g3 = a3g.matmul(&b3g).unwrap();
+    let c3 = a3c.matmul(&b3c).unwrap();
+    for (x, y) in g3.to_vec3::<f32>().unwrap().into_iter().flatten().into_iter().flatten().zip(c3.to_vec3::<f32>().unwrap().into_iter().flatten().into_iter().flatten()) {
+        assert!((x - y).abs() < 1e-3 * (1.0 + y.abs()), "matmul 3d: gpu {x} cpu {y}");
+    }
+    tracing::debug!("Vulkan device {gpu_id} matmul OK");
+}

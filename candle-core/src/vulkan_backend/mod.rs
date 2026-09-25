@@ -1785,12 +1785,80 @@ impl BackendStorage for VulkanStorage {
 
     fn matmul(
         &self,
-        _: &Self,
-        _: (usize, usize, usize, usize),
-        _: &Layout,
-        _: &Layout,
+        rhs: &Self,
+        bmnk: (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
     ) -> Result<Self> {
-        todo!()
+        if self.dtype != DType::F32 || rhs.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "matmul: only F32 supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (bsz, m, n, k) = bmnk;
+        if m == 0 || n == 0 || k == 0 || bsz == 0 {
+            return VulkanStorage::new(&self.device, 0, DType::F32);
+        }
+        let (lhs_start, lhs_len) = match lhs_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "matmul: non-contiguous lhs not supported on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        if lhs_len != bsz * m * k {
+            return Err(Error::Vulkan(
+                "matmul: lhs size mismatch on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let rank = rhs_l.dims().len();
+        if rank < 2 {
+            return Err(Error::Vulkan(
+                "matmul: rank < 2 not supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let rs = rhs_l.stride();
+        // Accept a contiguous (b,k,n) rhs or a contiguous (b,n,k) rhs viewed
+        // as (b,k,n) (the transposed case). Anything else is rejected.
+        let standard = rs[rank - 1] == 1
+            && rs[rank - 2] == n
+            && (rank == 2 || rs[rank - 3] == k * n);
+        let transposed = rs[rank - 2] == 1
+            && rs[rank - 1] == k
+            && (rank == 2 || rs[rank - 3] == n * k);
+        if !standard && !transposed {
+            return Err(Error::Vulkan(
+                "matmul: non-contiguous rhs not supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let rhs_transposed = transposed && !standard;
+        let rhs_start = rhs_l.start_offset();
+        let rhs_len = bsz * n * k;
+        let input = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let rhs_buf = match &rhs.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let out = VulkanStorage::new(&self.device, bsz * m * n, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        let kernels = self.device.kernels();
+        let input = input.clone();
+        let rhs_buf = rhs_buf.clone();
+        let out_buf = out_buf.clone();
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_gemm_f32(
+                cbb, &kernels, &input, &rhs_buf, &out_buf, bsz, m, n, k, rhs_transposed,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(out)
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
