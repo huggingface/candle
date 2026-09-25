@@ -2809,6 +2809,9 @@ impl BackendStorage for VulkanStorage {
                 "scatter_add: size mismatch on the Vulkan backend".to_string().into(),
             ));
         }
+        // Drain any deferred encodes (e.g. the copy that materialized this
+        // storage) before reading the buffer contents.
+        self.device.synchronize()?;
         let dst_v: Vec<f32> = match &self.buffer {
             VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
             _ => unreachable!("dtype checked above"),
@@ -3024,6 +3027,8 @@ impl BackendStorage for VulkanStorage {
                 "index_add: size mismatch on the Vulkan backend".to_string().into(),
             ));
         }
+        // Drain any deferred encodes before reading the buffer contents.
+        self.device.synchronize()?;
         let v1: Vec<f32> = match &self.buffer {
             VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
             _ => unreachable!("dtype checked above"),

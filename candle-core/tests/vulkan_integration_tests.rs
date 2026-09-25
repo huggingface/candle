@@ -1494,3 +1494,55 @@ fn test_vulkan_scatter() {
     }
     tracing::debug!("Vulkan device {gpu_id} scatter OK");
 }
+
+/// `scatter_add` vs the CPU backend (host-side implementation on Vulkan).
+#[test]
+fn test_vulkan_scatter_add() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let b = 3usize;
+    let c = 6usize;
+    let base: Vec<f32> = (0..b * c).map(|i| (i as f32) * 0.5).collect();
+    // Duplicates on purpose: several rows hit the same target column.
+    let idx: Vec<u32> = vec![3, 3, 5, 1, 4, 2, 0, 0, 4, 1, 5, 3, 2, 0, 5, 1, 3, 4];
+    let src: Vec<f32> = (0..b * c).map(|i| (i as f32) * -1.25 + 4.0).collect();
+    for dim in [0usize, 1usize] {
+        let (b2, c2) = if dim == 0 { (c, b) } else { (b, c) };
+        let mut base2 = Vec::new();
+        let mut idx2 = Vec::new();
+        let mut src2 = Vec::new();
+        if dim == 0 {
+            for i in 0..c {
+                for j in 0..b {
+                    base2.push(base[j * c + i]);
+                    idx2.push(idx[j * c + i]);
+                    src2.push(src[j * c + i]);
+                }
+            }
+        } else {
+            base2.extend_from_slice(base.as_slice());
+            idx2.extend_from_slice(idx.as_slice());
+            src2.extend_from_slice(src.as_slice());
+        }
+        let gid = candle_core::Tensor::new(idx2.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((b2, c2))).unwrap();
+        let gsr = candle_core::Tensor::new(src2.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((b2, c2))).unwrap();
+        let gdst = candle_core::Tensor::new(base2.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((b2, c2))).unwrap();
+        let cid = candle_core::Tensor::new(idx2.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((b2, c2))).unwrap();
+        let csr = candle_core::Tensor::new(src2.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((b2, c2))).unwrap();
+        let cdst = candle_core::Tensor::new(base2.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((b2, c2))).unwrap();
+        let gg = gdst.scatter_add(&gid, &gsr, dim).unwrap();
+        let cc = cdst.scatter_add(&cid, &csr, dim).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-5 * (1.0 + b.abs()),
+                "scatter_add dim={dim} at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} scatter_add OK");
+}
