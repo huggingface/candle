@@ -1866,12 +1866,104 @@ impl BackendStorage for VulkanStorage {
 
     fn conv_transpose1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConvTranspose1D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose1D,
     ) -> Result<Self> {
-        todo!()
+        if self.dtype != DType::F32 || kernel.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "conv_transpose1d: only F32 supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (in_start, in_len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "conv_transpose1d: non-contiguous inputs not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (w_start, w_len) = match kernel_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "conv_transpose1d: non-contiguous kernels not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if in_len != params.b_size * params.c_in * params.l_in
+            || w_len != params.c_in * params.c_out * params.k_size
+        {
+            return Err(Error::Vulkan(
+                "conv_transpose1d: size mismatch on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let l_out = params.l_out();
+        let total = params.b_size * params.c_out * l_out;
+        let in_buf = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(in_start as u64..(in_start + in_len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let w_buf = match &kernel.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(w_start as u64..(w_start + w_len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let out = VulkanStorage::new(&self.device, total, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        if total == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![
+                params.b_size as f32,
+                params.c_in as f32,
+                params.c_out as f32,
+                params.k_size as f32,
+                params.l_in as f32,
+                l_out as f32,
+                params.padding as f32,
+                params.stride as f32,
+                params.dilation as f32,
+            ],
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params_sub: Subbuffer<[f32]> = params_buf;
+        let in_buf = in_buf.clone();
+        let w_buf = w_buf.clone();
+        let out_buf = out_buf.clone();
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_conv_slang_f32(
+                cbb,
+                &kernels,
+                candle_vulkan_kernels::KernelName::ConvTranspose1dF32,
+                &in_buf,
+                &w_buf,
+                &out_buf,
+                &params_sub,
+                total,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(out)
     }
 
     fn conv2d(
