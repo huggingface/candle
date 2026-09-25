@@ -156,8 +156,72 @@ impl BackendDevice for VulkanDevice {
         }
     }
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
-        todo!()
+    fn rand_uniform(&self, shape: &Shape, dtype: DType, min: f64, max: f64) -> Result<Self::Storage> {
+        use rand::prelude::*;
+        let elem_count = shape.elem_count();
+        // Host-side generation seeded from the device seed, then uploaded:
+        // keeps the distribution semantics of the CPU backend while the
+        // device stays free of RNG plumbing.
+        let seed = self.seed_atomic().load(std::sync::atomic::Ordering::Relaxed);
+        let mut rng = StdRng::seed_from_u64(seed);
+        let cpu = match dtype {
+            DType::U8
+            | DType::U32
+            | DType::I16
+            | DType::I32
+            | DType::I64
+            | DType::F6E2M3
+            | DType::F6E3M2
+            | DType::F4
+            | DType::F8E8M0 => {
+                return Err(Error::UnsupportedDTypeForOp(dtype, "rand_uniform").bt())
+            }
+            DType::BF16 => {
+                let uniform = rand::distr::Uniform::new(
+                    half::bf16::from_f64(min),
+                    half::bf16::from_f64(max),
+                )
+                .map_err(Error::wrap)?;
+                let data: Vec<half::bf16> =
+                    (0..elem_count).map(|_| rng.sample(uniform.clone())).collect();
+                CpuStorage::BF16(data)
+            }
+            DType::F16 => {
+                let uniform = rand::distr::Uniform::new(
+                    half::f16::from_f64(min),
+                    half::f16::from_f64(max),
+                )
+                .map_err(Error::wrap)?;
+                let data: Vec<half::f16> =
+                    (0..elem_count).map(|_| rng.sample(uniform.clone())).collect();
+                CpuStorage::F16(data)
+            }
+            DType::F32 => {
+                let uniform =
+                    rand::distr::Uniform::new(min as f32, max as f32).map_err(Error::wrap)?;
+                let data: Vec<f32> =
+                    (0..elem_count).map(|_| rng.sample(uniform.clone())).collect();
+                CpuStorage::F32(data)
+            }
+            DType::F64 => {
+                let uniform =
+                    rand::distr::Uniform::new(min, max).map_err(Error::wrap)?;
+                let data: Vec<f64> =
+                    (0..elem_count).map(|_| rng.sample(uniform.clone())).collect();
+                CpuStorage::F64(data)
+            }
+            DType::F8E4M3 => {
+                let uniform = rand::distr::Uniform::new(
+                    microfloat::f8e4m3::from_f64(min),
+                    microfloat::f8e4m3::from_f64(max),
+                )
+                .map_err(Error::wrap)?;
+                let data: Vec<microfloat::f8e4m3> =
+                    (0..elem_count).map(|_| rng.sample(uniform.clone())).collect();
+                CpuStorage::F8E4M3(data)
+            }
+        };
+        self.storage_from_cpu_storage_owned(cpu)
     }
 
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {

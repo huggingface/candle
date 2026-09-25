@@ -576,3 +576,23 @@ fn test_vulkan_device_storage_from_cpu_storage_owned() {
     assert_eq!(data, &[7.5f32, 8.25, 9.0]);
     tracing::debug!("Vulkan device {gpu_id} owned upload round-tripped OK");
 }
+
+/// `rand_uniform` must draw in [min, max] and be reproducible per seed.
+#[test]
+fn test_vulkan_device_rand_uniform() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let shape = candle_core::Shape::from(1024);
+    device.set_seed(1234).unwrap();
+    let a = device.rand_uniform(&shape, candle_core::DType::F32, -1.0, 2.0).unwrap();
+    device.set_seed(1234).unwrap();
+    let b = device.rand_uniform(&shape, candle_core::DType::F32, -1.0, 2.0).unwrap();
+    let va = a.to_cpu_storage().unwrap().as_slice::<f32>().unwrap().to_vec();
+    let vb = b.to_cpu_storage().unwrap().as_slice::<f32>().unwrap().to_vec();
+    assert_eq!(va, vb, "same seed must give the same draw");
+    assert!(va.iter().all(|x| *x >= -1.0 && *x <= 2.0));
+    assert!(va.iter().any(|x| *x < -0.99) && va.iter().any(|x| *x > 1.99),
+            "draw should span the range: min {} max {}", va.iter().cloned().fold(f32::INFINITY, f32::min), va.iter().cloned().fold(f32::NEG_INFINITY, f32::max));
+    tracing::debug!("Vulkan device {gpu_id} rand_uniform OK");
+}
