@@ -978,8 +978,65 @@ impl BackendStorage for VulkanStorage {
         Ok(out)
     }
 
-    fn powf(&self, _: &Layout, _: f64) -> Result<Self> {
-        todo!()
+    fn powf(&self, l: &Layout, exponent: f64) -> Result<Self> {
+        if self.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "powf: only F32 supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "powf: non-contiguous layouts not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let input = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let out = VulkanStorage::new(&self.device, len, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        if len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![len as f32, exponent as f32],
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[f32]> = params_buf;
+        let input = input.clone();
+        let out_buf = out_buf.clone();
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_unary_slang_f32(
+                cbb,
+                &kernels,
+                candle_vulkan_kernels::KernelName::UnaryPowF32,
+                &input,
+                &out_buf,
+                &params,
+                len,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(out)
     }
 
     fn elu(&self, _: &Layout, _: f64) -> Result<Self> {
@@ -1154,7 +1211,7 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        let params_vec = vec![len as f32];
+        let params_vec = vec![len as f32, 0.0f32];
         let params_buf = Buffer::from_iter(
             self.device.mem_alloc(),
             &BufferCreateInfo {

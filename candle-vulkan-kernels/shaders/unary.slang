@@ -3,7 +3,7 @@
 // Each entry point maps `g_In[i] -> g_Out[i]` for `i < g_Params[0]`.
 StructuredBuffer<float> g_In;
 RWStructuredBuffer<float> g_Out;
-StructuredBuffer<float> g_Params; // [0] = element count
+StructuredBuffer<float> g_Params; // [0] = element count, [1] = powf exponent (main_pow only)
 
 // Abramowitz-Stegun 7.1.26 approximation (|err| < 1.5e-7),
 // matching libm::erff (what candle's CPU path uses) to f32 precision.
@@ -137,5 +137,15 @@ void main_sign(uint3 dispatchThreadID : SV_DispatchThreadID)
     {
         float x = g_In[idx];
         g_Out[idx] = (x > 0.0 ? 1.0 : 0.0) - (x < 0.0 ? 1.0 : 0.0);
+    }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_pow(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint i = dispatchThreadID.x;
+    if (i < uint(g_Params[0]))
+    {
+        g_Out[i] = pow(g_In[i], g_Params[1]);
     }
 }

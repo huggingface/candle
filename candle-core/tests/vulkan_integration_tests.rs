@@ -888,3 +888,27 @@ fn test_vulkan_affine() {
     }
     tracing::debug!("Vulkan device {gpu_id} affine OK");
 }
+
+/// `powf` (x^e) vs the CPU backend.
+#[test]
+fn test_vulkan_powf() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..64).map(|i| 0.5 + i as f32 * 0.0625).collect();
+    for e in [2.0f64, 0.5f64, 3.0f64] {
+        let g = candle_core::Tensor::new(v.as_slice(), &dev).unwrap().powf(e).unwrap();
+        let c = candle_core::Tensor::new(v.as_slice(), &cpu).unwrap().powf(e).unwrap();
+        let gv = g.to_vec1::<f32>().unwrap();
+        let cv = c.to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+                "powf e={e}: mismatch at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} powf OK");
+}
