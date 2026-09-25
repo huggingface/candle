@@ -747,7 +747,8 @@ macro_rules! define_gemv_fused {
                 let blk_bytes = std::mem::size_of::<$blk>();
                 let lhs_ptr = lhs_b.as_ptr() as usize;
                 let pool = crate::utils::barrier_pool();
-                pool.execute_chunked(total, |range| {
+                // equal-sized gemv units: static split, as in the single-projection gemvs
+                pool.execute_static(total, |range| {
                     let lhs_row: &[$lhs_blk] = unsafe {
                         std::slice::from_raw_parts(lhs_ptr as *const $lhs_blk, k_in_blocks)
                     };
