@@ -1821,8 +1821,19 @@ impl BackendStorage for VulkanStorage {
         )
     }
 
-    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
-        todo!()
+    fn max_pool2d(
+        &self,
+        l: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    ) -> Result<Self> {
+        self.pool2d(
+            l,
+            kernel_size,
+            stride,
+            candle_vulkan_kernels::KernelName::MaxPool2dF32,
+            "max_pool2d",
+        )
     }
 
     fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self> {

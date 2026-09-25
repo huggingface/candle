@@ -1177,3 +1177,26 @@ fn test_vulkan_avg_pool2d() {
     }
     tracing::debug!("Vulkan device {gpu_id} avg_pool2d OK");
 }
+
+/// `max_pool2d` vs the CPU backend.
+#[test]
+fn test_vulkan_max_pool2d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..128).map(|i| (i as f32) * 0.2 - 12.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((1, 2, 8, 8))).unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((1, 2, 8, 8))).unwrap();
+    for (k, s) in [((2usize, 2usize), (2usize, 2usize)), ((3usize, 2usize), (1usize, 1usize))] {
+        let gg = g.clone().max_pool2d_with_stride(k, s).unwrap();
+        let cc = c.clone().max_pool2d_with_stride(k, s).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (a, b) in gv.iter().zip(cv.iter()) {
+            assert!((a - b).abs() < 1e-5 * (1.0 + b.abs()), "max_pool k={k:?} s={s:?}: gpu {a} cpu {b}");
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} max_pool2d OK");
+}
