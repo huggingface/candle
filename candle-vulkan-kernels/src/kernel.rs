@@ -78,6 +78,7 @@ pub enum KernelName {
     WhereF32,
     Copy2dF32,
     GatherIdxF32,
+    GatherRowsF32,
     ReduceMinF32,
     ReduceArgMinF32,
     ReduceArgMaxF32,
@@ -156,6 +157,7 @@ impl AsRef<str> for KernelName {
             Self::WhereF32 => "main",
             Self::Copy2dF32 => "main",
             Self::GatherIdxF32 => "main",
+            Self::GatherRowsF32 => "main_gather_rows",
             Self::ReduceMinF32 => "main_reduce_min",
             Self::ReduceArgMinF32 => "main_reduce_argmin",
             Self::ReduceArgMaxF32 => "main_reduce_argmax",
@@ -374,6 +376,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         KernelName::WhereF32 => 5,
         KernelName::Copy2dF32 => 3,
         KernelName::GatherIdxF32 => 4,
+        KernelName::GatherRowsF32 => 4,
         KernelName::ReduceMinF32
         | KernelName::ReduceArgMinF32
         | KernelName::ReduceArgMaxF32 => 4,

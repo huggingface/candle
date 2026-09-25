@@ -14,13 +14,14 @@ use crate::source::Source;
 pub fn call_gather_idx_slang_f32(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
+    name: KernelName,
     src: &Subbuffer<[f32]>,
     dst: &Subbuffer<[f32]>,
     idx: &Subbuffer<[u32]>,
     params: &Subbuffer<[f32]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
-    let entry = kernels.load_entry(Source::GatherIdxSlang, KernelName::GatherIdxF32)?;
+    let entry = kernels.load_entry(Source::GatherIdxSlang, name)?;
     let src_info = DescriptorBufferInfo {
         buffer: Some(src.buffer()),
         offset: src.offset(),

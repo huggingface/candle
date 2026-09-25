@@ -1739,8 +1739,120 @@ impl BackendStorage for VulkanStorage {
         todo!()
     }
 
-    fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self> {
-        todo!()
+    fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
+        if self.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "gather: only F32 embeddings supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        if dim != 0 {
+            return Err(Error::Vulkan(
+                "gather: only dim 0 supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (emb_start, emb_len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "gather: non-contiguous embeddings not supported on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let emb_dims = l.dims();
+        if emb_dims.len() != 2 {
+            return Err(Error::Vulkan(
+                "gather: only 2D embeddings supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (rows, dim_len) = (emb_dims[0], emb_dims[1]);
+        if emb_len != rows * dim_len {
+            return Err(Error::Vulkan(
+                "gather: embedding size mismatch on the Vulkan backend".to_string().into(),
+            ));
+        }
+        // ids must be a contiguous 1D u32 vector.
+        let ids_u32 = match &ids.buffer {
+            VulkanStorageBuffer::U32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "gather: only U32 ids supported on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let (ids_start, ids_len) = match ids_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "gather: non-contiguous ids not supported on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let ids_dims = ids_l.dims();
+        if ids_dims.len() != 2 {
+            return Err(Error::Vulkan(
+                "gather: only 2D ids supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        if ids_dims[1] > dim_len {
+            return Err(Error::Vulkan(
+                "gather: ids inner dim larger than the embedding dim on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        if ids_len != ids_dims[0] * ids_dims[1] {
+            return Err(Error::Vulkan(
+                "gather: ids size mismatch on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let inner = ids_dims[1];
+        let ids_buf = ids_u32.slice(ids_start as u64..(ids_start + ids_len) as u64);
+        let emb_buf = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(emb_start as u64..(emb_start + emb_len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let out = VulkanStorage::new(&self.device, ids_len, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        if ids_len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let ids_buf = ids_buf.clone();
+        let emb_buf = emb_buf.clone();
+        let out_buf = out_buf.clone();
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![ids_len as f32, inner as f32, dim_len as f32, 0.0f32],
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[f32]> = params_buf;
+        let inner = inner;
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_gather_idx_slang_f32(
+                cbb,
+                &kernels,
+                candle_vulkan_kernels::KernelName::GatherRowsF32,
+                &emb_buf,
+                &out_buf,
+                &ids_buf,
+                &params,
+                ids_len,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(out)
     }
 
     fn scatter_set(
@@ -1979,6 +2091,7 @@ impl BackendStorage for VulkanStorage {
                     candle_vulkan_kernels::call_gather_idx_slang_f32(
                         cbb,
                         &kernels,
+                        candle_vulkan_kernels::KernelName::GatherIdxF32,
                         &src_buf,
                         &dst_buf,
                         &idx,
