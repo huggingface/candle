@@ -780,3 +780,46 @@ fn sbcast_dev(t: candle_core::Tensor, shape: &candle_core::Shape) -> candle_core
 fn sbcast_cpu(t: candle_core::Tensor, shape: &candle_core::Shape) -> candle_core::Tensor {
     t.broadcast_as(shape.clone()).unwrap()
 }
+
+/// All 6 CmpOps, same-shape and scalar rhs, compared against the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lhs_v: Vec<f32> = (0..32).map(|i| (i as f32) * 0.5 - 8.0).collect();
+    let rhs_v: Vec<f32> = (0..32).map(|i| ((i as f32) % 3.0) * 2.0 - 3.0).collect();
+    let l = candle_core::Tensor::new(lhs_v.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let r = candle_core::Tensor::new(rhs_v.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let lc = candle_core::Tensor::new(lhs_v.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let rc = candle_core::Tensor::new(rhs_v.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+        // Scalar rhs.
+        ("eq_s", l.eq(0.0f32).unwrap(), lc.eq(0.0f32).unwrap()),
+        ("gt_s", l.gt(-4.0f32).unwrap(), lc.gt(-4.0f32).unwrap()),
+        ("le_s", l.le(-4.0f32).unwrap(), lc.le(-4.0f32).unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, g, c) in &cases {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if a != b {
+                failures += 1;
+                tracing::debug!("cmp {name}: mismatch at {i}: gpu {a} cpu {b}");
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} cmp mismatches");
+    tracing::debug!("Vulkan device {gpu_id} cmp ops OK");
+}

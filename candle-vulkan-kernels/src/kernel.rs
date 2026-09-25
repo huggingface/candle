@@ -67,6 +67,12 @@ pub enum KernelName {
     UnarySignF32,
     BinaryMaximumF32,
     BinaryMinimumF32,
+    CmpEqF32,
+    CmpNeF32,
+    CmpLtF32,
+    CmpLeF32,
+    CmpGtF32,
+    CmpGeF32,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -131,6 +137,12 @@ impl AsRef<str> for KernelName {
             Self::UnarySignF32 => "main_sign",
             Self::BinaryMaximumF32 => "main_maximum",
             Self::BinaryMinimumF32 => "main_minimum",
+            Self::CmpEqF32 => "main_eq",
+            Self::CmpNeF32 => "main_ne",
+            Self::CmpLtF32 => "main_lt",
+            Self::CmpLeF32 => "main_le",
+            Self::CmpGtF32 => "main_gt",
+            Self::CmpGeF32 => "main_ge",
             Self::TestFillF16 => "main",
             Self::TestFillU8
             | Self::TestFillI16
@@ -333,7 +345,14 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::UnaryCeilF32
         | KernelName::UnaryRoundF32
         | KernelName::UnarySignF32 => 3,
-        KernelName::BinaryMaximumF32 | KernelName::BinaryMinimumF32 => 4,
+        KernelName::BinaryMaximumF32
+        | KernelName::BinaryMinimumF32
+        | KernelName::CmpEqF32
+        | KernelName::CmpNeF32
+        | KernelName::CmpLtF32
+        | KernelName::CmpLeF32
+        | KernelName::CmpGtF32
+        | KernelName::CmpGeF32 => 4,
         KernelName::TestFillF16 => 1,
         KernelName::TestFillU8
         | KernelName::TestFillI16

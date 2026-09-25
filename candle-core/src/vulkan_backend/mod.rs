@@ -954,8 +954,94 @@ impl BackendStorage for VulkanStorage {
         todo!()
     }
 
-    fn cmp(&self, _: CmpOp, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
-        todo!()
+    fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
+        use candle_vulkan_kernels::KernelName;
+        if self.dtype != DType::F32 || rhs.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "cmp: only F32 inputs supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (start, len) = match lhs_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "cmp: non-contiguous lhs not supported on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let input = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let rhs_buf = match &rhs.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!("dtype checked above"),
+        };
+        // U8 output storage (1 where the predicate holds, 0 otherwise).
+        let out = VulkanStorage::new(&self.device, len, DType::U8)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::U8(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        if len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let lhs_dims: Vec<usize> = lhs_l.dims().to_vec();
+        if lhs_dims.len() > 4 {
+            return Err(Error::Vulkan(
+                "cmp: more than 4 dims not supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let rhs_dims: Vec<usize> = rhs_l
+            .dims()
+            .iter()
+            .zip(rhs_l.stride().iter())
+            .map(|(d, s)| if *s == 0 { 1 } else { *d })
+            .collect();
+        let name = match op {
+            CmpOp::Eq => KernelName::CmpEqF32,
+            CmpOp::Ne => KernelName::CmpNeF32,
+            CmpOp::Lt => KernelName::CmpLtF32,
+            CmpOp::Le => KernelName::CmpLeF32,
+            CmpOp::Gt => KernelName::CmpGtF32,
+            CmpOp::Ge => KernelName::CmpGeF32,
+        };
+        let mut params = [0.0f32; 11];
+        params[0] = len as f32;
+        params[1] = lhs_dims.len() as f32;
+        params[2] = rhs_dims.len() as f32;
+        for (slot, d) in params[3..7].iter_mut().zip(lhs_dims.iter()) {
+            *slot = *d as f32;
+        }
+        for (slot, d) in params[7..11].iter_mut().zip(rhs_dims.iter()) {
+            *slot = *d as f32;
+        }
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            params.to_vec(),
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[f32]> = params_buf;
+        let input = input.clone();
+        let rhs_buf = rhs_buf.clone();
+        let out_buf = out_buf.clone();
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_cmp_slang_f32(
+                cbb, &kernels, name, &input, &rhs_buf, &out_buf, &params, len,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(out)
     }
 
     fn to_dtype(&self, _: &Layout, _: DType) -> Result<Self> {
