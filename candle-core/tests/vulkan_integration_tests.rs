@@ -559,3 +559,20 @@ fn test_vulkan_device_storage_from_cpu_storage() {
     assert_eq!(data, &[1.5f32, -2.25, 0.0, 42.0]);
     tracing::debug!("Vulkan device {gpu_id} storage_from_cpu_storage round-tripped OK");
 }
+
+/// `storage_from_cpu_storage_owned` must consume the CPU storage.
+#[test]
+fn test_vulkan_device_storage_from_cpu_storage_owned() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let t = candle_core::Tensor::new(vec![7.5f32, 8.25, 9.0], &cpu).unwrap();
+    let cpu_storage = candle_core::CpuStorage::F32(t.to_vec1::<f32>().unwrap());
+    let v = device.storage_from_cpu_storage_owned(cpu_storage).unwrap();
+    assert_eq!(v.dtype(), candle_core::DType::F32);
+    let back = v.to_cpu_storage().unwrap();
+    let data = back.as_slice::<f32>().unwrap();
+    assert_eq!(data, &[7.5f32, 8.25, 9.0]);
+    tracing::debug!("Vulkan device {gpu_id} owned upload round-tripped OK");
+}

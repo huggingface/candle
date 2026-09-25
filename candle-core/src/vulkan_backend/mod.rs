@@ -125,8 +125,35 @@ impl BackendDevice for VulkanDevice {
         }
     }
 
-    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage> {
-        todo!()
+    fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<Self::Storage> {
+        match storage {
+            CpuStorage::U8(d) => self.storage_from_slice(&d),
+            CpuStorage::U32(d) => self.storage_from_slice(&d),
+            CpuStorage::I16(d) => self.storage_from_slice(&d),
+            CpuStorage::I32(d) => self.storage_from_slice(&d),
+            CpuStorage::I64(d) => self.storage_from_slice(&d),
+            CpuStorage::BF16(d) => self.storage_from_slice(&d),
+            CpuStorage::F16(d) => self.storage_from_slice(&d),
+            CpuStorage::F32(d) => self.storage_from_slice(&d),
+            CpuStorage::F64(d) => self.storage_from_slice(&d),
+            CpuStorage::F8E4M3(d) => self.storage_from_slice(&d),
+            CpuStorage::F6E2M3(d) => {
+                let bytes: Vec<u8> = d.into_iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, bytes.len(), DType::F6E2M3)
+            }
+            CpuStorage::F6E3M2(d) => {
+                let bytes: Vec<u8> = d.into_iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, bytes.len(), DType::F6E3M2)
+            }
+            CpuStorage::F4(d) => {
+                let bytes: Vec<u8> = d.into_iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, bytes.len(), DType::F4)
+            }
+            CpuStorage::F8E8M0(d) => {
+                let bytes: Vec<u8> = d.into_iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, bytes.len(), DType::F8E8M0)
+            }
+        }
     }
 
     fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
