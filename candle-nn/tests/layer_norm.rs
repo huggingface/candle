@@ -61,3 +61,64 @@ fn layer_norm() -> Result<()> {
 
     Ok(())
 }
+
+/// Gradients must flow through the fused layer_norm and match the gradients of
+/// the pure-tensor layer_norm_slow implementation, for x, alpha, and beta.
+#[test]
+fn layer_norm_grad() -> Result<()> {
+    use candle::{Device, Var};
+
+    let device = &Device::Cpu;
+    let (rows, n) = (4, 6);
+    let xs: Vec<f32> = (0..rows * n)
+        .map(|i| (i as f32 * 0.37).sin() * 3.0)
+        .collect();
+    let alpha: Vec<f32> = (0..n).map(|i| 0.5 + (i as f32 * 0.11).cos()).collect();
+    let beta: Vec<f32> = (0..n).map(|i| (i as f32 * 0.23).sin()).collect();
+    let weight: Vec<f32> = (0..rows * n).map(|i| (i as f32 * 0.53).cos()).collect();
+    let xs = Tensor::from_vec(xs, (rows, n), device)?;
+    let alpha = Tensor::from_vec(alpha, n, device)?;
+    let beta = Tensor::from_vec(beta, n, device)?;
+    let weight = Tensor::from_vec(weight, (rows, n), device)?;
+
+    let grads_of = |fused: bool| -> Result<(Tensor, Tensor, Tensor)> {
+        let x_var = Var::from_tensor(&xs)?;
+        let a_var = Var::from_tensor(&alpha)?;
+        let b_var = Var::from_tensor(&beta)?;
+        let y = if fused {
+            candle_nn::ops::layer_norm(
+                x_var.as_tensor(),
+                a_var.as_tensor(),
+                b_var.as_tensor(),
+                1e-5,
+            )?
+        } else {
+            candle_nn::ops::layer_norm_slow(
+                x_var.as_tensor(),
+                a_var.as_tensor(),
+                b_var.as_tensor(),
+                1e-5,
+            )?
+        };
+        let loss = (y * &weight)?.sum_all()?;
+        let grads = loss.backward()?;
+        let err = || candle::Error::Msg("missing gradient".to_string());
+        Ok((
+            grads.get(&x_var).cloned().ok_or_else(err)?,
+            grads.get(&a_var).cloned().ok_or_else(err)?,
+            grads.get(&b_var).cloned().ok_or_else(err)?,
+        ))
+    };
+
+    let (gx_f, ga_f, gb_f) = grads_of(true)?;
+    let (gx_s, ga_s, gb_s) = grads_of(false)?;
+    for (name, f, s) in [
+        ("x", gx_f, gx_s),
+        ("alpha", ga_f, ga_s),
+        ("beta", gb_f, gb_s),
+    ] {
+        let diff = (&f - &s)?.abs()?.max_all()?.to_vec0::<f32>()?;
+        assert!(diff < 1e-4, "grad mismatch for {name}: {diff}");
+    }
+    Ok(())
+}
