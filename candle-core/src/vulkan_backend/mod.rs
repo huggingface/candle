@@ -1113,7 +1113,56 @@ impl BackendStorage for VulkanStorage {
         todo!()
     }
 
-    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
-        todo!()
+    fn const_set(&mut self, scalar: crate::scalar::Scalar, l: &Layout) -> Result<()> {
+        use crate::scalar::Scalar;
+        let value = match (self.dtype, &scalar) {
+            (DType::F32, Scalar::F32(v)) => *v,
+            _ => {
+                return Err(Error::Vulkan(
+                    "const_set: unsupported scalar/dtype combination".to_string().into(),
+                ))
+            }
+        };
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "const_set: non-contiguous layout not yet supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if len == 0 {
+            return Ok(());
+        }
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!("dtype checked above"),
+        };
+        let sub = buffer.slice(start as u64..(start + len) as u64);
+        // Params: [0] = value, [1] = count.
+        let params = vec![value, len as f32];
+        let param_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            params,
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let param_sub: Subbuffer<[f32]> = param_buf;
+        let kernels = self.device.kernels();
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_const_set_f32(cbb, &kernels, &sub, &param_sub, len)
+                .map_err(|e| e.to_string())
+        })?;
+        Ok(())
     }
 }

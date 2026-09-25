@@ -1,6 +1,7 @@
 //! Compute kernel dispatch facades.
 
 pub mod affine;
+pub mod const_set;
 pub mod copy;
 pub mod dispatch;
 pub mod elementwise;
@@ -29,6 +30,7 @@ pub mod test_fill_u32;
 pub mod test_fill_u8;
 
 pub use affine::call_affine_f32;
+pub use const_set::call_const_set_f32;
 pub use copy::call_copy_f32;
 pub use elementwise::{call_elem_binary_f32, call_elem_unary_f32};
 pub use gather::call_gather_f32;

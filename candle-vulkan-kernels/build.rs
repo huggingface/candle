@@ -43,6 +43,22 @@ fn main() {
         fs::write(&out_path, &bytes).expect("failed to write SPIR-V");
         println!("cargo:rerun-if-changed=shaders/{shader}.comp");
     }
+    // Slang production shaders live next to the `.comp` files and are
+    // compiled with `slangc` (the `.comp` files go through naga instead).
+    for entry in fs::read_dir(src_dir).expect("failed to read shaders dir") {
+        let entry = entry.expect("failed to read shaders dir entry");
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("slang") {
+            continue;
+        }
+        let name = path
+            .file_stem()
+            .expect("slang shader without file stem")
+            .to_string_lossy();
+        let out_path = Path::new(&out_dir).join(format!("{name}.spv"));
+        compile_slang(&path, &out_path);
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
     // Test-only shaders live under `shaders/test/`. The SPIR-V output goes
     // to `${OUT_DIR}/test/` so a test shader can never collide with a
     // production shader of the same name.

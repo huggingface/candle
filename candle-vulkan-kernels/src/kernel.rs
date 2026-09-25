@@ -51,6 +51,7 @@ pub enum KernelName {
     Q80DequantF32,
     Q50DequantF32,
     Q5KDequantF32,
+    ConstSetF32,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -99,6 +100,7 @@ impl AsRef<str> for KernelName {
             Self::Q80DequantF32 => "main_q80_dequant",
             Self::Q50DequantF32 => "main_q50_dequant",
             Self::Q5KDequantF32 => "main_q5k_dequant",
+            Self::ConstSetF32 => "main",
             Self::TestFillF16 => "main",
             Self::TestFillU8
             | Self::TestFillI16
@@ -201,9 +203,10 @@ impl Kernels {
             .ok_or(VulkanKernelError::EntryPoint)?;
 
         let bindings: Vec<_> = (0..descriptor_bindings(name))
-            .map(|_| {
+            .map(|i| {
                 let mut b =
                     DescriptorSetLayoutBinding::new(DescriptorType::StorageBuffer);
+                b.binding = i;
                 b.stages = ShaderStages::COMPUTE;
                 b
             })
@@ -286,6 +289,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Q80DequantF32
         | KernelName::Q50DequantF32
         | KernelName::Q5KDequantF32 => 3,
+        KernelName::ConstSetF32 => 2,
         KernelName::TestFillF16 => 1,
         KernelName::TestFillU8
         | KernelName::TestFillI16

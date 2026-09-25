@@ -16,6 +16,8 @@ const GEMV_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv.spv"));
 const GEMV_T_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemv_t.spv"));
 const Q4K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q4k.spv"));
 const Q5Q8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q5q8.spv"));
+const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
+
 const TEST_FILL_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f16.spv"));
 const TEST_FILL_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_u8.spv"));
 const TEST_FILL_I16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_i16.spv"));
@@ -55,6 +57,7 @@ pub enum Source {
     GemvT,
     Q4k,
     Q5q8,
+    ConstSet,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -106,6 +109,7 @@ impl Source {
             KernelName::Q80DequantF32 => 8,
             KernelName::Q50DequantF32 => 8,
             KernelName::Q5KDequantF32 => 8,
+            KernelName::ConstSetF32 => 0,
             KernelName::TestFillF16 => 0,
             KernelName::TestFillU8
             | KernelName::TestFillI16
@@ -141,6 +145,7 @@ impl Source {
             Self::GemvT => GEMV_T_SPV,
             Self::Q4k => Q4K_SPV,
             Self::Q5q8 => Q5Q8_SPV,
+            Self::ConstSet => CONST_SET_SPV,
             Self::TestFillF16 => TEST_FILL_F16_SPV,
             Self::TestFillU8 => TEST_FILL_U8_SPV,
             Self::TestFillI16 => TEST_FILL_I16_SPV,
@@ -181,6 +186,7 @@ impl AsRef<str> for Source {
             Self::RmsNorm => "rms_norm",
             Self::Softmax => "softmax",
             Self::Rope => "rope",
+            Self::ConstSet => "const_set",
             Self::TestFillF16 => "test_fill_f16",
             Self::TestFillU8 => "test_fill_u8",
             Self::TestFillI16 => "test_fill_i16",

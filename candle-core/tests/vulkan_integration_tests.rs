@@ -618,3 +618,22 @@ fn test_vulkan_device_rand_normal() {
     assert!((var - 4.0).abs() < 0.5, "var {var}");
     tracing::debug!("Vulkan device {gpu_id} rand_normal OK (mean {mean}, var {var})");
 }
+
+/// `const_set` fills a contiguous region with a constant value.
+#[test]
+fn test_vulkan_const_set() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let shape = candle_core::Shape::from((4, 8));
+    let mut storage = device.zeros_impl(&shape, candle_core::DType::F32).unwrap();
+    let l = candle_core::Layout::contiguous(shape);
+    storage
+        .const_set(candle_core::scalar::Scalar::F32(3.5), &l)
+        .unwrap();
+    device.synchronize().unwrap();
+    let binding = storage.to_cpu_storage().unwrap();
+    let data = binding.as_slice::<f32>().unwrap();
+    assert!(data.iter().all(|x| *x == 3.5), "expected all 3.5, got {:?}", &data[..4]);
+    tracing::debug!("Vulkan device {gpu_id} const_set OK");
+}
