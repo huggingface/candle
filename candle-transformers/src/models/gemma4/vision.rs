@@ -8,7 +8,9 @@ use candle_nn::{Activation, Linear, VarBuilder};
 
 use super::config::Gemma4VisionConfig;
 
-// ── RmsNorm (Gemma-style) ───────────────────────────────────────────────────
+// ── RmsNorm ─────────────────────────────────────────────────────────────────
+//
+// Same as the text decoder: Gemma 4 multiplies by `weight` directly.
 
 #[derive(Debug, Clone)]
 struct RmsNorm {
@@ -34,9 +36,8 @@ impl Module for RmsNorm {
         let x = x.to_dtype(internal_dtype)?;
         let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        x_normed
-            .to_dtype(x_dtype)?
-            .broadcast_mul(&(&self.weight + 1.0)?)
+        let weight = self.weight.to_dtype(internal_dtype)?;
+        x_normed.broadcast_mul(&weight)?.to_dtype(x_dtype)
     }
 }
 
