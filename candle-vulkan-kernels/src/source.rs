@@ -20,6 +20,7 @@ const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set
 const UNARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary.spv"));
 const BINARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary.spv"));
 const CMP_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp.spv"));
+const WHERE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where.spv"));
 
 const TEST_FILL_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f16.spv"));
 const TEST_FILL_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_u8.spv"));
@@ -64,6 +65,7 @@ pub enum Source {
     UnarySlang,
     BinarySlang,
     CmpSlang,
+    WhereSlang,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -136,7 +138,8 @@ impl Source {
             | KernelName::CmpLtF32
             | KernelName::CmpLeF32
             | KernelName::CmpGtF32
-            | KernelName::CmpGeF32 => 0,
+            | KernelName::CmpGeF32
+            | KernelName::WhereF32 => 0,
             KernelName::TestFillF16 => 0,
             KernelName::TestFillU8
             | KernelName::TestFillI16
@@ -176,6 +179,7 @@ impl Source {
             Self::UnarySlang => UNARY_SLANG_SPV,
             Self::BinarySlang => BINARY_SLANG_SPV,
             Self::CmpSlang => CMP_SLANG_SPV,
+            Self::WhereSlang => WHERE_SLANG_SPV,
             Self::TestFillF16 => TEST_FILL_F16_SPV,
             Self::TestFillU8 => TEST_FILL_U8_SPV,
             Self::TestFillI16 => TEST_FILL_I16_SPV,
@@ -220,6 +224,7 @@ impl AsRef<str> for Source {
             Self::UnarySlang => "unary",
             Self::BinarySlang => "binary",
             Self::CmpSlang => "cmp",
+            Self::WhereSlang => "where",
             Self::TestFillF16 => "test_fill_f16",
             Self::TestFillU8 => "test_fill_u8",
             Self::TestFillI16 => "test_fill_i16",

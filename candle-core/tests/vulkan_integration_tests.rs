@@ -823,3 +823,39 @@ fn test_vulkan_cmp_ops() {
     assert_eq!(failures, 0, "{failures} cmp mismatches");
     tracing::debug!("Vulkan device {gpu_id} cmp ops OK");
 }
+
+/// `where_cond` with a cmp predicate, incl. a broadcast on_false.
+#[test]
+fn test_vulkan_where_cond() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let cond_v: Vec<f32> = (0..32).map(|i| (i as f32) - 15.0).collect();
+    let t_v: Vec<f32> = (0..32).map(|i| 100.0 + i as f32).collect();
+    let l = candle_core::Tensor::new(cond_v.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let lc = candle_core::Tensor::new(cond_v.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let t = candle_core::Tensor::new(t_v.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let tc = candle_core::Tensor::new(t_v.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    // on_false: a single scalar (broadcast view) and a full tensor.
+    let f_scalar_dev = candle_core::Tensor::new(-1.0f32, &dev).unwrap();
+    let f_scalar_cpu = candle_core::Tensor::new(-1.0f32, &cpu).unwrap();
+    let f_v: Vec<f32> = (0..32).map(|i| -50.0 - i as f32).collect();
+    let f = candle_core::Tensor::new(f_v.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let fc = candle_core::Tensor::new(f_v.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+
+    let g1 = l.gt(0.0f32).unwrap().where_cond(&t, &f_scalar_dev.broadcast_as(shape.clone()).unwrap()).unwrap();
+    let c1 = lc.gt(0.0f32).unwrap().where_cond(&tc, &f_scalar_cpu.broadcast_as(shape.clone()).unwrap()).unwrap();
+    let g2 = l.lt(0.0f32).unwrap().where_cond(&t, &f).unwrap();
+    let c2 = lc.lt(0.0f32).unwrap().where_cond(&tc, &fc).unwrap();
+    for (name, g, c) in [("where_scalar", g1, c1), ("where_tensor", g2, c2)] {
+        let gv: Vec<f32> = g.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<f32> = c.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-4, "where {name}: mismatch at {i}: gpu {a} cpu {b}");
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} where_cond OK");
+}

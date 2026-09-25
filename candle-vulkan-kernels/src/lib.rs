@@ -16,5 +16,6 @@ pub use kernels::{
     call_test_fill_f6e2m3, call_test_fill_f6e3m2, call_test_fill_f8e4m3, call_test_fill_f8e8m0,
     call_test_fill_i16, call_test_fill_i32, call_test_fill_i64, call_test_fill_u32,
     call_test_fill_u8, call_binary_slang_f32, call_cmp_slang_f32, call_unary_slang_f32,
+    call_where_slang_f32,
 };
 pub use source::Source;

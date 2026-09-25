@@ -1260,8 +1260,109 @@ impl BackendStorage for VulkanStorage {
         }
     }
 
-    fn where_cond(&self, _: &Layout, _: &Self, _: &Layout, _: &Self, _: &Layout) -> Result<Self> {
-        todo!()
+    fn where_cond(&self, l: &Layout, t: &Self, t_l: &Layout, f: &Self, f_l: &Layout) -> Result<Self> {
+        if t.dtype != DType::F32 || f.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "where_cond: only F32 values supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "where_cond: non-contiguous pred not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let pred = match &self.buffer {
+            VulkanStorageBuffer::U8(b) => b.clone().slice(start as u64..(start + len) as u64),
+            _ => {
+                return Err(Error::Vulkan(
+                    "where_cond: only U8 predicates supported on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let t_buf = match &t.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!("dtype checked above"),
+        };
+        let f_buf = match &f.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!("dtype checked above"),
+        };
+        let out = VulkanStorage::new(&self.device, len, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        if len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let ndim = l.dims().len();
+        if ndim > 4 {
+            return Err(Error::Vulkan(
+                "where_cond: more than 4 dims not supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let eff = |ly: &Layout| -> Vec<usize> {
+            ly.dims()
+                .iter()
+                .zip(ly.stride().iter())
+                .map(|(d, s)| if *s == 0 { 1 } else { *d })
+                .collect()
+        };
+        let p_dims = eff(l);
+        let t_dims = eff(t_l);
+        let f_dims = eff(f_l);
+        let mut params = [0.0f32; 14];
+        params[0] = len as f32;
+        params[1] = ndim as f32;
+        for (slot, d) in params[2..6].iter_mut().zip(p_dims.iter()) {
+            *slot = *d as f32;
+        }
+        for (slot, d) in params[6..10].iter_mut().zip(t_dims.iter()) {
+            *slot = *d as f32;
+        }
+        for (slot, d) in params[10..14].iter_mut().zip(f_dims.iter()) {
+            *slot = *d as f32;
+        }
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            params.to_vec(),
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[f32]> = params_buf;
+        let pred = pred.clone();
+        let t_buf = t_buf.clone();
+        let f_buf = f_buf.clone();
+        let out_buf = out_buf.clone();
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_where_slang_f32(
+                cbb,
+                &kernels,
+                candle_vulkan_kernels::KernelName::WhereF32,
+                &pred,
+                &t_buf,
+                &f_buf,
+                &out_buf,
+                &params,
+                len,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(out)
     }
 
     fn conv1d(

@@ -30,6 +30,7 @@ pub mod test_fill_u32;
 pub mod test_fill_u8;
 pub mod binary_slang;
 pub mod cmp_slang;
+pub mod where_slang;
 pub mod unary_slang;
 
 pub use affine::call_affine_f32;
@@ -61,4 +62,5 @@ pub use test_fill_u32::call_test_fill_u32;
 pub use test_fill_u8::call_test_fill_u8;
 pub use binary_slang::call_binary_slang_f32;
 pub use cmp_slang::call_cmp_slang_f32;
+pub use where_slang::call_where_slang_f32;
 pub use unary_slang::call_unary_slang_f32;
