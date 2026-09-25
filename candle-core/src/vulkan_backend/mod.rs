@@ -224,8 +224,62 @@ impl BackendDevice for VulkanDevice {
         self.storage_from_cpu_storage_owned(cpu)
     }
 
-    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
-        todo!()
+    fn rand_normal(&self, shape: &Shape, dtype: DType, mean: f64, std: f64) -> Result<Self::Storage> {
+        use rand::prelude::*;
+        let elem_count = shape.elem_count();
+        // Host-side generation seeded from the device seed, then uploaded.
+        let seed = self.seed_atomic().load(std::sync::atomic::Ordering::Relaxed);
+        let mut rng = StdRng::seed_from_u64(seed);
+        let cpu = match dtype {
+            DType::U8
+            | DType::U32
+            | DType::I16
+            | DType::I32
+            | DType::I64
+            | DType::F6E2M3
+            | DType::F6E3M2
+            | DType::F4
+            | DType::F8E8M0 => {
+                return Err(Error::UnsupportedDTypeForOp(dtype, "rand_normal").bt())
+            }
+            DType::BF16 => {
+                let normal = rand_distr::Normal::new(
+                    half::bf16::from_f64(mean),
+                    half::bf16::from_f64(std),
+                )
+                .map_err(Error::wrap)?;
+                let data: Vec<half::bf16> = (0..elem_count).map(|_| normal.sample(&mut rng)).collect();
+                CpuStorage::BF16(data)
+            }
+            DType::F16 => {
+                let normal = rand_distr::Normal::new(
+                    half::f16::from_f64(mean),
+                    half::f16::from_f64(std),
+                )
+                .map_err(Error::wrap)?;
+                let data: Vec<half::f16> = (0..elem_count).map(|_| normal.sample(&mut rng)).collect();
+                CpuStorage::F16(data)
+            }
+            DType::F32 => {
+                let normal = rand_distr::Normal::new(mean as f32, std as f32).map_err(Error::wrap)?;
+                let data: Vec<f32> = (0..elem_count).map(|_| normal.sample(&mut rng)).collect();
+                CpuStorage::F32(data)
+            }
+            DType::F64 => {
+                let normal = rand_distr::Normal::new(mean, std).map_err(Error::wrap)?;
+                let data: Vec<f64> = (0..elem_count).map(|_| normal.sample(&mut rng)).collect();
+                CpuStorage::F64(data)
+            }
+            DType::F8E4M3 => {
+                // f8e4m3 has no Float impl: draw in f64 and convert.
+                let normal = rand_distr::Normal::new(mean, std).map_err(Error::wrap)?;
+                let data: Vec<microfloat::f8e4m3> = (0..elem_count)
+                    .map(|_| microfloat::f8e4m3::from_f64(normal.sample(&mut rng)))
+                    .collect();
+                CpuStorage::F8E4M3(data)
+            }
+        };
+        self.storage_from_cpu_storage_owned(cpu)
     }
 
     fn set_seed(&self, seed: u64) -> Result<()> {

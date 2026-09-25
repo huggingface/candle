@@ -596,3 +596,25 @@ fn test_vulkan_device_rand_uniform() {
             "draw should span the range: min {} max {}", va.iter().cloned().fold(f32::INFINITY, f32::min), va.iter().cloned().fold(f32::NEG_INFINITY, f32::max));
     tracing::debug!("Vulkan device {gpu_id} rand_uniform OK");
 }
+
+/// `rand_normal` must be reproducible per seed with the right moment.
+#[test]
+fn test_vulkan_device_rand_normal() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let shape = candle_core::Shape::from(4096);
+    device.set_seed(99).unwrap();
+    let a = device.rand_normal(&shape, candle_core::DType::F32, 1.0, 2.0).unwrap();
+    device.set_seed(99).unwrap();
+    let b = device.rand_normal(&shape, candle_core::DType::F32, 1.0, 2.0).unwrap();
+    let va = a.to_cpu_storage().unwrap().as_slice::<f32>().unwrap().to_vec();
+    let vb = b.to_cpu_storage().unwrap().as_slice::<f32>().unwrap().to_vec();
+    assert_eq!(va, vb, "same seed must give the same draw");
+    let n = va.len() as f64;
+    let mean = va.iter().map(|x| *x as f64).sum::<f64>() / n;
+    let var = va.iter().map(|x| (*x as f64 - 1.0) * (*x as f64 - 1.0)).sum::<f64>() / n;
+    assert!((mean - 1.0).abs() < 0.1, "mean {mean}");
+    assert!((var - 4.0).abs() < 0.5, "var {var}");
+    tracing::debug!("Vulkan device {gpu_id} rand_normal OK (mean {mean}, var {var})");
+}
