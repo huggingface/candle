@@ -118,14 +118,8 @@ impl AsRef<str> for KernelName {
     }
 }
 
-fn pipeline_error(e: vulkano::Validated<vulkano::VulkanError>) -> VulkanKernelError {
-    match e {
-        vulkano::Validated::Error(e) => VulkanKernelError::Pipeline(e.to_string()),
-        vulkano::Validated::ValidationError(e) => VulkanKernelError::Pipeline(format!(
-            "validation error: {} (requires: {}; vuids: {:?})",
-            e.problem, e.requires_one_of, e.vuids
-        )),
-    }
+fn pipeline_error(e: vulkano::VulkanError) -> VulkanKernelError {
+    VulkanKernelError::Pipeline(e.to_string())
 }
 
 /// A cached pipeline together with the layout needed to dispatch it.
@@ -196,11 +190,9 @@ impl Kernels {
         name: KernelName,
     ) -> Result<PipelineEntry, VulkanKernelError> {
         let words = source.spv_words();
+        let create_info = vulkano::shader::ShaderModuleCreateInfo::new(&words);
         let shader = unsafe {
-            vulkano::shader::ShaderModule::new(
-                self.device.clone(),
-                vulkano::shader::ShaderModuleCreateInfo::new(&words),
-            )
+            vulkano::shader::ShaderModule::new(&self.device, &create_info)
         }
         .map_err(pipeline_error)?;
 
@@ -208,50 +200,47 @@ impl Kernels {
             .entry_point(name.as_ref())
             .ok_or(VulkanKernelError::EntryPoint)?;
 
-        let bindings = (0..descriptor_bindings(name))
-            .map(|i| {
+        let bindings: Vec<_> = (0..descriptor_bindings(name))
+            .map(|_| {
                 let mut b =
-                    DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageBuffer);
+                    DescriptorSetLayoutBinding::new(DescriptorType::StorageBuffer);
                 b.stages = ShaderStages::COMPUTE;
-                (i, b)
+                b
             })
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let set_layout = DescriptorSetLayout::new(
-            self.device.clone(),
-            DescriptorSetLayoutCreateInfo {
-                bindings,
-                ..Default::default()
-            },
-        )
-        .map_err(pipeline_error)?;
+            .collect();
+        let create_info = DescriptorSetLayoutCreateInfo {
+            bindings: &bindings,
+            ..Default::default()
+        };
+        let set_layout = DescriptorSetLayout::new(&self.device, &create_info)
+            .map_err(pipeline_error)?;
 
-        let layout = PipelineLayout::new(
-            self.device.clone(),
-            PipelineLayoutCreateInfo {
-                set_layouts: vec![set_layout.clone()],
-                // VUID-VkPushConstantRange-size-00296: size must be > 0, so omit
-                // the range entirely for kernels that use no push constants.
-                push_constant_ranges: {
-                    let size = source.push_constant_size(name);
-                    if size > 0 {
-                        vec![PushConstantRange {
-                            stages: ShaderStages::COMPUTE,
-                            offset: 0,
-                            size,
-                        }]
-                    } else {
-                        Vec::new()
-                    }
-                },
-                ..Default::default()
-            },
-        )
-        .map_err(pipeline_error)?;
-        let stage = PipelineShaderStageCreateInfo::new(entry_point);
+        let set_layouts = [&set_layout];
+        let push_constant_ranges: Vec<PushConstantRange> = {
+            let size = source.push_constant_size(name);
+            if size > 0 {
+                vec![PushConstantRange {
+                    stages: ShaderStages::COMPUTE,
+                    offset: 0,
+                    size,
+                }]
+            } else {
+                vec![]
+            }
+        };
+        let create_info = PipelineLayoutCreateInfo {
+            set_layouts: &set_layouts,
+            push_constant_ranges: &push_constant_ranges,
+            ..Default::default()
+        };
+        let layout = PipelineLayout::new(&self.device, &create_info)
+            .map_err(pipeline_error)?;
+        let stage = PipelineShaderStageCreateInfo::new(&entry_point);
+        let create_info = ComputePipelineCreateInfo::new(stage, &layout);
         let pipeline = ComputePipeline::new(
-            self.device.clone(),
+            &self.device,
             None,
-            ComputePipelineCreateInfo::stage_layout(stage, layout.clone()),
+            &create_info,
         )
         .map_err(pipeline_error)?;
 

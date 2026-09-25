@@ -5,8 +5,9 @@ use crate::kernel::{KernelName, Kernels};
 use crate::source::Source;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
-use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
+
 /// Records a Q4_K GEMV dispatch: `a` has `k` elements (the single input
 /// row, f32), `w` is the raw Q4_K weight of shape `(n, k)` (row-major,
 /// 144 bytes per 256 elements), `output` has `n` elements.
@@ -20,16 +21,34 @@ pub fn call_q4k_qmatvec_f32(
     n: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::Q4k, KernelName::Q4kQmatvecF32)?;
+    let a_info = DescriptorBufferInfo {
+        buffer: Some(a.buffer()),
+        offset: a.offset(),
+        range: Some(a.size()),
+        ..Default::default()
+    };
+    let output_info = DescriptorBufferInfo {
+        buffer: Some(output.buffer()),
+        offset: output.offset(),
+        range: Some(output.size()),
+        ..Default::default()
+    };
+    let w_info = DescriptorBufferInfo {
+        buffer: Some(w.buffer()),
+        offset: w.offset(),
+        range: Some(w.size()),
+        ..Default::default()
+    };
     let writes = vec![
-        WriteDescriptorSet::buffer(0, a.clone()),
-        WriteDescriptorSet::buffer(1, w.clone()),
-        WriteDescriptorSet::buffer(2, output.clone()),
+        WriteDescriptorSet::buffer(0, &a_info),
+        WriteDescriptorSet::buffer(1, &w_info),
+        WriteDescriptorSet::buffer(2, &output_info),
     ];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        writes,
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
@@ -43,6 +62,7 @@ pub fn call_q4k_qmatvec_f32(
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     Ok(())
 }
+
 /// Records a Q4_K dequant dispatch: `w` is raw Q4_K bytes holding
 /// `elem_count` elements, `output` has `elem_count` f32 elements.
 pub fn call_q4k_dequant_f32(
@@ -53,15 +73,27 @@ pub fn call_q4k_dequant_f32(
     elem_count: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::Q4k, KernelName::Q4kDequantF32)?;
+    let output_info = DescriptorBufferInfo {
+        buffer: Some(output.buffer()),
+        offset: output.offset(),
+        range: Some(output.size()),
+        ..Default::default()
+    };
+    let w_info = DescriptorBufferInfo {
+        buffer: Some(w.buffer()),
+        offset: w.offset(),
+        range: Some(w.size()),
+        ..Default::default()
+    };
     let writes = vec![
-        WriteDescriptorSet::buffer(1, w.clone()),
-        WriteDescriptorSet::buffer(2, output.clone()),
+        WriteDescriptorSet::buffer(1, &w_info),
+        WriteDescriptorSet::buffer(2, &output_info),
     ];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        writes,
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
@@ -86,15 +118,27 @@ pub fn call_q6k_dequant_f32(
     elem_count: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::Q4k, KernelName::Q6kDequantF32)?;
+    let output_info = DescriptorBufferInfo {
+        buffer: Some(output.buffer()),
+        offset: output.offset(),
+        range: Some(output.size()),
+        ..Default::default()
+    };
+    let w_info = DescriptorBufferInfo {
+        buffer: Some(w.buffer()),
+        offset: w.offset(),
+        range: Some(w.size()),
+        ..Default::default()
+    };
     let writes = vec![
-        WriteDescriptorSet::buffer(1, w.clone()),
-        WriteDescriptorSet::buffer(2, output.clone()),
+        WriteDescriptorSet::buffer(1, &w_info),
+        WriteDescriptorSet::buffer(2, &output_info),
     ];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        writes,
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())

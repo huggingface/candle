@@ -165,12 +165,12 @@ impl VulkanStorage {
         let data = vec![T::default(); size];
         // Create the staging buffer on the host with the data that needs to be copied to VRAM.
         let source_buffer = Buffer::from_iter(
-            device.mem_alloc().clone(),
-            BufferCreateInfo {
+            device.mem_alloc(),
+            &BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_SRC,
                 ..Default::default()
             },
-            AllocationCreateInfo {
+            &AllocationCreateInfo {
                 memory_type_filter: MemoryTypeFilter::PREFER_HOST
                     | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
@@ -183,15 +183,15 @@ impl VulkanStorage {
 
         // Create the VRAM buffer.
         let vram_buffer = Buffer::new_slice::<T>(
-            device.mem_alloc().clone(),
-            BufferCreateInfo {
+            device.mem_alloc(),
+            &BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_SRC
                     | BufferUsage::TRANSFER_DST
                     | BufferUsage::UNIFORM_BUFFER
                     | BufferUsage::STORAGE_BUFFER,
                 ..Default::default()
             },
-            AllocationCreateInfo {
+            &AllocationCreateInfo {
                 memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
                 ..Default::default()
             },
@@ -211,7 +211,7 @@ impl VulkanStorage {
             Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
         })?;
         builder
-            .copy_buffer(CopyBufferInfo::buffers(
+            .copy_buffer(CopyBufferInfo::new(
                 source_buffer.clone(),
                 vram_buffer.clone(),
             ))
@@ -251,12 +251,12 @@ impl VulkanStorage {
     {
         let len = vram.len();
         let destination_buffer = Buffer::new_slice::<T>(
-            device.mem_alloc().clone(),
-            BufferCreateInfo {
+            device.mem_alloc(),
+            &BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
-            AllocationCreateInfo {
+            &AllocationCreateInfo {
                 memory_type_filter: MemoryTypeFilter::PREFER_HOST
                     | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                 ..Default::default()
@@ -275,7 +275,7 @@ impl VulkanStorage {
             Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
         })?;
         builder
-            .copy_buffer(CopyBufferInfo::buffers(
+            .copy_buffer(CopyBufferInfo::new(
                 vram.clone(),
                 destination_buffer.clone(),
             ))

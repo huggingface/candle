@@ -2,7 +2,7 @@
 
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
-use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
 
 use crate::err::VulkanKernelError;
@@ -19,15 +19,27 @@ pub fn call_reduce_sum_f32(
     cols: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::Reduce, KernelName::ReduceSumF32)?;
+    let input_info = DescriptorBufferInfo {
+        buffer: Some(input.buffer()),
+        offset: input.offset(),
+        range: Some(input.size()),
+        ..Default::default()
+    };
+    let output_info = DescriptorBufferInfo {
+        buffer: Some(output.buffer()),
+        offset: output.offset(),
+        range: Some(output.size()),
+        ..Default::default()
+    };
     let writes = vec![
-        WriteDescriptorSet::buffer(0, input.clone()),
-        WriteDescriptorSet::buffer(1, output.clone()),
+        WriteDescriptorSet::buffer(0, &input_info),
+        WriteDescriptorSet::buffer(1, &output_info),
     ];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        writes,
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
 
@@ -53,15 +65,27 @@ pub fn call_reduce_max_f32(
     cols: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::ReduceMax, KernelName::ReduceMaxF32)?;
+    let input_info = DescriptorBufferInfo {
+        buffer: Some(input.buffer()),
+        offset: input.offset(),
+        range: Some(input.size()),
+        ..Default::default()
+    };
+    let output_info = DescriptorBufferInfo {
+        buffer: Some(output.buffer()),
+        offset: output.offset(),
+        range: Some(output.size()),
+        ..Default::default()
+    };
     let writes = vec![
-        WriteDescriptorSet::buffer(0, input.clone()),
-        WriteDescriptorSet::buffer(1, output.clone()),
+        WriteDescriptorSet::buffer(0, &input_info),
+        WriteDescriptorSet::buffer(1, &output_info),
     ];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        writes,
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
 

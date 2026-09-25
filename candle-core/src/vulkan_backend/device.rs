@@ -10,7 +10,7 @@ use vulkano::command_buffer::allocator::{
 };
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferSubmitInfo, CommandBufferUsage, CopyBufferInfo,
-    PrimaryAutoCommandBuffer, SubmitInfo,
+    PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, SubmitInfo,
 };
 use vulkano::descriptor_set::allocator::{
     StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo,
@@ -19,7 +19,7 @@ use vulkano::device::{
     Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
 };
 use vulkano::instance::{Instance, InstanceCreateInfo};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::memory::allocator::{AllocationCreateInfo, GenericMemoryAllocatorCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::sync::fence::{Fence, FenceCreateInfo};
 use vulkano::VulkanLibrary;
 
@@ -112,20 +112,20 @@ impl std::fmt::Debug for VulkanDevice {
 
 impl VulkanDevice {
     pub fn new(gpu_id: usize) -> Result<Self> {
-        let library = VulkanLibrary::new().map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let library = unsafe { VulkanLibrary::new() }.map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let instance = Instance::new(
-            library,
-            InstanceCreateInfo {
-                application_name: Some("candle".into()),
+            &library,
+            &InstanceCreateInfo {
+                application_name: Some("candle"),
                 ..Default::default()
             },
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let mut devices = instance
+        let devices = instance
             .enumerate_physical_devices()
             .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let physical = devices
-            .nth(gpu_id)
+            .get(gpu_id)
             .ok_or_else(|| Error::Vulkan(format!("no physical device {gpu_id}").into()))?;
         let queue_family = physical
             .queue_family_properties()
@@ -144,36 +144,35 @@ impl VulkanDevice {
         let i16 = supported.shader_int16;
         let i64 = supported.shader_int64;
         let f64 = supported.shader_float64;
+        let queue_ci = QueueCreateInfo {
+            flags: Default::default(),
+            queue_family_index: queue_family as u32,
+            queues: &[1.0],
+            ..Default::default()
+        };
+        let exts = DeviceExtensions {
+            khr_16bit_storage: true,
+            khr_shader_float16_int8: true,
+            ..Default::default()
+        };
+        let feats = DeviceFeatures {
+            storage_buffer8_bit_access: fb8,
+            uniform_and_storage_buffer8_bit_access: fb8u,
+            storage_buffer16_bit_access: fb16,
+            uniform_and_storage_buffer16_bit_access: fb16u,
+            shader_float16: f16,
+            shader_int8: i8,
+            shader_int16: i16,
+            shader_int64: i64,
+            shader_float64: f64,
+            ..Default::default()
+        };
         let (device, queues) = Device::new(
             physical,
-            DeviceCreateInfo {
-                queue_create_infos: vec![QueueCreateInfo {
-                    flags: Default::default(),
-                    queue_family_index: queue_family as u32,
-                    queues: vec![1.0],
-                    ..Default::default()
-                }],
-                // Compute kernels need 8/16-bit storage buffers, 16-bit
-                // integer/float shader types, and 64-bit integer/float shader
-                // types for the full u8..f64 dtype coverage. Enable exactly
-                // the subset the device reports as supported.
-                enabled_extensions: DeviceExtensions {
-                    khr_16bit_storage: true,
-                    khr_shader_float16_int8: true,
-                    ..Default::default()
-                },
-                enabled_features: DeviceFeatures {
-                    storage_buffer8_bit_access: fb8,
-                    uniform_and_storage_buffer8_bit_access: fb8u,
-                    storage_buffer16_bit_access: fb16,
-                    uniform_and_storage_buffer16_bit_access: fb16u,
-                    shader_float16: f16,
-                    shader_int8: i8,
-                    shader_int16: i16,
-                    shader_int64: i64,
-                    shader_float64: f64,
-                    ..Default::default()
-                },
+            &DeviceCreateInfo {
+                queue_create_infos: &[queue_ci],
+                enabled_extensions: &exts,
+                enabled_features: &feats,
                 ..Default::default()
             },
         )
@@ -182,19 +181,19 @@ impl VulkanDevice {
             .into_iter()
             .next()
             .ok_or_else(|| Error::Vulkan("no queue returned".to_string().into()))?;
-        let mem_alloc = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
+        let mem_alloc = Arc::new(StandardMemoryAllocator::new(&device, &GenericMemoryAllocatorCreateInfo::default()));
         let cbb_alloc = Arc::new(StandardCommandBufferAllocator::new(
-            device.clone(),
-            StandardCommandBufferAllocatorCreateInfo::default(),
+            &device,
+            &StandardCommandBufferAllocatorCreateInfo::default(),
         ));
         let dss_alloc = Arc::new(StandardDescriptorSetAllocator::new(
-            device.clone(),
-            StandardDescriptorSetAllocatorCreateInfo::default(),
+            &device,
+            &StandardDescriptorSetAllocatorCreateInfo::default(),
         ));
         let kernels = Arc::new(Kernels::new(device.clone(), dss_alloc.clone()));
         let mut fence_ring = Vec::with_capacity(FENCE_RING_SIZE);
         for _ in 0..FENCE_RING_SIZE {
-            let fence = Fence::new(device.clone(), FenceCreateInfo::default())
+            let fence = Fence::new(&device, &FenceCreateInfo::default())
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
             fence_ring.push(InFlight {
                 cbb: None,
@@ -241,7 +240,7 @@ impl VulkanDevice {
     /// RAM (the BAR aperture is small), which caps decode at the PCIe
     /// bandwidth; weights and activations live in VRAM instead, with
     /// one-shot staging copies for uploads and readback.
-    fn storage_alloc_info() -> AllocationCreateInfo {
+    fn storage_alloc_info() -> AllocationCreateInfo<'static> {
         AllocationCreateInfo {
             memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
             ..Default::default()
@@ -249,7 +248,7 @@ impl VulkanDevice {
     }
 
     /// Host-visible staging memory for uploads and readback.
-    fn staging_alloc_info() -> AllocationCreateInfo {
+    fn staging_alloc_info() -> AllocationCreateInfo<'static> {
         AllocationCreateInfo {
             memory_type_filter: MemoryTypeFilter::PREFER_HOST
                 | MemoryTypeFilter::HOST_RANDOM_ACCESS,
@@ -271,32 +270,32 @@ impl VulkanDevice {
     /// and runs at the next `synchronize`.
     pub fn upload_f32(&self, data: &[f32]) -> Result<Subbuffer<[f32]>> {
         let buffer = Buffer::new_slice(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
+            &self.mem_alloc,
+            &BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER
                     | BufferUsage::TRANSFER_SRC
                     | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
-            Self::storage_alloc_info(),
+            &Self::storage_alloc_info(),
             data.len()
                 .try_into()
                 .map_err(|_| Error::Vulkan("f32 buffer length".to_string().into()))?,
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let staging = Buffer::from_iter(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
+            &self.mem_alloc,
+            &BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_SRC,
                 ..Default::default()
             },
-            Self::staging_alloc_info(),
+            &Self::staging_alloc_info(),
             data.iter().copied(),
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let dst = buffer.clone();
         self.execute(move |cbb| {
-            cbb.copy_buffer(CopyBufferInfo::buffers(staging, dst))
+            cbb.copy_buffer(CopyBufferInfo::new(staging, dst))
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;
@@ -307,14 +306,14 @@ impl VulkanDevice {
     /// (the fill is deferred onto the pending batch).
     pub fn new_f32_buffer(&self, len: usize) -> Result<Subbuffer<[f32]>> {
         let buffer = Buffer::new_slice(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
+            &self.mem_alloc,
+            &BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER
                     | BufferUsage::TRANSFER_SRC
                     | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
-            Self::storage_alloc_info(),
+            &Self::storage_alloc_info(),
             len.try_into()
                 .map_err(|_| Error::Vulkan("f32 buffer length".to_string().into()))?,
         )
@@ -332,14 +331,14 @@ impl VulkanDevice {
     /// onto the pending batch).
     pub fn new_u32_buffer(&self, len: usize) -> Result<Subbuffer<[u32]>> {
         let buffer = Buffer::new_slice(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
+            &self.mem_alloc,
+            &BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER
                     | BufferUsage::TRANSFER_SRC
                     | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
-            Self::storage_alloc_info(),
+            &Self::storage_alloc_info(),
             len.try_into()
                 .map_err(|_| Error::Vulkan("u32 buffer length".to_string().into()))?,
         )
@@ -429,9 +428,9 @@ impl VulkanDevice {
                 .with(|mut q| unsafe {
                     q.submit(
                         &[SubmitInfo {
-                            wait_semaphores: Vec::new(),
-                            command_buffers: vec![CommandBufferSubmitInfo::new(cbb_submit)],
-                            signal_semaphores: Vec::new(),
+                            wait_semaphores: &[],
+                            command_buffers: &[CommandBufferSubmitInfo::new(cbb_submit.as_raw())],
+                            signal_semaphores: &[],
                             ..Default::default()
                         }],
                         Some(&fence),
@@ -463,32 +462,32 @@ impl VulkanDevice {
     /// host-visible staging buffer, then returns the data.
     pub fn upload_u8(&self, data: &[u8]) -> Result<Subbuffer<[u8]>> {
         let buffer = Buffer::new_slice(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
+            &self.mem_alloc,
+            &BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER
                     | BufferUsage::TRANSFER_SRC
                     | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
-            Self::storage_alloc_info(),
+            &Self::storage_alloc_info(),
             data.len()
                 .try_into()
                 .map_err(|_| Error::Vulkan("u8 buffer length".to_string().into()))?,
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let staging = Buffer::from_iter(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
+            &self.mem_alloc,
+            &BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_SRC,
                 ..Default::default()
             },
-            Self::staging_alloc_info(),
+            &Self::staging_alloc_info(),
             data.iter().copied(),
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let dst = buffer.clone();
         self.execute(move |cbb| {
-            cbb.copy_buffer(CopyBufferInfo::buffers(staging, dst))
+            cbb.copy_buffer(CopyBufferInfo::new(staging, dst))
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;
@@ -497,32 +496,32 @@ impl VulkanDevice {
     /// Downloads a device u8 storage buffer to the host.
     pub fn upload_u32(&self, data: &[u32]) -> Result<Subbuffer<[u32]>> {
         let buffer = Buffer::new_slice(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
+            &self.mem_alloc,
+            &BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER
                     | BufferUsage::TRANSFER_SRC
                     | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
-            Self::storage_alloc_info(),
+            &Self::storage_alloc_info(),
             data.len()
                 .try_into()
                 .map_err(|_| Error::Vulkan("u32 buffer length".to_string().into()))?,
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let staging = Buffer::from_iter(
-            self.mem_alloc.clone(),
-            BufferCreateInfo {
+            &self.mem_alloc,
+            &BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_SRC,
                 ..Default::default()
             },
-            Self::staging_alloc_info(),
+            &Self::staging_alloc_info(),
             data.iter().copied(),
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let dst = buffer.clone();
         self.execute(move |cbb| {
-            cbb.copy_buffer(CopyBufferInfo::buffers(staging, dst))
+            cbb.copy_buffer(CopyBufferInfo::new(staging, dst))
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;

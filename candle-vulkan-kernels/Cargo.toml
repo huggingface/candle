@@ -15,7 +15,7 @@ default = []
 
 [dependencies]
 thiserror = "2"
-vulkano = { git = "https://github.com/amejia1/vulkano.git", branch = "v0.35.2-shader-float8" }
+vulkano = { git = "https://github.com/amejia1/vulkano.git", branch = "master" }
 parking_lot = "0.12"
 
 [build-dependencies]

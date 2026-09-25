@@ -4,8 +4,9 @@ use crate::kernel::{KernelName, Kernels, GEMV_T_TILE_N};
 use crate::source::Source;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
-use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
+
 /// Records a `gemv_f32` dispatch: `a` has `k` elements, `w` is the
 /// row-major `(k, n)` weight, `output` has `n` elements.
 pub fn call_gemv_f32(
@@ -18,16 +19,34 @@ pub fn call_gemv_f32(
     n: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::Gemv, KernelName::GemvF32)?;
+    let a_info = DescriptorBufferInfo {
+        buffer: Some(a.buffer()),
+        offset: a.offset(),
+        range: Some(a.size()),
+        ..Default::default()
+    };
+    let output_info = DescriptorBufferInfo {
+        buffer: Some(output.buffer()),
+        offset: output.offset(),
+        range: Some(output.size()),
+        ..Default::default()
+    };
+    let w_info = DescriptorBufferInfo {
+        buffer: Some(w.buffer()),
+        offset: w.offset(),
+        range: Some(w.size()),
+        ..Default::default()
+    };
     let writes = vec![
-        WriteDescriptorSet::buffer(0, a.clone()),
-        WriteDescriptorSet::buffer(1, w.clone()),
-        WriteDescriptorSet::buffer(2, output.clone()),
+        WriteDescriptorSet::buffer(0, &a_info),
+        WriteDescriptorSet::buffer(1, &w_info),
+        WriteDescriptorSet::buffer(2, &output_info),
     ];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        writes,
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
@@ -55,16 +74,34 @@ pub fn call_gemv_t_f32(
     w_stride: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::GemvT, KernelName::GemvTF32)?;
+    let a_info = DescriptorBufferInfo {
+        buffer: Some(a.buffer()),
+        offset: a.offset(),
+        range: Some(a.size()),
+        ..Default::default()
+    };
+    let output_info = DescriptorBufferInfo {
+        buffer: Some(output.buffer()),
+        offset: output.offset(),
+        range: Some(output.size()),
+        ..Default::default()
+    };
+    let w_info = DescriptorBufferInfo {
+        buffer: Some(w.buffer()),
+        offset: w.offset(),
+        range: Some(w.size()),
+        ..Default::default()
+    };
     let writes = vec![
-        WriteDescriptorSet::buffer(0, a.clone()),
-        WriteDescriptorSet::buffer(1, w.clone()),
-        WriteDescriptorSet::buffer(2, output.clone()),
+        WriteDescriptorSet::buffer(0, &a_info),
+        WriteDescriptorSet::buffer(1, &w_info),
+        WriteDescriptorSet::buffer(2, &output_info),
     ];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        writes,
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())

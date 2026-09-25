@@ -4,7 +4,7 @@ use crate::kernel::{KernelName, Kernels};
 use crate::source::Source;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
-use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
 /// Records a `rope_f32` dispatch over `(b, h, t, d)`; `cos`/`sin` have
 /// `d / 2` elements per (batch,) position and `unbatched` says whether the
@@ -23,17 +23,41 @@ pub fn call_rope_f32(
     unbatched: bool,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::Rope, KernelName::RopeF32)?;
+        let cos_info = DescriptorBufferInfo {
+        buffer: Some(cos.buffer()),
+        offset: cos.offset(),
+        range: Some(cos.size()),
+        ..Default::default()
+    };
+    let input_info = DescriptorBufferInfo {
+        buffer: Some(input.buffer()),
+        offset: input.offset(),
+        range: Some(input.size()),
+        ..Default::default()
+    };
+    let output_info = DescriptorBufferInfo {
+        buffer: Some(output.buffer()),
+        offset: output.offset(),
+        range: Some(output.size()),
+        ..Default::default()
+    };
+    let sin_info = DescriptorBufferInfo {
+        buffer: Some(sin.buffer()),
+        offset: sin.offset(),
+        range: Some(sin.size()),
+        ..Default::default()
+    };
     let writes = vec![
-        WriteDescriptorSet::buffer(0, input.clone()),
-        WriteDescriptorSet::buffer(1, cos.clone()),
-        WriteDescriptorSet::buffer(2, sin.clone()),
-        WriteDescriptorSet::buffer(3, output.clone()),
+        WriteDescriptorSet::buffer(0, &input_info),
+        WriteDescriptorSet::buffer(1, &cos_info),
+        WriteDescriptorSet::buffer(2, &sin_info),
+        WriteDescriptorSet::buffer(3, &output_info),
     ];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        writes,
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())

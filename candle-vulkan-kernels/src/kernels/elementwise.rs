@@ -2,7 +2,7 @@
 
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
-use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
 
 use crate::err::VulkanKernelError;
@@ -41,16 +41,34 @@ pub fn call_elem_binary_f32(
         *slot = *d as u32;
     }
     let entry = kernels.load_entry(Source::Elementwise, name)?;
+    let input_info = DescriptorBufferInfo {
+        buffer: Some(input.buffer()),
+        offset: input.offset(),
+        range: Some(input.size()),
+        ..Default::default()
+    };
+    let output_info = DescriptorBufferInfo {
+        buffer: Some(output.buffer()),
+        offset: output.offset(),
+        range: Some(output.size()),
+        ..Default::default()
+    };
+    let rhs_info = DescriptorBufferInfo {
+        buffer: Some(rhs.buffer()),
+        offset: rhs.offset(),
+        range: Some(rhs.size()),
+        ..Default::default()
+    };
     let writes = vec![
-        WriteDescriptorSet::buffer(0, input.clone()),
-        WriteDescriptorSet::buffer(1, rhs.clone()),
-        WriteDescriptorSet::buffer(2, output.clone()),
+        WriteDescriptorSet::buffer(0, &input_info),
+        WriteDescriptorSet::buffer(1, &rhs_info),
+        WriteDescriptorSet::buffer(2, &output_info),
     ];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        writes,
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
 
@@ -93,18 +111,30 @@ pub fn call_elem_unary_f32(
 ) -> Result<(), VulkanKernelError> {
     let total = input.len();
     let entry = kernels.load_entry(Source::Elementwise, name)?;
+    let input_info = DescriptorBufferInfo {
+        buffer: Some(input.buffer()),
+        offset: input.offset(),
+        range: Some(input.size()),
+        ..Default::default()
+    };
+    let output_info = DescriptorBufferInfo {
+        buffer: Some(output.buffer()),
+        offset: output.offset(),
+        range: Some(output.size()),
+        ..Default::default()
+    };
     let writes = vec![
-        WriteDescriptorSet::buffer(0, input.clone()),
+        WriteDescriptorSet::buffer(0, &input_info),
         // The shader module is shared between the unary and binary entry
         // points: `out_buf` is binding 2, `rhs_buf` (binding 1) is unused
         // by the unary ops and left unwritten.
-        WriteDescriptorSet::buffer(2, output.clone()),
+        WriteDescriptorSet::buffer(2, &output_info),
     ];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        writes,
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
 

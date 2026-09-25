@@ -3,7 +3,7 @@
 
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
-use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
 
 use crate::err::VulkanKernelError;
@@ -46,15 +46,27 @@ pub fn call_copy_f32(
     let dd = pack4(dst_strides);
 
     let entry = kernels.load_entry(Source::Copy, KernelName::CopyF32)?;
+        let dst_info = DescriptorBufferInfo {
+        buffer: Some(dst.buffer()),
+        offset: dst.offset(),
+        range: Some(dst.size()),
+        ..Default::default()
+    };
+    let src_info = DescriptorBufferInfo {
+        buffer: Some(src.buffer()),
+        offset: src.offset(),
+        range: Some(src.size()),
+        ..Default::default()
+    };
     let writes = vec![
-        WriteDescriptorSet::buffer(0, src.clone()),
-        WriteDescriptorSet::buffer(1, dst.clone()),
+        WriteDescriptorSet::buffer(0, &src_info),
+        WriteDescriptorSet::buffer(1, &dst_info),
     ];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        writes,
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
 

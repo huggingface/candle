@@ -1,7 +1,7 @@
 //! Shared dispatch for single-output-buffer test fill kernels.
 use vulkano::buffer::{BufferContents, Subbuffer};
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
-use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
 
 use crate::err::VulkanKernelError;
@@ -20,11 +20,18 @@ pub fn dispatch_single_buffer<T: BufferContents>(
     total: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;
+    let out_info = DescriptorBufferInfo {
+        buffer: Some(out.buffer()),
+        offset: out.offset(),
+        range: Some(out.size()),
+        ..Default::default()
+    };
+    let writes = [WriteDescriptorSet::buffer(0, &out_info)];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        vec![WriteDescriptorSet::buffer(0, out.clone())],
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| match e {
         vulkano::Validated::Error(e) => VulkanKernelError::DescriptorSet(e.to_string()),

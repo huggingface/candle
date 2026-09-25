@@ -2,7 +2,7 @@
 
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
-use vulkano::descriptor_set::{DescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
 
 use crate::err::VulkanKernelError;
@@ -23,16 +23,34 @@ pub fn call_gather_f32(
     dim: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::Gather, KernelName::GatherF32)?;
+        let emb_info = DescriptorBufferInfo {
+        buffer: Some(emb.buffer()),
+        offset: emb.offset(),
+        range: Some(emb.size()),
+        ..Default::default()
+    };
+    let ids_info = DescriptorBufferInfo {
+        buffer: Some(ids.buffer()),
+        offset: ids.offset(),
+        range: Some(ids.size()),
+        ..Default::default()
+    };
+    let output_info = DescriptorBufferInfo {
+        buffer: Some(output.buffer()),
+        offset: output.offset(),
+        range: Some(output.size()),
+        ..Default::default()
+    };
     let writes = vec![
-        WriteDescriptorSet::buffer(0, ids.clone()),
-        WriteDescriptorSet::buffer(1, emb.clone()),
-        WriteDescriptorSet::buffer(2, output.clone()),
+        WriteDescriptorSet::buffer(0, &ids_info),
+        WriteDescriptorSet::buffer(1, &emb_info),
+        WriteDescriptorSet::buffer(2, &output_info),
     ];
     let set = DescriptorSet::new(
-        kernels.dss_alloc().clone(),
-        entry.set_layout.clone(),
-        writes,
-        Vec::new(),
+        kernels.dss_alloc(),
+        &entry.set_layout,
+        &writes,
+        &[],
     )
     .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
 
