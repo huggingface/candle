@@ -277,3 +277,122 @@ fn interleaved_kv_decode() -> Result<()> {
     let out = out.unsqueeze(0)?;
     assert_close(&out, &expected, 1e-5, "interleaved_kv_decode")
 }
+
+#[test]
+fn f16kv_headmajor_prefill() -> Result<()> {
+    use candle_nn::attention::cpu_flash::causal::causal_prefill_f16kv_headmajor;
+    use half::f16;
+
+    let (h_q, h_kv, d, s) = (8, 2, 16, 200);
+    let scale = 1.0 / (d as f32).sqrt();
+    let dev = &Device::Cpu;
+
+    let q = Tensor::randn(0f32, 1f32, (1, h_q, s, d), dev)?;
+    let k = Tensor::randn(0f32, 1f32, (1, h_kv, s, d), dev)?;
+    let v = Tensor::randn(0f32, 1f32, (1, h_kv, s, d), dev)?;
+
+    // Reference on the f16-rounded K/V so we measure kernel error, not storage error.
+    let k_h = k
+        .to_dtype(candle::DType::F16)?
+        .to_dtype(candle::DType::F32)?;
+    let v_h = v
+        .to_dtype(candle::DType::F16)?
+        .to_dtype(candle::DType::F32)?;
+    let reps = h_q / h_kv;
+    let k_exp = k_h
+        .reshape((1, h_kv, 1, s, d))?
+        .broadcast_as((1, h_kv, reps, s, d))?
+        .reshape((1, h_q, s, d))?;
+    let v_exp = v_h
+        .reshape((1, h_kv, 1, s, d))?
+        .broadcast_as((1, h_kv, reps, s, d))?
+        .reshape((1, h_q, s, d))?;
+    let expected = reference_causal_sdpa(&q, &k_exp, &v_exp, scale)?;
+
+    // Pack K/V into the head-major interleaved f16 layout: [head][pos][K(d), V(d)].
+    let k_v: Vec<f32> = k.flatten_all()?.to_vec1()?; // (h_kv, s, d)
+    let v_v: Vec<f32> = v.flatten_all()?.to_vec1()?;
+    let head_stride = s * 2 * d;
+    let mut kv = vec![f16::ZERO; h_kv * head_stride];
+    for h in 0..h_kv {
+        for pos in 0..s {
+            for t in 0..d {
+                kv[h * head_stride + pos * 2 * d + t] = f16::from_f32(k_v[h * s * d + pos * d + t]);
+                kv[h * head_stride + pos * 2 * d + d + t] =
+                    f16::from_f32(v_v[h * s * d + pos * d + t]);
+            }
+        }
+    }
+
+    // Q as (s, h_q, d)
+    let q_seq: Vec<f32> = q
+        .squeeze(0)?
+        .transpose(0, 1)?
+        .contiguous()?
+        .flatten_all()?
+        .to_vec1()?;
+
+    let out =
+        causal_prefill_f16kv_headmajor(&q_seq, &kv, head_stride, s, h_q, h_kv, d, s, scale, 0)?
+            .unsqueeze(0)?; // (1, h_q, s, d) to match reference
+
+    assert_close(&out, &expected, 2e-2, "f16kv_headmajor_prefill")
+}
+
+#[test]
+fn interleaved_kv_decode_f16() -> Result<()> {
+    use candle_nn::attention::cpu_flash::causal::causal_decode_f16kv_interleaved;
+
+    let (h_q, h_kv, d, kv_len) = (8, 2, 16, 20);
+    let scale = 1.0 / (d as f32).sqrt();
+    let dev = &Device::Cpu;
+
+    let q = Tensor::randn(0f32, 1f32, (1, h_q, 1, d), dev)?;
+    let k = Tensor::randn(0f32, 1f32, (1, h_kv, kv_len, d), dev)?;
+    let v = Tensor::randn(0f32, 1f32, (1, h_kv, kv_len, d), dev)?;
+
+    // Reference with GQA expansion
+    let reps = h_q / h_kv;
+    let k_exp = k
+        .reshape((1, h_kv, 1, kv_len, d))?
+        .broadcast_as((1, h_kv, reps, kv_len, d))?
+        .reshape((1, h_q, kv_len, d))?;
+    let v_exp = v
+        .reshape((1, h_kv, 1, kv_len, d))?
+        .broadcast_as((1, h_kv, reps, kv_len, d))?
+        .reshape((1, h_q, kv_len, d))?;
+    let expected = reference_sdpa(&q, &k_exp, &v_exp, scale)?;
+
+    // Build head-major interleaved KV: (h_kv, kv_len, 2*d).
+    let k_seq = k.squeeze(0)?.contiguous()?;
+    let v_seq = v.squeeze(0)?.contiguous()?;
+    let kv = Tensor::cat(&[&k_seq, &v_seq], 2)?.contiguous()?; // (h_kv, kv_len, 2*d)
+
+    let kv_data: Vec<half::f16> = kv
+        .flatten_all()?
+        .to_vec1::<f32>()?
+        .into_iter()
+        .map(half::f16::from_f32)
+        .collect();
+    let q_flat: Vec<f32> = q
+        .squeeze(0)?
+        .squeeze(1)?
+        .contiguous()?
+        .flatten_all()?
+        .to_vec1()?;
+
+    let out = causal_decode_f16kv_interleaved(
+        &q_flat,
+        &kv_data,
+        kv_len * 2 * d,
+        h_q,
+        h_kv,
+        d,
+        kv_len,
+        scale,
+    )?;
+
+    let out = out.unsqueeze(0)?;
+    // f16 KV storage rounds K/V to ~1e-3 relative; the reference uses f32 throughout.
+    assert_close(&out, &expected, 2e-2, "interleaved_kv_decode")
+}
