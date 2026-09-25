@@ -516,3 +516,13 @@ fn test_vulkan_device_set_seed() {
     device.set_seed(0xDEADBEEF).unwrap();
     assert_eq!(device.seed_atomic().load(std::sync::atomic::Ordering::Relaxed), 0xDEADBEEF);
 }
+
+/// `get_current_seed` must return the seed stored on the device.
+#[test]
+fn test_vulkan_device_get_current_seed() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    device.set_seed(42).unwrap();
+    assert_eq!(device.get_current_seed().unwrap(), 42);
+}

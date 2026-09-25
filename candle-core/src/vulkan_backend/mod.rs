@@ -82,7 +82,7 @@ impl BackendDevice for VulkanDevice {
     }
 
     fn get_current_seed(&self) -> Result<u64> {
-        todo!()
+        Ok(self.seed_atomic().load(std::sync::atomic::Ordering::Relaxed))
     }
 
     fn synchronize(&self) -> Result<()> {
