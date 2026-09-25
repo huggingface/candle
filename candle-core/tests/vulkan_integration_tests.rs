@@ -1396,3 +1396,40 @@ fn test_vulkan_conv_transpose1d() {
     }
     tracing::debug!("Vulkan device {gpu_id} conv_transpose1d OK");
 }
+
+/// `conv_transpose2d` vs the CPU backend.
+#[test]
+fn test_vulkan_conv_transpose2d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let b = 2usize;
+    let c_in = 2usize;
+    let i_h = 5usize;
+    let i_w = 6usize;
+    let c_out = 3usize;
+    let k_h = 3usize;
+    let k_w = 3usize;
+    let in_v: Vec<f32> = (0..b * c_in * i_h * i_w).map(|i| (i as f32) * 0.1 - 4.0).collect();
+    let w_v: Vec<f32> = (0..c_in * c_out * k_h * k_w).map(|i| (i as f32) * 0.05 - 0.7).collect();
+    let cases: Vec<(usize, usize, usize, usize)> = vec![(0, 0, 1, 1), (1, 0, 2, 1), (0, 1, 2, 1)];
+    for (padding, out_padding, stride, dilation) in cases {
+        let gin = candle_core::Tensor::new(in_v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((b, c_in, i_h, i_w))).unwrap();
+        let gk = candle_core::Tensor::new(w_v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((c_in, c_out, k_h, k_w))).unwrap();
+        let cin = candle_core::Tensor::new(in_v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((b, c_in, i_h, i_w))).unwrap();
+        let ck = candle_core::Tensor::new(w_v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((c_in, c_out, k_h, k_w))).unwrap();
+        let gg = gin.conv_transpose2d(&gk, padding, out_padding, stride, dilation).unwrap();
+        let cc = cin.conv_transpose2d(&ck, padding, out_padding, stride, dilation).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+                "convtr2d p={padding} op={out_padding} s={stride} d={dilation} at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} conv_transpose2d OK");
+}
