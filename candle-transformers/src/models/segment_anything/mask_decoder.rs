@@ -216,7 +216,7 @@ impl MaskDecoder {
             .gelu()?;
         let mut hyper_in_list = Vec::with_capacity(self.num_mask_tokens);
         for (i, mlp) in self.output_hypernetworks_mlps.iter().enumerate() {
-            let h = mlp.forward(&mask_tokens_out.i((.., i))?)?;
+            let h = mlp.forward(&mask_tokens_out.i((.., i))?.contiguous()?)?;
             hyper_in_list.push(h)
         }
         let hyper_in = Tensor::stack(hyper_in_list.as_slice(), 1)?.contiguous()?;
@@ -225,7 +225,9 @@ impl MaskDecoder {
         let masks = masks.reshape((b, (), h, w))?;
 
         // Generate mask quality predictions.
-        let iou_pred = self.iou_prediction_head.forward(&iou_token_out)?;
+        let iou_pred = self
+            .iou_prediction_head
+            .forward(&iou_token_out.contiguous()?)?;
         Ok((masks, iou_pred))
     }
 }
