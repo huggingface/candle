@@ -1571,7 +1571,7 @@ test_device!(
 );
 
 // Repacked aarch64 kernels must agree with the dequantized reference across the m tiers
-// that select different paths: 1 (gemv), 4/512 (tiled), 23 (generic fallback).
+// that select different paths: 1 (gemv), 4/512 (tiled), 3 (per-row gemv), 23 (tiled + gemv tail).
 #[test]
 fn qmatmul_repack_matches_reference_across_m() -> Result<()> {
     let dev = Device::Cpu;
@@ -1586,7 +1586,7 @@ fn qmatmul_repack_matches_reference_across_m() -> Result<()> {
         let qtensor = quantized::QTensor::quantize(&weight, dtype)?;
         let wref = qtensor.dequantize(&dev)?;
         let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
-        for m in [1usize, 4, 8, 23, 512] {
+        for m in [1usize, 3, 4, 8, 23, 512] {
             let lhs = Tensor::rand(-1f32, 1f32, (m, k), &dev)?;
             let got = matmul.forward(&lhs)?;
             let want = lhs.matmul(&wref.t()?)?;

@@ -559,7 +559,9 @@ fn matmul_q4_0_x4_gemv(
         let dst_ptr = dst.as_mut_ptr() as usize;
         let x4_block_bytes = std::mem::size_of::<BlockQ4_0x4>();
 
-        pool.execute_chunked(n_groups, |range| {
+        // equal-sized gemv units: a static split skips the shared cursor, which costs
+        // several us per small decode matmul
+        pool.execute_static(n_groups, |range| {
             let lhs_row =
                 unsafe { std::slice::from_raw_parts(lhs_ptr as *const BlockQ8_0, k_in_blocks) };
             let dst_ptr = dst_ptr as *mut f32;
@@ -1838,7 +1840,9 @@ fn matmul_q5k_x8_gemv(
         let dst_ptr = dst.as_mut_ptr() as usize;
         let x8_block_bytes = std::mem::size_of::<BlockQ5Kx8>();
 
-        pool.execute_chunked(n_groups, |range| {
+        // equal-sized gemv units: a static split skips the shared cursor, which costs
+        // several us per small decode matmul
+        pool.execute_static(n_groups, |range| {
             let lhs_row =
                 unsafe { std::slice::from_raw_parts(lhs_ptr as *const BlockQ8K, k_in_blocks) };
             let dst_ptr = dst_ptr as *mut f32;
@@ -2623,7 +2627,9 @@ fn matmul_q6k_x8_gemv(
         let dst_ptr = dst.as_mut_ptr() as usize;
         let x8_block_bytes = std::mem::size_of::<BlockQ6Kx8>();
 
-        pool.execute_chunked(n_groups, |range| {
+        // equal-sized gemv units: a static split skips the shared cursor, which costs
+        // several us per small decode matmul
+        pool.execute_static(n_groups, |range| {
             let lhs_row =
                 unsafe { std::slice::from_raw_parts(lhs_ptr as *const BlockQ8K, k_in_blocks) };
             let dst_ptr = dst_ptr as *mut f32;
@@ -2928,7 +2934,9 @@ fn matmul_q8_0_x4_gemv(
         let dst_ptr = dst.as_mut_ptr() as usize;
         let x4_block_bytes = std::mem::size_of::<BlockQ8_0x4>();
 
-        pool.execute_chunked(n_groups, |range| {
+        // equal-sized gemv units: a static split skips the shared cursor, which costs
+        // several us per small decode matmul
+        pool.execute_static(n_groups, |range| {
             let lhs_row =
                 unsafe { std::slice::from_raw_parts(lhs_ptr as *const BlockQ8_0, k_in_blocks) };
             let dst_ptr = dst_ptr as *mut f32;
