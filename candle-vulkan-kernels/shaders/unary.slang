@@ -149,3 +149,15 @@ void main_pow(uint3 dispatchThreadID : SV_DispatchThreadID)
         g_Out[i] = pow(g_In[i], g_Params[1]);
     }
 }
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_elu(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint i = dispatchThreadID.x;
+    if (i < uint(g_Params[0]))
+    {
+        float x = g_In[i];
+        float alpha = g_Params[1];
+        g_Out[i] = x >= 0.0 ? x : alpha * (exp(x) - 1.0);
+    }
+}

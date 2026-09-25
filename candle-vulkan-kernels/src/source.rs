@@ -132,6 +132,7 @@ impl Source {
             | KernelName::UnaryRoundF32
             | KernelName::UnarySignF32
             | KernelName::UnaryPowF32
+            | KernelName::UnaryEluF32
             | KernelName::BinaryMaximumF32
             | KernelName::BinaryMinimumF32
             | KernelName::CmpEqF32

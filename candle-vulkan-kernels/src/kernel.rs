@@ -66,6 +66,7 @@ pub enum KernelName {
     UnaryRoundF32,
     UnarySignF32,
     UnaryPowF32,
+    UnaryEluF32,
     BinaryMaximumF32,
     BinaryMinimumF32,
     CmpEqF32,
@@ -138,6 +139,7 @@ impl AsRef<str> for KernelName {
             Self::UnaryRoundF32 => "main_round",
             Self::UnarySignF32 => "main_sign",
             Self::UnaryPowF32 => "main_pow",
+            Self::UnaryEluF32 => "main_elu",
             Self::BinaryMaximumF32 => "main_maximum",
             Self::BinaryMinimumF32 => "main_minimum",
             Self::CmpEqF32 => "main_eq",
@@ -349,7 +351,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::UnaryCeilF32
         | KernelName::UnaryRoundF32
         | KernelName::UnarySignF32
-        | KernelName::UnaryPowF32 => 3,
+        | KernelName::UnaryPowF32
+        | KernelName::UnaryEluF32 => 3,
         KernelName::BinaryMaximumF32
         | KernelName::BinaryMinimumF32
         | KernelName::CmpEqF32

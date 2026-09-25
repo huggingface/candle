@@ -912,3 +912,27 @@ fn test_vulkan_powf() {
     }
     tracing::debug!("Vulkan device {gpu_id} powf OK");
 }
+
+/// `elu` (x >= 0 ? x : alpha * (exp(x) - 1)) vs the CPU backend.
+#[test]
+fn test_vulkan_elu() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..64).map(|i| (i as f32) * 0.2 - 6.0).collect();
+    for alpha in [1.0f64, 0.5f64] {
+        let g = candle_core::Tensor::new(v.as_slice(), &dev).unwrap().elu(alpha).unwrap();
+        let c = candle_core::Tensor::new(v.as_slice(), &cpu).unwrap().elu(alpha).unwrap();
+        let gv = g.to_vec1::<f32>().unwrap();
+        let cv = c.to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-5 * (1.0 + b.abs()),
+                "elu alpha={alpha}: mismatch at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} elu OK");
+}
