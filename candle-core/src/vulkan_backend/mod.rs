@@ -30,6 +30,32 @@ impl From<String> for VulkanError {
         VulkanError::Message(e)
     }
 }
+/// Uploads `bytes` (`n` elements of `dtype`) to a new device storage via a
+/// host-visible staging buffer and a deferred device copy.
+fn upload_bytes(device: &VulkanDevice, bytes: &[u8], n: usize, dtype: DType) -> Result<VulkanStorage> {
+    let staging = Buffer::from_iter(
+        device.mem_alloc(),
+        &BufferCreateInfo {
+            usage: BufferUsage::TRANSFER_SRC,
+            ..Default::default()
+        },
+        &AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+            ..Default::default()
+        },
+        bytes.iter().copied(),
+    )
+    .map_err(|e| Error::Vulkan(format!("upload staging: {e:?}").into()))?;
+    let storage = VulkanStorage::new(device, n, dtype)?;
+    let dst = storage.buffer().as_u8();
+    device.execute(move |cbb| {
+        cbb.copy_buffer(CopyBufferInfo::new(staging, dst))
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })?;
+    Ok(storage)
+}
 
 impl BackendDevice for VulkanDevice {
     type Storage = VulkanStorage;
@@ -58,38 +84,45 @@ impl BackendDevice for VulkanDevice {
 
     fn storage_from_slice<T: crate::WithDType>(&self, data: &[T]) -> Result<Self::Storage> {
         let n = data.len();
-        let dtype = T::DTYPE;
         // Upload through a byte view so every element type works with one
         // code path.
         let bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(data.as_ptr() as *const u8, n * std::mem::size_of::<T>())
         };
-        let staging = Buffer::from_iter(
-            self.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_SRC,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            bytes.iter().copied(),
-        )
-        .map_err(|e| Error::Vulkan(format!("storage_from_slice staging: {e:?}").into()))?;
-        let storage = VulkanStorage::new(self, n, dtype)?;
-        let dst = storage.buffer().as_u8();
-        self.execute(move |cbb| {
-            cbb.copy_buffer(CopyBufferInfo::new(staging, dst))
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })?;
-        Ok(storage)
+        upload_bytes(self, bytes, n, T::DTYPE)
     }
 
-    fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
-        todo!()
+    fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
+        match storage {
+            CpuStorage::U8(d) => self.storage_from_slice(d),
+            CpuStorage::U32(d) => self.storage_from_slice(d),
+            CpuStorage::I16(d) => self.storage_from_slice(d),
+            CpuStorage::I32(d) => self.storage_from_slice(d),
+            CpuStorage::I64(d) => self.storage_from_slice(d),
+            CpuStorage::BF16(d) => self.storage_from_slice(d),
+            CpuStorage::F16(d) => self.storage_from_slice(d),
+            CpuStorage::F32(d) => self.storage_from_slice(d),
+            CpuStorage::F64(d) => self.storage_from_slice(d),
+            CpuStorage::F8E4M3(d) => self.storage_from_slice(d),
+            // Byte-width dummy types have no `WithDType` impl: upload the
+            // raw bytes and tag the storage with the target dtype.
+            CpuStorage::F6E2M3(d) => {
+                let bytes: Vec<u8> = d.iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, d.len(), DType::F6E2M3)
+            }
+            CpuStorage::F6E3M2(d) => {
+                let bytes: Vec<u8> = d.iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, d.len(), DType::F6E3M2)
+            }
+            CpuStorage::F4(d) => {
+                let bytes: Vec<u8> = d.iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, d.len(), DType::F4)
+            }
+            CpuStorage::F8E8M0(d) => {
+                let bytes: Vec<u8> = d.iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, d.len(), DType::F8E8M0)
+            }
+        }
     }
 
     fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage> {
