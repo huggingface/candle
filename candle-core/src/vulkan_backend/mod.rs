@@ -1684,8 +1684,135 @@ impl BackendStorage for VulkanStorage {
         todo!()
     }
 
-    fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()> {
-        todo!()
+    fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
+        if self.dtype != DType::F32 || dst.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "copy_strided_src: only F32 supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let src_buf = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!("dtype checked above"),
+        };
+        let dst_buf = match &dst.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!("dtype checked above"),
+        };
+        match src_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => {
+                if len == 0 {
+                    return Ok(());
+                }
+                let src_sub = src_buf.slice(start_offset as u64..(start_offset + len) as u64);
+                let dst_sub = dst_buf
+                    .slice(dst_offset as u64..(dst_offset + len) as u64);
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            crate::StridedBlocks::UniformBlocks {
+                start_offset,
+                block_len,
+                count,
+                src_stride,
+            } => {
+                let total = count * block_len;
+                if total == 0 {
+                    return Ok(());
+                }
+                let kernels = self.device.kernels();
+                let params_buf = Buffer::from_iter(
+                    self.device.mem_alloc(),
+                    &BufferCreateInfo {
+                        usage: BufferUsage::STORAGE_BUFFER,
+                        ..Default::default()
+                    },
+                    &AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                            | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                        ..Default::default()
+                    },
+                    vec![
+                        count as f32,
+                        block_len as f32,
+                        src_stride as f32,
+                        block_len as f32,
+                        start_offset as f32,
+                        dst_offset as f32,
+                    ],
+                )
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                let params: Subbuffer<[f32]> = params_buf;
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang_f32(
+                        cbb,
+                        &kernels,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            crate::StridedBlocks::MultipleBlocks {
+                block_start_index,
+                block_len,
+            } => {
+                let n = block_start_index.len();
+                let total = n * block_len;
+                if total == 0 {
+                    return Ok(());
+                }
+                let indices: Vec<u32> = block_start_index.map(|s| s as u32).collect();
+                let idx_buf = Buffer::from_iter(
+                    self.device.mem_alloc(),
+                    &BufferCreateInfo {
+                        usage: BufferUsage::STORAGE_BUFFER,
+                        ..Default::default()
+                    },
+                    &AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                            | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                        ..Default::default()
+                    },
+                    indices,
+                )
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                let idx: Subbuffer<[u32]> = idx_buf;
+                let kernels = self.device.kernels();
+                let params_buf = Buffer::from_iter(
+                    self.device.mem_alloc(),
+                    &BufferCreateInfo {
+                        usage: BufferUsage::STORAGE_BUFFER,
+                        ..Default::default()
+                    },
+                    &AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                            | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                        ..Default::default()
+                    },
+                    vec![total as f32, block_len as f32],
+                )
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                let params: Subbuffer<[f32]> = params_buf;
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_gather_idx_slang_f32(
+                        cbb,
+                        &kernels,
+                        &src_buf,
+                        &dst_buf,
+                        &idx,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+        }
+        Ok(())
     }
 
     fn copy2d(

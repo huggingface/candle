@@ -76,6 +76,8 @@ pub enum KernelName {
     CmpGtF32,
     CmpGeF32,
     WhereF32,
+    Copy2dF32,
+    GatherIdxF32,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -149,6 +151,8 @@ impl AsRef<str> for KernelName {
             Self::CmpGtF32 => "main_gt",
             Self::CmpGeF32 => "main_ge",
             Self::WhereF32 => "main",
+            Self::Copy2dF32 => "main",
+            Self::GatherIdxF32 => "main",
             Self::TestFillF16 => "main",
             Self::TestFillU8
             | Self::TestFillI16
@@ -362,6 +366,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::CmpGtF32
         | KernelName::CmpGeF32 => 4,
         KernelName::WhereF32 => 5,
+        KernelName::Copy2dF32 => 3,
+        KernelName::GatherIdxF32 => 4,
         KernelName::TestFillF16 => 1,
         KernelName::TestFillU8
         | KernelName::TestFillI16

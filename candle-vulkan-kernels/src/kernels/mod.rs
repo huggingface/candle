@@ -31,6 +31,8 @@ pub mod test_fill_u8;
 pub mod binary_slang;
 pub mod cmp_slang;
 pub mod where_slang;
+pub mod copy2d_slang;
+pub mod gather_idx_slang;
 pub mod unary_slang;
 
 pub use affine::call_affine_f32;
@@ -63,4 +65,6 @@ pub use test_fill_u8::call_test_fill_u8;
 pub use binary_slang::call_binary_slang_f32;
 pub use cmp_slang::call_cmp_slang_f32;
 pub use where_slang::call_where_slang_f32;
+pub use copy2d_slang::call_copy2d_slang_f32;
+pub use gather_idx_slang::call_gather_idx_slang_f32;
 pub use unary_slang::call_unary_slang_f32;

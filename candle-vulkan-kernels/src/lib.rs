@@ -17,5 +17,7 @@ pub use kernels::{
     call_test_fill_i16, call_test_fill_i32, call_test_fill_i64, call_test_fill_u32,
     call_test_fill_u8, call_binary_slang_f32, call_cmp_slang_f32, call_unary_slang_f32,
     call_where_slang_f32,
+    call_copy2d_slang_f32,
+    call_gather_idx_slang_f32,
 };
 pub use source::Source;

@@ -979,3 +979,34 @@ fn test_vulkan_to_dtype() {
     }
     tracing::debug!("Vulkan device {gpu_id} to_dtype OK");
 }
+
+/// `copy_strided_src` via `slice_scatter0` (contiguous src at a nonzero dst
+/// offset) and via `contiguous()` on a transposed view.
+#[test]
+fn test_vulkan_copy_strided_src() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let base_v: Vec<f32> = (0..32).map(|i| i as f32).collect();
+    let src_v: Vec<f32> = (0..16).map(|i| 100.0 + i as f32).collect();
+    let base = candle_core::Tensor::new(base_v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((4, 8))).unwrap();
+    let base_c = candle_core::Tensor::new(base_v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((4, 8))).unwrap();
+    let src = candle_core::Tensor::new(src_v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((2, 8))).unwrap();
+    let src_c = candle_core::Tensor::new(src_v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((2, 8))).unwrap();
+    let g = base.clone().slice_scatter0(&src, 1).unwrap();
+    let c = base_c.clone().slice_scatter0(&src_c, 1).unwrap();
+    let gv: Vec<f32> = g.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    let cv: Vec<f32> = c.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    assert_eq!(gv, cv);
+
+    // Transposed view -> contiguous (strided source).
+    let t_g = base.clone().t().unwrap();
+    let t_c = base_c.clone().t().unwrap();
+    let cg = t_g.contiguous().unwrap();
+    let cc = t_c.contiguous().unwrap();
+    let gv: Vec<f32> = cg.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    let cv: Vec<f32> = cc.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    assert_eq!(gv, cv);
+    tracing::debug!("Vulkan device {gpu_id} copy_strided_src OK");
+}
