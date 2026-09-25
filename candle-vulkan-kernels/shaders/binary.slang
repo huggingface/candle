@@ -1,5 +1,4 @@
-// Broadcast binary ops not covered by the elementwise WGSL kernels
-// (maximum / minimum).
+// Broadcast f32 binary ops (add/sub/mul/div/maximum/minimum).
 //
 // Params layout: [0]=total, [1]=lhs_ndim, [2]=rhs_ndim,
 //                [3..7]=lhs dims, [7..11]=rhs dims.
@@ -52,5 +51,45 @@ void main_minimum(uint3 dispatchThreadID : SV_DispatchThreadID)
     if (idx < uint(g_Params[0]))
     {
         g_Out[idx] = min(g_In[idx], g_Rhs[rhs_offset(idx)]);
+    }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_add(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint idx = dispatchThreadID.x;
+    if (idx < uint(g_Params[0]))
+    {
+        g_Out[idx] = g_In[idx] + g_Rhs[rhs_offset(idx)];
+    }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_sub(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint idx = dispatchThreadID.x;
+    if (idx < uint(g_Params[0]))
+    {
+        g_Out[idx] = g_In[idx] - g_Rhs[rhs_offset(idx)];
+    }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_mul(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint idx = dispatchThreadID.x;
+    if (idx < uint(g_Params[0]))
+    {
+        g_Out[idx] = g_In[idx] * g_Rhs[rhs_offset(idx)];
+    }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_div(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint idx = dispatchThreadID.x;
+    if (idx < uint(g_Params[0]))
+    {
+        g_Out[idx] = g_In[idx] / g_Rhs[rhs_offset(idx)];
     }
 }

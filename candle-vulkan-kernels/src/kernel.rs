@@ -28,17 +28,6 @@ pub enum KernelName {
     ReduceMaxF32,
     GatherF32,
     CopyF32,
-    ElemAddF32,
-    ElemSubF32,
-    ElemMulF32,
-    ElemDivF32,
-    ElemSigmoidF32,
-    ElemSiluF32,
-    ElemExpF32,
-    ElemSqrtF32,
-    ElemSinF32,
-    ElemCosF32,
-    ElemNegF32,
     GemmF32,
     GemvTF32,
     RmsNormF32,
@@ -69,6 +58,16 @@ pub enum KernelName {
     UnaryEluF32,
     BinaryMaximumF32,
     BinaryMinimumF32,
+    BinaryAddF32,
+    BinarySubF32,
+    BinaryMulF32,
+    BinaryDivF32,
+    UnaryExpF32,
+    UnarySiluF32,
+    UnarySqrtF32,
+    UnarySinF32,
+    UnaryCosF32,
+    UnaryNegF32,
     CmpEqF32,
     CmpNeF32,
     CmpLtF32,
@@ -118,17 +117,6 @@ impl AsRef<str> for KernelName {
             Self::ReduceMaxF32 => "main_reduce_max",
             Self::GatherF32 => "main",
             Self::CopyF32 => "main",
-            Self::ElemAddF32 => "main_add",
-            Self::ElemSubF32 => "main_sub",
-            Self::ElemMulF32 => "main_mul",
-            Self::ElemDivF32 => "main_div",
-            Self::ElemSigmoidF32 => "main_sigmoid",
-            Self::ElemSiluF32 => "main_silu",
-            Self::ElemExpF32 => "main_exp",
-            Self::ElemSqrtF32 => "main_sqrt",
-            Self::ElemSinF32 => "main_sin",
-            Self::ElemCosF32 => "main_cos",
-            Self::ElemNegF32 => "main_neg",
             Self::GemmF32 => "main_gemm",
             Self::RmsNormF32 => "main",
             Self::SoftmaxLastDimF32 => "main",
@@ -159,6 +147,16 @@ impl AsRef<str> for KernelName {
             Self::UnaryEluF32 => "main_elu",
             Self::BinaryMaximumF32 => "main_maximum",
             Self::BinaryMinimumF32 => "main_minimum",
+            Self::BinaryAddF32 => "main_add",
+            Self::BinarySubF32 => "main_sub",
+            Self::BinaryMulF32 => "main_mul",
+            Self::BinaryDivF32 => "main_div",
+            Self::UnaryExpF32 => "main_exp",
+            Self::UnarySiluF32 => "main_silu",
+            Self::UnarySqrtF32 => "main_sqrt",
+            Self::UnarySinF32 => "main_sin",
+            Self::UnaryCosF32 => "main_cos",
+            Self::UnaryNegF32 => "main_neg",
             Self::CmpEqF32 => "main_eq",
             Self::CmpNeF32 => "main_ne",
             Self::CmpLtF32 => "main_lt",
@@ -347,17 +345,6 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::SoftmaxLastDimF32 => 2,
         KernelName::AffineF32
         | KernelName::GatherF32
-        | KernelName::ElemAddF32
-        | KernelName::ElemSubF32
-        | KernelName::ElemMulF32
-        | KernelName::ElemDivF32
-        | KernelName::ElemSigmoidF32
-        | KernelName::ElemSiluF32
-        | KernelName::ElemExpF32
-        | KernelName::ElemSqrtF32
-        | KernelName::ElemSinF32
-        | KernelName::ElemCosF32
-        | KernelName::ElemNegF32
         | KernelName::GemmF32
         | KernelName::RmsNormF32 => 3,
         KernelName::RopeF32 => 4,
@@ -384,9 +371,19 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::UnaryRoundF32
         | KernelName::UnarySignF32
         | KernelName::UnaryPowF32
-        | KernelName::UnaryEluF32 => 3,
+        | KernelName::UnaryEluF32
+        | KernelName::UnaryExpF32
+        | KernelName::UnarySiluF32
+        | KernelName::UnarySqrtF32
+        | KernelName::UnarySinF32
+        | KernelName::UnaryCosF32
+        | KernelName::UnaryNegF32 => 3,
         KernelName::BinaryMaximumF32
         | KernelName::BinaryMinimumF32
+        | KernelName::BinaryAddF32
+        | KernelName::BinarySubF32
+        | KernelName::BinaryMulF32
+        | KernelName::BinaryDivF32
         | KernelName::CmpEqF32
         | KernelName::CmpNeF32
         | KernelName::CmpLtF32

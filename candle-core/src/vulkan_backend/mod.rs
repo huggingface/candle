@@ -1598,25 +1598,6 @@ impl BackendStorage for VulkanStorage {
             return Ok(out);
         }
         let kernels = self.device.kernels();
-        // Existing WGSL kernels.
-        let wgsl: Option<KernelName> = match B::NAME {
-            "exp" => Some(KernelName::ElemExpF32),
-            "sin" => Some(KernelName::ElemSinF32),
-            "cos" => Some(KernelName::ElemCosF32),
-            "neg" => Some(KernelName::ElemNegF32),
-            "sqrt" => Some(KernelName::ElemSqrtF32),
-            "silu" => Some(KernelName::ElemSiluF32),
-            _ => None,
-        };
-        if let Some(name) = wgsl {
-            let input = input.clone();
-            let out_buf = out_buf.clone();
-            self.device.execute(move |cbb| {
-                candle_vulkan_kernels::call_elem_unary_f32(cbb, &kernels, name, &input, &out_buf)
-                    .map_err(|e| e.to_string())
-            })?;
-            return Ok(out);
-        }
         // Slang kernels (params: [0] = element count).
         let name = match B::NAME {
             "log" => KernelName::UnaryLogF32,
@@ -1632,6 +1613,12 @@ impl BackendStorage for VulkanStorage {
             "ceil" => KernelName::UnaryCeilF32,
             "round" => KernelName::UnaryRoundF32,
             "sign" => KernelName::UnarySignF32,
+            "exp" => KernelName::UnaryExpF32,
+            "silu" => KernelName::UnarySiluF32,
+            "sqrt" => KernelName::UnarySqrtF32,
+            "sin" => KernelName::UnarySinF32,
+            "cos" => KernelName::UnaryCosF32,
+            "neg" => KernelName::UnaryNegF32,
             _ => {
                 return Err(Error::Vulkan(
                     format!("unary: unsupported op {}", B::NAME).into(),
@@ -1715,30 +1702,14 @@ impl BackendStorage for VulkanStorage {
             .map(|(d, s)| if *s == 0 { 1 } else { *d })
             .collect();
         match B::NAME {
-            "add" | "sub" | "mul" | "div" => {
+            "add" | "sub" | "mul" | "div" | "maximum" | "minimum" => {
                 let name = match B::NAME {
-                    "add" => KernelName::ElemAddF32,
-                    "sub" => KernelName::ElemSubF32,
-                    "mul" => KernelName::ElemMulF32,
-                    "div" => KernelName::ElemDivF32,
-                    _ => unreachable!(),
-                };
-                let input = input.clone();
-                let rhs_buf = rhs_buf.clone();
-                let out_buf = out_buf.clone();
-                self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_elem_binary_f32(
-                        cbb, &kernels, name, &input, &rhs_buf, &out_buf, &lhs_dims, &rhs_dims,
-                    )
-                    .map_err(|e| e.to_string())
-                })?;
-                Ok(out)
-            }
-            "maximum" | "minimum" => {
-                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddF32,
+                    "sub" => KernelName::BinarySubF32,
+                    "mul" => KernelName::BinaryMulF32,
+                    "div" => KernelName::BinaryDivF32,
                     "maximum" => KernelName::BinaryMaximumF32,
-                    "minimum" => KernelName::BinaryMinimumF32,
-                    _ => unreachable!(),
+                    _ => KernelName::BinaryMinimumF32,
                 };
                 let mut params = [0.0f32; 11];
                 params[0] = len as f32;

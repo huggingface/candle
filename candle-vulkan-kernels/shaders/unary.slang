@@ -1,6 +1,4 @@
-// Unary ops not covered by the existing elementwise WGSL kernels.
-//
-// Each entry point maps `g_In[i] -> g_Out[i]` for `i < g_Params[0]`.
+// Unary f32 ops. Each entry point maps `g_In[i] -> g_Out[i]` for `i < g_Params[0]`.
 StructuredBuffer<float> g_In;
 RWStructuredBuffer<float> g_Out;
 StructuredBuffer<float> g_Params; // [0] = element count, [1] = powf exponent (main_pow only)
@@ -160,4 +158,50 @@ void main_elu(uint3 dispatchThreadID : SV_DispatchThreadID)
         float alpha = g_Params[1];
         g_Out[i] = x >= 0.0 ? x : alpha * (exp(x) - 1.0);
     }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_exp(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint idx = dispatchThreadID.x;
+    if (idx < uint(g_Params[0])) { g_Out[idx] = exp(g_In[idx]); }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_silu(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint idx = dispatchThreadID.x;
+    if (idx < uint(g_Params[0]))
+    {
+        float x = g_In[idx];
+        g_Out[idx] = x / (1.0 + exp(-x));
+    }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_sqrt(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint idx = dispatchThreadID.x;
+    if (idx < uint(g_Params[0])) { g_Out[idx] = sqrt(g_In[idx]); }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_sin(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint idx = dispatchThreadID.x;
+    if (idx < uint(g_Params[0])) { g_Out[idx] = sin(g_In[idx]); }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_cos(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint idx = dispatchThreadID.x;
+    if (idx < uint(g_Params[0])) { g_Out[idx] = cos(g_In[idx]); }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_neg(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint idx = dispatchThreadID.x;
+    if (idx < uint(g_Params[0])) { g_Out[idx] = -g_In[idx]; }
 }

@@ -3,7 +3,6 @@
 use crate::kernel::KernelName;
 
 const AFFINE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine.spv"));
-const ELEMENTWISE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/elementwise.spv"));
 const GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm.spv"));
 const GATHER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather.spv"));
 const COPY_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy.spv"));
@@ -53,7 +52,6 @@ const TEST_FILL_F8E8M0_SPV: &[u8] =
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     Affine,
-    Elementwise,
     Gemm,
     Gather,
     Copy,
@@ -101,17 +99,6 @@ impl Source {
         match name {
             KernelName::GatherF32 => 8,
             KernelName::CopyF32 => 64,
-            KernelName::ElemAddF32
-            | KernelName::ElemSubF32
-            | KernelName::ElemMulF32
-            | KernelName::ElemDivF32 => 44,
-            KernelName::ElemSigmoidF32
-            | KernelName::ElemSiluF32
-            | KernelName::ElemExpF32
-            | KernelName::ElemSqrtF32
-            | KernelName::ElemSinF32
-            | KernelName::ElemCosF32
-            | KernelName::ElemNegF32 => 44,
             KernelName::GemmF32 => 20,
             KernelName::RmsNormF32 => 12,
             KernelName::SoftmaxLastDimF32 => 8,
@@ -159,6 +146,16 @@ impl Source {
             | KernelName::ReduceSumF32
             | KernelName::ReduceMaxF32
             | KernelName::AffineF32
+            | KernelName::BinaryAddF32
+            | KernelName::BinarySubF32
+            | KernelName::BinaryMulF32
+            | KernelName::BinaryDivF32
+            | KernelName::UnaryExpF32
+            | KernelName::UnarySiluF32
+            | KernelName::UnarySqrtF32
+            | KernelName::UnarySinF32
+            | KernelName::UnaryCosF32
+            | KernelName::UnaryNegF32
             | KernelName::AvgPool2dF32
             | KernelName::MaxPool2dF32
             | KernelName::UpsampleNearest1dF32
@@ -191,7 +188,6 @@ impl Source {
     pub fn spv_words(self) -> Vec<u32> {
         let bytes: &[u8] = match self {
             Self::Affine => AFFINE_SPV,
-            Self::Elementwise => ELEMENTWISE_SPV,
             Self::Gemm => GEMM_SPV,
             Self::Gather => GATHER_SPV,
             Self::Copy => COPY_SPV,
@@ -241,7 +237,6 @@ impl AsRef<str> for Source {
     fn as_ref(&self) -> &str {
         match self {
             Self::Affine => "affine",
-            Self::Elementwise => "elementwise",
             Self::Gemm => "gemm",
             Self::Gemv => "gemv",
             Self::GemvT => "gemv_t",

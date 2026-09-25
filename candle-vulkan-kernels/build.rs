@@ -21,7 +21,6 @@ fn main() {
         ("rope", ShaderLang::Wgsl),
         ("gemv", ShaderLang::Wgsl),
         ("gemv_t", ShaderLang::Wgsl),
-        ("elementwise", ShaderLang::Wgsl),
         ("gemm", ShaderLang::Wgsl),
         ("q4k", ShaderLang::Wgsl),
         ("q5q8", ShaderLang::Wgsl),
