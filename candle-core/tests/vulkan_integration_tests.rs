@@ -1200,3 +1200,26 @@ fn test_vulkan_max_pool2d() {
     }
     tracing::debug!("Vulkan device {gpu_id} max_pool2d OK");
 }
+
+/// `upsample_nearest1d` vs the CPU backend.
+#[test]
+fn test_vulkan_upsample_nearest1d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..48).map(|i| (i as f32) * 0.4 - 8.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((2, 3, 8))).unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((2, 3, 8))).unwrap();
+    for dst in [16usize, 8usize, 3usize] {
+        let gg = g.clone().upsample_nearest1d(dst).unwrap();
+        let cc = c.clone().upsample_nearest1d(dst).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (a, b) in gv.iter().zip(cv.iter()) {
+            assert!((a - b).abs() < 1e-5 * (1.0 + b.abs()), "upsample1d dst={dst}: gpu {a} cpu {b}");
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} upsample_nearest1d OK");
+}
