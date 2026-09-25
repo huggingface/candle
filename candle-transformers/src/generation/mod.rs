@@ -33,6 +33,7 @@ impl LogitsProcessor {
         // that drops `NaN` where the comparison below keeps it. Left as-is on purpose.
         #[allow(clippy::manual_filter)]
         let temperature = temperature.and_then(|v| if v < 1e-7 { None } else { Some(v) });
+        let top_p = top_p.and_then(|p| if p <= 0.0 || p >= 1.0 { None } else { Some(p) });
         let sampling = match temperature {
             None => Sampling::ArgMax,
             Some(temperature) => match top_p {
