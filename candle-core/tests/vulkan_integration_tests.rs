@@ -1246,3 +1246,44 @@ fn test_vulkan_upsample_nearest2d() {
     }
     tracing::debug!("Vulkan device {gpu_id} upsample_nearest2d OK");
 }
+
+/// `upsample_bilinear2d` (align_corners on/off, with/without scale) vs CPU.
+#[test]
+fn test_vulkan_upsample_bilinear2d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..128).map(|i| (i as f32) * 0.3 - 10.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((1, 2, 8, 8))).unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((1, 2, 8, 8))).unwrap();
+    let cases: Vec<(String, candle_core::Tensor, candle_core::Tensor)> = vec![
+        (
+            "ac_false 16x16".into(),
+            g.clone().upsample_bilinear2d(16, 16, false).unwrap(),
+            c.clone().upsample_bilinear2d(16, 16, false).unwrap(),
+        ),
+        (
+            "ac_true 6x10".into(),
+            g.clone().upsample_bilinear2d(6, 10, true).unwrap(),
+            c.clone().upsample_bilinear2d(6, 10, true).unwrap(),
+        ),
+        (
+            "scale 2x -> 16x16".into(),
+            g.clone().upsample_bilinear2d_with_scale(2.0f64, 2.0f64, false).unwrap(),
+            c.clone().upsample_bilinear2d_with_scale(2.0f64, 2.0f64, false).unwrap(),
+        ),
+    ];
+    for (name, gg, cc) in &cases {
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+                "bilinear {name}: mismatch at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} upsample_bilinear2d OK");
+}
