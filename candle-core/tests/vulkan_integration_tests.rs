@@ -859,3 +859,32 @@ fn test_vulkan_where_cond() {
     }
     tracing::debug!("Vulkan device {gpu_id} where_cond OK");
 }
+
+/// `affine` (y = x * mul + add) vs the CPU backend.
+#[test]
+fn test_vulkan_affine() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..64).map(|i| (i as f32) * 0.25 - 8.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((4, 16))).unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((4, 16))).unwrap();
+    let (mul, add) = (2.5f64, -1.0f64);
+    let gv: Vec<f32> = g.affine(mul, add).unwrap().to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    let cv: Vec<f32> = c.affine(mul, add).unwrap().to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    assert_eq!(gv.len(), cv.len());
+    for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-5 * (1.0 + a.abs().max(b.abs())),
+            "affine: mismatch at {i}: gpu {a} cpu {b}"
+        );
+    }
+    // mul = 0 -> constant fill via affine.
+    let g2 = candle_core::Tensor::new(v.as_slice(), &dev).unwrap().affine(0.0f64, 3.5f64).unwrap();
+    let c2 = candle_core::Tensor::new(v.as_slice(), &cpu).unwrap().affine(0.0f64, 3.5f64).unwrap();
+    for (a, b) in g2.to_vec1::<f32>().unwrap().iter().zip(c2.to_vec1::<f32>().unwrap().iter()) {
+        assert!((a - b).abs() < 1e-6);
+    }
+    tracing::debug!("Vulkan device {gpu_id} affine OK");
+}

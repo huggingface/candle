@@ -938,8 +938,44 @@ impl BackendStorage for VulkanStorage {
         })
     }
 
-    fn affine(&self, _: &Layout, _: f64, _: f64) -> Result<Self> {
-        todo!()
+    fn affine(&self, l: &Layout, mul: f64, add: f64) -> Result<Self> {
+        if self.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "affine: only F32 supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "affine: non-contiguous layouts not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let input = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let out = VulkanStorage::new(&self.device, len, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        if len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let input = input.clone();
+        let out_buf = out_buf.clone();
+        let mul = mul as f32;
+        let add = add as f32;
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_affine_f32(cbb, &kernels, &input, &out_buf, mul, add)
+                .map_err(|e| e.to_string())
+        })?;
+        Ok(out)
     }
 
     fn powf(&self, _: &Layout, _: f64) -> Result<Self> {
