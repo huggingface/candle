@@ -506,3 +506,13 @@ fn test_vulkan_device_synchronize() {
     assert!(data.iter().all(|value| *value == 0.0));
     tracing::debug!("Vulkan device {gpu_id} synchronize drained OK");
 }
+
+/// `set_seed` must store the seed on the device.
+#[test]
+fn test_vulkan_device_set_seed() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    device.set_seed(0xDEADBEEF).unwrap();
+    assert_eq!(device.seed_atomic().load(std::sync::atomic::Ordering::Relaxed), 0xDEADBEEF);
+}

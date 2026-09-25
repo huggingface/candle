@@ -76,8 +76,9 @@ impl BackendDevice for VulkanDevice {
         todo!()
     }
 
-    fn set_seed(&self, _: u64) -> Result<()> {
-        todo!()
+    fn set_seed(&self, seed: u64) -> Result<()> {
+        self.seed_atomic().store(seed, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 
     fn get_current_seed(&self) -> Result<u64> {
