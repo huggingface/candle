@@ -144,6 +144,7 @@ impl VulkanDevice {
         let i16 = supported.shader_int16;
         let i64 = supported.shader_int64;
         let f64 = supported.shader_float64;
+        let sf8_feature = supported.shader_float8;
         // Check if the device supports VK_EXT_shader_float8.
         let sf8 = physical
             .extension_properties()
@@ -178,6 +179,7 @@ impl VulkanDevice {
                     shader_int16: i16,
                     shader_int64: i64,
                     shader_float64: f64,
+                    shader_float8: sf8_feature,
                     ..Default::default()
                 },
                 ..Default::default()
