@@ -144,12 +144,6 @@ impl VulkanDevice {
         let i16 = supported.shader_int16;
         let i64 = supported.shader_int64;
         let f64 = supported.shader_float64;
-        let sf8_feature = supported.shader_float8;
-        // Check if the device supports VK_EXT_shader_float8.
-        let sf8 = physical
-            .extension_properties()
-            .iter()
-            .any(|e| e.extension_name == "VK_EXT_shader_float8");
         let (device, queues) = Device::new(
             physical,
             DeviceCreateInfo {
@@ -166,7 +160,6 @@ impl VulkanDevice {
                 enabled_extensions: DeviceExtensions {
                     khr_16bit_storage: true,
                     khr_shader_float16_int8: true,
-                    ext_shader_float8: sf8,
                     ..Default::default()
                 },
                 enabled_features: DeviceFeatures {
@@ -179,7 +172,6 @@ impl VulkanDevice {
                     shader_int16: i16,
                     shader_int64: i64,
                     shader_float64: f64,
-                    shader_float8: sf8_feature,
                     ..Default::default()
                 },
                 ..Default::default()
@@ -273,15 +265,6 @@ impl VulkanDevice {
             .any(|property| property.extension_name.eq("VK_KHR_shader_bfloat16"))
     }
 
-    /// Returns `true` if the device supports the `VK_EXT_shader_float8`
-    /// extension (native `float8_e4m3` / `float8_e5m2` shader types).
-    pub fn supports_f8e4m3(&self) -> bool {
-        self.device
-            .physical_device()
-            .extension_properties()
-            .iter()
-            .any(|property| property.extension_name.eq("VK_EXT_shader_float8"))
-    }
 
     /// Uploads `data` into a device f32 storage buffer in VRAM. A
     /// host-visible staging copy is recorded onto the pending batch

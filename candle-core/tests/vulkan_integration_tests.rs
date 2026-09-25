@@ -28,16 +28,6 @@ fn test_vulkan_device_supports_bf16() {
     );
 }
 #[test]
-fn test_vulkan_device_supports_f8e4m3() {
-    (*INIT);
-    let gpu_id = *GPU_ID;
-    let device = VulkanDevice::new(gpu_id).unwrap();
-    tracing::debug!(
-        "Vulkan device {gpu_id} has native float8 (VK_EXT_shader_float8) support?: {}",
-        device.supports_f8e4m3()
-    );
-}
-#[test]
 fn test_vulkan_device_storage() {
     (*INIT);
     let gpu_id = *GPU_ID;
