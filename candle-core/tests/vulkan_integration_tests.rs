@@ -716,3 +716,67 @@ fn test_vulkan_unary_ops() {
     assert_eq!(failures, 0, "{failures} unary mismatches");
     tracing::debug!("Vulkan device {gpu_id} all 19 unary ops OK");
 }
+
+/// Binary ops (all 6) including scalar and rank-broadcast against CPU.
+#[test]
+fn test_vulkan_binary_ops() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lhs_v: Vec<f32> = (0..32).map(|i| (i as f32) * 0.25 - 4.0).collect();
+    let rhs_v: Vec<f32> = (0..32).map(|i| 1.0 / (1.0 + (i as f32))).collect();
+    let l = candle_core::Tensor::new(lhs_v.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let r = candle_core::Tensor::new(rhs_v.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let lc = candle_core::Tensor::new(lhs_v.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let rc = candle_core::Tensor::new(rhs_v.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    // 8 elements: broadcasts over the last dim of (4, 8).
+    let row = candle_core::Tensor::new(&[0.5f32, -1.5, 2.0, 3.0, -2.5, 1.0, 0.25, -0.75], &dev).unwrap();
+    let rowc = candle_core::Tensor::new(&[0.5f32, -1.5, 2.0, 3.0, -2.5, 1.0, 0.25, -0.75], &cpu).unwrap();
+    let rowr = row.broadcast_as(shape.clone()).unwrap();
+    let rowrc = rowc.broadcast_as(shape.clone()).unwrap();
+    let s_dev = candle_core::Tensor::new(1.5f32, &dev).unwrap();
+    let s_cpu = candle_core::Tensor::new(1.5f32, &cpu).unwrap();
+    let n_dev = candle_core::Tensor::new(-2.0f32, &dev).unwrap();
+    let n_cpu = candle_core::Tensor::new(-2.0f32, &cpu).unwrap();
+
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+        // Scalar (0-dim) broadcast.
+        ("add_scalar", l.add(&sbcast_dev(s_dev, &shape)).unwrap(), lc.add(&sbcast_cpu(s_cpu, &shape)).unwrap()),
+        ("mul_scalar", l.mul(&sbcast_dev(n_dev, &shape)).unwrap(), lc.mul(&sbcast_cpu(n_cpu, &shape)).unwrap()),
+        ("maximum_scalar", l.maximum(0.0f32).unwrap(), lc.maximum(0.0f32).unwrap()),
+        // Rank-1 row broadcast over the last dim.
+        ("add_row", l.add(&rowr).unwrap(), lc.add(&rowrc).unwrap()),
+        ("mul_row", l.mul(&rowr).unwrap(), lc.mul(&rowrc).unwrap()),
+        ("minimum_row", l.minimum(&rowr).unwrap(), lc.minimum(&rowrc).unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, g, c) in &cases {
+        let gv: Vec<f32> = g.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<f32> = c.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            let tol = 1e-5 * (1.0 + a.abs().max(b.abs()));
+            if (a - b).abs() > tol {
+                failures += 1;
+                tracing::debug!("binary {name}: mismatch at {i}: gpu {a} cpu {b}");
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} binary mismatches");
+    tracing::debug!("Vulkan device {gpu_id} binary ops OK (incl. broadcast)");
+}
+
+fn sbcast_dev(t: candle_core::Tensor, shape: &candle_core::Shape) -> candle_core::Tensor {
+    t.broadcast_as(shape.clone()).unwrap()
+}
+fn sbcast_cpu(t: candle_core::Tensor, shape: &candle_core::Shape) -> candle_core::Tensor {
+    t.broadcast_as(shape.clone()).unwrap()
+}

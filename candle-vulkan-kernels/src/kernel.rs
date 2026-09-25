@@ -65,6 +65,8 @@ pub enum KernelName {
     UnaryCeilF32,
     UnaryRoundF32,
     UnarySignF32,
+    BinaryMaximumF32,
+    BinaryMinimumF32,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -127,6 +129,8 @@ impl AsRef<str> for KernelName {
             Self::UnaryCeilF32 => "main_ceil",
             Self::UnaryRoundF32 => "main_round",
             Self::UnarySignF32 => "main_sign",
+            Self::BinaryMaximumF32 => "main_maximum",
+            Self::BinaryMinimumF32 => "main_minimum",
             Self::TestFillF16 => "main",
             Self::TestFillU8
             | Self::TestFillI16
@@ -329,6 +333,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::UnaryCeilF32
         | KernelName::UnaryRoundF32
         | KernelName::UnarySignF32 => 3,
+        KernelName::BinaryMaximumF32 | KernelName::BinaryMinimumF32 => 4,
         KernelName::TestFillF16 => 1,
         KernelName::TestFillU8
         | KernelName::TestFillI16

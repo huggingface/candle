@@ -18,6 +18,7 @@ const Q4K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q4k.spv"));
 const Q5Q8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q5q8.spv"));
 const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
 const UNARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary.spv"));
+const BINARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary.spv"));
 
 const TEST_FILL_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f16.spv"));
 const TEST_FILL_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_u8.spv"));
@@ -60,6 +61,7 @@ pub enum Source {
     Q5q8,
     ConstSet,
     UnarySlang,
+    BinarySlang,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -124,7 +126,9 @@ impl Source {
             | KernelName::UnaryFloorF32
             | KernelName::UnaryCeilF32
             | KernelName::UnaryRoundF32
-            | KernelName::UnarySignF32 => 0,
+            | KernelName::UnarySignF32
+            | KernelName::BinaryMaximumF32
+            | KernelName::BinaryMinimumF32 => 0,
             KernelName::TestFillF16 => 0,
             KernelName::TestFillU8
             | KernelName::TestFillI16
@@ -162,6 +166,7 @@ impl Source {
             Self::Q5q8 => Q5Q8_SPV,
             Self::ConstSet => CONST_SET_SPV,
             Self::UnarySlang => UNARY_SLANG_SPV,
+            Self::BinarySlang => BINARY_SLANG_SPV,
             Self::TestFillF16 => TEST_FILL_F16_SPV,
             Self::TestFillU8 => TEST_FILL_U8_SPV,
             Self::TestFillI16 => TEST_FILL_I16_SPV,
@@ -204,6 +209,7 @@ impl AsRef<str> for Source {
             Self::Rope => "rope",
             Self::ConstSet => "const_set",
             Self::UnarySlang => "unary",
+            Self::BinarySlang => "binary",
             Self::TestFillF16 => "test_fill_f16",
             Self::TestFillU8 => "test_fill_u8",
             Self::TestFillI16 => "test_fill_i16",
