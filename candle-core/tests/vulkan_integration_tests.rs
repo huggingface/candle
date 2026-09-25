@@ -936,3 +936,46 @@ fn test_vulkan_elu() {
     }
     tracing::debug!("Vulkan device {gpu_id} elu OK");
 }
+
+/// `to_dtype` conversions (F32/F16/BF16) vs the CPU backend.
+#[test]
+fn test_vulkan_to_dtype() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..64).map(|i| (i as f32) * 0.3 - 8.0).collect();
+    let base_g = candle_core::Tensor::new(v.as_slice(), &dev).unwrap();
+    let base_c = candle_core::Tensor::new(v.as_slice(), &cpu).unwrap();
+
+    // F32 -> F16 -> F32 round trip.
+    let r1g = base_g.clone().to_dtype(candle_core::DType::F16).unwrap().to_dtype(candle_core::DType::F32).unwrap();
+    let r1c = base_c.clone().to_dtype(candle_core::DType::F16).unwrap().to_dtype(candle_core::DType::F32).unwrap();
+    for (a, b) in r1g.to_vec1::<f32>().unwrap().iter().zip(r1c.to_vec1::<f32>().unwrap().iter()) {
+        assert!((a - b).abs() < 1e-3 * (1.0 + b.abs()), "f32->f16->f32: gpu {a} cpu {b}");
+    }
+    // F32 -> BF16 -> F32 round trip (coarser: 8 mantissa bits).
+    let r2g = base_g.clone().to_dtype(candle_core::DType::BF16).unwrap().to_dtype(candle_core::DType::F32).unwrap();
+    let r2c = base_c.clone().to_dtype(candle_core::DType::BF16).unwrap().to_dtype(candle_core::DType::F32).unwrap();
+    for (a, b) in r2g.to_vec1::<f32>().unwrap().iter().zip(r2c.to_vec1::<f32>().unwrap().iter()) {
+        assert!((a - b).abs() < 1e-2 * (1.0 + b.abs()), "f32->bf16->f32: gpu {a} cpu {b}");
+    }
+    // Direct dtype comparison on the GPU side via back-conversion equality.
+    let f16g = base_g.clone().to_dtype(candle_core::DType::F16).unwrap();
+    let bf16g = base_g.clone().to_dtype(candle_core::DType::BF16).unwrap();
+    assert_eq!(f16g.dtype(), candle_core::DType::F16);
+    assert_eq!(bf16g.dtype(), candle_core::DType::BF16);
+    let f16c = base_c.clone().to_dtype(candle_core::DType::F16).unwrap();
+    let bf16c = base_c.clone().to_dtype(candle_core::DType::BF16).unwrap();
+    let f16g_b: Vec<f32> = f16g.to_dtype(candle_core::DType::F32).unwrap().to_vec1::<f32>().unwrap();
+    let f16c_b: Vec<f32> = f16c.to_dtype(candle_core::DType::F32).unwrap().to_vec1::<f32>().unwrap();
+    for (a, b) in f16g_b.iter().zip(f16c_b.iter()) {
+        assert!((a - b).abs() < 1e-6, "f16 value: gpu {a} cpu {b}");
+    }
+    let bf16g_b: Vec<f32> = bf16g.to_dtype(candle_core::DType::F32).unwrap().to_vec1::<f32>().unwrap();
+    let bf16c_b: Vec<f32> = bf16c.to_dtype(candle_core::DType::F32).unwrap().to_vec1::<f32>().unwrap();
+    for (a, b) in bf16g_b.iter().zip(bf16c_b.iter()) {
+        assert!((a - b).abs() < 1e-6, "bf16 value: gpu {a} cpu {b}");
+    }
+    tracing::debug!("Vulkan device {gpu_id} to_dtype OK");
+}

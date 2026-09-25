@@ -9,6 +9,8 @@ use vulkano::sync::GpuFuture;
 
 pub use crate::vulkan_backend::device::{VBuf, VulkanDevice};
 
+use half::{bf16, f16};
+
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
@@ -1192,8 +1194,55 @@ impl BackendStorage for VulkanStorage {
         Ok(out)
     }
 
-    fn to_dtype(&self, _: &Layout, _: DType) -> Result<Self> {
-        todo!()
+    fn to_dtype(&self, l: &Layout, dtype: DType) -> Result<Self> {
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "to_dtype: non-contiguous layouts not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        // Host-side conversion: drain the queue, convert the contiguous
+        // block with the same `half`-crate casts as the CPU backend,
+        // upload the result.
+        let src = self.to_cpu_storage()?;
+        let converted = match (&src, dtype) {
+            (CpuStorage::F32(d), DType::F16) => {
+                CpuStorage::F16(d[start..start + len].iter().map(|v| f16::from_f32(*v)).collect())
+            }
+            (CpuStorage::F16(d), DType::F32) => {
+                CpuStorage::F32(d[start..start + len].iter().map(|v| f16::to_f32(*v)).collect())
+            }
+            (CpuStorage::F32(d), DType::BF16) => {
+                CpuStorage::BF16(d[start..start + len].iter().map(|v| bf16::from_f32(*v)).collect())
+            }
+            (CpuStorage::BF16(d), DType::F32) => {
+                CpuStorage::F32(d[start..start + len].iter().map(|v| bf16::to_f32(*v)).collect())
+            }
+            (CpuStorage::F16(d), DType::BF16) => CpuStorage::BF16(
+                d[start..start + len]
+                    .iter()
+                    .map(|v| bf16::from_f32(f16::to_f32(*v)))
+                    .collect(),
+            ),
+            (CpuStorage::BF16(d), DType::F16) => CpuStorage::F16(
+                d[start..start + len]
+                    .iter()
+                    .map(|v| f16::from_f32(bf16::to_f32(*v)))
+                    .collect(),
+            ),
+            _ => {
+                let msg = format!(
+                    "to_dtype: {:?} -> {:?} not supported on the Vulkan backend",
+                    self.dtype, dtype
+                );
+                return Err(Error::Vulkan(msg.into()));
+            }
+        };
+        self.device.storage_from_cpu_storage(&converted)
     }
 
     fn unary_impl<B: UnaryOpT>(&self, l: &Layout) -> Result<Self> {
