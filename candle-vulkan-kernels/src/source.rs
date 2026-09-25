@@ -23,6 +23,7 @@ const CMP_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp.spv")
 const WHERE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where.spv"));
 const COPY2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d.spv"));
 const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx.spv"));
+const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_ops.spv"));
 
 const TEST_FILL_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f16.spv"));
 const TEST_FILL_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_u8.spv"));
@@ -70,6 +71,7 @@ pub enum Source {
     WhereSlang,
     Copy2dSlang,
     GatherIdxSlang,
+    ReduceSlang,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -147,7 +149,10 @@ impl Source {
             | KernelName::CmpGeF32
             | KernelName::WhereF32
             | KernelName::Copy2dF32
-            | KernelName::GatherIdxF32 => 0,
+            | KernelName::GatherIdxF32
+            | KernelName::ReduceMinF32
+            | KernelName::ReduceArgMinF32
+            | KernelName::ReduceArgMaxF32 => 0,
             KernelName::TestFillF16 => 0,
             KernelName::TestFillU8
             | KernelName::TestFillI16
@@ -190,6 +195,7 @@ impl Source {
             Self::WhereSlang => WHERE_SLANG_SPV,
             Self::Copy2dSlang => COPY2D_SLANG_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
+            Self::ReduceSlang => REDUCE_SLANG_SPV,
             Self::TestFillF16 => TEST_FILL_F16_SPV,
             Self::TestFillU8 => TEST_FILL_U8_SPV,
             Self::TestFillI16 => TEST_FILL_I16_SPV,
@@ -237,6 +243,7 @@ impl AsRef<str> for Source {
             Self::WhereSlang => "where",
             Self::Copy2dSlang => "copy2d",
             Self::GatherIdxSlang => "gather_idx",
+            Self::ReduceSlang => "reduce",
             Self::TestFillF16 => "test_fill_f16",
             Self::TestFillU8 => "test_fill_u8",
             Self::TestFillI16 => "test_fill_i16",

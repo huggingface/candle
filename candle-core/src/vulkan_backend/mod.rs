@@ -1100,8 +1100,117 @@ impl BackendStorage for VulkanStorage {
         Ok(out)
     }
 
-    fn reduce_op(&self, _: ReduceOp, _: &Layout, _: &[usize]) -> Result<Self> {
-        todo!()
+    fn reduce_op(&self, op: ReduceOp, l: &Layout, reduce_dims: &[usize]) -> Result<Self> {
+        if self.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "reduce_op: only F32 supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        let dims = l.dims();
+        let ndim = dims.len();
+        if ndim == 0 {
+            return Err(Error::Vulkan(
+                "reduce_op: scalar layouts not supported on the Vulkan backend".to_string().into(),
+            ));
+        }
+        // Only the last axis is reducible on the Vulkan backend for now.
+        if reduce_dims != [ndim - 1] {
+            return Err(Error::Vulkan(
+                "reduce_op: only the last axis can be reduced on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "reduce_op: non-contiguous layouts not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let input = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let rows: usize = dims[..ndim - 1].iter().product();
+        let cols = dims[ndim - 1];
+        let out_dtype = match op {
+            ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::F32,
+            ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+        };
+        let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+        if rows == 0 || cols == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        match op {
+            ReduceOp::Sum => {
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let input = input.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_sum_f32(
+                        cbb, &kernels, &input, &out_buf, rows, cols,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            ReduceOp::Max => {
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let input = input.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_max_f32(
+                        cbb, &kernels, &input, &out_buf, rows, cols,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            ReduceOp::Min | ReduceOp::ArgMin | ReduceOp::ArgMax => {
+                let name = match op {
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinF32,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinF32,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxF32,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => unreachable!(),
+                };
+                let params_buf = Buffer::from_iter(
+                    self.device.mem_alloc(),
+                    &BufferCreateInfo {
+                        usage: BufferUsage::STORAGE_BUFFER,
+                        ..Default::default()
+                    },
+                    &AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                            | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                        ..Default::default()
+                    },
+                    vec![rows as f32, cols as f32],
+                )
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                let params: Subbuffer<[f32]> = params_buf;
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang_f32(
+                        cbb, &kernels, name, &input, of.as_ref(), oi.as_ref(), &params, rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+        }
+        Ok(out)
     }
 
     fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {

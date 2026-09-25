@@ -1039,3 +1039,30 @@ fn test_vulkan_copy2d() {
     assert_eq!(g2.to_vec2::<f32>().unwrap(), c2.to_vec2::<f32>().unwrap());
     tracing::debug!("Vulkan device {gpu_id} copy2d OK");
 }
+
+/// `reduce_op` over the last axis: sum, max, min, argmax, argmin.
+#[test]
+fn test_vulkan_reduce_op() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let v: Vec<f32> = (0..32).map(|i| (i as f32) * 0.7 - 10.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+
+    let (gs, cs) = (g.clone().sum(1).unwrap(), c.clone().sum(1).unwrap());
+    for (a, b) in gs.to_vec1::<f32>().unwrap().iter().zip(cs.to_vec1::<f32>().unwrap().iter()) {
+        assert!((a - b).abs() < 1e-4 * (1.0 + b.abs()), "sum: gpu {a} cpu {b}");
+    }
+    let (gm, cm) = (g.clone().max(1).unwrap(), c.clone().max(1).unwrap());
+    assert_eq!(gm.to_vec1::<f32>().unwrap(), cm.to_vec1::<f32>().unwrap());
+    let (gn, cn) = (g.clone().min(1).unwrap(), c.clone().min(1).unwrap());
+    assert_eq!(gn.to_vec1::<f32>().unwrap(), cn.to_vec1::<f32>().unwrap());
+    let (ga, ca) = (g.clone().argmax(1).unwrap(), c.clone().argmax(1).unwrap());
+    assert_eq!(ga.to_vec1::<u32>().unwrap(), ca.to_vec1::<u32>().unwrap());
+    let (gb, cb) = (g.clone().argmin(1).unwrap(), c.clone().argmin(1).unwrap());
+    assert_eq!(gb.to_vec1::<u32>().unwrap(), cb.to_vec1::<u32>().unwrap());
+    tracing::debug!("Vulkan device {gpu_id} reduce_op OK");
+}
