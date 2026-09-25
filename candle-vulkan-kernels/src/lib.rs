@@ -22,5 +22,6 @@ pub use kernels::{
     call_reduce_slang_f32,
     call_pool2d_slang_f32,
     call_upsample_slang_f32,
+    call_conv_slang_f32,
 };
 pub use source::Source;

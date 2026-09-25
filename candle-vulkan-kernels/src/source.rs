@@ -26,6 +26,7 @@ const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ga
 const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_ops.spv"));
 const POOL2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d.spv"));
 const UPSAMPLE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/upsample.spv"));
+const CONV_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv.spv"));
 
 const TEST_FILL_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f16.spv"));
 const TEST_FILL_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_u8.spv"));
@@ -76,6 +77,7 @@ pub enum Source {
     ReduceSlang,
     Pool2dSlang,
     UpsampleSlang,
+    ConvSlang,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -163,7 +165,11 @@ impl Source {
             | KernelName::MaxPool2dF32
             | KernelName::UpsampleNearest1dF32
             | KernelName::UpsampleNearest2dF32
-            | KernelName::UpsampleBilinear2dF32 => 0,
+            | KernelName::UpsampleBilinear2dF32
+            | KernelName::Conv1dF32
+            | KernelName::Conv2dF32
+            | KernelName::ConvTranspose1dF32
+            | KernelName::ConvTranspose2dF32 => 0,
             KernelName::TestFillF16 => 0,
             KernelName::TestFillU8
             | KernelName::TestFillI16
@@ -209,6 +215,7 @@ impl Source {
             Self::ReduceSlang => REDUCE_SLANG_SPV,
             Self::Pool2dSlang => POOL2D_SLANG_SPV,
             Self::UpsampleSlang => UPSAMPLE_SLANG_SPV,
+            Self::ConvSlang => CONV_SLANG_SPV,
             Self::TestFillF16 => TEST_FILL_F16_SPV,
             Self::TestFillU8 => TEST_FILL_U8_SPV,
             Self::TestFillI16 => TEST_FILL_I16_SPV,
@@ -259,6 +266,7 @@ impl AsRef<str> for Source {
             Self::ReduceSlang => "reduce",
             Self::Pool2dSlang => "pool2d",
             Self::UpsampleSlang => "upsample",
+            Self::ConvSlang => "conv",
             Self::TestFillF16 => "test_fill_f16",
             Self::TestFillU8 => "test_fill_u8",
             Self::TestFillI16 => "test_fill_i16",

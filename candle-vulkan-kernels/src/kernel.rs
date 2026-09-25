@@ -88,6 +88,10 @@ pub enum KernelName {
     UpsampleNearest1dF32,
     UpsampleNearest2dF32,
     UpsampleBilinear2dF32,
+    Conv1dF32,
+    Conv2dF32,
+    ConvTranspose1dF32,
+    ConvTranspose2dF32,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -173,6 +177,10 @@ impl AsRef<str> for KernelName {
             Self::UpsampleNearest1dF32 => "main_upsample_nearest1d",
             Self::UpsampleNearest2dF32 => "main_upsample_nearest2d",
             Self::UpsampleBilinear2dF32 => "main_upsample_bilinear2d",
+            Self::Conv1dF32 => "main_conv1d",
+            Self::Conv2dF32 => "main_conv2d",
+            Self::ConvTranspose1dF32 => "main_conv_transpose1d",
+            Self::ConvTranspose2dF32 => "main_conv_transpose2d",
             Self::TestFillF16 => "main",
             Self::TestFillU8
             | Self::TestFillI16
@@ -398,6 +406,10 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::UpsampleNearest1dF32
         | KernelName::UpsampleNearest2dF32
         | KernelName::UpsampleBilinear2dF32 => 4,
+        | KernelName::Conv1dF32
+        | KernelName::Conv2dF32
+        | KernelName::ConvTranspose1dF32
+        | KernelName::ConvTranspose2dF32 => 4,
         KernelName::TestFillF16 => 1,
         KernelName::TestFillU8
         | KernelName::TestFillI16

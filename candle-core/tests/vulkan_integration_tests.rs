@@ -1287,3 +1287,40 @@ fn test_vulkan_upsample_bilinear2d() {
     }
     tracing::debug!("Vulkan device {gpu_id} upsample_bilinear2d OK");
 }
+
+/// `conv1d` vs the CPU backend.
+#[test]
+fn test_vulkan_conv1d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let b = 2usize;
+    let c_in = 3usize;
+    let l_in = 12usize;
+    let c_out = 4usize;
+    let k = 4usize;
+    let in_v: Vec<f32> = (0..b * c_in * l_in).map(|i| (i as f32) * 0.1 - 5.0).collect();
+    let w_v: Vec<f32> = (0..c_out * c_in * k).map(|i| (i as f32) * 0.05 - 0.9).collect();
+    let cases: Vec<(usize, usize, usize)> = vec![(0, 1, 1), (2, 2, 1), (1, 2, 2)];
+    for (padding, stride, dilation) in cases {
+        {
+            let gin = candle_core::Tensor::new(in_v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((b, c_in, l_in))).unwrap();
+            let gk = candle_core::Tensor::new(w_v.as_slice(), &dev).unwrap().reshape(candle_core::Shape::from((c_out, c_in, k))).unwrap();
+            let cin = candle_core::Tensor::new(in_v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((b, c_in, l_in))).unwrap();
+            let ck = candle_core::Tensor::new(w_v.as_slice(), &cpu).unwrap().reshape(candle_core::Shape::from((c_out, c_in, k))).unwrap();
+            let gg = gin.conv1d(&gk, padding, stride, dilation, 1).unwrap();
+            let cc = cin.conv1d(&ck, padding, stride, dilation, 1).unwrap();
+            let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            assert_eq!(gv.len(), cv.len());
+            for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+                assert!(
+                    (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+                    "conv1d p={padding} s={stride} d={dilation} at {i}: gpu {a} cpu {b}"
+                );
+            }
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} conv1d OK");
+}
