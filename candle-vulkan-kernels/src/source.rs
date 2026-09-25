@@ -24,6 +24,7 @@ const WHERE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where.s
 const COPY2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d.spv"));
 const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx.spv"));
 const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_ops.spv"));
+const POOL2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d.spv"));
 
 const TEST_FILL_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f16.spv"));
 const TEST_FILL_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_u8.spv"));
@@ -72,6 +73,7 @@ pub enum Source {
     Copy2dSlang,
     GatherIdxSlang,
     ReduceSlang,
+    Pool2dSlang,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -154,7 +156,9 @@ impl Source {
             | KernelName::IndexSelectF32
             | KernelName::ReduceMinF32
             | KernelName::ReduceArgMinF32
-            | KernelName::ReduceArgMaxF32 => 0,
+            | KernelName::ReduceArgMaxF32
+            | KernelName::AvgPool2dF32
+            | KernelName::MaxPool2dF32 => 0,
             KernelName::TestFillF16 => 0,
             KernelName::TestFillU8
             | KernelName::TestFillI16
@@ -198,6 +202,7 @@ impl Source {
             Self::Copy2dSlang => COPY2D_SLANG_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
             Self::ReduceSlang => REDUCE_SLANG_SPV,
+            Self::Pool2dSlang => POOL2D_SLANG_SPV,
             Self::TestFillF16 => TEST_FILL_F16_SPV,
             Self::TestFillU8 => TEST_FILL_U8_SPV,
             Self::TestFillI16 => TEST_FILL_I16_SPV,
@@ -246,6 +251,7 @@ impl AsRef<str> for Source {
             Self::Copy2dSlang => "copy2d",
             Self::GatherIdxSlang => "gather_idx",
             Self::ReduceSlang => "reduce",
+            Self::Pool2dSlang => "pool2d",
             Self::TestFillF16 => "test_fill_f16",
             Self::TestFillU8 => "test_fill_u8",
             Self::TestFillI16 => "test_fill_i16",

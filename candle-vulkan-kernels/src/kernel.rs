@@ -83,6 +83,8 @@ pub enum KernelName {
     ReduceMinF32,
     ReduceArgMinF32,
     ReduceArgMaxF32,
+    AvgPool2dF32,
+    MaxPool2dF32,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -163,6 +165,8 @@ impl AsRef<str> for KernelName {
             Self::ReduceMinF32 => "main_reduce_min",
             Self::ReduceArgMinF32 => "main_reduce_argmin",
             Self::ReduceArgMaxF32 => "main_reduce_argmax",
+            Self::AvgPool2dF32 => "main_avg_pool2d",
+            Self::MaxPool2dF32 => "main_max_pool2d",
             Self::TestFillF16 => "main",
             Self::TestFillU8
             | Self::TestFillI16
@@ -382,7 +386,9 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         KernelName::IndexSelectF32 => 4,
         KernelName::ReduceMinF32
         | KernelName::ReduceArgMinF32
-        | KernelName::ReduceArgMaxF32 => 4,
+        | KernelName::ReduceArgMaxF32
+        | KernelName::AvgPool2dF32
+        | KernelName::MaxPool2dF32 => 4,
         KernelName::TestFillF16 => 1,
         KernelName::TestFillU8
         | KernelName::TestFillI16

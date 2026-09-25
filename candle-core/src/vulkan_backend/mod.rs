@@ -900,8 +900,103 @@ impl VulkanStorage {
             candle_vulkan_kernels::call_test_fill_f8e8m0(cbb, kernels.as_ref(), buffer, total)
         })
     }
-}
 
+    /// Shared avg/max 2D pool setup (NCHW, F32, contiguous).
+    fn pool2d(
+        &self,
+        l: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+        name: candle_vulkan_kernels::KernelName,
+        op: &'static str,
+    ) -> Result<Self> {
+        if self.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                format!("{op}: only F32 supported on the Vulkan backend").into(),
+            ));
+        }
+        let dims = l.dims();
+        if dims.len() != 4 {
+            return Err(Error::Vulkan(
+                format!("{op}: only 4D NCHW layouts supported on the Vulkan backend").into(),
+            ));
+        }
+        let (b_sz, c, h, w) = (dims[0], dims[1], dims[2], dims[3]);
+        let (k_h, k_w) = kernel_size;
+        let (s_h, s_w) = stride;
+        if k_h == 0 || k_w == 0 || s_h == 0 || s_w == 0 {
+            return Err(Error::Vulkan(format!("{op}: zero kernel/stride").into()));
+        }
+        if h < k_h || w < k_w {
+            return Err(Error::Vulkan(
+                format!("{op}: input smaller than the kernel").into(),
+            ));
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("{op}: non-contiguous layouts not supported on the Vulkan backend")
+                        .into(),
+                ))
+            }
+        };
+        if len != b_sz * c * h * w {
+            return Err(Error::Vulkan(format!("{op}: size mismatch").into()));
+        }
+        let h_out = (h - k_h) / s_h + 1;
+        let w_out = (w - k_w) / s_w + 1;
+        let planes = b_sz * c;
+        let total = planes * h_out * w_out;
+        let src_buf = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+            _ => unreachable!("dtype checked above"),
+        };
+        let out = VulkanStorage::new(&self.device, total, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        if total == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![
+                planes as f32,
+                h as f32,
+                w as f32,
+                k_h as f32,
+                k_w as f32,
+                s_h as f32,
+                s_w as f32,
+                h_out as f32,
+                w_out as f32,
+            ],
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[f32]> = params_buf;
+        let src_buf = src_buf.clone();
+        let out_buf = out_buf.clone();
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_pool2d_slang_f32(
+                cbb, &kernels, name, &src_buf, &out_buf, &params, total,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(out)
+    }
+}
 impl BackendStorage for VulkanStorage {
     type Device = VulkanDevice;
 
@@ -1711,8 +1806,19 @@ impl BackendStorage for VulkanStorage {
         todo!()
     }
 
-    fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
-        todo!()
+    fn avg_pool2d(
+        &self,
+        l: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    ) -> Result<Self> {
+        self.pool2d(
+            l,
+            kernel_size,
+            stride,
+            candle_vulkan_kernels::KernelName::AvgPool2dF32,
+            "avg_pool2d",
+        )
     }
 
     fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
