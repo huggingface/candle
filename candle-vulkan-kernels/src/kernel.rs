@@ -132,6 +132,76 @@ pub enum KernelName {
     UnaryEluBf16,
     UnaryPowF8e4m3,
     UnaryEluF8e4m3,
+    AffineF16,
+    AffineF64,
+    UnaryLogF16,
+    UnaryAbsF16,
+    UnaryRecipF16,
+    UnarySqrF16,
+    UnaryGeluF16,
+    UnaryGeluErfF16,
+    UnaryErfF16,
+    UnaryReluF16,
+    UnaryTanhF16,
+    UnaryFloorF16,
+    UnaryCeilF16,
+    UnaryRoundF16,
+    UnarySignF16,
+    UnaryPowF16,
+    UnaryEluF16,
+    UnaryExpF16,
+    UnarySiluF16,
+    UnarySqrtF16,
+    UnarySinF16,
+    UnaryCosF16,
+    UnaryNegF16,
+    UnaryLogF64,
+    UnaryAbsF64,
+    UnaryRecipF64,
+    UnarySqrF64,
+    UnaryGeluF64,
+    UnaryGeluErfF64,
+    UnaryErfF64,
+    UnaryReluF64,
+    UnaryTanhF64,
+    UnaryFloorF64,
+    UnaryCeilF64,
+    UnaryRoundF64,
+    UnarySignF64,
+    UnaryPowF64,
+    UnaryEluF64,
+    UnaryExpF64,
+    UnarySiluF64,
+    UnarySqrtF64,
+    UnarySinF64,
+    UnaryCosF64,
+    UnaryNegF64,
+    BinaryAddF16,
+    BinarySubF16,
+    BinaryMulF16,
+    BinaryDivF16,
+    BinaryMaximumF16,
+    BinaryMinimumF16,
+    CmpEqF16,
+    CmpNeF16,
+    CmpLtF16,
+    CmpLeF16,
+    CmpGtF16,
+    CmpGeF16,
+    BinaryAddF64,
+    BinarySubF64,
+    BinaryMulF64,
+    BinaryDivF64,
+    BinaryMaximumF64,
+    BinaryMinimumF64,
+    CmpEqF64,
+    CmpNeF64,
+    CmpLtF64,
+    CmpLeF64,
+    CmpGtF64,
+    CmpGeF64,
+    WhereF16,
+    WhereF64,
     Copy2dF32,
     GatherIdxF32,
     GatherRowsF32,
@@ -278,6 +348,76 @@ impl AsRef<str> for KernelName {
             Self::UnaryEluBf16 => "main_elu",
             Self::UnaryPowF8e4m3 => "main_pow",
             Self::UnaryEluF8e4m3 => "main_elu",
+            Self::AffineF16 => "main",
+            Self::AffineF64 => "main",
+            Self::UnaryLogF16 => "main_log",
+            Self::UnaryAbsF16 => "main_abs",
+            Self::UnaryRecipF16 => "main_recip",
+            Self::UnarySqrF16 => "main_sqr",
+            Self::UnaryGeluF16 => "main_gelu",
+            Self::UnaryGeluErfF16 => "main_gelu_erf",
+            Self::UnaryErfF16 => "main_erf",
+            Self::UnaryReluF16 => "main_relu",
+            Self::UnaryTanhF16 => "main_tanh",
+            Self::UnaryFloorF16 => "main_floor",
+            Self::UnaryCeilF16 => "main_ceil",
+            Self::UnaryRoundF16 => "main_round",
+            Self::UnarySignF16 => "main_sign",
+            Self::UnaryPowF16 => "main_pow",
+            Self::UnaryEluF16 => "main_elu",
+            Self::UnaryExpF16 => "main_exp",
+            Self::UnarySiluF16 => "main_silu",
+            Self::UnarySqrtF16 => "main_sqrt",
+            Self::UnarySinF16 => "main_sin",
+            Self::UnaryCosF16 => "main_cos",
+            Self::UnaryNegF16 => "main_neg",
+            Self::UnaryLogF64 => "main_log",
+            Self::UnaryAbsF64 => "main_abs",
+            Self::UnaryRecipF64 => "main_recip",
+            Self::UnarySqrF64 => "main_sqr",
+            Self::UnaryGeluF64 => "main_gelu",
+            Self::UnaryGeluErfF64 => "main_gelu_erf",
+            Self::UnaryErfF64 => "main_erf",
+            Self::UnaryReluF64 => "main_relu",
+            Self::UnaryTanhF64 => "main_tanh",
+            Self::UnaryFloorF64 => "main_floor",
+            Self::UnaryCeilF64 => "main_ceil",
+            Self::UnaryRoundF64 => "main_round",
+            Self::UnarySignF64 => "main_sign",
+            Self::UnaryPowF64 => "main_pow",
+            Self::UnaryEluF64 => "main_elu",
+            Self::UnaryExpF64 => "main_exp",
+            Self::UnarySiluF64 => "main_silu",
+            Self::UnarySqrtF64 => "main_sqrt",
+            Self::UnarySinF64 => "main_sin",
+            Self::UnaryCosF64 => "main_cos",
+            Self::UnaryNegF64 => "main_neg",
+            Self::BinaryAddF16 => "main_add",
+            Self::BinarySubF16 => "main_sub",
+            Self::BinaryMulF16 => "main_mul",
+            Self::BinaryDivF16 => "main_div",
+            Self::BinaryMaximumF16 => "main_maximum",
+            Self::BinaryMinimumF16 => "main_minimum",
+            Self::CmpEqF16 => "main_eq",
+            Self::CmpNeF16 => "main_ne",
+            Self::CmpLtF16 => "main_lt",
+            Self::CmpLeF16 => "main_le",
+            Self::CmpGtF16 => "main_gt",
+            Self::CmpGeF16 => "main_ge",
+            Self::BinaryAddF64 => "main_add",
+            Self::BinarySubF64 => "main_sub",
+            Self::BinaryMulF64 => "main_mul",
+            Self::BinaryDivF64 => "main_div",
+            Self::BinaryMaximumF64 => "main_maximum",
+            Self::BinaryMinimumF64 => "main_minimum",
+            Self::CmpEqF64 => "main_eq",
+            Self::CmpNeF64 => "main_ne",
+            Self::CmpLtF64 => "main_lt",
+            Self::CmpLeF64 => "main_le",
+            Self::CmpGtF64 => "main_gt",
+            Self::CmpGeF64 => "main_ge",
+            Self::WhereF16 => "main",
+            Self::WhereF64 => "main",
             Self::Copy2dF32 => "main",
             Self::GatherIdxF32 => "main",
             Self::GatherRowsF32 => "main_gather_rows",
@@ -522,7 +662,51 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::UnarySqrtF8e4m3
         | KernelName::UnarySinF8e4m3
         | KernelName::UnaryCosF8e4m3
-        | KernelName::UnaryNegF8e4m3 => 3,
+        | KernelName::UnaryNegF8e4m3
+        | KernelName::AffineF16
+        | KernelName::AffineF64
+        | KernelName::UnaryLogF16
+        | KernelName::UnaryAbsF16
+        | KernelName::UnaryRecipF16
+        | KernelName::UnarySqrF16
+        | KernelName::UnaryGeluF16
+        | KernelName::UnaryGeluErfF16
+        | KernelName::UnaryErfF16
+        | KernelName::UnaryReluF16
+        | KernelName::UnaryTanhF16
+        | KernelName::UnaryFloorF16
+        | KernelName::UnaryCeilF16
+        | KernelName::UnaryRoundF16
+        | KernelName::UnarySignF16
+        | KernelName::UnaryPowF16
+        | KernelName::UnaryEluF16
+        | KernelName::UnaryExpF16
+        | KernelName::UnarySiluF16
+        | KernelName::UnarySqrtF16
+        | KernelName::UnarySinF16
+        | KernelName::UnaryCosF16
+        | KernelName::UnaryNegF16
+        | KernelName::UnaryLogF64
+        | KernelName::UnaryAbsF64
+        | KernelName::UnaryRecipF64
+        | KernelName::UnarySqrF64
+        | KernelName::UnaryGeluF64
+        | KernelName::UnaryGeluErfF64
+        | KernelName::UnaryErfF64
+        | KernelName::UnaryReluF64
+        | KernelName::UnaryTanhF64
+        | KernelName::UnaryFloorF64
+        | KernelName::UnaryCeilF64
+        | KernelName::UnaryRoundF64
+        | KernelName::UnarySignF64
+        | KernelName::UnaryPowF64
+        | KernelName::UnaryEluF64
+        | KernelName::UnaryExpF64
+        | KernelName::UnarySiluF64
+        | KernelName::UnarySqrtF64
+        | KernelName::UnarySinF64
+        | KernelName::UnaryCosF64
+        | KernelName::UnaryNegF64 => 3,
         KernelName::BinaryMaximumF32
         | KernelName::BinaryMinimumF32
         | KernelName::BinaryAddF32
@@ -558,10 +742,36 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::CmpLtF8e4m3
         | KernelName::CmpLeF8e4m3
         | KernelName::CmpGtF8e4m3
-        | KernelName::CmpGeF8e4m3 => 4,
+        | KernelName::CmpGeF8e4m3
+        | KernelName::BinaryAddF16
+        | KernelName::BinarySubF16
+        | KernelName::BinaryMulF16
+        | KernelName::BinaryDivF16
+        | KernelName::BinaryMaximumF16
+        | KernelName::BinaryMinimumF16
+        | KernelName::CmpEqF16
+        | KernelName::CmpNeF16
+        | KernelName::CmpLtF16
+        | KernelName::CmpLeF16
+        | KernelName::CmpGtF16
+        | KernelName::CmpGeF16
+        | KernelName::BinaryAddF64
+        | KernelName::BinarySubF64
+        | KernelName::BinaryMulF64
+        | KernelName::BinaryDivF64
+        | KernelName::BinaryMaximumF64
+        | KernelName::BinaryMinimumF64
+        | KernelName::CmpEqF64
+        | KernelName::CmpNeF64
+        | KernelName::CmpLtF64
+        | KernelName::CmpLeF64
+        | KernelName::CmpGtF64
+        | KernelName::CmpGeF64 => 4,
         KernelName::WhereF32
         | KernelName::WhereBf16
-        | KernelName::WhereF8e4m3 => 5,
+        | KernelName::WhereF8e4m3
+        | KernelName::WhereF16
+        | KernelName::WhereF64 => 5,
         KernelName::Copy2dF32 => 3,
         KernelName::GatherIdxF32 => 4,
         KernelName::GatherRowsF32 => 4,

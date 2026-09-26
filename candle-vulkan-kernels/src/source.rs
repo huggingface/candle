@@ -19,6 +19,16 @@ const WHERE_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where_bf
 const WHERE_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where_f8e4m3.spv"));
 const AFFINE_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine_bf16.spv"));
 const AFFINE_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine_f8e4m3.spv"));
+const BINARY_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_f16.spv"));
+const CMP_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_f16.spv"));
+const UNARY_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary_f16.spv"));
+const AFFINE_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine_f16.spv"));
+const WHERE_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where_f16.spv"));
+const BINARY_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_f64.spv"));
+const CMP_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_f64.spv"));
+const UNARY_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary_f64.spv"));
+const AFFINE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine_f64.spv"));
+const WHERE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where_f64.spv"));
 const COPY2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d.spv"));
 const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx.spv"));
 const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_ops.spv"));
@@ -69,6 +79,16 @@ pub enum Source {
     WhereF8e4m3,
     AffineBf16,
     AffineF8e4m3,
+    BinaryF16,
+    CmpF16,
+    UnaryF16,
+    AffineF16,
+    WhereF16,
+    BinaryF64,
+    CmpF64,
+    UnaryF64,
+    AffineF64,
+    WhereF64,
     Copy2dSlang,
     GatherIdxSlang,
     ReduceSlang,
@@ -194,6 +214,76 @@ impl Source {
             | KernelName::UnaryEluBf16
             | KernelName::UnaryPowF8e4m3
             | KernelName::UnaryEluF8e4m3
+            | KernelName::BinaryAddF16
+            | KernelName::BinarySubF16
+            | KernelName::BinaryMulF16
+            | KernelName::BinaryDivF16
+            | KernelName::BinaryMaximumF16
+            | KernelName::BinaryMinimumF16
+            | KernelName::CmpEqF16
+            | KernelName::CmpNeF16
+            | KernelName::CmpLtF16
+            | KernelName::CmpLeF16
+            | KernelName::CmpGtF16
+            | KernelName::CmpGeF16
+            | KernelName::UnaryLogF16
+            | KernelName::UnaryAbsF16
+            | KernelName::UnaryRecipF16
+            | KernelName::UnarySqrF16
+            | KernelName::UnaryGeluF16
+            | KernelName::UnaryGeluErfF16
+            | KernelName::UnaryErfF16
+            | KernelName::UnaryReluF16
+            | KernelName::UnaryTanhF16
+            | KernelName::UnaryFloorF16
+            | KernelName::UnaryCeilF16
+            | KernelName::UnaryRoundF16
+            | KernelName::UnarySignF16
+            | KernelName::UnaryPowF16
+            | KernelName::UnaryEluF16
+            | KernelName::UnaryExpF16
+            | KernelName::UnarySiluF16
+            | KernelName::UnarySqrtF16
+            | KernelName::UnarySinF16
+            | KernelName::UnaryCosF16
+            | KernelName::UnaryNegF16
+            | KernelName::AffineF16
+            | KernelName::WhereF16
+            | KernelName::BinaryAddF64
+            | KernelName::BinarySubF64
+            | KernelName::BinaryMulF64
+            | KernelName::BinaryDivF64
+            | KernelName::BinaryMaximumF64
+            | KernelName::BinaryMinimumF64
+            | KernelName::CmpEqF64
+            | KernelName::CmpNeF64
+            | KernelName::CmpLtF64
+            | KernelName::CmpLeF64
+            | KernelName::CmpGtF64
+            | KernelName::CmpGeF64
+            | KernelName::UnaryLogF64
+            | KernelName::UnaryAbsF64
+            | KernelName::UnaryRecipF64
+            | KernelName::UnarySqrF64
+            | KernelName::UnaryGeluF64
+            | KernelName::UnaryGeluErfF64
+            | KernelName::UnaryErfF64
+            | KernelName::UnaryReluF64
+            | KernelName::UnaryTanhF64
+            | KernelName::UnaryFloorF64
+            | KernelName::UnaryCeilF64
+            | KernelName::UnaryRoundF64
+            | KernelName::UnarySignF64
+            | KernelName::UnaryPowF64
+            | KernelName::UnaryEluF64
+            | KernelName::UnaryExpF64
+            | KernelName::UnarySiluF64
+            | KernelName::UnarySqrtF64
+            | KernelName::UnarySinF64
+            | KernelName::UnaryCosF64
+            | KernelName::UnaryNegF64
+            | KernelName::AffineF64
+            | KernelName::WhereF64
             | KernelName::Copy2dF32
             | KernelName::GatherIdxF32
             | KernelName::GatherRowsF32
@@ -263,6 +353,16 @@ impl Source {
             Self::WhereF8e4m3 => WHERE_F8E4M3_SPV,
             Self::AffineBf16 => AFFINE_BF16_SPV,
             Self::AffineF8e4m3 => AFFINE_F8E4M3_SPV,
+            Self::BinaryF16 => BINARY_F16_SPV,
+            Self::CmpF16 => CMP_F16_SPV,
+            Self::UnaryF16 => UNARY_F16_SPV,
+            Self::AffineF16 => AFFINE_F16_SPV,
+            Self::WhereF16 => WHERE_F16_SPV,
+            Self::BinaryF64 => BINARY_F64_SPV,
+            Self::CmpF64 => CMP_F64_SPV,
+            Self::UnaryF64 => UNARY_F64_SPV,
+            Self::AffineF64 => AFFINE_F64_SPV,
+            Self::WhereF64 => WHERE_F64_SPV,
             Self::Copy2dSlang => COPY2D_SLANG_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
             Self::ReduceSlang => REDUCE_SLANG_SPV,
@@ -313,6 +413,16 @@ impl AsRef<str> for Source {
             Self::WhereF8e4m3 => "where_f8e4m3",
             Self::AffineBf16 => "affine_bf16",
             Self::AffineF8e4m3 => "affine_f8e4m3",
+            Self::BinaryF16 => "binary_f16",
+            Self::CmpF16 => "cmp_f16",
+            Self::UnaryF16 => "unary_f16",
+            Self::AffineF16 => "affine_f16",
+            Self::WhereF16 => "where_f16",
+            Self::BinaryF64 => "binary_f64",
+            Self::CmpF64 => "cmp_f64",
+            Self::UnaryF64 => "unary_f64",
+            Self::AffineF64 => "affine_f64",
+            Self::WhereF64 => "where_f64",
             Self::Copy2dSlang => "copy2d",
             Self::GatherIdxSlang => "gather_idx",
             Self::ReduceSlang => "reduce",
