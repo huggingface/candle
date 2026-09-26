@@ -9,19 +9,21 @@ use crate::kernel::{KernelName, Kernels};
 use crate::source::Source;
 
 /// Records a Slang comparison dispatch onto `cbb`:
-/// `output[i] = (pred(input[i], rhs[rhs_offset(i)])) ? 1 : 0`.
-/// `params` must hold `[total, lhs_ndim, rhs_ndim, l0..l3, r0..r3]`.
-pub fn call_cmp_slang_f32(
+/// `output[i] = (pred(input[i], rhs[rhs_offset(i)])) ? 1 : 0`. `input` and
+/// `rhs` share the element type `T` (the dtype's GPU storage type); `output`
+/// is always `u8`. `params` must hold `[total, lhs_ndim, rhs_ndim, l0..l3, r0..r3]`.
+pub fn call_cmp_slang<T>(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
+    source: Source,
     name: KernelName,
-    input: &Subbuffer<[f32]>,
-    rhs: &Subbuffer<[f32]>,
+    input: &Subbuffer<[T]>,
+    rhs: &Subbuffer<[T]>,
     output: &Subbuffer<[u8]>,
     params: &Subbuffer<[f32]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
-    let entry = kernels.load_entry(Source::CmpSlang, name)?;
+    let entry = kernels.load_entry(source, name)?;
     let input_info = DescriptorBufferInfo {
         buffer: Some(input.buffer()),
         offset: input.offset(),

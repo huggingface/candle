@@ -1629,3 +1629,183 @@ fn test_vulkan_index_add() {
     }
     tracing::debug!("Vulkan device {gpu_id} index_add OK");
 }
+
+/// Binary ops for BF16 (emulated) vs the CPU backend.
+#[test]
+fn test_vulkan_binary_ops_bf16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    // Values representable in bf16 (integers and simple fractions).
+    let f: Vec<f32> = (0..32).map(|i| ((i % 9) as f32 - 4.0) * 0.5).collect();
+    let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let rv: Vec<half::bf16> = f.iter().rev().map(|x| half::bf16::from_f32(*x * 0.5 + 0.25)).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    // Same-dtype scalar broadcast (avoids to_dtype).
+    let s_dev = candle_core::Tensor::new(half::bf16::from_f32(1.5), &dev).unwrap().broadcast_as(shape.clone()).unwrap();
+    let s_cpu = candle_core::Tensor::new(half::bf16::from_f32(1.5), &cpu).unwrap().broadcast_as(shape.clone()).unwrap();
+
+    let mut cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+        ("add_s", l.add(&s_dev).unwrap(), lc.add(&s_cpu).unwrap()),
+        ("mul_s", l.mul(&s_dev).unwrap(), lc.mul(&s_cpu).unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<half::bf16> = g.to_vec2::<half::bf16>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<half::bf16> = c.to_vec2::<half::bf16>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if a.to_f32() != b.to_f32() {
+                failures += 1;
+                tracing::debug!("bf16 binary {name}: mismatch at {i}: gpu {} cpu {}", a.to_f32(), b.to_f32());
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} bf16 binary mismatches");
+    tracing::debug!("Vulkan device {gpu_id} bf16 binary ops OK");
+}
+
+/// Binary ops for F8E4M3 (emulated) vs the CPU backend.
+#[test]
+fn test_vulkan_binary_ops_f8e4m3() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    // Values within f8e4m3 finite range (|x| < 248).
+    let f: Vec<f32> = (0..32).map(|i| ((i % 11) as f32 - 5.0)).collect();
+    let lv: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+    let rv: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x * 0.5 + 1.0)).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    // Same-dtype scalar broadcast (avoids to_dtype).
+    let s_dev = candle_core::Tensor::new(microfloat::f8e4m3::from_f32(1.5), &dev).unwrap().broadcast_as(shape.clone()).unwrap();
+    let s_cpu = candle_core::Tensor::new(microfloat::f8e4m3::from_f32(1.5), &cpu).unwrap().broadcast_as(shape.clone()).unwrap();
+
+    let mut cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+        ("add_s", l.add(&s_dev).unwrap(), lc.add(&s_cpu).unwrap()),
+        ("mul_s", l.mul(&s_dev).unwrap(), lc.mul(&s_cpu).unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<microfloat::f8e4m3> = g.to_vec2::<microfloat::f8e4m3>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<microfloat::f8e4m3> = c.to_vec2::<microfloat::f8e4m3>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if a.to_f32() != b.to_f32() {
+                failures += 1;
+                tracing::debug!("f8e4m3 binary {name}: mismatch at {i}: gpu {} cpu {}", a.to_f32(), b.to_f32());
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} f8e4m3 binary mismatches");
+    tracing::debug!("Vulkan device {gpu_id} f8e4m3 binary ops OK");
+}
+
+/// Cmp ops for BF16 (emulated) vs the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops_bf16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) - 16.0).collect();
+    let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x * 0.25)).collect();
+    let rv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32((x % 7.0) - 3.0)).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    // Same-dtype scalar (avoids to_dtype).
+    let z_dev = candle_core::Tensor::new(half::bf16::from_f32(0.0), &dev).unwrap().broadcast_as(shape.clone()).unwrap();
+    let z_cpu = candle_core::Tensor::new(half::bf16::from_f32(0.0), &cpu).unwrap().broadcast_as(shape.clone()).unwrap();
+
+    let mut cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+        ("eq_s", l.eq(&z_dev).unwrap(), lc.eq(&z_cpu).unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if a != b {
+                failures += 1;
+                tracing::debug!("bf16 cmp {name}: mismatch at {i}: gpu {a} cpu {b}");
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} bf16 cmp mismatches");
+    tracing::debug!("Vulkan device {gpu_id} bf16 cmp ops OK");
+}
+
+/// Cmp ops for F8E4M3 (emulated) vs the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops_f8e4m3() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) - 16.0).collect();
+    let lv: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x * 0.5)).collect();
+    let rv: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32((x % 9.0) - 4.0)).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    // Same-dtype scalar (avoids to_dtype).
+    let z_dev = candle_core::Tensor::new(microfloat::f8e4m3::from_f32(0.0), &dev).unwrap().broadcast_as(shape.clone()).unwrap();
+    let z_cpu = candle_core::Tensor::new(microfloat::f8e4m3::from_f32(0.0), &cpu).unwrap().broadcast_as(shape.clone()).unwrap();
+
+    let mut cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+        ("eq_s", l.eq(&z_dev).unwrap(), lc.eq(&z_cpu).unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if a != b {
+                failures += 1;
+                tracing::debug!("f8e4m3 cmp {name}: mismatch at {i}: gpu {a} cpu {b}");
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} f8e4m3 cmp mismatches");
+    tracing::debug!("Vulkan device {gpu_id} f8e4m3 cmp ops OK");
+}

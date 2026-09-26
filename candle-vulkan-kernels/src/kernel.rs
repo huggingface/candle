@@ -61,6 +61,30 @@ pub enum KernelName {
     CmpLeF32,
     CmpGtF32,
     CmpGeF32,
+    BinaryAddBf16,
+    BinarySubBf16,
+    BinaryMulBf16,
+    BinaryDivBf16,
+    BinaryMaximumBf16,
+    BinaryMinimumBf16,
+    CmpEqBf16,
+    CmpNeBf16,
+    CmpLtBf16,
+    CmpLeBf16,
+    CmpGtBf16,
+    CmpGeBf16,
+    BinaryAddF8e4m3,
+    BinarySubF8e4m3,
+    BinaryMulF8e4m3,
+    BinaryDivF8e4m3,
+    BinaryMaximumF8e4m3,
+    BinaryMinimumF8e4m3,
+    CmpEqF8e4m3,
+    CmpNeF8e4m3,
+    CmpLtF8e4m3,
+    CmpLeF8e4m3,
+    CmpGtF8e4m3,
+    CmpGeF8e4m3,
     WhereF32,
     Copy2dF32,
     GatherIdxF32,
@@ -137,6 +161,30 @@ impl AsRef<str> for KernelName {
             Self::CmpLeF32 => "main_le",
             Self::CmpGtF32 => "main_gt",
             Self::CmpGeF32 => "main_ge",
+            Self::BinaryAddBf16 => "main_add",
+            Self::BinarySubBf16 => "main_sub",
+            Self::BinaryMulBf16 => "main_mul",
+            Self::BinaryDivBf16 => "main_div",
+            Self::BinaryMaximumBf16 => "main_maximum",
+            Self::BinaryMinimumBf16 => "main_minimum",
+            Self::CmpEqBf16 => "main_eq",
+            Self::CmpNeBf16 => "main_ne",
+            Self::CmpLtBf16 => "main_lt",
+            Self::CmpLeBf16 => "main_le",
+            Self::CmpGtBf16 => "main_gt",
+            Self::CmpGeBf16 => "main_ge",
+            Self::BinaryAddF8e4m3 => "main_add",
+            Self::BinarySubF8e4m3 => "main_sub",
+            Self::BinaryMulF8e4m3 => "main_mul",
+            Self::BinaryDivF8e4m3 => "main_div",
+            Self::BinaryMaximumF8e4m3 => "main_maximum",
+            Self::BinaryMinimumF8e4m3 => "main_minimum",
+            Self::CmpEqF8e4m3 => "main_eq",
+            Self::CmpNeF8e4m3 => "main_ne",
+            Self::CmpLtF8e4m3 => "main_lt",
+            Self::CmpLeF8e4m3 => "main_le",
+            Self::CmpGtF8e4m3 => "main_gt",
+            Self::CmpGeF8e4m3 => "main_ge",
             Self::WhereF32 => "main",
             Self::Copy2dF32 => "main",
             Self::GatherIdxF32 => "main",
@@ -350,7 +398,31 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::CmpLtF32
         | KernelName::CmpLeF32
         | KernelName::CmpGtF32
-        | KernelName::CmpGeF32 => 4,
+        | KernelName::CmpGeF32
+        | KernelName::BinaryAddBf16
+        | KernelName::BinarySubBf16
+        | KernelName::BinaryMulBf16
+        | KernelName::BinaryDivBf16
+        | KernelName::BinaryMaximumBf16
+        | KernelName::BinaryMinimumBf16
+        | KernelName::CmpEqBf16
+        | KernelName::CmpNeBf16
+        | KernelName::CmpLtBf16
+        | KernelName::CmpLeBf16
+        | KernelName::CmpGtBf16
+        | KernelName::CmpGeBf16
+        | KernelName::BinaryAddF8e4m3
+        | KernelName::BinarySubF8e4m3
+        | KernelName::BinaryMulF8e4m3
+        | KernelName::BinaryDivF8e4m3
+        | KernelName::BinaryMaximumF8e4m3
+        | KernelName::BinaryMinimumF8e4m3
+        | KernelName::CmpEqF8e4m3
+        | KernelName::CmpNeF8e4m3
+        | KernelName::CmpLtF8e4m3
+        | KernelName::CmpLeF8e4m3
+        | KernelName::CmpGtF8e4m3
+        | KernelName::CmpGeF8e4m3 => 4,
         KernelName::WhereF32 => 5,
         KernelName::Copy2dF32 => 3,
         KernelName::GatherIdxF32 => 4,

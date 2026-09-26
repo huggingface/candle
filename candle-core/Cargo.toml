@@ -45,6 +45,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 half = { workspace = true }
+microfloat = { workspace = true }
 candle-vulkan-kernels = { workspace = true }
 clap = { workspace = true }
 criterion = { workspace = true }

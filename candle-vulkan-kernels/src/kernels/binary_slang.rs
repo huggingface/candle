@@ -1,4 +1,4 @@
-//! Slang broadcast binary-op dispatch (maximum / minimum).
+//! Slang broadcast binary-op dispatch.
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
@@ -9,19 +9,21 @@ use crate::kernel::{KernelName, Kernels};
 use crate::source::Source;
 
 /// Records a Slang broadcast binary-op dispatch onto `cbb`:
-/// `output[i] = f(input[i], rhs[rhs_offset(i)])`. `params` must hold
-/// `[total, lhs_ndim, rhs_ndim, l0..l3, r0..r3]`.
-pub fn call_binary_slang_f32(
+/// `output[i] = f(input[i], rhs[rhs_offset(i)])`. `input`, `rhs` and `output`
+/// all share the element type `T` (the dtype's GPU storage type). `params` must
+/// hold `[total, lhs_ndim, rhs_ndim, l0..l3, r0..r3]`.
+pub fn call_binary_slang<T>(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
+    source: Source,
     name: KernelName,
-    input: &Subbuffer<[f32]>,
-    rhs: &Subbuffer<[f32]>,
-    output: &Subbuffer<[f32]>,
+    input: &Subbuffer<[T]>,
+    rhs: &Subbuffer<[T]>,
+    output: &Subbuffer<[T]>,
     params: &Subbuffer<[f32]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
-    let entry = kernels.load_entry(Source::BinarySlang, name)?;
+    let entry = kernels.load_entry(source, name)?;
     let input_info = DescriptorBufferInfo {
         buffer: Some(input.buffer()),
         offset: input.offset(),

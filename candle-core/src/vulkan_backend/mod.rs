@@ -1428,11 +1428,20 @@ impl BackendStorage for VulkanStorage {
     }
 
     fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
-        use candle_vulkan_kernels::KernelName;
-        if self.dtype != DType::F32 || rhs.dtype != DType::F32 {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        if dtype != rhs.dtype {
             return Err(Error::Vulkan(
-                "cmp: only F32 inputs supported on the Vulkan backend".to_string().into(),
+                "cmp: lhs and rhs must have the same dtype".to_string().into(),
             ));
+        }
+        let supported = matches!(dtype, DType::F32 | DType::BF16 | DType::F8E4M3);
+        if !supported {
+            return Err(Error::Vulkan(format!(
+                "cmp: dtype {:?} not supported on the Vulkan backend",
+                dtype
+            )
+            .into()));
         }
         let (start, len) = match lhs_l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
@@ -1442,23 +1451,15 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        let input = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
-            _ => unreachable!("dtype checked above"),
-        };
-        let rhs_buf = match &rhs.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!("dtype checked above"),
-        };
         // U8 output storage (1 where the predicate holds, 0 otherwise).
         let out = VulkanStorage::new(&self.device, len, DType::U8)?;
+        if len == 0 {
+            return Ok(out);
+        }
         let out_buf = match &out.buffer {
             VulkanStorageBuffer::U8(b) => b.clone(),
             _ => unreachable!(),
         };
-        if len == 0 {
-            return Ok(out);
-        }
         let kernels = self.device.kernels();
         let lhs_dims: Vec<usize> = lhs_l.dims().to_vec();
         if lhs_dims.len() > 4 {
@@ -1472,14 +1473,6 @@ impl BackendStorage for VulkanStorage {
             .zip(rhs_l.stride().iter())
             .map(|(d, s)| if *s == 0 { 1 } else { *d })
             .collect();
-        let name = match op {
-            CmpOp::Eq => KernelName::CmpEqF32,
-            CmpOp::Ne => KernelName::CmpNeF32,
-            CmpOp::Lt => KernelName::CmpLtF32,
-            CmpOp::Le => KernelName::CmpLeF32,
-            CmpOp::Gt => KernelName::CmpGtF32,
-            CmpOp::Ge => KernelName::CmpGeF32,
-        };
         let mut params = [0.0f32; 11];
         params[0] = len as f32;
         params[1] = lhs_dims.len() as f32;
@@ -1505,15 +1498,85 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
-        let input = input.clone();
-        let rhs_buf = rhs_buf.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_cmp_slang_f32(
-                cbb, &kernels, name, &input, &rhs_buf, &out_buf, &params, len,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+
+        match dtype {
+            DType::F32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqF32,
+                    CmpOp::Ne => KernelName::CmpNeF32,
+                    CmpOp::Lt => KernelName::CmpLtF32,
+                    CmpOp::Le => KernelName::CmpLeF32,
+                    CmpOp::Gt => KernelName::CmpGtF32,
+                    CmpOp::Ge => KernelName::CmpGeF32,
+                };
+                let (input, rhs_buf, out_buf, params) = (input, rhs_buf, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<f32>(
+                        cbb, &kernels, Source::CmpSlang, name, &input, &rhs_buf, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqBf16,
+                    CmpOp::Ne => KernelName::CmpNeBf16,
+                    CmpOp::Lt => KernelName::CmpLtBf16,
+                    CmpOp::Le => KernelName::CmpLeBf16,
+                    CmpOp::Gt => KernelName::CmpGtBf16,
+                    CmpOp::Ge => KernelName::CmpGeBf16,
+                };
+                let (input, rhs_buf, out_buf, params) = (input, rhs_buf, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<half::bf16>(
+                        cbb, &kernels, Source::CmpBf16, name, &input, &rhs_buf, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqF8e4m3,
+                    CmpOp::Ne => KernelName::CmpNeF8e4m3,
+                    CmpOp::Lt => KernelName::CmpLtF8e4m3,
+                    CmpOp::Le => KernelName::CmpLeF8e4m3,
+                    CmpOp::Gt => KernelName::CmpGtF8e4m3,
+                    CmpOp::Ge => KernelName::CmpGeF8e4m3,
+                };
+                let (input, rhs_buf, out_buf, params) = (input, rhs_buf, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<microfloat::f8e4m3>(
+                        cbb, &kernels, Source::CmpF8e4m3, name, &input, &rhs_buf, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("supported dtype checked above"),
+        }
         Ok(out)
     }
 
@@ -1653,11 +1716,20 @@ impl BackendStorage for VulkanStorage {
     }
 
     fn binary_impl<B: BinaryOpT>(&self, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
-        use candle_vulkan_kernels::KernelName;
-        if self.dtype != DType::F32 || rhs.dtype != DType::F32 {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        if dtype != rhs.dtype {
             return Err(Error::Vulkan(
-                "binary: only F32 supported on the Vulkan backend".to_string().into(),
+                "binary: lhs and rhs must have the same dtype".to_string().into(),
             ));
+        }
+        let supported = matches!(dtype, DType::F32 | DType::BF16 | DType::F8E4M3);
+        if !supported {
+            return Err(Error::Vulkan(format!(
+                "binary: dtype {:?} not supported on the Vulkan backend",
+                dtype
+            )
+            .into()));
         }
         let (start, len) = match lhs_l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
@@ -1669,21 +1741,7 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        let input = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
-            _ => unreachable!("dtype checked above"),
-        };
-        // The rhs buffer is always bound whole: broadcast offsets are
-        // computed relative to the buffer start.
-        let rhs_buf = match &rhs.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = self.device.zeros_impl(lhs_l.shape(), DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = self.device.zeros_impl(lhs_l.shape(), dtype)?;
         if len == 0 {
             return Ok(out);
         }
@@ -1701,54 +1759,126 @@ impl BackendStorage for VulkanStorage {
             .zip(rhs_l.stride().iter())
             .map(|(d, s)| if *s == 0 { 1 } else { *d })
             .collect();
-        match B::NAME {
-            "add" | "sub" | "mul" | "div" | "maximum" | "minimum" => {
+        let mut params = [0.0f32; 11];
+        params[0] = len as f32;
+        params[1] = lhs_dims.len() as f32;
+        params[2] = rhs_dims.len() as f32;
+        for (slot, d) in params[3..7].iter_mut().zip(lhs_dims.iter()) {
+            *slot = *d as f32;
+        }
+        for (slot, d) in params[7..11].iter_mut().zip(rhs_dims.iter()) {
+            *slot = *d as f32;
+        }
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            params.to_vec(),
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[f32]> = params_buf;
+
+        match dtype {
+            DType::F32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddF32,
                     "sub" => KernelName::BinarySubF32,
                     "mul" => KernelName::BinaryMulF32,
                     "div" => KernelName::BinaryDivF32,
                     "maximum" => KernelName::BinaryMaximumF32,
-                    _ => KernelName::BinaryMinimumF32,
+                    "minimum" => KernelName::BinaryMinimumF32,
+                    _ => return Err(Error::Vulkan(format!("binary: unsupported op {}", B::NAME).into())),
                 };
-                let mut params = [0.0f32; 11];
-                params[0] = len as f32;
-                params[1] = lhs_dims.len() as f32;
-                params[2] = rhs_dims.len() as f32;
-                for (slot, d) in params[3..7].iter_mut().zip(lhs_dims.iter()) {
-                    *slot = *d as f32;
-                }
-                for (slot, d) in params[7..11].iter_mut().zip(rhs_dims.iter()) {
-                    *slot = *d as f32;
-                }
-                let params_buf = Buffer::from_iter(
-                    self.device.mem_alloc(),
-                    &BufferCreateInfo {
-                        usage: BufferUsage::STORAGE_BUFFER,
-                        ..Default::default()
-                    },
-                    &AllocationCreateInfo {
-                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                            | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                        ..Default::default()
-                    },
-                    params.to_vec(),
-                )
-                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                let params: Subbuffer<[f32]> = params_buf;
-                let input = input.clone();
-                let rhs_buf = rhs_buf.clone();
-                let out_buf = out_buf.clone();
+                let (input, rhs_buf, out_buf, params) = (input, rhs_buf, out_buf, params.clone());
                 self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_binary_slang_f32(
-                        cbb, &kernels, name, &input, &rhs_buf, &out_buf, &params, len,
+                    candle_vulkan_kernels::call_binary_slang::<f32>(
+                        cbb, &kernels, Source::BinarySlang, name, &input, &rhs_buf, &out_buf, &params, len,
                     )
                     .map_err(|e| e.to_string())
                 })?;
-                Ok(out)
             }
-            _ => Err(Error::Vulkan(format!("binary: unsupported op {}", B::NAME).into())),
+            DType::BF16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddBf16,
+                    "sub" => KernelName::BinarySubBf16,
+                    "mul" => KernelName::BinaryMulBf16,
+                    "div" => KernelName::BinaryDivBf16,
+                    "maximum" => KernelName::BinaryMaximumBf16,
+                    "minimum" => KernelName::BinaryMinimumBf16,
+                    _ => return Err(Error::Vulkan(format!("binary: unsupported op {}", B::NAME).into())),
+                };
+                let (input, rhs_buf, out_buf, params) = (input, rhs_buf, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_binary_slang::<half::bf16>(
+                        cbb, &kernels, Source::BinaryBf16, name, &input, &rhs_buf, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddF8e4m3,
+                    "sub" => KernelName::BinarySubF8e4m3,
+                    "mul" => KernelName::BinaryMulF8e4m3,
+                    "div" => KernelName::BinaryDivF8e4m3,
+                    "maximum" => KernelName::BinaryMaximumF8e4m3,
+                    "minimum" => KernelName::BinaryMinimumF8e4m3,
+                    _ => return Err(Error::Vulkan(format!("binary: unsupported op {}", B::NAME).into())),
+                };
+                let (input, rhs_buf, out_buf, params) = (input, rhs_buf, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_binary_slang::<microfloat::f8e4m3>(
+                        cbb, &kernels, Source::BinaryF8e4m3, name, &input, &rhs_buf, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("supported dtype checked above"),
         }
+        Ok(out)
     }
 
     fn where_cond(&self, l: &Layout, t: &Self, t_l: &Layout, f: &Self, f_l: &Layout) -> Result<Self> {

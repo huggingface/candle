@@ -8,6 +8,10 @@ const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set
 const UNARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary.spv"));
 const BINARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary.spv"));
 const CMP_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp.spv"));
+const BINARY_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_bf16.spv"));
+const CMP_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_bf16.spv"));
+const BINARY_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_f8e4m3.spv"));
+const CMP_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_f8e4m3.spv"));
 const WHERE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where.spv"));
 const COPY2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d.spv"));
 const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx.spv"));
@@ -48,6 +52,10 @@ pub enum Source {
     UnarySlang,
     BinarySlang,
     CmpSlang,
+    BinaryBf16,
+    CmpBf16,
+    BinaryF8e4m3,
+    CmpF8e4m3,
     WhereSlang,
     Copy2dSlang,
     GatherIdxSlang,
@@ -103,6 +111,30 @@ impl Source {
             | KernelName::CmpLeF32
             | KernelName::CmpGtF32
             | KernelName::CmpGeF32
+            | KernelName::BinaryAddBf16
+            | KernelName::BinarySubBf16
+            | KernelName::BinaryMulBf16
+            | KernelName::BinaryDivBf16
+            | KernelName::BinaryMaximumBf16
+            | KernelName::BinaryMinimumBf16
+            | KernelName::CmpEqBf16
+            | KernelName::CmpNeBf16
+            | KernelName::CmpLtBf16
+            | KernelName::CmpLeBf16
+            | KernelName::CmpGtBf16
+            | KernelName::CmpGeBf16
+            | KernelName::BinaryAddF8e4m3
+            | KernelName::BinarySubF8e4m3
+            | KernelName::BinaryMulF8e4m3
+            | KernelName::BinaryDivF8e4m3
+            | KernelName::BinaryMaximumF8e4m3
+            | KernelName::BinaryMinimumF8e4m3
+            | KernelName::CmpEqF8e4m3
+            | KernelName::CmpNeF8e4m3
+            | KernelName::CmpLtF8e4m3
+            | KernelName::CmpLeF8e4m3
+            | KernelName::CmpGtF8e4m3
+            | KernelName::CmpGeF8e4m3
             | KernelName::WhereF32
             | KernelName::Copy2dF32
             | KernelName::GatherIdxF32
@@ -162,6 +194,10 @@ impl Source {
             Self::UnarySlang => UNARY_SLANG_SPV,
             Self::BinarySlang => BINARY_SLANG_SPV,
             Self::CmpSlang => CMP_SLANG_SPV,
+            Self::BinaryBf16 => BINARY_BF16_SPV,
+            Self::CmpBf16 => CMP_BF16_SPV,
+            Self::BinaryF8e4m3 => BINARY_F8E4M3_SPV,
+            Self::CmpF8e4m3 => CMP_F8E4M3_SPV,
             Self::WhereSlang => WHERE_SLANG_SPV,
             Self::Copy2dSlang => COPY2D_SLANG_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
@@ -202,6 +238,10 @@ impl AsRef<str> for Source {
             Self::UnarySlang => "unary",
             Self::BinarySlang => "binary",
             Self::CmpSlang => "cmp",
+            Self::BinaryBf16 => "binary_bf16",
+            Self::CmpBf16 => "cmp_bf16",
+            Self::BinaryF8e4m3 => "binary_f8e4m3",
+            Self::CmpF8e4m3 => "cmp_f8e4m3",
             Self::WhereSlang => "where",
             Self::Copy2dSlang => "copy2d",
             Self::GatherIdxSlang => "gather_idx",
