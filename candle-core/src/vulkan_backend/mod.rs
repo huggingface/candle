@@ -2605,6 +2605,24 @@ impl BackendStorage for VulkanStorage {
                     .map(|v| f16::from_f32(bf16::to_f32(*v)))
                     .collect(),
             ),
+            (CpuStorage::F32(d), DType::F64) => {
+                CpuStorage::F64(d[start..start + len].iter().map(|v| *v as f64).collect())
+            }
+            (CpuStorage::F64(d), DType::F32) => {
+                CpuStorage::F32(d[start..start + len].iter().map(|v| *v as f32).collect())
+            }
+            (CpuStorage::F64(d), DType::F16) => CpuStorage::F16(
+                d[start..start + len]
+                    .iter()
+                    .map(|v| f16::from_f32(*v as f32))
+                    .collect(),
+            ),
+            (CpuStorage::F16(d), DType::F64) => CpuStorage::F64(
+                d[start..start + len]
+                    .iter()
+                    .map(|v| f16::to_f32(*v) as f64)
+                    .collect(),
+            ),
             _ => {
                 let msg = format!(
                     "to_dtype: {:?} -> {:?} not supported on the Vulkan backend",
@@ -5412,9 +5430,9 @@ impl BackendStorage for VulkanStorage {
         // Host-side: needs float atomics for duplicate index positions, which
         // are not part of the Vulkan core (SPV_EXT_shader_atomic_float_add is
         // device-dependent). Drain, apply the CPU index-add semantics, upload.
-        if self.dtype != DType::F32 || src.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) || self.dtype != src.dtype {
             return Err(Error::Vulkan(
-                "index_add: only F32 data supported on the Vulkan backend"
+                "index_add: unsupported dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -5466,12 +5484,52 @@ impl BackendStorage for VulkanStorage {
         }
         // Drain any deferred encodes before reading the buffer contents.
         self.device.synchronize()?;
-        let v1: Vec<f32> = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
+        let v1_cpu = match self.dtype {
+            DType::F32 => {
+                let v: Vec<f32> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
+                    _ => unreachable!(),
+                };
+                CpuStorage::F32(v)
+            }
+            DType::F16 => {
+                let v: Vec<half::f16> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => Self::copy_to_host(&self.device, b)?,
+                    _ => unreachable!(),
+                };
+                CpuStorage::F16(v)
+            }
+            DType::F64 => {
+                let v: Vec<f64> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => Self::copy_to_host(&self.device, b)?,
+                    _ => unreachable!(),
+                };
+                CpuStorage::F64(v)
+            }
             _ => unreachable!("dtype checked above"),
         };
-        let src_v: Vec<f32> = match &src.buffer {
-            VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
+        let src_cpu = match src.dtype {
+            DType::F32 => {
+                let v: Vec<f32> = match &src.buffer {
+                    VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
+                    _ => unreachable!(),
+                };
+                CpuStorage::F32(v)
+            }
+            DType::F16 => {
+                let v: Vec<half::f16> = match &src.buffer {
+                    VulkanStorageBuffer::F16(b) => Self::copy_to_host(&self.device, b)?,
+                    _ => unreachable!(),
+                };
+                CpuStorage::F16(v)
+            }
+            DType::F64 => {
+                let v: Vec<f64> = match &src.buffer {
+                    VulkanStorageBuffer::F64(b) => Self::copy_to_host(&self.device, b)?,
+                    _ => unreachable!(),
+                };
+                CpuStorage::F64(v)
+            }
             _ => unreachable!("dtype checked above"),
         };
         let ids_cpu = match &ids.buffer {
@@ -5495,8 +5553,7 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        let v1_cpu = CpuStorage::F32(v1);
-        let src_cpu = CpuStorage::F32(src_v);
+
         let l_c = Layout::contiguous_with_offset(l.dims().to_vec(), dst_start);
         let s_c = Layout::contiguous_with_offset(src_l.dims().to_vec(), src_start);
         let i_c = Layout::contiguous_with_offset(ids_l.dims().to_vec(), ids_start);
@@ -5841,9 +5898,11 @@ impl BackendStorage for VulkanStorage {
         src_offset: usize,
         dst_offset: usize,
     ) -> Result<()> {
-        if self.dtype != DType::F32 || dst.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64)
+            || !matches!(dst.dtype, DType::F32 | DType::F16 | DType::F64)
+        {
             return Err(Error::Vulkan(
-                "copy2d: only F32 supported on the Vulkan backend"
+                "copy2d: unsupported dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -5852,14 +5911,6 @@ impl BackendStorage for VulkanStorage {
         if total == 0 {
             return Ok(());
         }
-        let src_buf = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!("dtype checked above"),
-        };
-        let dst_buf = match &dst.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!("dtype checked above"),
-        };
         let kernels = self.device.kernels();
         let params_buf = Buffer::from_iter(
             self.device.mem_alloc(),
@@ -5883,19 +5934,87 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_copy2d_slang::<f32>(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::Source::Copy2dSlang,
-                candle_vulkan_kernels::KernelName::Copy2dF32,
-                &src_buf,
-                &dst_buf,
-                &params,
-                total,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+        match self.dtype {
+            DType::F32 => {
+                let src_buf = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let dst_buf = match &dst.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+                let params = params.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dSlang,
+                        candle_vulkan_kernels::KernelName::Copy2dF32,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let src_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let dst_buf: Subbuffer<[half::f16]> = match &dst.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+                let params = params.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dF16,
+                        candle_vulkan_kernels::KernelName::Copy2dF16,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let src_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let dst_buf: Subbuffer<[f64]> = match &dst.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+                let params = params.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dF64,
+                        candle_vulkan_kernels::KernelName::Copy2dF64,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("dtype checked above"),
+        }
         Ok(())
     }
 

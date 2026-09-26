@@ -4276,3 +4276,26 @@ fn test_vulkan_gather_f16() {
         assert!((a - b).abs() < 0.05f32, "got {} vs exp {}", a, b);
     }
 }
+
+#[test]
+fn test_vulkan_to_dtype_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let f: Vec<f64> = (0..16).map(|i| (i as f64) * 0.5 - 3.0).collect();
+    let t = candle_core::Tensor::new(f.as_slice(), &dev).unwrap();
+    // F64 -> F32
+    let t32 = t.to_dtype(candle_core::DType::F32).unwrap();
+    let got: Vec<f32> = t32.flatten_all().unwrap().to_vec1().unwrap();
+    for (g, e) in got.iter().zip(f.iter().map(|x| *x as f32)) {
+        assert!((g - e).abs() < 1e-6f32, "got {} vs exp {}", g, e);
+    }
+    // F32 -> F64
+    let f32: Vec<f32> = (0..16).map(|i| (i as f32) * 0.5 - 3.0).collect();
+    let t32 = candle_core::Tensor::new(f32.as_slice(), &dev).unwrap();
+    let t64 = t32.to_dtype(candle_core::DType::F64).unwrap();
+    let got: Vec<f64> = t64.flatten_all().unwrap().to_vec1().unwrap();
+    for (g, e) in got.iter().zip(f32.iter().map(|x| *x as f64)) {
+        assert!((g - e).abs() < 1e-6f64, "got {} vs exp {}", g, e);
+    }
+}
