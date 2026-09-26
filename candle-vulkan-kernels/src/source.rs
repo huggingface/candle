@@ -29,6 +29,16 @@ const CMP_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_f64.spv
 const UNARY_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary_f64.spv"));
 const AFFINE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine_f64.spv"));
 const WHERE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where_f64.spv"));
+const BINARY_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_u8.spv"));
+const CMP_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_u8.spv"));
+const BINARY_U32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_u32.spv"));
+const CMP_U32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_u32.spv"));
+const BINARY_I16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_i16.spv"));
+const CMP_I16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_i16.spv"));
+const BINARY_I32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_i32.spv"));
+const CMP_I32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_i32.spv"));
+const BINARY_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_i64.spv"));
+const CMP_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_i64.spv"));
 const COPY2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d.spv"));
 const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx.spv"));
 const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_ops.spv"));
@@ -89,6 +99,16 @@ pub enum Source {
     UnaryF64,
     AffineF64,
     WhereF64,
+    BinaryU8,
+    CmpU8,
+    BinaryU32,
+    CmpU32,
+    BinaryI16,
+    CmpI16,
+    BinaryI32,
+    CmpI32,
+    BinaryI64,
+    CmpI64,
     Copy2dSlang,
     GatherIdxSlang,
     ReduceSlang,
@@ -284,6 +304,66 @@ impl Source {
             | KernelName::UnaryNegF64
             | KernelName::AffineF64
             | KernelName::WhereF64
+            | KernelName::BinaryAddU8
+            | KernelName::BinarySubU8
+            | KernelName::BinaryMulU8
+            | KernelName::BinaryDivU8
+            | KernelName::BinaryMaximumU8
+            | KernelName::BinaryMinimumU8
+            | KernelName::CmpEqU8
+            | KernelName::CmpNeU8
+            | KernelName::CmpLtU8
+            | KernelName::CmpLeU8
+            | KernelName::CmpGtU8
+            | KernelName::CmpGeU8
+            | KernelName::BinaryAddU32
+            | KernelName::BinarySubU32
+            | KernelName::BinaryMulU32
+            | KernelName::BinaryDivU32
+            | KernelName::BinaryMaximumU32
+            | KernelName::BinaryMinimumU32
+            | KernelName::CmpEqU32
+            | KernelName::CmpNeU32
+            | KernelName::CmpLtU32
+            | KernelName::CmpLeU32
+            | KernelName::CmpGtU32
+            | KernelName::CmpGeU32
+            | KernelName::BinaryAddI16
+            | KernelName::BinarySubI16
+            | KernelName::BinaryMulI16
+            | KernelName::BinaryDivI16
+            | KernelName::BinaryMaximumI16
+            | KernelName::BinaryMinimumI16
+            | KernelName::CmpEqI16
+            | KernelName::CmpNeI16
+            | KernelName::CmpLtI16
+            | KernelName::CmpLeI16
+            | KernelName::CmpGtI16
+            | KernelName::CmpGeI16
+            | KernelName::BinaryAddI32
+            | KernelName::BinarySubI32
+            | KernelName::BinaryMulI32
+            | KernelName::BinaryDivI32
+            | KernelName::BinaryMaximumI32
+            | KernelName::BinaryMinimumI32
+            | KernelName::CmpEqI32
+            | KernelName::CmpNeI32
+            | KernelName::CmpLtI32
+            | KernelName::CmpLeI32
+            | KernelName::CmpGtI32
+            | KernelName::CmpGeI32
+            | KernelName::BinaryAddI64
+            | KernelName::BinarySubI64
+            | KernelName::BinaryMulI64
+            | KernelName::BinaryDivI64
+            | KernelName::BinaryMaximumI64
+            | KernelName::BinaryMinimumI64
+            | KernelName::CmpEqI64
+            | KernelName::CmpNeI64
+            | KernelName::CmpLtI64
+            | KernelName::CmpLeI64
+            | KernelName::CmpGtI64
+            | KernelName::CmpGeI64
             | KernelName::Copy2dF32
             | KernelName::GatherIdxF32
             | KernelName::GatherRowsF32
@@ -363,6 +443,16 @@ impl Source {
             Self::UnaryF64 => UNARY_F64_SPV,
             Self::AffineF64 => AFFINE_F64_SPV,
             Self::WhereF64 => WHERE_F64_SPV,
+            Self::BinaryU8 => BINARY_U8_SPV,
+            Self::CmpU8 => CMP_U8_SPV,
+            Self::BinaryU32 => BINARY_U32_SPV,
+            Self::CmpU32 => CMP_U32_SPV,
+            Self::BinaryI16 => BINARY_I16_SPV,
+            Self::CmpI16 => CMP_I16_SPV,
+            Self::BinaryI32 => BINARY_I32_SPV,
+            Self::CmpI32 => CMP_I32_SPV,
+            Self::BinaryI64 => BINARY_I64_SPV,
+            Self::CmpI64 => CMP_I64_SPV,
             Self::Copy2dSlang => COPY2D_SLANG_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
             Self::ReduceSlang => REDUCE_SLANG_SPV,
@@ -423,6 +513,16 @@ impl AsRef<str> for Source {
             Self::UnaryF64 => "unary_f64",
             Self::AffineF64 => "affine_f64",
             Self::WhereF64 => "where_f64",
+            Self::BinaryU8 => "binary_u8",
+            Self::CmpU8 => "cmp_u8",
+            Self::BinaryU32 => "binary_u32",
+            Self::CmpU32 => "cmp_u32",
+            Self::BinaryI16 => "binary_i16",
+            Self::CmpI16 => "cmp_i16",
+            Self::BinaryI32 => "binary_i32",
+            Self::CmpI32 => "cmp_i32",
+            Self::BinaryI64 => "binary_i64",
+            Self::CmpI64 => "cmp_i64",
             Self::Copy2dSlang => "copy2d",
             Self::GatherIdxSlang => "gather_idx",
             Self::ReduceSlang => "reduce",

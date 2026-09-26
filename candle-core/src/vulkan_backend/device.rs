@@ -19,7 +19,10 @@ use vulkano::device::{
     Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
 };
 use vulkano::instance::{Instance, InstanceCreateInfo};
-use vulkano::memory::allocator::{AllocationCreateInfo, GenericMemoryAllocatorCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::memory::allocator::{
+    AllocationCreateInfo, GenericMemoryAllocatorCreateInfo, MemoryTypeFilter,
+    StandardMemoryAllocator,
+};
 use vulkano::sync::fence::{Fence, FenceCreateInfo};
 use vulkano::VulkanLibrary;
 
@@ -112,7 +115,8 @@ impl std::fmt::Debug for VulkanDevice {
 
 impl VulkanDevice {
     pub fn new(gpu_id: usize) -> Result<Self> {
-        let library = unsafe { VulkanLibrary::new() }.map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let library =
+            unsafe { VulkanLibrary::new() }.map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let instance = Instance::new(
             &library,
             &InstanceCreateInfo {
@@ -181,7 +185,10 @@ impl VulkanDevice {
             .into_iter()
             .next()
             .ok_or_else(|| Error::Vulkan("no queue returned".to_string().into()))?;
-        let mem_alloc = Arc::new(StandardMemoryAllocator::new(&device, &GenericMemoryAllocatorCreateInfo::default()));
+        let mem_alloc = Arc::new(StandardMemoryAllocator::new(
+            &device,
+            &GenericMemoryAllocatorCreateInfo::default(),
+        ));
         let cbb_alloc = Arc::new(StandardCommandBufferAllocator::new(
             &device,
             &StandardCommandBufferAllocatorCreateInfo::default(),
@@ -269,7 +276,6 @@ impl VulkanDevice {
     pub fn physical_device(&self) -> &vulkano::device::physical::PhysicalDevice {
         self.device.physical_device()
     }
-
 
     /// Uploads `data` into a device f32 storage buffer in VRAM. A
     /// host-visible staging copy is recorded onto the pending batch

@@ -200,6 +200,66 @@ pub enum KernelName {
     CmpLeF64,
     CmpGtF64,
     CmpGeF64,
+    BinaryAddU8,
+    BinarySubU8,
+    BinaryMulU8,
+    BinaryDivU8,
+    BinaryMaximumU8,
+    BinaryMinimumU8,
+    BinaryAddU32,
+    BinarySubU32,
+    BinaryMulU32,
+    BinaryDivU32,
+    BinaryMaximumU32,
+    BinaryMinimumU32,
+    BinaryAddI16,
+    BinarySubI16,
+    BinaryMulI16,
+    BinaryDivI16,
+    BinaryMaximumI16,
+    BinaryMinimumI16,
+    BinaryAddI32,
+    BinarySubI32,
+    BinaryMulI32,
+    BinaryDivI32,
+    BinaryMaximumI32,
+    BinaryMinimumI32,
+    BinaryAddI64,
+    BinarySubI64,
+    BinaryMulI64,
+    BinaryDivI64,
+    BinaryMaximumI64,
+    BinaryMinimumI64,
+    CmpEqU8,
+    CmpNeU8,
+    CmpLtU8,
+    CmpLeU8,
+    CmpGtU8,
+    CmpGeU8,
+    CmpEqU32,
+    CmpNeU32,
+    CmpLtU32,
+    CmpLeU32,
+    CmpGtU32,
+    CmpGeU32,
+    CmpEqI16,
+    CmpNeI16,
+    CmpLtI16,
+    CmpLeI16,
+    CmpGtI16,
+    CmpGeI16,
+    CmpEqI32,
+    CmpNeI32,
+    CmpLtI32,
+    CmpLeI32,
+    CmpGtI32,
+    CmpGeI32,
+    CmpEqI64,
+    CmpNeI64,
+    CmpLtI64,
+    CmpLeI64,
+    CmpGtI64,
+    CmpGeI64,
     WhereF16,
     WhereF64,
     Copy2dF32,
@@ -416,6 +476,66 @@ impl AsRef<str> for KernelName {
             Self::CmpLeF64 => "main_le",
             Self::CmpGtF64 => "main_gt",
             Self::CmpGeF64 => "main_ge",
+            Self::BinaryAddU8 => "main_add",
+            Self::BinarySubU8 => "main_sub",
+            Self::BinaryMulU8 => "main_mul",
+            Self::BinaryDivU8 => "main_div",
+            Self::BinaryMaximumU8 => "main_maximum",
+            Self::BinaryMinimumU8 => "main_minimum",
+            Self::BinaryAddU32 => "main_add",
+            Self::BinarySubU32 => "main_sub",
+            Self::BinaryMulU32 => "main_mul",
+            Self::BinaryDivU32 => "main_div",
+            Self::BinaryMaximumU32 => "main_maximum",
+            Self::BinaryMinimumU32 => "main_minimum",
+            Self::BinaryAddI16 => "main_add",
+            Self::BinarySubI16 => "main_sub",
+            Self::BinaryMulI16 => "main_mul",
+            Self::BinaryDivI16 => "main_div",
+            Self::BinaryMaximumI16 => "main_maximum",
+            Self::BinaryMinimumI16 => "main_minimum",
+            Self::BinaryAddI32 => "main_add",
+            Self::BinarySubI32 => "main_sub",
+            Self::BinaryMulI32 => "main_mul",
+            Self::BinaryDivI32 => "main_div",
+            Self::BinaryMaximumI32 => "main_maximum",
+            Self::BinaryMinimumI32 => "main_minimum",
+            Self::BinaryAddI64 => "main_add",
+            Self::BinarySubI64 => "main_sub",
+            Self::BinaryMulI64 => "main_mul",
+            Self::BinaryDivI64 => "main_div",
+            Self::BinaryMaximumI64 => "main_maximum",
+            Self::BinaryMinimumI64 => "main_minimum",
+            Self::CmpEqU8 => "main_eq",
+            Self::CmpNeU8 => "main_ne",
+            Self::CmpLtU8 => "main_lt",
+            Self::CmpLeU8 => "main_le",
+            Self::CmpGtU8 => "main_gt",
+            Self::CmpGeU8 => "main_ge",
+            Self::CmpEqU32 => "main_eq",
+            Self::CmpNeU32 => "main_ne",
+            Self::CmpLtU32 => "main_lt",
+            Self::CmpLeU32 => "main_le",
+            Self::CmpGtU32 => "main_gt",
+            Self::CmpGeU32 => "main_ge",
+            Self::CmpEqI16 => "main_eq",
+            Self::CmpNeI16 => "main_ne",
+            Self::CmpLtI16 => "main_lt",
+            Self::CmpLeI16 => "main_le",
+            Self::CmpGtI16 => "main_gt",
+            Self::CmpGeI16 => "main_ge",
+            Self::CmpEqI32 => "main_eq",
+            Self::CmpNeI32 => "main_ne",
+            Self::CmpLtI32 => "main_lt",
+            Self::CmpLeI32 => "main_le",
+            Self::CmpGtI32 => "main_gt",
+            Self::CmpGeI32 => "main_ge",
+            Self::CmpEqI64 => "main_eq",
+            Self::CmpNeI64 => "main_ne",
+            Self::CmpLtI64 => "main_lt",
+            Self::CmpLeI64 => "main_le",
+            Self::CmpGtI64 => "main_gt",
+            Self::CmpGeI64 => "main_ge",
             Self::WhereF16 => "main",
             Self::WhereF64 => "main",
             Self::Copy2dF32 => "main",
@@ -766,7 +886,68 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::CmpLtF64
         | KernelName::CmpLeF64
         | KernelName::CmpGtF64
-        | KernelName::CmpGeF64 => 4,
+        | KernelName::CmpGeF64
+        | KernelName::BinaryAddU8
+        | KernelName::BinarySubU8
+        | KernelName::BinaryMulU8
+        | KernelName::BinaryDivU8
+        | KernelName::BinaryMaximumU8
+        | KernelName::BinaryMinimumU8
+        | KernelName::BinaryAddU32
+        | KernelName::BinarySubU32
+        | KernelName::BinaryMulU32
+        | KernelName::BinaryDivU32
+        | KernelName::BinaryMaximumU32
+        | KernelName::BinaryMinimumU32
+        | KernelName::BinaryAddI16
+        | KernelName::BinarySubI16
+        | KernelName::BinaryMulI16
+        | KernelName::BinaryDivI16
+        | KernelName::BinaryMaximumI16
+        | KernelName::BinaryMinimumI16
+        | KernelName::BinaryAddI32
+        | KernelName::BinarySubI32
+        | KernelName::BinaryMulI32
+        | KernelName::BinaryDivI32
+        | KernelName::BinaryMaximumI32
+        | KernelName::BinaryMinimumI32
+        | KernelName::BinaryAddI64
+        | KernelName::BinarySubI64
+        | KernelName::BinaryMulI64
+        | KernelName::BinaryDivI64
+        | KernelName::BinaryMaximumI64
+        | KernelName::BinaryMinimumI64
+        | KernelName::CmpEqU8
+        | KernelName::CmpNeU8
+        | KernelName::CmpLtU8
+        | KernelName::CmpLeU8
+        | KernelName::CmpGtU8
+        | KernelName::CmpGeU8
+        | KernelName::CmpEqU32
+        | KernelName::CmpNeU32
+        | KernelName::CmpLtU32
+        | KernelName::CmpLeU32
+        | KernelName::CmpGtU32
+        | KernelName::CmpGeU32
+        | KernelName::CmpEqI16
+        | KernelName::CmpNeI16
+        | KernelName::CmpLtI16
+        | KernelName::CmpLeI16
+        | KernelName::CmpGtI16
+        | KernelName::CmpGeI16
+        | KernelName::CmpEqI32
+        | KernelName::CmpNeI32
+        | KernelName::CmpLtI32
+        | KernelName::CmpLeI32
+        | KernelName::CmpGtI32
+        | KernelName::CmpGeI32
+        | KernelName::CmpEqI64
+        | KernelName::CmpNeI64
+        | KernelName::CmpLtI64
+        | KernelName::CmpLeI64
+        | KernelName::CmpGtI64
+        | KernelName::CmpGeI64
+        => 4,
         KernelName::WhereF32
         | KernelName::WhereBf16
         | KernelName::WhereF8e4m3
