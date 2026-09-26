@@ -1929,3 +1929,153 @@ fn test_vulkan_unary_ops_f8e4m3() {
     assert_eq!(failures, 0, "{failures} f8e4m3 unary mismatches");
     tracing::debug!("Vulkan device {gpu_id} f8e4m3 unary ops OK");
 }
+
+/// affine (x*mul+add) for BF16 and F8E4M3 vs the CPU backend.
+#[test]
+fn test_vulkan_affine_dtype() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.25 - 4.0).collect();
+    let (mul, add) = (2.5f64, -1.0f64);
+
+    // bf16
+    let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let g = candle_core::Tensor::new(lv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap().affine(mul, add).unwrap();
+    let c = candle_core::Tensor::new(lv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap().affine(mul, add).unwrap();
+    let gv: Vec<half::bf16> = g.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+    let cv: Vec<half::bf16> = c.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+    for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+        assert!(close(a.to_f32(), b.to_f32(), 0.05), "bf16 affine: mismatch at {i}: gpu {} cpu {}", a.to_f32(), b.to_f32());
+    }
+    // f8e4m3
+    let f8v: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+    let g8 = candle_core::Tensor::new(f8v.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap().affine(mul, add).unwrap();
+    let c8 = candle_core::Tensor::new(f8v.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap().affine(mul, add).unwrap();
+    let gv8: Vec<microfloat::f8e4m3> = g8.flatten_all().unwrap().to_vec1::<microfloat::f8e4m3>().unwrap();
+    let cv8: Vec<microfloat::f8e4m3> = c8.flatten_all().unwrap().to_vec1::<microfloat::f8e4m3>().unwrap();
+    for (i, (a, b)) in gv8.iter().zip(cv8.iter()).enumerate() {
+        assert!(close(a.to_f32(), b.to_f32(), 0.2), "f8e4m3 affine: mismatch at {i}: gpu {} cpu {}", a.to_f32(), b.to_f32());
+    }
+    tracing::debug!("Vulkan device {gpu_id} affine (bf16/f8e4m3) OK");
+}
+
+/// powf (x^e) for BF16 and F8E4M3 vs the CPU backend.
+#[test]
+fn test_vulkan_powf_dtype() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| 0.5 + (i as f32) * 0.25).collect();
+    for exp in [2.0f64, 3.0f64] {
+        // bf16
+        let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+        let g = candle_core::Tensor::new(lv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap().powf(exp).unwrap();
+        let c = candle_core::Tensor::new(lv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap().powf(exp).unwrap();
+        let gv: Vec<half::bf16> = g.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+        let cv: Vec<half::bf16> = c.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(close(a.to_f32(), b.to_f32(), 0.05), "bf16 powf e={exp}: mismatch at {i}: gpu {} cpu {}", a.to_f32(), b.to_f32());
+        }
+        // f8e4m3
+        let f8v: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+        let g8 = candle_core::Tensor::new(f8v.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap().powf(exp).unwrap();
+        let c8 = candle_core::Tensor::new(f8v.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap().powf(exp).unwrap();
+        let gv8: Vec<microfloat::f8e4m3> = g8.flatten_all().unwrap().to_vec1::<microfloat::f8e4m3>().unwrap();
+        let cv8: Vec<microfloat::f8e4m3> = c8.flatten_all().unwrap().to_vec1::<microfloat::f8e4m3>().unwrap();
+        for (i, (a, b)) in gv8.iter().zip(cv8.iter()).enumerate() {
+            assert!(close(a.to_f32(), b.to_f32(), 0.2), "f8e4m3 powf e={exp}: mismatch at {i}: gpu {} cpu {}", a.to_f32(), b.to_f32());
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} powf (bf16/f8e4m3) OK");
+}
+
+/// elu for BF16 and F8E4M3 vs the CPU backend.
+#[test]
+fn test_vulkan_elu_dtype() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.5 - 8.0).collect();
+    for alpha in [1.0f64, 0.5f64] {
+        // bf16
+        let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+        let g = candle_core::Tensor::new(lv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap().elu(alpha).unwrap();
+        let c = candle_core::Tensor::new(lv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap().elu(alpha).unwrap();
+        let gv: Vec<half::bf16> = g.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+        let cv: Vec<half::bf16> = c.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(close(a.to_f32(), b.to_f32(), 0.05), "bf16 elu a={alpha}: mismatch at {i}: gpu {} cpu {}", a.to_f32(), b.to_f32());
+        }
+        // f8e4m3
+        let f8v: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+        let g8 = candle_core::Tensor::new(f8v.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap().elu(alpha).unwrap();
+        let c8 = candle_core::Tensor::new(f8v.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap().elu(alpha).unwrap();
+        let gv8: Vec<microfloat::f8e4m3> = g8.flatten_all().unwrap().to_vec1::<microfloat::f8e4m3>().unwrap();
+        let cv8: Vec<microfloat::f8e4m3> = c8.flatten_all().unwrap().to_vec1::<microfloat::f8e4m3>().unwrap();
+        for (i, (a, b)) in gv8.iter().zip(cv8.iter()).enumerate() {
+            assert!(close(a.to_f32(), b.to_f32(), 0.2), "f8e4m3 elu a={alpha}: mismatch at {i}: gpu {} cpu {}", a.to_f32(), b.to_f32());
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} elu (bf16/f8e4m3) OK");
+}
+
+/// where_cond for BF16 and F8E4M3 vs the CPU backend.
+#[test]
+fn test_vulkan_where_dtype() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.5 - 8.0).collect();
+
+    // bf16: pred = (l > r)
+    let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let rv: Vec<half::bf16> = f.iter().rev().map(|x| half::bf16::from_f32(*x)).collect();
+    let tv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x + 100.0)).collect();
+    let fv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x - 100.0)).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let t = candle_core::Tensor::new(tv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let f_t = candle_core::Tensor::new(fv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let tc = candle_core::Tensor::new(tv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let fc = candle_core::Tensor::new(fv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let g = l.gt(&r).unwrap().where_cond(&t, &f_t).unwrap();
+    let c = lc.gt(&rc).unwrap().where_cond(&tc, &fc).unwrap();
+    let gv: Vec<half::bf16> = g.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+    let cv: Vec<half::bf16> = c.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+    for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+        assert_eq!(a.to_f32(), b.to_f32(), "bf16 where: mismatch at {i}: gpu {} cpu {}", a.to_f32(), b.to_f32());
+    }
+
+    // f8e4m3
+    let l8: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+    let r8: Vec<microfloat::f8e4m3> = f.iter().rev().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+    let t8: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x + 10.0)).collect();
+    let f8: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x - 10.0)).collect();
+    let l8t = candle_core::Tensor::new(l8.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let r8t = candle_core::Tensor::new(r8.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let t8t = candle_core::Tensor::new(t8.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let f8t = candle_core::Tensor::new(f8.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let l8c = candle_core::Tensor::new(l8.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let r8c = candle_core::Tensor::new(r8.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let t8c = candle_core::Tensor::new(t8.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let f8c = candle_core::Tensor::new(f8.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+    let g8 = l8t.gt(&r8t).unwrap().where_cond(&t8t, &f8t).unwrap();
+    let c8 = l8c.gt(&r8c).unwrap().where_cond(&t8c, &f8c).unwrap();
+    let gv8: Vec<microfloat::f8e4m3> = g8.flatten_all().unwrap().to_vec1::<microfloat::f8e4m3>().unwrap();
+    let cv8: Vec<microfloat::f8e4m3> = c8.flatten_all().unwrap().to_vec1::<microfloat::f8e4m3>().unwrap();
+    for (i, (a, b)) in gv8.iter().zip(cv8.iter()).enumerate() {
+        assert_eq!(a.to_f32(), b.to_f32(), "f8e4m3 where: mismatch at {i}: gpu {} cpu {}", a.to_f32(), b.to_f32());
+    }
+    tracing::debug!("Vulkan device {gpu_id} where_cond (bf16/f8e4m3) OK");
+}

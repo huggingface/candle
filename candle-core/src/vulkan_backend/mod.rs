@@ -1162,10 +1162,14 @@ impl BackendStorage for VulkanStorage {
     }
 
     fn affine(&self, l: &Layout, mul: f64, add: f64) -> Result<Self> {
-        if self.dtype != DType::F32 {
-            return Err(Error::Vulkan(
-                "affine: only F32 supported on the Vulkan backend".to_string().into(),
-            ));
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        let supported = matches!(dtype, DType::F32 | DType::BF16 | DType::F8E4M3);
+        if !supported {
+            return Err(Error::Vulkan(format!(
+                "affine: dtype {:?} not supported on the Vulkan backend", dtype
+            )
+            .into()));
         }
         let (start, len) = match l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
@@ -1177,15 +1181,7 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        let input = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, len, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = self.device.zeros_impl(l.shape(), dtype)?;
         if len == 0 {
             return Ok(out);
         }
@@ -1207,22 +1203,73 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
-        let input = input.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_affine_slang_f32(
-                cbb, &kernels, &input, &out_buf, &params, len,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+
+        match dtype {
+            DType::F32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let (input, out_buf, params) = (input, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_affine_slang::<f32>(
+                        cbb, &kernels, Source::Affine, KernelName::AffineF32, &input, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let (input, out_buf, params) = (input, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_affine_slang::<half::bf16>(
+                        cbb, &kernels, Source::AffineBf16, KernelName::AffineBf16, &input, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let (input, out_buf, params) = (input, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_affine_slang::<microfloat::f8e4m3>(
+                        cbb, &kernels, Source::AffineF8e4m3, KernelName::AffineF8e4m3, &input, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("supported dtype checked above"),
+        }
         Ok(out)
     }
 
     fn powf(&self, l: &Layout, exponent: f64) -> Result<Self> {
-        if self.dtype != DType::F32 {
-            return Err(Error::Vulkan(
-                "powf: only F32 supported on the Vulkan backend".to_string().into(),
-            ));
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        let supported = matches!(dtype, DType::F32 | DType::BF16 | DType::F8E4M3);
+        if !supported {
+            return Err(Error::Vulkan(format!(
+                "powf: dtype {:?} not supported on the Vulkan backend", dtype
+            )
+            .into()));
         }
         let (start, len) = match l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
@@ -1234,15 +1281,7 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        let input = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, len, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = self.device.zeros_impl(l.shape(), dtype)?;
         if len == 0 {
             return Ok(out);
         }
@@ -1262,47 +1301,85 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
-        let input = input.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_unary_slang::<f32>(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::Source::UnarySlang,
-                candle_vulkan_kernels::KernelName::UnaryPowF32,
-                &input,
-                &out_buf,
-                &params,
-                len,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+
+        match dtype {
+            DType::F32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let (input, out_buf, params) = (input, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<f32>(
+                        cbb, &kernels, Source::UnarySlang, KernelName::UnaryPowF32, &input, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let (input, out_buf, params) = (input, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<half::bf16>(
+                        cbb, &kernels, Source::UnaryBf16, KernelName::UnaryPowBf16, &input, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let (input, out_buf, params) = (input, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<microfloat::f8e4m3>(
+                        cbb, &kernels, Source::UnaryF8e4m3, KernelName::UnaryPowF8e4m3, &input, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("supported dtype checked above"),
+        }
         Ok(out)
     }
 
     fn elu(&self, l: &Layout, alpha: f64) -> Result<Self> {
-        if self.dtype != DType::F32 {
-            return Err(Error::Vulkan(
-                "elu: only F32 supported on the Vulkan backend".to_string().into(),
-            ));
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        let supported = matches!(dtype, DType::F32 | DType::BF16 | DType::F8E4M3);
+        if !supported {
+            return Err(Error::Vulkan(format!(
+                "elu: dtype {:?} not supported on the Vulkan backend", dtype
+            )
+            .into()));
         }
         let (start, len) = match l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
             _ => {
                 return Err(Error::Vulkan(
-                    "elu: non-contiguous layouts not supported on the Vulkan backend".to_string().into(),
+                    "elu: non-contiguous layouts not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
                 ))
             }
         };
-        let input = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, len, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = self.device.zeros_impl(l.shape(), dtype)?;
         if len == 0 {
             return Ok(out);
         }
@@ -1322,21 +1399,61 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
-        let input = input.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_unary_slang::<f32>(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::Source::UnarySlang,
-                candle_vulkan_kernels::KernelName::UnaryEluF32,
-                &input,
-                &out_buf,
-                &params,
-                len,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+
+        match dtype {
+            DType::F32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let (input, out_buf, params) = (input, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<f32>(
+                        cbb, &kernels, Source::UnarySlang, KernelName::UnaryEluF32, &input, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let (input, out_buf, params) = (input, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<half::bf16>(
+                        cbb, &kernels, Source::UnaryBf16, KernelName::UnaryEluBf16, &input, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let (input, out_buf, params) = (input, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<microfloat::f8e4m3>(
+                        cbb, &kernels, Source::UnaryF8e4m3, KernelName::UnaryEluF8e4m3, &input, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("supported dtype checked above"),
+        }
         Ok(out)
     }
 
@@ -1967,10 +2084,19 @@ impl BackendStorage for VulkanStorage {
     }
 
     fn where_cond(&self, l: &Layout, t: &Self, t_l: &Layout, f: &Self, f_l: &Layout) -> Result<Self> {
-        if t.dtype != DType::F32 || f.dtype != DType::F32 {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = t.dtype;
+        if dtype != f.dtype {
             return Err(Error::Vulkan(
-                "where_cond: only F32 values supported on the Vulkan backend".to_string().into(),
+                "where_cond: on_true and on_false must have the same dtype".to_string().into(),
             ));
+        }
+        let supported = matches!(dtype, DType::F32 | DType::BF16 | DType::F8E4M3);
+        if !supported {
+            return Err(Error::Vulkan(format!(
+                "where_cond: dtype {:?} not supported on the Vulkan backend", dtype
+            )
+            .into()));
         }
         let (start, len) = match l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
@@ -1990,19 +2116,7 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        let t_buf = match &t.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!("dtype checked above"),
-        };
-        let f_buf = match &f.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, len, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = self.device.zeros_impl(l.shape(), dtype)?;
         if len == 0 {
             return Ok(out);
         }
@@ -2051,23 +2165,76 @@ impl BackendStorage for VulkanStorage {
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
         let pred = pred.clone();
-        let t_buf = t_buf.clone();
-        let f_buf = f_buf.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_where_slang_f32(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::KernelName::WhereF32,
-                &pred,
-                &t_buf,
-                &f_buf,
-                &out_buf,
-                &params,
-                len,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+
+        match dtype {
+            DType::F32 => {
+                let t_buf = match &t.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let f_buf = match &f.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let (t_buf, f_buf, out_buf, params) = (t_buf, f_buf, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_where_slang::<f32>(
+                        cbb, &kernels, Source::WhereSlang, KernelName::WhereF32,
+                        &pred, &t_buf, &f_buf, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let t_buf = match &t.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let f_buf = match &f.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let (t_buf, f_buf, out_buf, params) = (t_buf, f_buf, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_where_slang::<half::bf16>(
+                        cbb, &kernels, Source::WhereBf16, KernelName::WhereBf16,
+                        &pred, &t_buf, &f_buf, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let t_buf = match &t.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let f_buf = match &f.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let (t_buf, f_buf, out_buf, params) = (t_buf, f_buf, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_where_slang::<microfloat::f8e4m3>(
+                        cbb, &kernels, Source::WhereF8e4m3, KernelName::WhereF8e4m3,
+                        &pred, &t_buf, &f_buf, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("supported dtype checked above"),
+        }
         Ok(out)
     }
 

@@ -1,23 +1,29 @@
-//! Slang `dst[i] = src[i] * mul + add` dispatch over f32 storage buffers.
+//! Slang `dst[i] = src[i] * mul + add` dispatch over dtype storage buffers.
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
+
 use crate::err::VulkanKernelError;
 use crate::kernel::{KernelName, Kernels};
 use crate::source::Source;
+
 const WORKGROUP_SIZE: usize = 256;
-/// Records an affine dispatch onto `cbb`. `params` must hold
+
+/// Records an affine dispatch onto `cbb`. `input` and `output` share the
+/// element type `T` (the dtype's GPU storage type). `params` must hold
 /// `[total, mul, add]`.
-pub fn call_affine_slang_f32(
+pub fn call_affine_slang<T>(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
-    input: &Subbuffer<[f32]>,
-    output: &Subbuffer<[f32]>,
+    source: Source,
+    name: KernelName,
+    input: &Subbuffer<[T]>,
+    output: &Subbuffer<[T]>,
     params: &Subbuffer<[f32]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
-    let entry = kernels.load_entry(Source::Affine, KernelName::AffineF32)?;
+    let entry = kernels.load_entry(source, name)?;
     let input_info = DescriptorBufferInfo {
         buffer: Some(input.buffer()),
         offset: input.offset(),

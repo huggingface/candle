@@ -1,4 +1,4 @@
-//! Slang where_cond dispatch (u8 pred, f32 values -> f32 output).
+//! Slang where_cond dispatch (u8 pred, dtype values -> dtype output).
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
@@ -9,20 +9,22 @@ use crate::kernel::{KernelName, Kernels};
 use crate::source::Source;
 
 /// Records a where_cond dispatch onto `cbb`:
-/// `output[i] = pred[i] != 0 ? true[t_off(i)] : false[f_off(i)]`.
+/// `output[i] = pred[i] != 0 ? true[t_off(i)] : false[f_off(i)]`. `pred` is
+/// `u8`; `on_true`, `on_false` and `output` share the element type `T`.
 /// `params` must hold `[total, ndim, pred dims, true dims, false dims]`.
-pub fn call_where_slang_f32(
+pub fn call_where_slang<T>(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
+    source: Source,
     name: KernelName,
     pred: &Subbuffer<[u8]>,
-    on_true: &Subbuffer<[f32]>,
-    on_false: &Subbuffer<[f32]>,
-    output: &Subbuffer<[f32]>,
+    on_true: &Subbuffer<[T]>,
+    on_false: &Subbuffer<[T]>,
+    output: &Subbuffer<[T]>,
     params: &Subbuffer<[f32]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
-    let entry = kernels.load_entry(Source::WhereSlang, name)?;
+    let entry = kernels.load_entry(source, name)?;
     let pred_info = DescriptorBufferInfo {
         buffer: Some(pred.buffer()),
         offset: pred.offset(),

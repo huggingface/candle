@@ -30,7 +30,7 @@ pub mod conv_slang;
 pub mod scatter_slang;
 pub mod unary_slang;
 
-pub use affine::call_affine_slang_f32;
+pub use affine::call_affine_slang;
 pub use const_set::call_const_set_f32;
 pub use gemm::call_gemm_slang_f32;
 pub use test_fill_bf16::{call_test_fill_bf16_emulated, call_test_fill_bf16_native};
@@ -49,7 +49,7 @@ pub use test_fill_u32::call_test_fill_u32;
 pub use test_fill_u8::call_test_fill_u8;
 pub use binary_slang::call_binary_slang;
 pub use cmp_slang::call_cmp_slang;
-pub use where_slang::call_where_slang_f32;
+pub use where_slang::call_where_slang;
 pub use copy2d_slang::call_copy2d_slang_f32;
 pub use gather_idx_slang::call_gather_idx_slang_f32;
 pub use reduce_slang::call_reduce_slang_f32;

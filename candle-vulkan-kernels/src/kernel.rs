@@ -124,6 +124,14 @@ pub enum KernelName {
     UnaryCosF8e4m3,
     UnaryNegF8e4m3,
     WhereF32,
+    WhereBf16,
+    WhereF8e4m3,
+    AffineBf16,
+    AffineF8e4m3,
+    UnaryPowBf16,
+    UnaryEluBf16,
+    UnaryPowF8e4m3,
+    UnaryEluF8e4m3,
     Copy2dF32,
     GatherIdxF32,
     GatherRowsF32,
@@ -262,6 +270,14 @@ impl AsRef<str> for KernelName {
             Self::UnaryNegBf16 => "main_neg",
             Self::UnaryNegF8e4m3 => "main_neg",
             Self::WhereF32 => "main",
+            Self::WhereBf16 => "main",
+            Self::WhereF8e4m3 => "main",
+            Self::AffineBf16 => "main",
+            Self::AffineF8e4m3 => "main",
+            Self::UnaryPowBf16 => "main_pow",
+            Self::UnaryEluBf16 => "main_elu",
+            Self::UnaryPowF8e4m3 => "main_pow",
+            Self::UnaryEluF8e4m3 => "main_elu",
             Self::Copy2dF32 => "main",
             Self::GatherIdxF32 => "main",
             Self::GatherRowsF32 => "main_gather_rows",
@@ -439,7 +455,9 @@ impl Kernels {
 /// the other kernels use their input (+rhs) and output at bindings 0..N-1.
 fn descriptor_bindings(name: KernelName) -> u32 {
     match name {
-        KernelName::AffineF32 => 3,
+        KernelName::AffineF32
+        | KernelName::AffineBf16
+        | KernelName::AffineF8e4m3 => 3,
         KernelName::GemmF32 => 4,
         KernelName::ConstSetF32
         | KernelName::UnaryLogF32
@@ -457,6 +475,10 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::UnarySignF32
         | KernelName::UnaryPowF32
         | KernelName::UnaryEluF32
+        | KernelName::UnaryPowBf16
+        | KernelName::UnaryEluBf16
+        | KernelName::UnaryPowF8e4m3
+        | KernelName::UnaryEluF8e4m3
         | KernelName::UnaryExpF32
         | KernelName::UnarySiluF32
         | KernelName::UnarySqrtF32
@@ -537,7 +559,9 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::CmpLeF8e4m3
         | KernelName::CmpGtF8e4m3
         | KernelName::CmpGeF8e4m3 => 4,
-        KernelName::WhereF32 => 5,
+        KernelName::WhereF32
+        | KernelName::WhereBf16
+        | KernelName::WhereF8e4m3 => 5,
         KernelName::Copy2dF32 => 3,
         KernelName::GatherIdxF32 => 4,
         KernelName::GatherRowsF32 => 4,

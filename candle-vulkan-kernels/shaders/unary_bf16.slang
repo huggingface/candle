@@ -262,3 +262,27 @@ void main_neg(uint3 dispatchThreadID : SV_DispatchThreadID)
         g_Out[idx] = bf16_encode(-x);
     }
 }
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_pow(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint i = dispatchThreadID.x;
+    if (i < uint(g_Params[0]))
+    {
+        float x = bf16_decode(g_In[i]);
+        g_Out[i] = bf16_encode(pow(x, g_Params[1]));
+    }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_elu(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint i = dispatchThreadID.x;
+    if (i < uint(g_Params[0]))
+    {
+        float x = bf16_decode(g_In[i]);
+        float alpha = g_Params[1];
+        g_Out[i] = bf16_encode(x >= 0.0 ? x : alpha * (exp(x) - 1.0));
+    }
+}

@@ -15,6 +15,10 @@ const CMP_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_f8e4
 const UNARY_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary_bf16.spv"));
 const UNARY_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary_f8e4m3.spv"));
 const WHERE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where.spv"));
+const WHERE_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where_bf16.spv"));
+const WHERE_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where_f8e4m3.spv"));
+const AFFINE_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine_bf16.spv"));
+const AFFINE_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine_f8e4m3.spv"));
 const COPY2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d.spv"));
 const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx.spv"));
 const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_ops.spv"));
@@ -61,6 +65,10 @@ pub enum Source {
     UnaryBf16,
     UnaryF8e4m3,
     WhereSlang,
+    WhereBf16,
+    WhereF8e4m3,
+    AffineBf16,
+    AffineF8e4m3,
     Copy2dSlang,
     GatherIdxSlang,
     ReduceSlang,
@@ -178,6 +186,14 @@ impl Source {
             | KernelName::UnaryCosF8e4m3
             | KernelName::UnaryNegF8e4m3
             | KernelName::WhereF32
+            | KernelName::WhereBf16
+            | KernelName::WhereF8e4m3
+            | KernelName::AffineBf16
+            | KernelName::AffineF8e4m3
+            | KernelName::UnaryPowBf16
+            | KernelName::UnaryEluBf16
+            | KernelName::UnaryPowF8e4m3
+            | KernelName::UnaryEluF8e4m3
             | KernelName::Copy2dF32
             | KernelName::GatherIdxF32
             | KernelName::GatherRowsF32
@@ -243,6 +259,10 @@ impl Source {
             Self::UnaryBf16 => UNARY_BF16_SPV,
             Self::UnaryF8e4m3 => UNARY_F8E4M3_SPV,
             Self::WhereSlang => WHERE_SLANG_SPV,
+            Self::WhereBf16 => WHERE_BF16_SPV,
+            Self::WhereF8e4m3 => WHERE_F8E4M3_SPV,
+            Self::AffineBf16 => AFFINE_BF16_SPV,
+            Self::AffineF8e4m3 => AFFINE_F8E4M3_SPV,
             Self::Copy2dSlang => COPY2D_SLANG_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
             Self::ReduceSlang => REDUCE_SLANG_SPV,
@@ -289,6 +309,10 @@ impl AsRef<str> for Source {
             Self::UnaryBf16 => "unary_bf16",
             Self::UnaryF8e4m3 => "unary_f8e4m3",
             Self::WhereSlang => "where",
+            Self::WhereBf16 => "where_bf16",
+            Self::WhereF8e4m3 => "where_f8e4m3",
+            Self::AffineBf16 => "affine_bf16",
+            Self::AffineF8e4m3 => "affine_f8e4m3",
             Self::Copy2dSlang => "copy2d",
             Self::GatherIdxSlang => "gather_idx",
             Self::ReduceSlang => "reduce",

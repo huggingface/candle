@@ -372,3 +372,27 @@ void main_neg(uint3 dispatchThreadID : SV_DispatchThreadID)
         g_Out[idx] = f8e4m3_encode(-x);
     }
 }
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_pow(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint i = dispatchThreadID.x;
+    if (i < uint(g_Params[0]))
+    {
+        float x = f8e4m3_decode(g_In[i]);
+        g_Out[i] = f8e4m3_encode(pow(x, g_Params[1]));
+    }
+}
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_elu(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint i = dispatchThreadID.x;
+    if (i < uint(g_Params[0]))
+    {
+        float x = f8e4m3_decode(g_In[i]);
+        float alpha = g_Params[1];
+        g_Out[i] = f8e4m3_encode(x >= 0.0 ? x : alpha * (exp(x) - 1.0));
+    }
+}
