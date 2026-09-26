@@ -264,6 +264,12 @@ impl VulkanDevice {
             .any(|property| property.extension_name.eq("VK_KHR_shader_bfloat16"))
     }
 
+    /// The underlying Vulkan physical device (for querying properties
+    /// and extensions).
+    pub fn physical_device(&self) -> &vulkano::device::physical::PhysicalDevice {
+        self.device.physical_device()
+    }
+
 
     /// Uploads `data` into a device f32 storage buffer in VRAM. A
     /// host-visible staging copy is recorded onto the pending batch

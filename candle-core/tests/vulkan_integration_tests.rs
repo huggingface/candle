@@ -17,14 +17,48 @@ static GPU_ID: LazyLock<usize> = LazyLock::new(|| {
         .map(|value| value.parse().unwrap())
         .unwrap_or_default()
 });
+/// Sanity test: report the basic properties of the selected Vulkan
+/// device. No assertions; the point is that the properties can be
+/// read and printed.
 #[test]
-fn test_vulkan_device_supports_bf16() {
+fn test_vulkan_device_properties() {
     (*INIT);
     let gpu_id = *GPU_ID;
     let device = VulkanDevice::new(gpu_id).unwrap();
+    let phys = device.physical_device();
+    let props = phys.properties();
+    let api = props.api_version;
+    let driver = props.driver_version;
+    let driver_str = format!(
+        "{}.{}.{}",
+        (driver >> 22) & 0x3FFFFF,
+        (driver >> 12) & 0x3FF,
+        driver & 0xFFF
+    );
+    let device_type = match props.device_type {
+        vulkano::device::physical::PhysicalDeviceType::DiscreteGpu => {
+            "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU"
+        }
+        vulkano::device::physical::PhysicalDeviceType::IntegratedGpu => {
+            "PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU"
+        }
+        vulkano::device::physical::PhysicalDeviceType::VirtualGpu => {
+            "PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU"
+        }
+        vulkano::device::physical::PhysicalDeviceType::Cpu => "PHYSICAL_DEVICE_TYPE_CPU",
+        _ => "PHYSICAL_DEVICE_TYPE_OTHER",
+    };
+    let has_bf16 = phys
+        .extension_properties()
+        .iter()
+        .any(|p| p.extension_name == "VK_KHR_shader_bfloat16");
+    let has_float8 = phys
+        .extension_properties()
+        .iter()
+        .any(|p| p.extension_name == "VK_EXT_shader_float8");
     tracing::debug!(
-        "Vulkan device {gpu_id} has bfloat16 support?: {}",
-        device.supports_bf16()
+        "Vulkan device {gpu_id} name={} api_version={}.{}.{} driver_version={} type={device_type} VK_KHR_shader_bfloat16={has_bf16} VK_EXT_shader_float8={has_float8}",
+        props.device_name, api.major, api.minor, api.patch, driver_str
     );
 }
 #[test]
