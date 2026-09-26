@@ -2163,7 +2163,7 @@ fn test_vulkan_binary_ops_bf16() {
         .broadcast_as(shape.clone())
         .unwrap();
 
-    let mut cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
         ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
         ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
         ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
@@ -2212,7 +2212,7 @@ fn test_vulkan_binary_ops_f8e4m3() {
     let cpu = candle_core::Device::Cpu;
     let shape = candle_core::Shape::from((4, 8));
     // Values within f8e4m3 finite range (|x| < 248).
-    let f: Vec<f32> = (0..32).map(|i| ((i % 11) as f32 - 5.0)).collect();
+    let f: Vec<f32> = (0..32).map(|i| (i % 11) as f32 - 5.0).collect();
     let lv: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
     let rv: Vec<microfloat::f8e4m3> = f
         .iter()
@@ -2244,7 +2244,7 @@ fn test_vulkan_binary_ops_f8e4m3() {
         .broadcast_as(shape.clone())
         .unwrap();
 
-    let mut cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
         ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
         ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
         ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
@@ -2324,7 +2324,7 @@ fn test_vulkan_cmp_ops_bf16() {
         .broadcast_as(shape.clone())
         .unwrap();
 
-    let mut cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
         ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
         ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
         ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
@@ -2392,7 +2392,7 @@ fn test_vulkan_cmp_ops_f8e4m3() {
         .broadcast_as(shape.clone())
         .unwrap();
 
-    let mut cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
         ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
         ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
         ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
@@ -3418,7 +3418,7 @@ fn test_vulkan_where_f16_f64() {
 }
 /// Binary ops for U8 vs the CPU backend.
 #[test]
-fn test_vulkan_binary_ops_U8() {
+fn test_vulkan_binary_ops_u8() {
     (*INIT);
     let gpu_id = *GPU_ID;
     let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
@@ -3460,7 +3460,7 @@ fn test_vulkan_binary_ops_U8() {
 
 /// Cmp ops for U8 vs the CPU backend.
 #[test]
-fn test_vulkan_cmp_ops_U8() {
+fn test_vulkan_cmp_ops_u8() {
     (*INIT);
     let gpu_id = *GPU_ID;
     let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
@@ -3502,7 +3502,7 @@ fn test_vulkan_cmp_ops_U8() {
 
 /// Binary ops for U32 vs the CPU backend.
 #[test]
-fn test_vulkan_binary_ops_U32() {
+fn test_vulkan_binary_ops_u32() {
     (*INIT);
     let gpu_id = *GPU_ID;
     let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
@@ -3544,7 +3544,7 @@ fn test_vulkan_binary_ops_U32() {
 
 /// Cmp ops for U32 vs the CPU backend.
 #[test]
-fn test_vulkan_cmp_ops_U32() {
+fn test_vulkan_cmp_ops_u32() {
     (*INIT);
     let gpu_id = *GPU_ID;
     let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
@@ -3586,7 +3586,7 @@ fn test_vulkan_cmp_ops_U32() {
 
 /// Binary ops for I16 vs the CPU backend.
 #[test]
-fn test_vulkan_binary_ops_I16() {
+fn test_vulkan_binary_ops_i16() {
     (*INIT);
     let gpu_id = *GPU_ID;
     let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
@@ -3628,7 +3628,7 @@ fn test_vulkan_binary_ops_I16() {
 
 /// Cmp ops for I16 vs the CPU backend.
 #[test]
-fn test_vulkan_cmp_ops_I16() {
+fn test_vulkan_cmp_ops_i16() {
     (*INIT);
     let gpu_id = *GPU_ID;
     let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
@@ -3670,7 +3670,7 @@ fn test_vulkan_cmp_ops_I16() {
 
 /// Binary ops for I32 vs the CPU backend.
 #[test]
-fn test_vulkan_binary_ops_I32() {
+fn test_vulkan_binary_ops_i32() {
     (*INIT);
     let gpu_id = *GPU_ID;
     let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
@@ -3712,7 +3712,7 @@ fn test_vulkan_binary_ops_I32() {
 
 /// Cmp ops for I32 vs the CPU backend.
 #[test]
-fn test_vulkan_cmp_ops_I32() {
+fn test_vulkan_cmp_ops_i32() {
     (*INIT);
     let gpu_id = *GPU_ID;
     let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
@@ -3754,7 +3754,7 @@ fn test_vulkan_cmp_ops_I32() {
 
 /// Binary ops for I64 vs the CPU backend.
 #[test]
-fn test_vulkan_binary_ops_I64() {
+fn test_vulkan_binary_ops_i64() {
     (*INIT);
     let gpu_id = *GPU_ID;
     let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
@@ -3796,7 +3796,7 @@ fn test_vulkan_binary_ops_I64() {
 
 /// Cmp ops for I64 vs the CPU backend.
 #[test]
-fn test_vulkan_cmp_ops_I64() {
+fn test_vulkan_cmp_ops_i64() {
     (*INIT);
     let gpu_id = *GPU_ID;
     let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
