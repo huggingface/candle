@@ -12,6 +12,8 @@ const BINARY_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_
 const CMP_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_bf16.spv"));
 const BINARY_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_f8e4m3.spv"));
 const CMP_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_f8e4m3.spv"));
+const UNARY_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary_bf16.spv"));
+const UNARY_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary_f8e4m3.spv"));
 const WHERE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/where.spv"));
 const COPY2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d.spv"));
 const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx.spv"));
@@ -56,6 +58,8 @@ pub enum Source {
     CmpBf16,
     BinaryF8e4m3,
     CmpF8e4m3,
+    UnaryBf16,
+    UnaryF8e4m3,
     WhereSlang,
     Copy2dSlang,
     GatherIdxSlang,
@@ -135,6 +139,44 @@ impl Source {
             | KernelName::CmpLeF8e4m3
             | KernelName::CmpGtF8e4m3
             | KernelName::CmpGeF8e4m3
+            | KernelName::UnaryLogBf16
+            | KernelName::UnaryAbsBf16
+            | KernelName::UnaryRecipBf16
+            | KernelName::UnarySqrBf16
+            | KernelName::UnaryGeluBf16
+            | KernelName::UnaryGeluErfBf16
+            | KernelName::UnaryErfBf16
+            | KernelName::UnaryReluBf16
+            | KernelName::UnaryTanhBf16
+            | KernelName::UnaryFloorBf16
+            | KernelName::UnaryCeilBf16
+            | KernelName::UnaryRoundBf16
+            | KernelName::UnarySignBf16
+            | KernelName::UnaryExpBf16
+            | KernelName::UnarySiluBf16
+            | KernelName::UnarySqrtBf16
+            | KernelName::UnarySinBf16
+            | KernelName::UnaryCosBf16
+            | KernelName::UnaryNegBf16
+            | KernelName::UnaryLogF8e4m3
+            | KernelName::UnaryAbsF8e4m3
+            | KernelName::UnaryRecipF8e4m3
+            | KernelName::UnarySqrF8e4m3
+            | KernelName::UnaryGeluF8e4m3
+            | KernelName::UnaryGeluErfF8e4m3
+            | KernelName::UnaryErfF8e4m3
+            | KernelName::UnaryReluF8e4m3
+            | KernelName::UnaryTanhF8e4m3
+            | KernelName::UnaryFloorF8e4m3
+            | KernelName::UnaryCeilF8e4m3
+            | KernelName::UnaryRoundF8e4m3
+            | KernelName::UnarySignF8e4m3
+            | KernelName::UnaryExpF8e4m3
+            | KernelName::UnarySiluF8e4m3
+            | KernelName::UnarySqrtF8e4m3
+            | KernelName::UnarySinF8e4m3
+            | KernelName::UnaryCosF8e4m3
+            | KernelName::UnaryNegF8e4m3
             | KernelName::WhereF32
             | KernelName::Copy2dF32
             | KernelName::GatherIdxF32
@@ -198,6 +240,8 @@ impl Source {
             Self::CmpBf16 => CMP_BF16_SPV,
             Self::BinaryF8e4m3 => BINARY_F8E4M3_SPV,
             Self::CmpF8e4m3 => CMP_F8E4M3_SPV,
+            Self::UnaryBf16 => UNARY_BF16_SPV,
+            Self::UnaryF8e4m3 => UNARY_F8E4M3_SPV,
             Self::WhereSlang => WHERE_SLANG_SPV,
             Self::Copy2dSlang => COPY2D_SLANG_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
@@ -242,6 +286,8 @@ impl AsRef<str> for Source {
             Self::CmpBf16 => "cmp_bf16",
             Self::BinaryF8e4m3 => "binary_f8e4m3",
             Self::CmpF8e4m3 => "cmp_f8e4m3",
+            Self::UnaryBf16 => "unary_bf16",
+            Self::UnaryF8e4m3 => "unary_f8e4m3",
             Self::WhereSlang => "where",
             Self::Copy2dSlang => "copy2d",
             Self::GatherIdxSlang => "gather_idx",

@@ -9,17 +9,19 @@ use crate::kernel::{KernelName, Kernels};
 use crate::source::Source;
 
 /// Records a Slang unary-op dispatch onto `cbb`: `output[i] = f(input[i])`
-/// for `i < total`. `params` must hold `[total as f32]`.
-pub fn call_unary_slang_f32(
+/// for `i < total`. `input` and `output` share the element type `T` (the
+/// dtype's GPU storage type). `params` must hold `[total as f32]`.
+pub fn call_unary_slang<T>(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
+    source: Source,
     name: KernelName,
-    input: &Subbuffer<[f32]>,
-    output: &Subbuffer<[f32]>,
+    input: &Subbuffer<[T]>,
+    output: &Subbuffer<[T]>,
     params: &Subbuffer<[f32]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
-    let entry = kernels.load_entry(Source::UnarySlang, name)?;
+    let entry = kernels.load_entry(source, name)?;
     let input_info = DescriptorBufferInfo {
         buffer: Some(input.buffer()),
         offset: input.offset(),

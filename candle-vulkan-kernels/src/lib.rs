@@ -11,7 +11,7 @@ pub use kernels::{
     call_test_fill_f16, call_test_fill_f32, call_test_fill_f4, call_test_fill_f64,
     call_test_fill_f6e2m3, call_test_fill_f6e3m2, call_test_fill_f8e4m3, call_test_fill_f8e8m0,
     call_test_fill_i16, call_test_fill_i32, call_test_fill_i64, call_test_fill_u32,
-    call_test_fill_u8, call_binary_slang, call_cmp_slang, call_unary_slang_f32,
+    call_test_fill_u8, call_binary_slang, call_cmp_slang, call_unary_slang,
     call_where_slang_f32,
     call_copy2d_slang_f32,
     call_gather_idx_slang_f32,

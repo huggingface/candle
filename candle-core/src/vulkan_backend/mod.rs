@@ -1265,9 +1265,10 @@ impl BackendStorage for VulkanStorage {
         let input = input.clone();
         let out_buf = out_buf.clone();
         self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_unary_slang_f32(
+            candle_vulkan_kernels::call_unary_slang::<f32>(
                 cbb,
                 &kernels,
+                candle_vulkan_kernels::Source::UnarySlang,
                 candle_vulkan_kernels::KernelName::UnaryPowF32,
                 &input,
                 &out_buf,
@@ -1324,9 +1325,10 @@ impl BackendStorage for VulkanStorage {
         let input = input.clone();
         let out_buf = out_buf.clone();
         self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_unary_slang_f32(
+            candle_vulkan_kernels::call_unary_slang::<f32>(
                 cbb,
                 &kernels,
+                candle_vulkan_kernels::Source::UnarySlang,
                 candle_vulkan_kernels::KernelName::UnaryEluF32,
                 &input,
                 &out_buf,
@@ -1632,11 +1634,15 @@ impl BackendStorage for VulkanStorage {
     }
 
     fn unary_impl<B: UnaryOpT>(&self, l: &Layout) -> Result<Self> {
-        use candle_vulkan_kernels::KernelName;
-        if self.dtype != DType::F32 {
-            return Err(Error::Vulkan(
-                "unary: only F32 supported on the Vulkan backend".to_string().into(),
-            ));
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        let supported = matches!(dtype, DType::F32 | DType::BF16 | DType::F8E4M3);
+        if !supported {
+            return Err(Error::Vulkan(format!(
+                "unary: dtype {:?} not supported on the Vulkan backend",
+                dtype
+            )
+            .into()));
         }
         let (start, len) = match l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
@@ -1648,46 +1654,12 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        let input = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = self.device.zeros_impl(l.shape(), DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = self.device.zeros_impl(l.shape(), dtype)?;
         if len == 0 {
             return Ok(out);
         }
         let kernels = self.device.kernels();
         // Slang kernels (params: [0] = element count).
-        let name = match B::NAME {
-            "log" => KernelName::UnaryLogF32,
-            "abs" => KernelName::UnaryAbsF32,
-            "recip" => KernelName::UnaryRecipF32,
-            "sqr" => KernelName::UnarySqrF32,
-            "gelu" => KernelName::UnaryGeluF32,
-            "gelu_erf" => KernelName::UnaryGeluErfF32,
-            "erf" => KernelName::UnaryErfF32,
-            "relu" => KernelName::UnaryReluF32,
-            "tanh" => KernelName::UnaryTanhF32,
-            "floor" => KernelName::UnaryFloorF32,
-            "ceil" => KernelName::UnaryCeilF32,
-            "round" => KernelName::UnaryRoundF32,
-            "sign" => KernelName::UnarySignF32,
-            "exp" => KernelName::UnaryExpF32,
-            "silu" => KernelName::UnarySiluF32,
-            "sqrt" => KernelName::UnarySqrtF32,
-            "sin" => KernelName::UnarySinF32,
-            "cos" => KernelName::UnaryCosF32,
-            "neg" => KernelName::UnaryNegF32,
-            _ => {
-                return Err(Error::Vulkan(
-                    format!("unary: unsupported op {}", B::NAME).into(),
-                ))
-            }
-        };
         let params_vec = vec![len as f32, 0.0f32];
         let params_buf = Buffer::from_iter(
             self.device.mem_alloc(),
@@ -1704,14 +1676,127 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
-        let input = input.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_unary_slang_f32(
-                cbb, &kernels, name, &input, &out_buf, &params, len,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+
+        match dtype {
+            DType::F32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let name = match B::NAME {
+                    "log" => KernelName::UnaryLogF32,
+                    "abs" => KernelName::UnaryAbsF32,
+                    "recip" => KernelName::UnaryRecipF32,
+                    "sqr" => KernelName::UnarySqrF32,
+                    "gelu" => KernelName::UnaryGeluF32,
+                    "gelu_erf" => KernelName::UnaryGeluErfF32,
+                    "erf" => KernelName::UnaryErfF32,
+                    "relu" => KernelName::UnaryReluF32,
+                    "tanh" => KernelName::UnaryTanhF32,
+                    "floor" => KernelName::UnaryFloorF32,
+                    "ceil" => KernelName::UnaryCeilF32,
+                    "round" => KernelName::UnaryRoundF32,
+                    "sign" => KernelName::UnarySignF32,
+                    "exp" => KernelName::UnaryExpF32,
+                    "silu" => KernelName::UnarySiluF32,
+                    "sqrt" => KernelName::UnarySqrtF32,
+                    "sin" => KernelName::UnarySinF32,
+                    "cos" => KernelName::UnaryCosF32,
+                    "neg" => KernelName::UnaryNegF32,
+                    _ => return Err(Error::Vulkan(format!("unary: unsupported op {}", B::NAME).into())),
+                };
+                let (input, out_buf, params) = (input, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<f32>(
+                        cbb, &kernels, Source::UnarySlang, name, &input, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let name = match B::NAME {
+                    "log" => KernelName::UnaryLogBf16,
+                    "abs" => KernelName::UnaryAbsBf16,
+                    "recip" => KernelName::UnaryRecipBf16,
+                    "sqr" => KernelName::UnarySqrBf16,
+                    "gelu" => KernelName::UnaryGeluBf16,
+                    "gelu_erf" => KernelName::UnaryGeluErfBf16,
+                    "erf" => KernelName::UnaryErfBf16,
+                    "relu" => KernelName::UnaryReluBf16,
+                    "tanh" => KernelName::UnaryTanhBf16,
+                    "floor" => KernelName::UnaryFloorBf16,
+                    "ceil" => KernelName::UnaryCeilBf16,
+                    "round" => KernelName::UnaryRoundBf16,
+                    "sign" => KernelName::UnarySignBf16,
+                    "exp" => KernelName::UnaryExpBf16,
+                    "silu" => KernelName::UnarySiluBf16,
+                    "sqrt" => KernelName::UnarySqrtBf16,
+                    "sin" => KernelName::UnarySinBf16,
+                    "cos" => KernelName::UnaryCosBf16,
+                    "neg" => KernelName::UnaryNegBf16,
+                    _ => return Err(Error::Vulkan(format!("unary: unsupported op {}", B::NAME).into())),
+                };
+                let (input, out_buf, params) = (input, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<half::bf16>(
+                        cbb, &kernels, Source::UnaryBf16, name, &input, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start as u64..(start + len) as u64),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let name = match B::NAME {
+                    "log" => KernelName::UnaryLogF8e4m3,
+                    "abs" => KernelName::UnaryAbsF8e4m3,
+                    "recip" => KernelName::UnaryRecipF8e4m3,
+                    "sqr" => KernelName::UnarySqrF8e4m3,
+                    "gelu" => KernelName::UnaryGeluF8e4m3,
+                    "gelu_erf" => KernelName::UnaryGeluErfF8e4m3,
+                    "erf" => KernelName::UnaryErfF8e4m3,
+                    "relu" => KernelName::UnaryReluF8e4m3,
+                    "tanh" => KernelName::UnaryTanhF8e4m3,
+                    "floor" => KernelName::UnaryFloorF8e4m3,
+                    "ceil" => KernelName::UnaryCeilF8e4m3,
+                    "round" => KernelName::UnaryRoundF8e4m3,
+                    "sign" => KernelName::UnarySignF8e4m3,
+                    "exp" => KernelName::UnaryExpF8e4m3,
+                    "silu" => KernelName::UnarySiluF8e4m3,
+                    "sqrt" => KernelName::UnarySqrtF8e4m3,
+                    "sin" => KernelName::UnarySinF8e4m3,
+                    "cos" => KernelName::UnaryCosF8e4m3,
+                    "neg" => KernelName::UnaryNegF8e4m3,
+                    _ => return Err(Error::Vulkan(format!("unary: unsupported op {}", B::NAME).into())),
+                };
+                let (input, out_buf, params) = (input, out_buf, params.clone());
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<microfloat::f8e4m3>(
+                        cbb, &kernels, Source::UnaryF8e4m3, name, &input, &out_buf, &params, len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("supported dtype checked above"),
+        }
         Ok(out)
     }
 

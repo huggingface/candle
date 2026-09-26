@@ -85,6 +85,44 @@ pub enum KernelName {
     CmpLeF8e4m3,
     CmpGtF8e4m3,
     CmpGeF8e4m3,
+    UnaryLogBf16,
+    UnaryAbsBf16,
+    UnaryRecipBf16,
+    UnarySqrBf16,
+    UnaryGeluBf16,
+    UnaryGeluErfBf16,
+    UnaryErfBf16,
+    UnaryReluBf16,
+    UnaryTanhBf16,
+    UnaryFloorBf16,
+    UnaryCeilBf16,
+    UnaryRoundBf16,
+    UnarySignBf16,
+    UnaryExpBf16,
+    UnarySiluBf16,
+    UnarySqrtBf16,
+    UnarySinBf16,
+    UnaryCosBf16,
+    UnaryNegBf16,
+    UnaryLogF8e4m3,
+    UnaryAbsF8e4m3,
+    UnaryRecipF8e4m3,
+    UnarySqrF8e4m3,
+    UnaryGeluF8e4m3,
+    UnaryGeluErfF8e4m3,
+    UnaryErfF8e4m3,
+    UnaryReluF8e4m3,
+    UnaryTanhF8e4m3,
+    UnaryFloorF8e4m3,
+    UnaryCeilF8e4m3,
+    UnaryRoundF8e4m3,
+    UnarySignF8e4m3,
+    UnaryExpF8e4m3,
+    UnarySiluF8e4m3,
+    UnarySqrtF8e4m3,
+    UnarySinF8e4m3,
+    UnaryCosF8e4m3,
+    UnaryNegF8e4m3,
     WhereF32,
     Copy2dF32,
     GatherIdxF32,
@@ -185,6 +223,44 @@ impl AsRef<str> for KernelName {
             Self::CmpLeF8e4m3 => "main_le",
             Self::CmpGtF8e4m3 => "main_gt",
             Self::CmpGeF8e4m3 => "main_ge",
+            Self::UnaryLogBf16 => "main_log",
+            Self::UnaryLogF8e4m3 => "main_log",
+            Self::UnaryAbsBf16 => "main_abs",
+            Self::UnaryAbsF8e4m3 => "main_abs",
+            Self::UnaryRecipBf16 => "main_recip",
+            Self::UnaryRecipF8e4m3 => "main_recip",
+            Self::UnarySqrBf16 => "main_sqr",
+            Self::UnarySqrF8e4m3 => "main_sqr",
+            Self::UnaryGeluBf16 => "main_gelu",
+            Self::UnaryGeluF8e4m3 => "main_gelu",
+            Self::UnaryGeluErfBf16 => "main_gelu_erf",
+            Self::UnaryGeluErfF8e4m3 => "main_gelu_erf",
+            Self::UnaryErfBf16 => "main_erf",
+            Self::UnaryErfF8e4m3 => "main_erf",
+            Self::UnaryReluBf16 => "main_relu",
+            Self::UnaryReluF8e4m3 => "main_relu",
+            Self::UnaryTanhBf16 => "main_tanh",
+            Self::UnaryTanhF8e4m3 => "main_tanh",
+            Self::UnaryFloorBf16 => "main_floor",
+            Self::UnaryFloorF8e4m3 => "main_floor",
+            Self::UnaryCeilBf16 => "main_ceil",
+            Self::UnaryCeilF8e4m3 => "main_ceil",
+            Self::UnaryRoundBf16 => "main_round",
+            Self::UnaryRoundF8e4m3 => "main_round",
+            Self::UnarySignBf16 => "main_sign",
+            Self::UnarySignF8e4m3 => "main_sign",
+            Self::UnaryExpBf16 => "main_exp",
+            Self::UnaryExpF8e4m3 => "main_exp",
+            Self::UnarySiluBf16 => "main_silu",
+            Self::UnarySiluF8e4m3 => "main_silu",
+            Self::UnarySqrtBf16 => "main_sqrt",
+            Self::UnarySqrtF8e4m3 => "main_sqrt",
+            Self::UnarySinBf16 => "main_sin",
+            Self::UnarySinF8e4m3 => "main_sin",
+            Self::UnaryCosBf16 => "main_cos",
+            Self::UnaryCosF8e4m3 => "main_cos",
+            Self::UnaryNegBf16 => "main_neg",
+            Self::UnaryNegF8e4m3 => "main_neg",
             Self::WhereF32 => "main",
             Self::Copy2dF32 => "main",
             Self::GatherIdxF32 => "main",
@@ -386,7 +462,45 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::UnarySqrtF32
         | KernelName::UnarySinF32
         | KernelName::UnaryCosF32
-        | KernelName::UnaryNegF32 => 3,
+        | KernelName::UnaryNegF32
+        | KernelName::UnaryLogBf16
+        | KernelName::UnaryAbsBf16
+        | KernelName::UnaryRecipBf16
+        | KernelName::UnarySqrBf16
+        | KernelName::UnaryGeluBf16
+        | KernelName::UnaryGeluErfBf16
+        | KernelName::UnaryErfBf16
+        | KernelName::UnaryReluBf16
+        | KernelName::UnaryTanhBf16
+        | KernelName::UnaryFloorBf16
+        | KernelName::UnaryCeilBf16
+        | KernelName::UnaryRoundBf16
+        | KernelName::UnarySignBf16
+        | KernelName::UnaryExpBf16
+        | KernelName::UnarySiluBf16
+        | KernelName::UnarySqrtBf16
+        | KernelName::UnarySinBf16
+        | KernelName::UnaryCosBf16
+        | KernelName::UnaryNegBf16
+        | KernelName::UnaryLogF8e4m3
+        | KernelName::UnaryAbsF8e4m3
+        | KernelName::UnaryRecipF8e4m3
+        | KernelName::UnarySqrF8e4m3
+        | KernelName::UnaryGeluF8e4m3
+        | KernelName::UnaryGeluErfF8e4m3
+        | KernelName::UnaryErfF8e4m3
+        | KernelName::UnaryReluF8e4m3
+        | KernelName::UnaryTanhF8e4m3
+        | KernelName::UnaryFloorF8e4m3
+        | KernelName::UnaryCeilF8e4m3
+        | KernelName::UnaryRoundF8e4m3
+        | KernelName::UnarySignF8e4m3
+        | KernelName::UnaryExpF8e4m3
+        | KernelName::UnarySiluF8e4m3
+        | KernelName::UnarySqrtF8e4m3
+        | KernelName::UnarySinF8e4m3
+        | KernelName::UnaryCosF8e4m3
+        | KernelName::UnaryNegF8e4m3 => 3,
         KernelName::BinaryMaximumF32
         | KernelName::BinaryMinimumF32
         | KernelName::BinaryAddF32

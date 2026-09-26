@@ -1809,3 +1809,123 @@ fn test_vulkan_cmp_ops_f8e4m3() {
     assert_eq!(failures, 0, "{failures} f8e4m3 cmp mismatches");
     tracing::debug!("Vulkan device {gpu_id} f8e4m3 cmp ops OK");
 }
+
+/// True if `a` and `b` are equal within `tol` (relative), handling NaN/inf.
+fn close(a: f32, b: f32, tol: f32) -> bool {
+    if a.is_nan() && b.is_nan() {
+        return true;
+    }
+    if a.is_infinite() && b.is_infinite() && a.signum() == b.signum() {
+        return true;
+    }
+    if a.is_nan() != b.is_nan() || a.is_infinite() != b.is_infinite() {
+        return false;
+    }
+    (a - b).abs() <= tol * (1.0 + a.abs().max(b.abs()))
+}
+
+/// All 19 unary ops for BF16 (emulated) vs the CPU backend.
+#[test]
+fn test_vulkan_unary_ops_bf16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (-16..16).map(|i| i as f32 * 0.5).collect();
+    let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("log", l.log().unwrap(), lc.log().unwrap()),
+        ("abs", l.abs().unwrap(), lc.abs().unwrap()),
+        ("recip", l.recip().unwrap(), lc.recip().unwrap()),
+        ("sqr", l.sqr().unwrap(), lc.sqr().unwrap()),
+        ("gelu", l.gelu().unwrap(), lc.gelu().unwrap()),
+        ("gelu_erf", l.gelu_erf().unwrap(), lc.gelu_erf().unwrap()),
+        ("erf", l.erf().unwrap(), lc.erf().unwrap()),
+        ("relu", l.relu().unwrap(), lc.relu().unwrap()),
+        ("tanh", l.tanh().unwrap(), lc.tanh().unwrap()),
+        ("floor", l.floor().unwrap(), lc.floor().unwrap()),
+        ("ceil", l.ceil().unwrap(), lc.ceil().unwrap()),
+        ("round", l.round().unwrap(), lc.round().unwrap()),
+        ("sign", l.sign().unwrap(), lc.sign().unwrap()),
+        ("exp", l.exp().unwrap(), lc.exp().unwrap()),
+        ("silu", l.silu().unwrap(), lc.silu().unwrap()),
+        ("sqrt", l.sqrt().unwrap(), lc.sqrt().unwrap()),
+        ("sin", l.sin().unwrap(), lc.sin().unwrap()),
+        ("cos", l.cos().unwrap(), lc.cos().unwrap()),
+        ("neg", l.neg().unwrap(), lc.neg().unwrap()),
+    ];
+    // bf16 has ~8-bit mantissa; complex ops (gelu/silu) round intermediates to
+    // bf16 on the CPU (measured max rel diff ~0.006), so allow ~0.02.
+    let tol = 0.02f32;
+    let mut failures = 0usize;
+    for (name, g, c) in &cases {
+        let gv: Vec<half::bf16> = g.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+        let cv: Vec<half::bf16> = c.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if !close(a.to_f32(), b.to_f32(), tol) {
+                failures += 1;
+                tracing::debug!("bf16 unary {name}: mismatch at {i}: gpu {} cpu {}", a.to_f32(), b.to_f32());
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} bf16 unary mismatches");
+    tracing::debug!("Vulkan device {gpu_id} bf16 unary ops OK");
+}
+
+/// All 19 unary ops for F8E4M3 (emulated) vs the CPU backend.
+#[test]
+fn test_vulkan_unary_ops_f8e4m3() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (-16..16).map(|i| i as f32 * 0.5).collect();
+    let lv: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev).unwrap().reshape(shape.clone()).unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu).unwrap().reshape(shape.clone()).unwrap();
+
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("log", l.log().unwrap(), lc.log().unwrap()),
+        ("abs", l.abs().unwrap(), lc.abs().unwrap()),
+        ("recip", l.recip().unwrap(), lc.recip().unwrap()),
+        ("sqr", l.sqr().unwrap(), lc.sqr().unwrap()),
+        ("gelu", l.gelu().unwrap(), lc.gelu().unwrap()),
+        ("gelu_erf", l.gelu_erf().unwrap(), lc.gelu_erf().unwrap()),
+        ("erf", l.erf().unwrap(), lc.erf().unwrap()),
+        ("relu", l.relu().unwrap(), lc.relu().unwrap()),
+        ("tanh", l.tanh().unwrap(), lc.tanh().unwrap()),
+        ("floor", l.floor().unwrap(), lc.floor().unwrap()),
+        ("ceil", l.ceil().unwrap(), lc.ceil().unwrap()),
+        ("round", l.round().unwrap(), lc.round().unwrap()),
+        ("sign", l.sign().unwrap(), lc.sign().unwrap()),
+        ("exp", l.exp().unwrap(), lc.exp().unwrap()),
+        ("silu", l.silu().unwrap(), lc.silu().unwrap()),
+        ("sqrt", l.sqrt().unwrap(), lc.sqrt().unwrap()),
+        ("sin", l.sin().unwrap(), lc.sin().unwrap()),
+        ("cos", l.cos().unwrap(), lc.cos().unwrap()),
+        ("neg", l.neg().unwrap(), lc.neg().unwrap()),
+    ];
+    // f8e4m3 has a 3-bit mantissa and complex ops (gelu/silu) round intermediates
+    // to the narrow type on the CPU (measured max rel diff ~0.063), so allow ~0.15.
+    let tol = 0.15f32;
+    let mut failures = 0usize;
+    for (name, g, c) in &cases {
+        let gv: Vec<microfloat::f8e4m3> = g.flatten_all().unwrap().to_vec1::<microfloat::f8e4m3>().unwrap();
+        let cv: Vec<microfloat::f8e4m3> = c.flatten_all().unwrap().to_vec1::<microfloat::f8e4m3>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if !close(a.to_f32(), b.to_f32(), tol) {
+                failures += 1;
+                tracing::debug!("f8e4m3 unary {name}: mismatch at {i}: gpu {} cpu {}", a.to_f32(), b.to_f32());
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} f8e4m3 unary mismatches");
+    tracing::debug!("Vulkan device {gpu_id} f8e4m3 unary ops OK");
+}
