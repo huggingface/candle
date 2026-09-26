@@ -49,6 +49,8 @@ const REDUCE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f
 const POOL2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d.spv"));
 const UPSAMPLE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/upsample.spv"));
 const CONV_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv.spv"));
+const CONV_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv_f16.spv"));
+const CONV_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv_f64.spv"));
 const SCATTER_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scatter.spv"));
 
 const TEST_FILL_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f16.spv"));
@@ -123,6 +125,8 @@ pub enum Source {
     Pool2dSlang,
     UpsampleSlang,
     ConvSlang,
+    ConvF16,
+    ConvF64,
     ScatterSlang,
     TestFillF16,
     TestFillU8,
@@ -414,6 +418,14 @@ impl Source {
             | KernelName::Conv2dF32
             | KernelName::ConvTranspose1dF32
             | KernelName::ConvTranspose2dF32
+            | KernelName::Conv1dF16
+            | KernelName::Conv2dF16
+            | KernelName::ConvTranspose1dF16
+            | KernelName::ConvTranspose2dF16
+            | KernelName::Conv1dF64
+            | KernelName::Conv2dF64
+            | KernelName::ConvTranspose1dF64
+            | KernelName::ConvTranspose2dF64
             | KernelName::ScatterF32 => 0,
             KernelName::TestFillF16 => 0,
             KernelName::TestFillU8
@@ -483,6 +495,8 @@ impl Source {
             Self::Pool2dSlang => POOL2D_SLANG_SPV,
             Self::UpsampleSlang => UPSAMPLE_SLANG_SPV,
             Self::ConvSlang => CONV_SLANG_SPV,
+            Self::ConvF16 => CONV_F16_SPV,
+            Self::ConvF64 => CONV_F64_SPV,
             Self::ScatterSlang => SCATTER_SLANG_SPV,
             Self::TestFillF16 => TEST_FILL_F16_SPV,
             Self::TestFillU8 => TEST_FILL_U8_SPV,
@@ -557,6 +571,8 @@ impl AsRef<str> for Source {
             Self::Pool2dSlang => "pool2d",
             Self::UpsampleSlang => "upsample",
             Self::ConvSlang => "conv",
+            Self::ConvF16 => "conv_f16",
+            Self::ConvF64 => "conv_f64",
             Self::ScatterSlang => "scatter",
             Self::TestFillF16 => "test_fill_f16",
             Self::TestFillU8 => "test_fill_u8",

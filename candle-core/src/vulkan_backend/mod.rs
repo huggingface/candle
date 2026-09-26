@@ -3596,9 +3596,10 @@ impl BackendStorage for VulkanStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConv1D,
     ) -> Result<Self> {
-        if self.dtype != DType::F32 || kernel.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) || self.dtype != kernel.dtype
+        {
             return Err(Error::Vulkan(
-                "conv1d: only F32 supported on the Vulkan backend"
+                "conv1d: unsupported or mismatched dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -3634,23 +3635,7 @@ impl BackendStorage for VulkanStorage {
         }
         let l_out = params.l_out();
         let total = params.b_size * params.c_out * l_out;
-        let in_buf = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => {
-                b.clone().slice(in_start as u64..(in_start + in_len) as u64)
-            }
-            _ => unreachable!("dtype checked above"),
-        };
-        let w_buf = match &kernel.buffer {
-            VulkanStorageBuffer::F32(b) => {
-                b.clone().slice(w_start as u64..(w_start + w_len) as u64)
-            }
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, total, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
         if total == 0 {
             return Ok(out);
         }
@@ -3680,22 +3665,105 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params_sub: Subbuffer<[f32]> = params_buf;
-        let in_buf = in_buf.clone();
-        let w_buf = w_buf.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_conv_slang_f32(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::KernelName::Conv1dF32,
-                &in_buf,
-                &w_buf,
-                &out_buf,
-                &params_sub,
-                total,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+        match self.dtype {
+            DType::F32 => {
+                let in_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let w_buf: Subbuffer<[f32]> = match &kernel.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvSlang,
+                        candle_vulkan_kernels::KernelName::Conv1dF32,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let in_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let w_buf: Subbuffer<[half::f16]> = match &kernel.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF16,
+                        candle_vulkan_kernels::KernelName::Conv1dF16,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let in_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let w_buf: Subbuffer<[f64]> = match &kernel.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF64,
+                        candle_vulkan_kernels::KernelName::Conv1dF64,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("dtype checked above"),
+        }
         Ok(out)
     }
 
@@ -3706,9 +3774,10 @@ impl BackendStorage for VulkanStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConvTranspose1D,
     ) -> Result<Self> {
-        if self.dtype != DType::F32 || kernel.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) || self.dtype != kernel.dtype
+        {
             return Err(Error::Vulkan(
-                "conv_transpose1d: only F32 supported on the Vulkan backend"
+                "conv_transpose1d: unsupported or mismatched dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -3742,23 +3811,7 @@ impl BackendStorage for VulkanStorage {
         }
         let l_out = params.l_out();
         let total = params.b_size * params.c_out * l_out;
-        let in_buf = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => {
-                b.clone().slice(in_start as u64..(in_start + in_len) as u64)
-            }
-            _ => unreachable!("dtype checked above"),
-        };
-        let w_buf = match &kernel.buffer {
-            VulkanStorageBuffer::F32(b) => {
-                b.clone().slice(w_start as u64..(w_start + w_len) as u64)
-            }
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, total, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
         if total == 0 {
             return Ok(out);
         }
@@ -3788,22 +3841,105 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params_sub: Subbuffer<[f32]> = params_buf;
-        let in_buf = in_buf.clone();
-        let w_buf = w_buf.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_conv_slang_f32(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::KernelName::ConvTranspose1dF32,
-                &in_buf,
-                &w_buf,
-                &out_buf,
-                &params_sub,
-                total,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+        match self.dtype {
+            DType::F32 => {
+                let in_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let w_buf: Subbuffer<[f32]> = match &kernel.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvSlang,
+                        candle_vulkan_kernels::KernelName::ConvTranspose1dF32,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let in_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let w_buf: Subbuffer<[half::f16]> = match &kernel.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF16,
+                        candle_vulkan_kernels::KernelName::ConvTranspose1dF16,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let in_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let w_buf: Subbuffer<[f64]> = match &kernel.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF64,
+                        candle_vulkan_kernels::KernelName::ConvTranspose1dF64,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("dtype checked above"),
+        }
         Ok(out)
     }
 
@@ -3814,9 +3950,10 @@ impl BackendStorage for VulkanStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
-        if self.dtype != DType::F32 || kernel.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) || self.dtype != kernel.dtype
+        {
             return Err(Error::Vulkan(
-                "conv2d: only F32 supported on the Vulkan backend"
+                "conv2d: unsupported or mismatched dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -3852,23 +3989,7 @@ impl BackendStorage for VulkanStorage {
         }
         let (o_h, o_w) = (params.out_h(), params.out_w());
         let total = params.b_size * params.c_out * o_h * o_w;
-        let in_buf = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => {
-                b.clone().slice(in_start as u64..(in_start + in_len) as u64)
-            }
-            _ => unreachable!("dtype checked above"),
-        };
-        let w_buf = match &kernel.buffer {
-            VulkanStorageBuffer::F32(b) => {
-                b.clone().slice(w_start as u64..(w_start + w_len) as u64)
-            }
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, total, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
         if total == 0 {
             return Ok(out);
         }
@@ -3901,22 +4022,105 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params_sub: Subbuffer<[f32]> = params_buf;
-        let in_buf = in_buf.clone();
-        let w_buf = w_buf.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_conv_slang_f32(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::KernelName::Conv2dF32,
-                &in_buf,
-                &w_buf,
-                &out_buf,
-                &params_sub,
-                total,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+        match self.dtype {
+            DType::F32 => {
+                let in_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let w_buf: Subbuffer<[f32]> = match &kernel.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvSlang,
+                        candle_vulkan_kernels::KernelName::Conv2dF32,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let in_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let w_buf: Subbuffer<[half::f16]> = match &kernel.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF16,
+                        candle_vulkan_kernels::KernelName::Conv2dF16,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let in_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let w_buf: Subbuffer<[f64]> = match &kernel.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF64,
+                        candle_vulkan_kernels::KernelName::Conv2dF64,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("dtype checked above"),
+        }
         Ok(out)
     }
 
@@ -3927,9 +4131,10 @@ impl BackendStorage for VulkanStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConvTranspose2D,
     ) -> Result<Self> {
-        if self.dtype != DType::F32 || kernel.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) || self.dtype != kernel.dtype
+        {
             return Err(Error::Vulkan(
-                "conv_transpose2d: only F32 supported on the Vulkan backend"
+                "conv_transpose2d: unsupported or mismatched dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -3963,23 +4168,7 @@ impl BackendStorage for VulkanStorage {
         }
         let (o_h, o_w) = (params.out_h(), params.out_w());
         let total = params.b_size * params.c_out * o_h * o_w;
-        let in_buf = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => {
-                b.clone().slice(in_start as u64..(in_start + in_len) as u64)
-            }
-            _ => unreachable!("dtype checked above"),
-        };
-        let w_buf = match &kernel.buffer {
-            VulkanStorageBuffer::F32(b) => {
-                b.clone().slice(w_start as u64..(w_start + w_len) as u64)
-            }
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, total, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
         if total == 0 {
             return Ok(out);
         }
@@ -4012,22 +4201,105 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params_sub: Subbuffer<[f32]> = params_buf;
-        let in_buf = in_buf.clone();
-        let w_buf = w_buf.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_conv_slang_f32(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::KernelName::ConvTranspose2dF32,
-                &in_buf,
-                &w_buf,
-                &out_buf,
-                &params_sub,
-                total,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+        match self.dtype {
+            DType::F32 => {
+                let in_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let w_buf: Subbuffer<[f32]> = match &kernel.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvSlang,
+                        candle_vulkan_kernels::KernelName::ConvTranspose2dF32,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let in_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let w_buf: Subbuffer<[half::f16]> = match &kernel.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF16,
+                        candle_vulkan_kernels::KernelName::ConvTranspose2dF16,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let in_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let w_buf: Subbuffer<[f64]> = match &kernel.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF64,
+                        candle_vulkan_kernels::KernelName::ConvTranspose2dF64,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("dtype checked above"),
+        }
         Ok(out)
     }
 
