@@ -1735,9 +1735,9 @@ impl BackendStorage for VulkanStorage {
     }
 
     fn reduce_op(&self, op: ReduceOp, l: &Layout, reduce_dims: &[usize]) -> Result<Self> {
-        if self.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) {
             return Err(Error::Vulkan(
-                "reduce_op: only F32 supported on the Vulkan backend"
+                "reduce_op: unsupported dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -1769,23 +1769,25 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        let input = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
-            _ => unreachable!("dtype checked above"),
-        };
         let rows: usize = dims[..ndim - 1].iter().product();
         let cols = dims[ndim - 1];
-        let out_dtype = match op {
-            ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::F32,
-            ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
-        };
-        let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
-        if rows == 0 || cols == 0 {
-            return Ok(out);
-        }
         let kernels = self.device.kernels();
-        match op {
-            ReduceOp::Sum | ReduceOp::Max | ReduceOp::Min | ReduceOp::ArgMin | ReduceOp::ArgMax => {
+        match self.dtype {
+            DType::F32 => {
+                let input: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::F32,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
                 let name = match op {
                     ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumF32,
                     ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxF32,
@@ -1817,9 +1819,10 @@ impl BackendStorage for VulkanStorage {
                 let of = out_f.clone();
                 let oi = out_i.clone();
                 self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_reduce_slang_f32(
+                    candle_vulkan_kernels::call_reduce_slang::<f32>(
                         cbb,
                         &kernels,
+                        candle_vulkan_kernels::Source::ReduceSlang,
                         name,
                         &input,
                         of.as_ref(),
@@ -1829,9 +1832,132 @@ impl BackendStorage for VulkanStorage {
                     )
                     .map_err(|e| e.to_string())
                 })?;
+                Ok(out)
             }
+            DType::F16 => {
+                let input: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::F16,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumF16,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxF16,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinF16,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinF16,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxF16,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => unreachable!(),
+                };
+                let params_buf = Buffer::from_iter(
+                    self.device.mem_alloc(),
+                    &BufferCreateInfo {
+                        usage: BufferUsage::STORAGE_BUFFER,
+                        ..Default::default()
+                    },
+                    &AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                            | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                        ..Default::default()
+                    },
+                    vec![rows as f32, cols as f32],
+                )
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                let params: Subbuffer<[f32]> = params_buf;
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceF16,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::F64 => {
+                let input: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::F64,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumF64,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxF64,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinF64,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinF64,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxF64,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => unreachable!(),
+                };
+                let params_buf = Buffer::from_iter(
+                    self.device.mem_alloc(),
+                    &BufferCreateInfo {
+                        usage: BufferUsage::STORAGE_BUFFER,
+                        ..Default::default()
+                    },
+                    &AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                            | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                        ..Default::default()
+                    },
+                    vec![rows as f32, cols as f32],
+                )
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                let params: Subbuffer<[f32]> = params_buf;
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceF64,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            _ => unreachable!("dtype checked above"),
         }
-        Ok(out)
     }
 
     fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {

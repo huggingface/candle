@@ -52,7 +52,7 @@ pub use cmp_slang::call_cmp_slang;
 pub use where_slang::call_where_slang;
 pub use copy2d_slang::call_copy2d_slang_f32;
 pub use gather_idx_slang::call_gather_idx_slang_f32;
-pub use reduce_slang::call_reduce_slang_f32;
+pub use reduce_slang::call_reduce_slang;
 pub use pool2d_slang::call_pool2d_slang_f32;
 pub use upsample_slang::call_upsample_slang_f32;
 pub use conv_slang::call_conv_slang_f32;

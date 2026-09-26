@@ -271,6 +271,16 @@ pub enum KernelName {
     ReduceMinF32,
     ReduceArgMinF32,
     ReduceArgMaxF32,
+    ReduceSumF16,
+    ReduceMaxF16,
+    ReduceMinF16,
+    ReduceArgMinF16,
+    ReduceArgMaxF16,
+    ReduceSumF64,
+    ReduceMaxF64,
+    ReduceMinF64,
+    ReduceArgMinF64,
+    ReduceArgMaxF64,
     AvgPool2dF32,
     MaxPool2dF32,
     UpsampleNearest1dF32,
@@ -549,6 +559,16 @@ impl AsRef<str> for KernelName {
             Self::ReduceMinF32 => "main_reduce_min",
             Self::ReduceArgMinF32 => "main_reduce_argmin",
             Self::ReduceArgMaxF32 => "main_reduce_argmax",
+            Self::ReduceSumF16 => "main_reduce_sum",
+            Self::ReduceMaxF16 => "main_reduce_max",
+            Self::ReduceMinF16 => "main_reduce_min",
+            Self::ReduceArgMinF16 => "main_reduce_argmin",
+            Self::ReduceArgMaxF16 => "main_reduce_argmax",
+            Self::ReduceSumF64 => "main_reduce_sum",
+            Self::ReduceMaxF64 => "main_reduce_max",
+            Self::ReduceMinF64 => "main_reduce_min",
+            Self::ReduceArgMinF64 => "main_reduce_argmin",
+            Self::ReduceArgMaxF64 => "main_reduce_argmax",
             Self::AvgPool2dF32 => "main_avg_pool2d",
             Self::MaxPool2dF32 => "main_max_pool2d",
             Self::UpsampleNearest1dF32 => "main_upsample_nearest1d",
@@ -966,6 +986,16 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::ReduceArgMaxF32
         | KernelName::ReduceSumF32
         | KernelName::ReduceMaxF32
+        | KernelName::ReduceSumF16
+        | KernelName::ReduceMaxF16
+        | KernelName::ReduceMinF16
+        | KernelName::ReduceArgMinF16
+        | KernelName::ReduceArgMaxF16
+        | KernelName::ReduceSumF64
+        | KernelName::ReduceMaxF64
+        | KernelName::ReduceMinF64
+        | KernelName::ReduceArgMinF64
+        | KernelName::ReduceArgMaxF64
         | KernelName::AvgPool2dF32
         | KernelName::MaxPool2dF32
         | KernelName::UpsampleNearest1dF32

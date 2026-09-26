@@ -44,6 +44,8 @@ const CMP_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_i64.spv
 const COPY2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d.spv"));
 const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx.spv"));
 const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_ops.spv"));
+const REDUCE_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f16.spv"));
+const REDUCE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f64.spv"));
 const POOL2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d.spv"));
 const UPSAMPLE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/upsample.spv"));
 const CONV_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv.spv"));
@@ -116,6 +118,8 @@ pub enum Source {
     Copy2dSlang,
     GatherIdxSlang,
     ReduceSlang,
+    ReduceF16,
+    ReduceF64,
     Pool2dSlang,
     UpsampleSlang,
     ConvSlang,
@@ -377,6 +381,16 @@ impl Source {
             | KernelName::ReduceArgMaxF32
             | KernelName::ReduceSumF32
             | KernelName::ReduceMaxF32
+            | KernelName::ReduceSumF16
+            | KernelName::ReduceMaxF16
+            | KernelName::ReduceMinF16
+            | KernelName::ReduceArgMinF16
+            | KernelName::ReduceArgMaxF16
+            | KernelName::ReduceSumF64
+            | KernelName::ReduceMaxF64
+            | KernelName::ReduceMinF64
+            | KernelName::ReduceArgMinF64
+            | KernelName::ReduceArgMaxF64
             | KernelName::AffineF32
             | KernelName::BinaryAddF32
             | KernelName::BinarySubF32
@@ -464,6 +478,8 @@ impl Source {
             Self::Copy2dSlang => COPY2D_SLANG_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
             Self::ReduceSlang => REDUCE_SLANG_SPV,
+            Self::ReduceF16 => REDUCE_F16_SPV,
+            Self::ReduceF64 => REDUCE_F64_SPV,
             Self::Pool2dSlang => POOL2D_SLANG_SPV,
             Self::UpsampleSlang => UPSAMPLE_SLANG_SPV,
             Self::ConvSlang => CONV_SLANG_SPV,
@@ -536,6 +552,8 @@ impl AsRef<str> for Source {
             Self::Copy2dSlang => "copy2d",
             Self::GatherIdxSlang => "gather_idx",
             Self::ReduceSlang => "reduce",
+            Self::ReduceF16 => "reduce_f16",
+            Self::ReduceF64 => "reduce_f64",
             Self::Pool2dSlang => "pool2d",
             Self::UpsampleSlang => "upsample",
             Self::ConvSlang => "conv",
