@@ -4,6 +4,8 @@ use crate::kernel::KernelName;
 
 const AFFINE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine.spv"));
 const GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm.spv"));
+const GEMM_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm_f16.spv"));
+const GEMM_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm_f64.spv"));
 const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
 const UNARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary.spv"));
 const BINARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary.spv"));
@@ -74,6 +76,8 @@ const TEST_FILL_F8E8M0_SPV: &[u8] =
 pub enum Source {
     Affine,
     Gemm,
+    GemmF16,
+    GemmF64,
     ConstSet,
     UnarySlang,
     BinarySlang,
@@ -385,6 +389,8 @@ impl Source {
             | KernelName::UnaryCosF32
             | KernelName::UnaryNegF32
             | KernelName::GemmF32
+            | KernelName::GemmF16
+            | KernelName::GemmF64
             | KernelName::AvgPool2dF32
             | KernelName::MaxPool2dF32
             | KernelName::UpsampleNearest1dF32
@@ -418,6 +424,8 @@ impl Source {
         let bytes: &[u8] = match self {
             Self::Affine => AFFINE_SPV,
             Self::Gemm => GEMM_SPV,
+            Self::GemmF16 => GEMM_F16_SPV,
+            Self::GemmF64 => GEMM_F64_SPV,
             Self::ConstSet => CONST_SET_SPV,
             Self::UnarySlang => UNARY_SLANG_SPV,
             Self::BinarySlang => BINARY_SLANG_SPV,
@@ -488,6 +496,8 @@ impl AsRef<str> for Source {
         match self {
             Self::Affine => "affine",
             Self::Gemm => "gemm",
+            Self::GemmF16 => "gemm_f16",
+            Self::GemmF64 => "gemm_f64",
             Self::ConstSet => "const_set",
             Self::UnarySlang => "unary",
             Self::BinarySlang => "binary",

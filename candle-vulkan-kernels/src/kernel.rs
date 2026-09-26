@@ -27,6 +27,8 @@ pub enum KernelName {
     ReduceSumF32,
     ReduceMaxF32,
     GemmF32,
+    GemmF16,
+    GemmF64,
     ConstSetF32,
     UnaryLogF32,
     UnaryAbsF32,
@@ -303,6 +305,8 @@ impl AsRef<str> for KernelName {
             Self::ReduceSumF32 => "main_reduce_sum",
             Self::ReduceMaxF32 => "main_reduce_max",
             Self::GemmF32 => "main",
+            Self::GemmF16 => "main",
+            Self::GemmF64 => "main",
             Self::ConstSetF32 => "main",
             Self::UnaryLogF32 => "main_log",
             Self::UnaryAbsF32 => "main_abs",
@@ -718,7 +722,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         KernelName::AffineF32
         | KernelName::AffineBf16
         | KernelName::AffineF8e4m3 => 3,
-        KernelName::GemmF32 => 4,
+        KernelName::GemmF32 | KernelName::GemmF16 | KernelName::GemmF64 => 4,
         KernelName::ConstSetF32
         | KernelName::UnaryLogF32
         | KernelName::UnaryAbsF32

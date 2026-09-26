@@ -32,7 +32,7 @@ pub mod unary_slang;
 
 pub use affine::call_affine_slang;
 pub use const_set::call_const_set_f32;
-pub use gemm::call_gemm_slang_f32;
+pub use gemm::call_gemm_slang;
 pub use test_fill_bf16::{call_test_fill_bf16_emulated, call_test_fill_bf16_native};
 pub use test_fill_f16::call_test_fill_f16;
 pub use test_fill_f32::call_test_fill_f32;

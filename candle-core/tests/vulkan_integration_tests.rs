@@ -3835,3 +3835,89 @@ fn test_vulkan_cmp_ops_i64() {
     }
     tracing::debug!("Vulkan device {gpu_id} I64 cmp ops OK");
 }
+/// Matmul for F16 (native half, F32 accumulate) vs the CPU backend.
+#[test]
+fn test_vulkan_matmul_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.2 - 3.0).collect();
+    let g: Vec<f32> = (0..48).map(|i| (i as f32) * 0.1 - 2.0).collect();
+    let av: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let bv: Vec<half::f16> = g.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let ag = candle_core::Tensor::new(av.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(av.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(bv.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((8, 6)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(bv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((8, 6)))
+        .unwrap();
+    let gres = ag.clone().matmul(&bg).unwrap();
+    let cres = ac.clone().matmul(&bc).unwrap();
+    for (x, y) in gres
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .zip(cres.to_vec2::<half::f16>().unwrap().into_iter().flatten())
+    {
+        assert!(
+            (x.to_f32() - y.to_f32()).abs() < 0.05 * (1.0 + y.to_f32().abs()),
+            "matmul f16: gpu {} cpu {}",
+            x.to_f32(),
+            y.to_f32()
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} matmul f16 OK");
+}
+/// Matmul for F64 (native double) vs the CPU backend.
+#[test]
+fn test_vulkan_matmul_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let f: Vec<f64> = (0..32).map(|i| (i as f64) * 0.2 - 3.0).collect();
+    let g: Vec<f64> = (0..48).map(|i| (i as f64) * 0.1 - 2.0).collect();
+    let ag = candle_core::Tensor::new(f.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(f.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(g.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((8, 6)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(g.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((8, 6)))
+        .unwrap();
+    let gres = ag.clone().matmul(&bg).unwrap();
+    let cres = ac.clone().matmul(&bc).unwrap();
+    for (x, y) in gres
+        .to_vec2::<f64>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .zip(cres.to_vec2::<f64>().unwrap().into_iter().flatten())
+    {
+        assert!(
+            (x - y).abs() < 1e-9 * (1.0 + y.abs()),
+            "matmul f64: gpu {x} cpu {y}"
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} matmul f64 OK");
+}
