@@ -51,7 +51,7 @@ pub use binary_slang::call_binary_slang;
 pub use cmp_slang::call_cmp_slang;
 pub use where_slang::call_where_slang;
 pub use copy2d_slang::call_copy2d_slang_f32;
-pub use gather_idx_slang::call_gather_idx_slang_f32;
+pub use gather_idx_slang::call_gather_idx_slang;
 pub use reduce_slang::call_reduce_slang;
 pub use pool2d_slang::call_pool2d_slang;
 pub use upsample_slang::call_upsample_slang;

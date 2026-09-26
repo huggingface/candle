@@ -4228,3 +4228,51 @@ fn test_vulkan_upsample_nearest2d_f16() {
         assert!((g - e).abs() < 0.05f32, "got {} vs exp {}", g, e);
     }
 }
+
+#[test]
+fn test_vulkan_gather_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    // emb: (10, 8)
+    let emb_v: Vec<f32> = (0..80).map(|i| (i as f32) * 0.25 - 10.0).collect();
+    let emb_f16: Vec<half::f16> = emb_v.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let emb = candle_core::Tensor::new(emb_f16.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((10, 8)))
+        .unwrap();
+    let emb_c = candle_core::Tensor::new(emb_f16.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((10, 8)))
+        .unwrap();
+    // ids: (4, 8), same rank as the embeddings, each entry < 10.
+    let ids_v: Vec<u32> = (0..32).map(|i| (i * 7 % 10) as u32).collect();
+    let ids = candle_core::Tensor::new(ids_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let ids_c = candle_core::Tensor::new(ids_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let g = emb.clone().gather(&ids, 0).unwrap();
+    let c = emb_c.clone().gather(&ids_c, 0).unwrap();
+    let gv: Vec<f32> = g
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .map(|x| f32::from(x))
+        .collect();
+    let cv: Vec<f32> = c
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .map(|x| f32::from(x))
+        .collect();
+    for (a, b) in gv.iter().zip(cv.iter()) {
+        assert!((a - b).abs() < 0.05f32, "got {} vs exp {}", a, b);
+    }
+}

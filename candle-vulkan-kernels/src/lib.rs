@@ -14,7 +14,7 @@ pub use kernels::{
     call_test_fill_u8, call_binary_slang, call_cmp_slang, call_unary_slang,
     call_where_slang,
     call_copy2d_slang_f32,
-    call_gather_idx_slang_f32,
+    call_gather_idx_slang,
     call_reduce_slang,
     call_pool2d_slang,
     call_upsample_slang,

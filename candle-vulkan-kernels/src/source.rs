@@ -43,6 +43,8 @@ const BINARY_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_i
 const CMP_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_i64.spv"));
 const COPY2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d.spv"));
 const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx.spv"));
+const GATHER_IDX_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_f16.spv"));
+const GATHER_IDX_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_f64.spv"));
 const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_ops.spv"));
 const REDUCE_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f16.spv"));
 const REDUCE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f64.spv"));
@@ -123,6 +125,8 @@ pub enum Source {
     CmpI64,
     Copy2dSlang,
     GatherIdxSlang,
+    GatherIdxF16,
+    GatherIdxF64,
     ReduceSlang,
     ReduceF16,
     ReduceF64,
@@ -388,6 +392,12 @@ impl Source {
             | KernelName::GatherIdxF32
             | KernelName::GatherRowsF32
             | KernelName::IndexSelectF32
+            | KernelName::GatherIdxF16
+            | KernelName::GatherRowsF16
+            | KernelName::IndexSelectF16
+            | KernelName::GatherIdxF64
+            | KernelName::GatherRowsF64
+            | KernelName::IndexSelectF64
             | KernelName::ReduceMinF32
             | KernelName::ReduceArgMinF32
             | KernelName::ReduceArgMaxF32
@@ -507,6 +517,8 @@ impl Source {
             Self::CmpI64 => CMP_I64_SPV,
             Self::Copy2dSlang => COPY2D_SLANG_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
+            Self::GatherIdxF16 => GATHER_IDX_F16_SPV,
+            Self::GatherIdxF64 => GATHER_IDX_F64_SPV,
             Self::ReduceSlang => REDUCE_SLANG_SPV,
             Self::ReduceF16 => REDUCE_F16_SPV,
             Self::ReduceF64 => REDUCE_F64_SPV,
@@ -587,6 +599,8 @@ impl AsRef<str> for Source {
             Self::CmpI64 => "cmp_i64",
             Self::Copy2dSlang => "copy2d",
             Self::GatherIdxSlang => "gather_idx",
+            Self::GatherIdxF16 => "gather_idx_f16",
+            Self::GatherIdxF64 => "gather_idx_f64",
             Self::ReduceSlang => "reduce",
             Self::ReduceF16 => "reduce_f16",
             Self::ReduceF64 => "reduce_f64",

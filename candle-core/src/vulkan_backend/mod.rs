@@ -4874,9 +4874,9 @@ impl BackendStorage for VulkanStorage {
     }
 
     fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
-        if self.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) {
             return Err(Error::Vulkan(
-                "gather: only F32 embeddings supported on the Vulkan backend"
+                "gather: unsupported dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -4959,24 +4959,11 @@ impl BackendStorage for VulkanStorage {
         }
         let inner = ids_dims[1];
         let ids_buf = ids_u32.slice(ids_start as u64..(ids_start + ids_len) as u64);
-        let emb_buf = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b
-                .clone()
-                .slice(emb_start as u64..(emb_start + emb_len) as u64),
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, ids_len, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = VulkanStorage::new(&self.device, ids_len, self.dtype)?;
         if ids_len == 0 {
             return Ok(out);
         }
         let kernels = self.device.kernels();
-        let ids_buf = ids_buf.clone();
-        let emb_buf = emb_buf.clone();
-        let out_buf = out_buf.clone();
         let params_buf = Buffer::from_iter(
             self.device.mem_alloc(),
             &BufferCreateInfo {
@@ -4992,19 +4979,96 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_gather_idx_slang_f32(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::KernelName::GatherRowsF32,
-                &emb_buf,
-                &out_buf,
-                &ids_buf,
-                &params,
-                ids_len,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+        match self.dtype {
+            DType::F32 => {
+                let emb_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b
+                        .clone()
+                        .slice(emb_start as u64..(emb_start + emb_len) as u64),
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let ids_buf = ids_buf.clone();
+                let emb_buf = emb_buf.clone();
+                let out_buf = out_buf.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_gather_idx_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::GatherIdxSlang,
+                        candle_vulkan_kernels::KernelName::GatherRowsF32,
+                        &emb_buf,
+                        &out_buf,
+                        &ids_buf,
+                        &params,
+                        ids_len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let emb_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(emb_start as u64..(emb_start + emb_len) as u64),
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let ids_buf = ids_buf.clone();
+                let emb_buf = emb_buf.clone();
+                let out_buf = out_buf.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_gather_idx_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::GatherIdxF16,
+                        candle_vulkan_kernels::KernelName::GatherRowsF16,
+                        &emb_buf,
+                        &out_buf,
+                        &ids_buf,
+                        &params,
+                        ids_len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let emb_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b
+                        .clone()
+                        .slice(emb_start as u64..(emb_start + emb_len) as u64),
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                let ids_buf = ids_buf.clone();
+                let emb_buf = emb_buf.clone();
+                let out_buf = out_buf.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_gather_idx_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::GatherIdxF64,
+                        candle_vulkan_kernels::KernelName::GatherRowsF64,
+                        &emb_buf,
+                        &out_buf,
+                        &ids_buf,
+                        &params,
+                        ids_len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("dtype checked above"),
+        }
         Ok(out)
     }
 
@@ -5250,9 +5314,10 @@ impl BackendStorage for VulkanStorage {
         let ids_buf = ids_buf.clone();
         let out_buf = out_buf.clone();
         self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_gather_idx_slang_f32(
+            candle_vulkan_kernels::call_gather_idx_slang::<f32>(
                 cbb,
                 &kernels,
+                candle_vulkan_kernels::Source::GatherIdxSlang,
                 candle_vulkan_kernels::KernelName::IndexSelectF32,
                 &src_buf,
                 &out_buf,
@@ -5671,9 +5736,10 @@ impl BackendStorage for VulkanStorage {
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
                 let params: Subbuffer<[f32]> = params_buf;
                 self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_gather_idx_slang_f32(
+                    candle_vulkan_kernels::call_gather_idx_slang::<f32>(
                         cbb,
                         &kernels,
+                        candle_vulkan_kernels::Source::GatherIdxSlang,
                         candle_vulkan_kernels::KernelName::GatherIdxF32,
                         &src_buf,
                         &dst_buf,
