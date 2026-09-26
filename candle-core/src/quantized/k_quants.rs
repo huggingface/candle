@@ -2571,10 +2571,12 @@ pub(crate) fn matmul_q4k_x8(
         let repacked_ptr = repacked.as_ptr() as usize;
         let x8_block_bytes = std::mem::size_of::<BlockQ4Kx8>();
 
+        // equal-sized gemv units: a static split skips the shared cursor, which costs
+        // several us per small decode matmul
         if m == 1 {
             let lhs_row_ptr = lhs_b.as_ptr() as usize;
             let dst_row_ptr = dst.as_mut_ptr() as usize;
-            pool.execute_chunked(n_groups, |range| {
+            pool.execute_static(n_groups, |range| {
                 let lhs_row: &[BlockQ8K] = unsafe {
                     std::slice::from_raw_parts(lhs_row_ptr as *const BlockQ8K, k_in_blocks)
                 };
@@ -2600,7 +2602,7 @@ pub(crate) fn matmul_q4k_x8(
             let lhs_row_ptr = lhs_row.as_ptr() as usize;
             let dst_row_ptr = dst[row_idx * n..(row_idx + 1) * n].as_mut_ptr() as usize;
 
-            pool.execute_chunked(n_groups, |range| {
+            pool.execute_static(n_groups, |range| {
                 let lhs_row: &[BlockQ8K] = unsafe {
                     std::slice::from_raw_parts(lhs_row_ptr as *const BlockQ8K, k_in_blocks)
                 };

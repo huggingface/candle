@@ -225,11 +225,31 @@ pub(crate) fn try_matmul_f32(
 ) -> Result<bool> {
     #[cfg(target_arch = "aarch64")]
     {
-        let Some(kind) = PackedKind::select(storage.dtype(), mkn) else {
+        let (m, k, n) = mkn;
+        let dtype = storage.dtype();
+        if let Some(kind) = PackedKind::select(dtype, mkn) {
+            let packed = packed.get_or_init(kind, || kind.pack(storage, n));
+            kind.matmul(mkn, lhs, packed, dst)?;
+            return Ok(true);
+        }
+        // tiled kernels need m % 4 == 0: run the aligned rows tiled and the tail rows as
+        // gemvs on the same packing instead of dropping the whole matmul to the unpacked path
+        let Some(kind) = PackedKind::select(dtype, (1, k, n)) else {
             return Ok(false);
         };
-        let packed = packed.get_or_init(kind, || kind.pack(storage, mkn.2));
-        kind.matmul(mkn, lhs, packed, dst)?;
+        let m_tiled = m & !3;
+        if m_tiled > 0 && PackedKind::select(dtype, (m_tiled, k, n)) != Some(kind) {
+            return Ok(false);
+        }
+        let packed = packed.get_or_init(kind, || kind.pack(storage, n));
+        let (lhs_tiled, lhs_tail) = lhs.split_at(m_tiled * k);
+        let (dst_tiled, dst_tail) = dst.split_at_mut(m_tiled * n);
+        if m_tiled > 0 {
+            kind.matmul((m_tiled, k, n), lhs_tiled, packed, dst_tiled)?;
+        }
+        for (lhs_row, dst_row) in lhs_tail.chunks_exact(k).zip(dst_tail.chunks_exact_mut(n)) {
+            kind.matmul((1, k, n), lhs_row, packed, dst_row)?;
+        }
         Ok(true)
     }
 
@@ -727,7 +747,8 @@ macro_rules! define_gemv_fused {
                 let blk_bytes = std::mem::size_of::<$blk>();
                 let lhs_ptr = lhs_b.as_ptr() as usize;
                 let pool = crate::utils::barrier_pool();
-                pool.execute_chunked(total, |range| {
+                // equal-sized gemv units: static split, as in the single-projection gemvs
+                pool.execute_static(total, |range| {
                     let lhs_row: &[$lhs_blk] = unsafe {
                         std::slice::from_raw_parts(lhs_ptr as *const $lhs_blk, k_in_blocks)
                     };
