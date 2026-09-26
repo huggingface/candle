@@ -286,6 +286,16 @@ pub enum KernelName {
     UpsampleNearest1dF32,
     UpsampleNearest2dF32,
     UpsampleBilinear2dF32,
+    AvgPool2dF16,
+    MaxPool2dF16,
+    UpsampleNearest1dF16,
+    UpsampleNearest2dF16,
+    UpsampleBilinear2dF16,
+    AvgPool2dF64,
+    MaxPool2dF64,
+    UpsampleNearest1dF64,
+    UpsampleNearest2dF64,
+    UpsampleBilinear2dF64,
     Conv1dF32,
     Conv2dF32,
     ConvTranspose1dF32,
@@ -582,6 +592,16 @@ impl AsRef<str> for KernelName {
             Self::UpsampleNearest1dF32 => "main_upsample_nearest1d",
             Self::UpsampleNearest2dF32 => "main_upsample_nearest2d",
             Self::UpsampleBilinear2dF32 => "main_upsample_bilinear2d",
+            Self::AvgPool2dF16 => "main_avg_pool2d",
+            Self::MaxPool2dF16 => "main_max_pool2d",
+            Self::UpsampleNearest1dF16 => "main_upsample_nearest1d",
+            Self::UpsampleNearest2dF16 => "main_upsample_nearest2d",
+            Self::UpsampleBilinear2dF16 => "main_upsample_bilinear2d",
+            Self::AvgPool2dF64 => "main_avg_pool2d",
+            Self::MaxPool2dF64 => "main_max_pool2d",
+            Self::UpsampleNearest1dF64 => "main_upsample_nearest1d",
+            Self::UpsampleNearest2dF64 => "main_upsample_nearest2d",
+            Self::UpsampleBilinear2dF64 => "main_upsample_bilinear2d",
             Self::Conv1dF32 => "main_conv1d",
             Self::Conv2dF32 => "main_conv2d",
             Self::ConvTranspose1dF32 => "main_conv_transpose1d",
@@ -1016,7 +1036,18 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::MaxPool2dF32
         | KernelName::UpsampleNearest1dF32
         | KernelName::UpsampleNearest2dF32
-        | KernelName::UpsampleBilinear2dF32 => 4,
+        | KernelName::UpsampleBilinear2dF32
+        | KernelName::AvgPool2dF16
+        | KernelName::MaxPool2dF16
+        | KernelName::UpsampleNearest1dF16
+        | KernelName::UpsampleNearest2dF16
+        | KernelName::UpsampleBilinear2dF16
+        | KernelName::AvgPool2dF64
+        | KernelName::MaxPool2dF64
+        | KernelName::UpsampleNearest1dF64
+        | KernelName::UpsampleNearest2dF64
+        | KernelName::UpsampleBilinear2dF64
+        => 4,
         | KernelName::Conv1dF32
         | KernelName::Conv2dF32
         | KernelName::ConvTranspose1dF32

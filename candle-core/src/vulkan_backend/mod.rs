@@ -920,7 +920,7 @@ impl VulkanStorage {
         name: candle_vulkan_kernels::KernelName,
         op: &'static str,
     ) -> Result<Self> {
-        if self.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) {
             return Err(Error::Vulkan(
                 format!("{op}: only F32 supported on the Vulkan backend").into(),
             ));
@@ -958,15 +958,7 @@ impl VulkanStorage {
         let w_out = (w - k_w) / s_w + 1;
         let planes = b_sz * c;
         let total = planes * h_out * w_out;
-        let src_buf = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, total, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
         if total == 0 {
             return Ok(out);
         }
@@ -996,14 +988,96 @@ impl VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
-        let src_buf = src_buf.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_pool2d_slang_f32(
-                cbb, &kernels, name, &src_buf, &out_buf, &params, total,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+        match self.dtype {
+            DType::F32 => {
+                let src_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_pool2d_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Pool2dSlang,
+                        name,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let name16 = match name {
+                    candle_vulkan_kernels::KernelName::AvgPool2dF32 => {
+                        candle_vulkan_kernels::KernelName::AvgPool2dF16
+                    }
+                    _ => candle_vulkan_kernels::KernelName::MaxPool2dF16,
+                };
+                let src_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_pool2d_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Pool2dF16,
+                        name16,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let name64 = match name {
+                    candle_vulkan_kernels::KernelName::AvgPool2dF32 => {
+                        candle_vulkan_kernels::KernelName::AvgPool2dF64
+                    }
+                    _ => candle_vulkan_kernels::KernelName::MaxPool2dF64,
+                };
+                let src_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_pool2d_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Pool2dF64,
+                        name64,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("dtype checked above"),
+        }
         Ok(out)
     }
 
@@ -4334,9 +4408,9 @@ impl BackendStorage for VulkanStorage {
     }
 
     fn upsample_nearest1d(&self, l: &Layout, dst_sz: usize) -> Result<Self> {
-        if self.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) {
             return Err(Error::Vulkan(
-                "upsample_nearest1d: only F32 supported on the Vulkan backend"
+                "upsample_nearest1d: unsupported dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -4372,15 +4446,7 @@ impl BackendStorage for VulkanStorage {
         }
         let planes = b_sz * c;
         let total = planes * dst_sz;
-        let src_buf = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, total, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
         if total == 0 {
             return Ok(out);
         }
@@ -4400,27 +4466,91 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
-        let src_buf = src_buf.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_upsample_slang_f32(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::KernelName::UpsampleNearest1dF32,
-                &src_buf,
-                &out_buf,
-                &params,
-                total,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+        match self.dtype {
+            DType::F32 => {
+                let src_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleSlang,
+                        candle_vulkan_kernels::KernelName::UpsampleNearest1dF32,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let src_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleF16,
+                        candle_vulkan_kernels::KernelName::UpsampleNearest1dF16,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let src_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleF64,
+                        candle_vulkan_kernels::KernelName::UpsampleNearest1dF64,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("dtype checked above"),
+        }
         Ok(out)
     }
 
     fn upsample_nearest2d(&self, l: &Layout, dst_h: usize, dst_w: usize) -> Result<Self> {
-        if self.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) {
             return Err(Error::Vulkan(
-                "upsample_nearest2d: only F32 supported on the Vulkan backend"
+                "upsample_nearest2d: unsupported dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -4456,15 +4586,7 @@ impl BackendStorage for VulkanStorage {
         }
         let planes = b_sz * c;
         let total = planes * dst_h * dst_w;
-        let src_buf = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, total, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
         if total == 0 {
             return Ok(out);
         }
@@ -4490,20 +4612,84 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
-        let src_buf = src_buf.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_upsample_slang_f32(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::KernelName::UpsampleNearest2dF32,
-                &src_buf,
-                &out_buf,
-                &params,
-                total,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+        match self.dtype {
+            DType::F32 => {
+                let src_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleSlang,
+                        candle_vulkan_kernels::KernelName::UpsampleNearest2dF32,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let src_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleF16,
+                        candle_vulkan_kernels::KernelName::UpsampleNearest2dF16,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let src_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleF64,
+                        candle_vulkan_kernels::KernelName::UpsampleNearest2dF64,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("dtype checked above"),
+        }
         Ok(out)
     }
 
@@ -4516,9 +4702,9 @@ impl BackendStorage for VulkanStorage {
         scale_h_factor: Option<f64>,
         scale_w_factor: Option<f64>,
     ) -> Result<Self> {
-        if self.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) {
             return Err(Error::Vulkan(
-                "upsample_bilinear2d: only F32 supported on the Vulkan backend"
+                "upsample_bilinear2d: unsupported dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -4577,15 +4763,7 @@ impl BackendStorage for VulkanStorage {
         };
         let planes = b_sz * c;
         let total = planes * target_h * target_w;
-        let src_buf = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
-            _ => unreachable!("dtype checked above"),
-        };
-        let out = VulkanStorage::new(&self.device, total, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
-        };
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
         if total == 0 {
             return Ok(out);
         }
@@ -4614,20 +4792,84 @@ impl BackendStorage for VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
-        let src_buf = src_buf.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_upsample_slang_f32(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::KernelName::UpsampleBilinear2dF32,
-                &src_buf,
-                &out_buf,
-                &params,
-                total,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+        match self.dtype {
+            DType::F32 => {
+                let src_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleSlang,
+                        candle_vulkan_kernels::KernelName::UpsampleBilinear2dF32,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let src_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleF16,
+                        candle_vulkan_kernels::KernelName::UpsampleBilinear2dF16,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let src_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => unreachable!(),
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleF64,
+                        candle_vulkan_kernels::KernelName::UpsampleBilinear2dF64,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("dtype checked above"),
+        }
         Ok(out)
     }
 

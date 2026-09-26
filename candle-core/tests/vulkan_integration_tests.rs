@@ -4120,3 +4120,111 @@ fn test_vulkan_conv1d_f64() {
     }
     tracing::debug!("Vulkan device {gpu_id} conv1d f64 OK");
 }
+#[test]
+fn test_vulkan_avg_pool2d_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let f: Vec<f32> = (0..16).map(|i| (i as f32) * 0.5 - 3.0).collect();
+    let v: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let t = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 2, 4)))
+        .unwrap();
+    let out = t.avg_pool2d((2, 2)).unwrap();
+    let got: Vec<f32> = out
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .map(|x| f32::from(x))
+        .collect();
+    let cpu = candle_core::Device::Cpu;
+    let tc = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 2, 4)))
+        .unwrap();
+    let exp: Vec<f32> = tc
+        .avg_pool2d((2, 2))
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    assert_eq!(got.len(), exp.len());
+    for (g, e) in got.iter().zip(exp.iter()) {
+        assert!((g - e).abs() < 0.05f32, "got {} vs exp {}", g, e);
+    }
+}
+
+#[test]
+fn test_vulkan_max_pool2d_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let f: Vec<f64> = (0..16).map(|i| (i as f64) * 0.5 - 3.0).collect();
+    let t = candle_core::Tensor::new(f.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 2, 4)))
+        .unwrap();
+    let out = t.max_pool2d((2, 2)).unwrap();
+    let got: Vec<f64> = out.flatten_all().unwrap().to_vec1().unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let tc = candle_core::Tensor::new(f.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 2, 4)))
+        .unwrap();
+    let exp: Vec<f64> = tc
+        .max_pool2d((2, 2))
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    assert_eq!(got.len(), exp.len());
+    for (g, e) in got.iter().zip(exp.iter()) {
+        assert!((g - e).abs() < 1e-9f64, "got {} vs exp {}", g, e);
+    }
+}
+
+#[test]
+fn test_vulkan_upsample_nearest2d_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let f: Vec<f32> = (0..8).map(|i| (i as f32) * 0.5 - 1.0).collect();
+    let v: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let t = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 2, 2)))
+        .unwrap();
+    let out = t.upsample_nearest2d(4, 4).unwrap();
+    let got: Vec<f32> = out
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let tc = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 2, 2)))
+        .unwrap();
+    let exp: Vec<f32> = tc
+        .upsample_nearest2d(4, 4)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    assert_eq!(got.len(), exp.len());
+    for (g, e) in got.iter().zip(exp.iter()) {
+        assert!((g - e).abs() < 0.05f32, "got {} vs exp {}", g, e);
+    }
+}

@@ -16,8 +16,8 @@ pub use kernels::{
     call_copy2d_slang_f32,
     call_gather_idx_slang_f32,
     call_reduce_slang,
-    call_pool2d_slang_f32,
-    call_upsample_slang_f32,
+    call_pool2d_slang,
+    call_upsample_slang,
     call_conv_slang,
     call_scatter_slang_f32,
 };

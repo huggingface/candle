@@ -47,7 +47,11 @@ const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce
 const REDUCE_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f16.spv"));
 const REDUCE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f64.spv"));
 const POOL2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d.spv"));
+const POOL2D_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d_f16.spv"));
+const POOL2D_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d_f64.spv"));
 const UPSAMPLE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/upsample.spv"));
+const UPSAMPLE_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/upsample_f16.spv"));
+const UPSAMPLE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/upsample_f64.spv"));
 const CONV_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv.spv"));
 const CONV_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv_f16.spv"));
 const CONV_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv_f64.spv"));
@@ -123,7 +127,11 @@ pub enum Source {
     ReduceF16,
     ReduceF64,
     Pool2dSlang,
+    Pool2dF16,
+    Pool2dF64,
     UpsampleSlang,
+    UpsampleF16,
+    UpsampleF64,
     ConvSlang,
     ConvF16,
     ConvF64,
@@ -414,6 +422,16 @@ impl Source {
             | KernelName::UpsampleNearest1dF32
             | KernelName::UpsampleNearest2dF32
             | KernelName::UpsampleBilinear2dF32
+            | KernelName::AvgPool2dF16
+            | KernelName::MaxPool2dF16
+            | KernelName::UpsampleNearest1dF16
+            | KernelName::UpsampleNearest2dF16
+            | KernelName::UpsampleBilinear2dF16
+            | KernelName::AvgPool2dF64
+            | KernelName::MaxPool2dF64
+            | KernelName::UpsampleNearest1dF64
+            | KernelName::UpsampleNearest2dF64
+            | KernelName::UpsampleBilinear2dF64
             | KernelName::Conv1dF32
             | KernelName::Conv2dF32
             | KernelName::ConvTranspose1dF32
@@ -493,7 +511,11 @@ impl Source {
             Self::ReduceF16 => REDUCE_F16_SPV,
             Self::ReduceF64 => REDUCE_F64_SPV,
             Self::Pool2dSlang => POOL2D_SLANG_SPV,
+            Self::Pool2dF16 => POOL2D_F16_SPV,
+            Self::Pool2dF64 => POOL2D_F64_SPV,
             Self::UpsampleSlang => UPSAMPLE_SLANG_SPV,
+            Self::UpsampleF16 => UPSAMPLE_F16_SPV,
+            Self::UpsampleF64 => UPSAMPLE_F64_SPV,
             Self::ConvSlang => CONV_SLANG_SPV,
             Self::ConvF16 => CONV_F16_SPV,
             Self::ConvF64 => CONV_F64_SPV,
@@ -569,7 +591,11 @@ impl AsRef<str> for Source {
             Self::ReduceF16 => "reduce_f16",
             Self::ReduceF64 => "reduce_f64",
             Self::Pool2dSlang => "pool2d",
+            Self::Pool2dF16 => "pool2d_f16",
+            Self::Pool2dF64 => "pool2d_f64",
             Self::UpsampleSlang => "upsample",
+            Self::UpsampleF16 => "upsample_f16",
+            Self::UpsampleF64 => "upsample_f64",
             Self::ConvSlang => "conv",
             Self::ConvF16 => "conv_f16",
             Self::ConvF64 => "conv_f64",
