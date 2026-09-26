@@ -1091,9 +1091,11 @@ impl VulkanStorage {
         src_l: &Layout,
         dim: usize,
     ) -> Result<()> {
-        if self.dtype != DType::F32 || src.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64)
+            || !matches!(src.dtype, DType::F32 | DType::F16 | DType::F64)
+        {
             return Err(Error::Vulkan(
-                "scatter: only F32 data supported on the Vulkan backend"
+                "scatter: unsupported dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -1203,23 +1205,90 @@ impl VulkanStorage {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params_sub: Subbuffer<[f32]> = params_buf;
-        let ids_sub = ids_sub.clone();
-        let src_sub = src_sub.clone();
-        let dst_sub = dst_sub.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_scatter_slang::<f32>(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::Source::ScatterSlang,
-                candle_vulkan_kernels::KernelName::ScatterF32,
-                &src_sub,
-                &dst_sub,
-                &ids_sub,
-                &params_sub,
-                total,
-            )
-            .map_err(|e| e.to_string())
-        })?;
+        match self.dtype {
+            DType::F32 => {
+                let src_sub = src_sub.clone();
+                let dst_sub = dst_sub.clone();
+                let ids_sub = ids_sub.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_scatter_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ScatterSlang,
+                        candle_vulkan_kernels::KernelName::ScatterF32,
+                        &src_sub,
+                        &dst_sub,
+                        &ids_sub,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let src_sub: Subbuffer<[half::f16]> = match &src.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(src_start as u64..(src_start + src_len) as u64),
+                    _ => unreachable!(),
+                };
+                let dst_sub: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(dst_start as u64..(dst_start + dst_len) as u64),
+                    _ => unreachable!(),
+                };
+                let src_sub = src_sub.clone();
+                let dst_sub = dst_sub.clone();
+                let ids_sub = ids_sub.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_scatter_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ScatterF16,
+                        candle_vulkan_kernels::KernelName::ScatterF16,
+                        &src_sub,
+                        &dst_sub,
+                        &ids_sub,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let src_sub: Subbuffer<[f64]> = match &src.buffer {
+                    VulkanStorageBuffer::F64(b) => b
+                        .clone()
+                        .slice(src_start as u64..(src_start + src_len) as u64),
+                    _ => unreachable!(),
+                };
+                let dst_sub: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b
+                        .clone()
+                        .slice(dst_start as u64..(dst_start + dst_len) as u64),
+                    _ => unreachable!(),
+                };
+                let src_sub = src_sub.clone();
+                let dst_sub = dst_sub.clone();
+                let ids_sub = ids_sub.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_scatter_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ScatterF64,
+                        candle_vulkan_kernels::KernelName::ScatterF64,
+                        &src_sub,
+                        &dst_sub,
+                        &ids_sub,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => unreachable!("dtype checked above"),
+        }
         Ok(())
     }
 }
