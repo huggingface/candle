@@ -42,6 +42,8 @@ const CMP_I32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_i32.spv
 const BINARY_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_i64.spv"));
 const CMP_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_i64.spv"));
 const COPY2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d.spv"));
+const COPY2D_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_f16.spv"));
+const COPY2D_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_f64.spv"));
 const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx.spv"));
 const GATHER_IDX_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_f16.spv"));
 const GATHER_IDX_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_f64.spv"));
@@ -58,6 +60,8 @@ const CONV_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv.spv
 const CONV_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv_f16.spv"));
 const CONV_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv_f64.spv"));
 const SCATTER_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scatter.spv"));
+const SCATTER_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scatter_f16.spv"));
+const SCATTER_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scatter_f64.spv"));
 
 const TEST_FILL_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f16.spv"));
 const TEST_FILL_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_u8.spv"));
@@ -124,6 +128,8 @@ pub enum Source {
     BinaryI64,
     CmpI64,
     Copy2dSlang,
+    Copy2dF16,
+    Copy2dF64,
     GatherIdxSlang,
     GatherIdxF16,
     GatherIdxF64,
@@ -140,6 +146,8 @@ pub enum Source {
     ConvF16,
     ConvF64,
     ScatterSlang,
+    ScatterF16,
+    ScatterF64,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -389,6 +397,8 @@ impl Source {
             | KernelName::CmpGtI64
             | KernelName::CmpGeI64
             | KernelName::Copy2dF32
+            | KernelName::Copy2dF16
+            | KernelName::Copy2dF64
             | KernelName::GatherIdxF32
             | KernelName::GatherRowsF32
             | KernelName::IndexSelectF32
@@ -454,7 +464,9 @@ impl Source {
             | KernelName::Conv2dF64
             | KernelName::ConvTranspose1dF64
             | KernelName::ConvTranspose2dF64
-            | KernelName::ScatterF32 => 0,
+            | KernelName::ScatterF32
+            | KernelName::ScatterF16
+            | KernelName::ScatterF64 => 0,
             KernelName::TestFillF16 => 0,
             KernelName::TestFillU8
             | KernelName::TestFillI16
@@ -516,6 +528,8 @@ impl Source {
             Self::BinaryI64 => BINARY_I64_SPV,
             Self::CmpI64 => CMP_I64_SPV,
             Self::Copy2dSlang => COPY2D_SLANG_SPV,
+            Self::Copy2dF16 => COPY2D_F16_SPV,
+            Self::Copy2dF64 => COPY2D_F64_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
             Self::GatherIdxF16 => GATHER_IDX_F16_SPV,
             Self::GatherIdxF64 => GATHER_IDX_F64_SPV,
@@ -532,6 +546,8 @@ impl Source {
             Self::ConvF16 => CONV_F16_SPV,
             Self::ConvF64 => CONV_F64_SPV,
             Self::ScatterSlang => SCATTER_SLANG_SPV,
+            Self::ScatterF16 => SCATTER_F16_SPV,
+            Self::ScatterF64 => SCATTER_F64_SPV,
             Self::TestFillF16 => TEST_FILL_F16_SPV,
             Self::TestFillU8 => TEST_FILL_U8_SPV,
             Self::TestFillI16 => TEST_FILL_I16_SPV,
@@ -598,6 +614,8 @@ impl AsRef<str> for Source {
             Self::BinaryI64 => "binary_i64",
             Self::CmpI64 => "cmp_i64",
             Self::Copy2dSlang => "copy2d",
+            Self::Copy2dF16 => "copy2d_f16",
+            Self::Copy2dF64 => "copy2d_f64",
             Self::GatherIdxSlang => "gather_idx",
             Self::GatherIdxF16 => "gather_idx_f16",
             Self::GatherIdxF64 => "gather_idx_f64",
@@ -614,6 +632,8 @@ impl AsRef<str> for Source {
             Self::ConvF16 => "conv_f16",
             Self::ConvF64 => "conv_f64",
             Self::ScatterSlang => "scatter",
+            Self::ScatterF16 => "scatter_f16",
+            Self::ScatterF64 => "scatter_f64",
             Self::TestFillF16 => "test_fill_f16",
             Self::TestFillU8 => "test_fill_u8",
             Self::TestFillI16 => "test_fill_i16",

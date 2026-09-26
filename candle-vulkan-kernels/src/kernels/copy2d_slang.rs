@@ -1,43 +1,36 @@
-//! Slang 2D row-wise copy dispatch (f32 buffers).
+//! Slang 2D row-wise copy dispatch.
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
-
 use crate::err::VulkanKernelError;
 use crate::kernel::{KernelName, Kernels};
 use crate::source::Source;
-
+fn buf_info<T>(buf: &Subbuffer<[T]>) -> DescriptorBufferInfo<'_> {
+    DescriptorBufferInfo {
+        buffer: Some(buf.buffer()),
+        offset: buf.offset(),
+        range: Some(buf.size()),
+        ..Default::default()
+    }
+}
 /// Records a `copy2d` dispatch onto `cbb`:
 /// `for row in 0..d1: dst[dst_o + row*dst_s .. +d2] = src[src_o + row*src_s .. +d2]`.
 /// `params` must hold `[d1, d2, src_stride, dst_stride, src_offset, dst_offset]`.
-pub fn call_copy2d_slang_f32(
+pub fn call_copy2d_slang<T>(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
-    src: &Subbuffer<[f32]>,
-    dst: &Subbuffer<[f32]>,
+    source: Source,
+    name: KernelName,
+    src: &Subbuffer<[T]>,
+    dst: &Subbuffer<[T]>,
     params: &Subbuffer<[f32]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
-    let entry = kernels.load_entry(Source::Copy2dSlang, KernelName::Copy2dF32)?;
-    let src_info = DescriptorBufferInfo {
-        buffer: Some(src.buffer()),
-        offset: src.offset(),
-        range: Some(src.size()),
-        ..Default::default()
-    };
-    let dst_info = DescriptorBufferInfo {
-        buffer: Some(dst.buffer()),
-        offset: dst.offset(),
-        range: Some(dst.size()),
-        ..Default::default()
-    };
-    let params_info = DescriptorBufferInfo {
-        buffer: Some(params.buffer()),
-        offset: params.offset(),
-        range: Some(params.size()),
-        ..Default::default()
-    };
+    let entry = kernels.load_entry(source, name)?;
+    let src_info = buf_info(src);
+    let dst_info = buf_info(dst);
+    let params_info = buf_info(params);
     let writes = vec![
         WriteDescriptorSet::buffer(0, &src_info),
         WriteDescriptorSet::buffer(1, &dst_info),

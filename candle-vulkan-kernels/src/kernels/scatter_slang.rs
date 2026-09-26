@@ -1,49 +1,36 @@
-//! Slang scatter dispatch (f32 data, u32 ids).
+//! Slang scatter dispatch (u32 ids).
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
-
 use crate::err::VulkanKernelError;
 use crate::kernel::{KernelName, Kernels};
 use crate::source::Source;
-
+fn buf_info<T>(buf: &Subbuffer<[T]>) -> DescriptorBufferInfo<'_> {
+    DescriptorBufferInfo {
+        buffer: Some(buf.buffer()),
+        offset: buf.offset(),
+        range: Some(buf.size()),
+        ..Default::default()
+    }
+}
 /// Records a scatter dispatch onto `cbb` (see scatter.slang for the params).
-pub fn call_scatter_slang_f32(
+pub fn call_scatter_slang<T>(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
+    source: Source,
     name: KernelName,
-    src: &Subbuffer<[f32]>,
-    dst: &Subbuffer<[f32]>,
+    src: &Subbuffer<[T]>,
+    dst: &Subbuffer<[T]>,
     ids: &Subbuffer<[u32]>,
     params: &Subbuffer<[f32]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
-    let entry = kernels.load_entry(Source::ScatterSlang, name)?;
-    let src_info = DescriptorBufferInfo {
-        buffer: Some(src.buffer()),
-        offset: src.offset(),
-        range: Some(src.size()),
-        ..Default::default()
-    };
-    let dst_info = DescriptorBufferInfo {
-        buffer: Some(dst.buffer()),
-        offset: dst.offset(),
-        range: Some(dst.size()),
-        ..Default::default()
-    };
-    let ids_info = DescriptorBufferInfo {
-        buffer: Some(ids.buffer()),
-        offset: ids.offset(),
-        range: Some(ids.size()),
-        ..Default::default()
-    };
-    let params_info = DescriptorBufferInfo {
-        buffer: Some(params.buffer()),
-        offset: params.offset(),
-        range: Some(params.size()),
-        ..Default::default()
-    };
+    let entry = kernels.load_entry(source, name)?;
+    let src_info = buf_info(src);
+    let dst_info = buf_info(dst);
+    let ids_info = buf_info(ids);
+    let params_info = buf_info(params);
     let writes = vec![
         WriteDescriptorSet::buffer(0, &src_info),
         WriteDescriptorSet::buffer(1, &dst_info),

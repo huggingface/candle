@@ -1207,9 +1207,10 @@ impl VulkanStorage {
         let src_sub = src_sub.clone();
         let dst_sub = dst_sub.clone();
         self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_scatter_slang_f32(
+            candle_vulkan_kernels::call_scatter_slang::<f32>(
                 cbb,
                 &kernels,
+                candle_vulkan_kernels::Source::ScatterSlang,
                 candle_vulkan_kernels::KernelName::ScatterF32,
                 &src_sub,
                 &dst_sub,
@@ -5688,8 +5689,15 @@ impl BackendStorage for VulkanStorage {
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
                 let params: Subbuffer<[f32]> = params_buf;
                 self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_copy2d_slang_f32(
-                        cbb, &kernels, &src_buf, &dst_buf, &params, total,
+                    candle_vulkan_kernels::call_copy2d_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dSlang,
+                        candle_vulkan_kernels::KernelName::Copy2dF32,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
                     )
                     .map_err(|e| e.to_string())
                 })?;
@@ -5807,8 +5815,15 @@ impl BackendStorage for VulkanStorage {
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[f32]> = params_buf;
         self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_copy2d_slang_f32(
-                cbb, &kernels, &src_buf, &dst_buf, &params, total,
+            candle_vulkan_kernels::call_copy2d_slang::<f32>(
+                cbb,
+                &kernels,
+                candle_vulkan_kernels::Source::Copy2dSlang,
+                candle_vulkan_kernels::KernelName::Copy2dF32,
+                &src_buf,
+                &dst_buf,
+                &params,
+                total,
             )
             .map_err(|e| e.to_string())
         })?;

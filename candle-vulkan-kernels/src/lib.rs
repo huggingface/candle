@@ -13,12 +13,12 @@ pub use kernels::{
     call_test_fill_i16, call_test_fill_i32, call_test_fill_i64, call_test_fill_u32,
     call_test_fill_u8, call_binary_slang, call_cmp_slang, call_unary_slang,
     call_where_slang,
-    call_copy2d_slang_f32,
+    call_copy2d_slang,
     call_gather_idx_slang,
     call_reduce_slang,
     call_pool2d_slang,
     call_upsample_slang,
     call_conv_slang,
-    call_scatter_slang_f32,
+    call_scatter_slang,
 };
 pub use source::Source;

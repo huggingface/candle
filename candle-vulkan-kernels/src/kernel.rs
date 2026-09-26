@@ -265,6 +265,8 @@ pub enum KernelName {
     WhereF16,
     WhereF64,
     Copy2dF32,
+    Copy2dF16,
+    Copy2dF64,
     GatherIdxF32,
     GatherRowsF32,
     IndexSelectF32,
@@ -315,6 +317,8 @@ pub enum KernelName {
     ConvTranspose1dF64,
     ConvTranspose2dF64,
     ScatterF32,
+    ScatterF16,
+    ScatterF64,
     TestFillF16,
     TestFillU8,
     TestFillI16,
@@ -577,6 +581,8 @@ impl AsRef<str> for KernelName {
             Self::WhereF16 => "main",
             Self::WhereF64 => "main",
             Self::Copy2dF32 => "main",
+            Self::Copy2dF16 => "main",
+            Self::Copy2dF64 => "main",
             Self::GatherIdxF32 => "main",
             Self::GatherRowsF32 => "main_gather_rows",
             Self::IndexSelectF32 => "main_index_select",
@@ -627,6 +633,8 @@ impl AsRef<str> for KernelName {
             Self::ConvTranspose1dF64 => "main_conv_transpose1d",
             Self::ConvTranspose2dF64 => "main_conv_transpose2d",
             Self::ScatterF32 => "main",
+            Self::ScatterF16 => "main",
+            Self::ScatterF64 => "main",
             Self::TestFillF16 => "main",
             Self::TestFillU8
             | Self::TestFillI16
@@ -1025,7 +1033,10 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::WhereF8e4m3
         | KernelName::WhereF16
         | KernelName::WhereF64 => 5,
-        KernelName::Copy2dF32 => 3,
+        KernelName::Copy2dF32
+        | KernelName::Copy2dF16
+        | KernelName::Copy2dF64
+        => 3,
         KernelName::GatherIdxF32 => 4,
         KernelName::GatherRowsF32 => 4,
         KernelName::IndexSelectF32
@@ -1080,7 +1091,10 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::ConvTranspose1dF64
         | KernelName::ConvTranspose2dF64
         => 4,
-        KernelName::ScatterF32 => 4,
+        KernelName::ScatterF32
+        | KernelName::ScatterF16
+        | KernelName::ScatterF64
+        => 4,
         KernelName::TestFillF16 => 1,
         KernelName::TestFillU8
         | KernelName::TestFillI16
