@@ -607,9 +607,10 @@ impl FlashAttnVarLen {
 
         let elem_count = out_shape.elem_count();
         let mut dst = unsafe { dev.alloc::<T>(elem_count) }?;
-        let mut softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q)?;
-        // Must start at zero for every launch: the persistent scheduler hands out tiles from it.
-        let mut tile_count_semaphore = dev.alloc_zeros::<i32>(1)?;
+        // Forward kernels only write LSE; no initialized values are consumed.
+        let mut softmax_lse = unsafe { dev.alloc::<f32>(num_heads * total_q) }?;
+        // This kernel snapshot uses SingleTileScheduler for varlen inputs, which
+        // never reads a tile semaphore. Dense persistent launchers still need one.
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -634,7 +635,6 @@ impl FlashAttnVarLen {
             let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr_mut(&stream);
             let (seqlens_q_ptr, _guard) = seqlens_q.device_ptr(&stream);
             let (seqlens_k_ptr, _guard) = seqlens_k.device_ptr(&stream);
-            let (tile_count_semaphore_ptr, _guard) = tile_count_semaphore.device_ptr_mut(&stream);
             ffi::run_mha_v3(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
@@ -642,7 +642,7 @@ impl FlashAttnVarLen {
                 dst_ptr as *const core::ffi::c_void,
                 softmax_lse_ptr as *const core::ffi::c_void,
                 /* alibi_slopes_ptr */ alibi_slopes_ptr,
-                /* tile_count_semaphore_ptr */ tile_count_semaphore_ptr as *const i32,
+                /* tile_count_semaphore_ptr */ std::ptr::null(),
                 /* cu_seqlens_q_ptr */ seqlens_q_ptr as *const i32,
                 /* cu_seqlens_k_ptr */ seqlens_k_ptr as *const i32,
                 /* q_batch_stride */ 0,
