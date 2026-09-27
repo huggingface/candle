@@ -108,6 +108,162 @@ const TO_DTYPE_F64BF16_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_bf16.spv"));
 const TO_DTYPE_F64F32_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_f32.spv"));
+    static TO_DTYPE_U8U32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_u32.spv"));
+    static TO_DTYPE_U8I16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_i16.spv"));
+    static TO_DTYPE_U8I32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_i32.spv"));
+    static TO_DTYPE_U8I64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_i64.spv"));
+    static TO_DTYPE_U8BF16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_bf16.spv"));
+    static TO_DTYPE_U8F16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f16.spv"));
+    static TO_DTYPE_U8F32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f32.spv"));
+    static TO_DTYPE_U8F64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f64.spv"));
+    static TO_DTYPE_U8F8E4M3_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f8e4m3.spv"));
+    static TO_DTYPE_U32U8_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_u8.spv"));
+    static TO_DTYPE_U32I16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_i16.spv"));
+    static TO_DTYPE_U32I32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_i32.spv"));
+    static TO_DTYPE_U32I64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_i64.spv"));
+    static TO_DTYPE_U32BF16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_bf16.spv"));
+    static TO_DTYPE_U32F16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f16.spv"));
+    static TO_DTYPE_U32F32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f32.spv"));
+    static TO_DTYPE_U32F64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f64.spv"));
+    static TO_DTYPE_U32F8E4M3_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f8e4m3.spv"));
+    static TO_DTYPE_I16U8_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_u8.spv"));
+    static TO_DTYPE_I16U32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_u32.spv"));
+    static TO_DTYPE_I16I32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_i32.spv"));
+    static TO_DTYPE_I16I64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_i64.spv"));
+    static TO_DTYPE_I16BF16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_bf16.spv"));
+    static TO_DTYPE_I16F16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f16.spv"));
+    static TO_DTYPE_I16F32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f32.spv"));
+    static TO_DTYPE_I16F64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f64.spv"));
+    static TO_DTYPE_I16F8E4M3_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f8e4m3.spv"));
+    static TO_DTYPE_I32U8_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_u8.spv"));
+    static TO_DTYPE_I32U32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_u32.spv"));
+    static TO_DTYPE_I32I16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_i16.spv"));
+    static TO_DTYPE_I32I64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_i64.spv"));
+    static TO_DTYPE_I32BF16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_bf16.spv"));
+    static TO_DTYPE_I32F16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f16.spv"));
+    static TO_DTYPE_I32F32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f32.spv"));
+    static TO_DTYPE_I32F64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f64.spv"));
+    static TO_DTYPE_I32F8E4M3_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f8e4m3.spv"));
+    static TO_DTYPE_I64U8_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_u8.spv"));
+    static TO_DTYPE_I64U32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_u32.spv"));
+    static TO_DTYPE_I64I16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_i16.spv"));
+    static TO_DTYPE_I64I32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_i32.spv"));
+    static TO_DTYPE_I64BF16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_bf16.spv"));
+    static TO_DTYPE_I64F16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f16.spv"));
+    static TO_DTYPE_I64F32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f32.spv"));
+    static TO_DTYPE_I64F64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f64.spv"));
+    static TO_DTYPE_I64F8E4M3_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f8e4m3.spv"));
+    static TO_DTYPE_F8E4M3U8_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_u8.spv"));
+    static TO_DTYPE_F8E4M3U32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_u32.spv"));
+    static TO_DTYPE_F8E4M3I16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_i16.spv"));
+    static TO_DTYPE_F8E4M3I32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_i32.spv"));
+    static TO_DTYPE_F8E4M3I64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_i64.spv"));
+    static TO_DTYPE_F8E4M3BF16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_bf16.spv"));
+    static TO_DTYPE_F8E4M3F16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_f16.spv"));
+    static TO_DTYPE_F8E4M3F32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_f32.spv"));
+    static TO_DTYPE_F8E4M3F64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_f64.spv"));
+    static TO_DTYPE_BF16U8_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_u8.spv"));
+    static TO_DTYPE_BF16U32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_u32.spv"));
+    static TO_DTYPE_BF16I16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_i16.spv"));
+    static TO_DTYPE_BF16I32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_i32.spv"));
+    static TO_DTYPE_BF16I64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_i64.spv"));
+    static TO_DTYPE_BF16F8E4M3_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_f8e4m3.spv"));
+    static TO_DTYPE_F16U8_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_u8.spv"));
+    static TO_DTYPE_F16U32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_u32.spv"));
+    static TO_DTYPE_F16I16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_i16.spv"));
+    static TO_DTYPE_F16I32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_i32.spv"));
+    static TO_DTYPE_F16I64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_i64.spv"));
+    static TO_DTYPE_F16F8E4M3_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_f8e4m3.spv"));
+    static TO_DTYPE_F32U8_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_u8.spv"));
+    static TO_DTYPE_F32U32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_u32.spv"));
+    static TO_DTYPE_F32I16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_i16.spv"));
+    static TO_DTYPE_F32I32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_i32.spv"));
+    static TO_DTYPE_F32I64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_i64.spv"));
+    static TO_DTYPE_F32F8E4M3_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_f8e4m3.spv"));
+    static TO_DTYPE_F64U8_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_u8.spv"));
+    static TO_DTYPE_F64U32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_u32.spv"));
+    static TO_DTYPE_F64I16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_i16.spv"));
+    static TO_DTYPE_F64I32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_i32.spv"));
+    static TO_DTYPE_F64I64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_i64.spv"));
+    static TO_DTYPE_F64F8E4M3_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_f8e4m3.spv"));
 
 /// The set of compiled compute shaders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -199,6 +355,84 @@ pub enum Source {
     ToDtypeF64F16,
     ToDtypeF64Bf16,
     ToDtypeF64F32,
+    ToDtypeU8U32,
+    ToDtypeU8I16,
+    ToDtypeU8I32,
+    ToDtypeU8I64,
+    ToDtypeU8Bf16,
+    ToDtypeU8F16,
+    ToDtypeU8F32,
+    ToDtypeU8F64,
+    ToDtypeU8F8e4m3,
+    ToDtypeU32U8,
+    ToDtypeU32I16,
+    ToDtypeU32I32,
+    ToDtypeU32I64,
+    ToDtypeU32Bf16,
+    ToDtypeU32F16,
+    ToDtypeU32F32,
+    ToDtypeU32F64,
+    ToDtypeU32F8e4m3,
+    ToDtypeI16U8,
+    ToDtypeI16U32,
+    ToDtypeI16I32,
+    ToDtypeI16I64,
+    ToDtypeI16Bf16,
+    ToDtypeI16F16,
+    ToDtypeI16F32,
+    ToDtypeI16F64,
+    ToDtypeI16F8e4m3,
+    ToDtypeI32U8,
+    ToDtypeI32U32,
+    ToDtypeI32I16,
+    ToDtypeI32I64,
+    ToDtypeI32Bf16,
+    ToDtypeI32F16,
+    ToDtypeI32F32,
+    ToDtypeI32F64,
+    ToDtypeI32F8e4m3,
+    ToDtypeI64U8,
+    ToDtypeI64U32,
+    ToDtypeI64I16,
+    ToDtypeI64I32,
+    ToDtypeI64Bf16,
+    ToDtypeI64F16,
+    ToDtypeI64F32,
+    ToDtypeI64F64,
+    ToDtypeI64F8e4m3,
+    ToDtypeF8e4m3U8,
+    ToDtypeF8e4m3U32,
+    ToDtypeF8e4m3I16,
+    ToDtypeF8e4m3I32,
+    ToDtypeF8e4m3I64,
+    ToDtypeF8e4m3Bf16,
+    ToDtypeF8e4m3F16,
+    ToDtypeF8e4m3F32,
+    ToDtypeF8e4m3F64,
+    ToDtypeBf16U8,
+    ToDtypeBf16U32,
+    ToDtypeBf16I16,
+    ToDtypeBf16I32,
+    ToDtypeBf16I64,
+    ToDtypeBf16F8e4m3,
+    ToDtypeF16U8,
+    ToDtypeF16U32,
+    ToDtypeF16I16,
+    ToDtypeF16I32,
+    ToDtypeF16I64,
+    ToDtypeF16F8e4m3,
+    ToDtypeF32U8,
+    ToDtypeF32U32,
+    ToDtypeF32I16,
+    ToDtypeF32I32,
+    ToDtypeF32I64,
+    ToDtypeF32F8e4m3,
+    ToDtypeF64U8,
+    ToDtypeF64U32,
+    ToDtypeF64I16,
+    ToDtypeF64I32,
+    ToDtypeF64I64,
+    ToDtypeF64F8e4m3,
 }
 
 impl Source {
@@ -529,7 +763,86 @@ impl Source {
             | KernelName::ToDtypeF32F64
             | KernelName::ToDtypeF64F16
             | KernelName::ToDtypeF64Bf16
-            | KernelName::ToDtypeF64F32 => 0,
+            | KernelName::ToDtypeF64F32 
+            | KernelName::ToDtypeU8U32
+            | KernelName::ToDtypeU8I16
+            | KernelName::ToDtypeU8I32
+            | KernelName::ToDtypeU8I64
+            | KernelName::ToDtypeU8Bf16
+            | KernelName::ToDtypeU8F16
+            | KernelName::ToDtypeU8F32
+            | KernelName::ToDtypeU8F64
+            | KernelName::ToDtypeU8F8e4m3
+            | KernelName::ToDtypeU32U8
+            | KernelName::ToDtypeU32I16
+            | KernelName::ToDtypeU32I32
+            | KernelName::ToDtypeU32I64
+            | KernelName::ToDtypeU32Bf16
+            | KernelName::ToDtypeU32F16
+            | KernelName::ToDtypeU32F32
+            | KernelName::ToDtypeU32F64
+            | KernelName::ToDtypeU32F8e4m3
+            | KernelName::ToDtypeI16U8
+            | KernelName::ToDtypeI16U32
+            | KernelName::ToDtypeI16I32
+            | KernelName::ToDtypeI16I64
+            | KernelName::ToDtypeI16Bf16
+            | KernelName::ToDtypeI16F16
+            | KernelName::ToDtypeI16F32
+            | KernelName::ToDtypeI16F64
+            | KernelName::ToDtypeI16F8e4m3
+            | KernelName::ToDtypeI32U8
+            | KernelName::ToDtypeI32U32
+            | KernelName::ToDtypeI32I16
+            | KernelName::ToDtypeI32I64
+            | KernelName::ToDtypeI32Bf16
+            | KernelName::ToDtypeI32F16
+            | KernelName::ToDtypeI32F32
+            | KernelName::ToDtypeI32F64
+            | KernelName::ToDtypeI32F8e4m3
+            | KernelName::ToDtypeI64U8
+            | KernelName::ToDtypeI64U32
+            | KernelName::ToDtypeI64I16
+            | KernelName::ToDtypeI64I32
+            | KernelName::ToDtypeI64Bf16
+            | KernelName::ToDtypeI64F16
+            | KernelName::ToDtypeI64F32
+            | KernelName::ToDtypeI64F64
+            | KernelName::ToDtypeI64F8e4m3
+            | KernelName::ToDtypeF8e4m3U8
+            | KernelName::ToDtypeF8e4m3U32
+            | KernelName::ToDtypeF8e4m3I16
+            | KernelName::ToDtypeF8e4m3I32
+            | KernelName::ToDtypeF8e4m3I64
+            | KernelName::ToDtypeF8e4m3Bf16
+            | KernelName::ToDtypeF8e4m3F16
+            | KernelName::ToDtypeF8e4m3F32
+            | KernelName::ToDtypeF8e4m3F64
+            | KernelName::ToDtypeBf16U8
+            | KernelName::ToDtypeBf16U32
+            | KernelName::ToDtypeBf16I16
+            | KernelName::ToDtypeBf16I32
+            | KernelName::ToDtypeBf16I64
+            | KernelName::ToDtypeBf16F8e4m3
+            | KernelName::ToDtypeF16U8
+            | KernelName::ToDtypeF16U32
+            | KernelName::ToDtypeF16I16
+            | KernelName::ToDtypeF16I32
+            | KernelName::ToDtypeF16I64
+            | KernelName::ToDtypeF16F8e4m3
+            | KernelName::ToDtypeF32U8
+            | KernelName::ToDtypeF32U32
+            | KernelName::ToDtypeF32I16
+            | KernelName::ToDtypeF32I32
+            | KernelName::ToDtypeF32I64
+            | KernelName::ToDtypeF32F8e4m3
+            | KernelName::ToDtypeF64U8
+            | KernelName::ToDtypeF64U32
+            | KernelName::ToDtypeF64I16
+            | KernelName::ToDtypeF64I32
+            | KernelName::ToDtypeF64I64
+            | KernelName::ToDtypeF64F8e4m3
+            => 0,
         }
     }
 
@@ -623,6 +936,84 @@ impl Source {
             Self::ToDtypeF64F16 => TO_DTYPE_F64F16_SPV,
             Self::ToDtypeF64Bf16 => TO_DTYPE_F64BF16_SPV,
             Self::ToDtypeF64F32 => TO_DTYPE_F64F32_SPV,
+            Self::ToDtypeU8U32 => TO_DTYPE_U8U32_SPV,
+            Self::ToDtypeU8I16 => TO_DTYPE_U8I16_SPV,
+            Self::ToDtypeU8I32 => TO_DTYPE_U8I32_SPV,
+            Self::ToDtypeU8I64 => TO_DTYPE_U8I64_SPV,
+            Self::ToDtypeU8Bf16 => TO_DTYPE_U8BF16_SPV,
+            Self::ToDtypeU8F16 => TO_DTYPE_U8F16_SPV,
+            Self::ToDtypeU8F32 => TO_DTYPE_U8F32_SPV,
+            Self::ToDtypeU8F64 => TO_DTYPE_U8F64_SPV,
+            Self::ToDtypeU8F8e4m3 => TO_DTYPE_U8F8E4M3_SPV,
+            Self::ToDtypeU32U8 => TO_DTYPE_U32U8_SPV,
+            Self::ToDtypeU32I16 => TO_DTYPE_U32I16_SPV,
+            Self::ToDtypeU32I32 => TO_DTYPE_U32I32_SPV,
+            Self::ToDtypeU32I64 => TO_DTYPE_U32I64_SPV,
+            Self::ToDtypeU32Bf16 => TO_DTYPE_U32BF16_SPV,
+            Self::ToDtypeU32F16 => TO_DTYPE_U32F16_SPV,
+            Self::ToDtypeU32F32 => TO_DTYPE_U32F32_SPV,
+            Self::ToDtypeU32F64 => TO_DTYPE_U32F64_SPV,
+            Self::ToDtypeU32F8e4m3 => TO_DTYPE_U32F8E4M3_SPV,
+            Self::ToDtypeI16U8 => TO_DTYPE_I16U8_SPV,
+            Self::ToDtypeI16U32 => TO_DTYPE_I16U32_SPV,
+            Self::ToDtypeI16I32 => TO_DTYPE_I16I32_SPV,
+            Self::ToDtypeI16I64 => TO_DTYPE_I16I64_SPV,
+            Self::ToDtypeI16Bf16 => TO_DTYPE_I16BF16_SPV,
+            Self::ToDtypeI16F16 => TO_DTYPE_I16F16_SPV,
+            Self::ToDtypeI16F32 => TO_DTYPE_I16F32_SPV,
+            Self::ToDtypeI16F64 => TO_DTYPE_I16F64_SPV,
+            Self::ToDtypeI16F8e4m3 => TO_DTYPE_I16F8E4M3_SPV,
+            Self::ToDtypeI32U8 => TO_DTYPE_I32U8_SPV,
+            Self::ToDtypeI32U32 => TO_DTYPE_I32U32_SPV,
+            Self::ToDtypeI32I16 => TO_DTYPE_I32I16_SPV,
+            Self::ToDtypeI32I64 => TO_DTYPE_I32I64_SPV,
+            Self::ToDtypeI32Bf16 => TO_DTYPE_I32BF16_SPV,
+            Self::ToDtypeI32F16 => TO_DTYPE_I32F16_SPV,
+            Self::ToDtypeI32F32 => TO_DTYPE_I32F32_SPV,
+            Self::ToDtypeI32F64 => TO_DTYPE_I32F64_SPV,
+            Self::ToDtypeI32F8e4m3 => TO_DTYPE_I32F8E4M3_SPV,
+            Self::ToDtypeI64U8 => TO_DTYPE_I64U8_SPV,
+            Self::ToDtypeI64U32 => TO_DTYPE_I64U32_SPV,
+            Self::ToDtypeI64I16 => TO_DTYPE_I64I16_SPV,
+            Self::ToDtypeI64I32 => TO_DTYPE_I64I32_SPV,
+            Self::ToDtypeI64Bf16 => TO_DTYPE_I64BF16_SPV,
+            Self::ToDtypeI64F16 => TO_DTYPE_I64F16_SPV,
+            Self::ToDtypeI64F32 => TO_DTYPE_I64F32_SPV,
+            Self::ToDtypeI64F64 => TO_DTYPE_I64F64_SPV,
+            Self::ToDtypeI64F8e4m3 => TO_DTYPE_I64F8E4M3_SPV,
+            Self::ToDtypeF8e4m3U8 => TO_DTYPE_F8E4M3U8_SPV,
+            Self::ToDtypeF8e4m3U32 => TO_DTYPE_F8E4M3U32_SPV,
+            Self::ToDtypeF8e4m3I16 => TO_DTYPE_F8E4M3I16_SPV,
+            Self::ToDtypeF8e4m3I32 => TO_DTYPE_F8E4M3I32_SPV,
+            Self::ToDtypeF8e4m3I64 => TO_DTYPE_F8E4M3I64_SPV,
+            Self::ToDtypeF8e4m3Bf16 => TO_DTYPE_F8E4M3BF16_SPV,
+            Self::ToDtypeF8e4m3F16 => TO_DTYPE_F8E4M3F16_SPV,
+            Self::ToDtypeF8e4m3F32 => TO_DTYPE_F8E4M3F32_SPV,
+            Self::ToDtypeF8e4m3F64 => TO_DTYPE_F8E4M3F64_SPV,
+            Self::ToDtypeBf16U8 => TO_DTYPE_BF16U8_SPV,
+            Self::ToDtypeBf16U32 => TO_DTYPE_BF16U32_SPV,
+            Self::ToDtypeBf16I16 => TO_DTYPE_BF16I16_SPV,
+            Self::ToDtypeBf16I32 => TO_DTYPE_BF16I32_SPV,
+            Self::ToDtypeBf16I64 => TO_DTYPE_BF16I64_SPV,
+            Self::ToDtypeBf16F8e4m3 => TO_DTYPE_BF16F8E4M3_SPV,
+            Self::ToDtypeF16U8 => TO_DTYPE_F16U8_SPV,
+            Self::ToDtypeF16U32 => TO_DTYPE_F16U32_SPV,
+            Self::ToDtypeF16I16 => TO_DTYPE_F16I16_SPV,
+            Self::ToDtypeF16I32 => TO_DTYPE_F16I32_SPV,
+            Self::ToDtypeF16I64 => TO_DTYPE_F16I64_SPV,
+            Self::ToDtypeF16F8e4m3 => TO_DTYPE_F16F8E4M3_SPV,
+            Self::ToDtypeF32U8 => TO_DTYPE_F32U8_SPV,
+            Self::ToDtypeF32U32 => TO_DTYPE_F32U32_SPV,
+            Self::ToDtypeF32I16 => TO_DTYPE_F32I16_SPV,
+            Self::ToDtypeF32I32 => TO_DTYPE_F32I32_SPV,
+            Self::ToDtypeF32I64 => TO_DTYPE_F32I64_SPV,
+            Self::ToDtypeF32F8e4m3 => TO_DTYPE_F32F8E4M3_SPV,
+            Self::ToDtypeF64U8 => TO_DTYPE_F64U8_SPV,
+            Self::ToDtypeF64U32 => TO_DTYPE_F64U32_SPV,
+            Self::ToDtypeF64I16 => TO_DTYPE_F64I16_SPV,
+            Self::ToDtypeF64I32 => TO_DTYPE_F64I32_SPV,
+            Self::ToDtypeF64I64 => TO_DTYPE_F64I64_SPV,
+            Self::ToDtypeF64F8e4m3 => TO_DTYPE_F64F8E4M3_SPV,
         };
         bytes
             .chunks_exact(4)
@@ -721,6 +1112,84 @@ impl AsRef<str> for Source {
             Self::ToDtypeF64F16 => "to_dtype_f64_f16",
             Self::ToDtypeF64Bf16 => "to_dtype_f64_bf16",
             Self::ToDtypeF64F32 => "to_dtype_f64_f32",
+            Self::ToDtypeU8U32 => "to_dtype_u8_u32",
+            Self::ToDtypeU8I16 => "to_dtype_u8_i16",
+            Self::ToDtypeU8I32 => "to_dtype_u8_i32",
+            Self::ToDtypeU8I64 => "to_dtype_u8_i64",
+            Self::ToDtypeU8Bf16 => "to_dtype_u8_bf16",
+            Self::ToDtypeU8F16 => "to_dtype_u8_f16",
+            Self::ToDtypeU8F32 => "to_dtype_u8_f32",
+            Self::ToDtypeU8F64 => "to_dtype_u8_f64",
+            Self::ToDtypeU8F8e4m3 => "to_dtype_u8_f8e4m3",
+            Self::ToDtypeU32U8 => "to_dtype_u32_u8",
+            Self::ToDtypeU32I16 => "to_dtype_u32_i16",
+            Self::ToDtypeU32I32 => "to_dtype_u32_i32",
+            Self::ToDtypeU32I64 => "to_dtype_u32_i64",
+            Self::ToDtypeU32Bf16 => "to_dtype_u32_bf16",
+            Self::ToDtypeU32F16 => "to_dtype_u32_f16",
+            Self::ToDtypeU32F32 => "to_dtype_u32_f32",
+            Self::ToDtypeU32F64 => "to_dtype_u32_f64",
+            Self::ToDtypeU32F8e4m3 => "to_dtype_u32_f8e4m3",
+            Self::ToDtypeI16U8 => "to_dtype_i16_u8",
+            Self::ToDtypeI16U32 => "to_dtype_i16_u32",
+            Self::ToDtypeI16I32 => "to_dtype_i16_i32",
+            Self::ToDtypeI16I64 => "to_dtype_i16_i64",
+            Self::ToDtypeI16Bf16 => "to_dtype_i16_bf16",
+            Self::ToDtypeI16F16 => "to_dtype_i16_f16",
+            Self::ToDtypeI16F32 => "to_dtype_i16_f32",
+            Self::ToDtypeI16F64 => "to_dtype_i16_f64",
+            Self::ToDtypeI16F8e4m3 => "to_dtype_i16_f8e4m3",
+            Self::ToDtypeI32U8 => "to_dtype_i32_u8",
+            Self::ToDtypeI32U32 => "to_dtype_i32_u32",
+            Self::ToDtypeI32I16 => "to_dtype_i32_i16",
+            Self::ToDtypeI32I64 => "to_dtype_i32_i64",
+            Self::ToDtypeI32Bf16 => "to_dtype_i32_bf16",
+            Self::ToDtypeI32F16 => "to_dtype_i32_f16",
+            Self::ToDtypeI32F32 => "to_dtype_i32_f32",
+            Self::ToDtypeI32F64 => "to_dtype_i32_f64",
+            Self::ToDtypeI32F8e4m3 => "to_dtype_i32_f8e4m3",
+            Self::ToDtypeI64U8 => "to_dtype_i64_u8",
+            Self::ToDtypeI64U32 => "to_dtype_i64_u32",
+            Self::ToDtypeI64I16 => "to_dtype_i64_i16",
+            Self::ToDtypeI64I32 => "to_dtype_i64_i32",
+            Self::ToDtypeI64Bf16 => "to_dtype_i64_bf16",
+            Self::ToDtypeI64F16 => "to_dtype_i64_f16",
+            Self::ToDtypeI64F32 => "to_dtype_i64_f32",
+            Self::ToDtypeI64F64 => "to_dtype_i64_f64",
+            Self::ToDtypeI64F8e4m3 => "to_dtype_i64_f8e4m3",
+            Self::ToDtypeF8e4m3U8 => "to_dtype_f8e4m3_u8",
+            Self::ToDtypeF8e4m3U32 => "to_dtype_f8e4m3_u32",
+            Self::ToDtypeF8e4m3I16 => "to_dtype_f8e4m3_i16",
+            Self::ToDtypeF8e4m3I32 => "to_dtype_f8e4m3_i32",
+            Self::ToDtypeF8e4m3I64 => "to_dtype_f8e4m3_i64",
+            Self::ToDtypeF8e4m3Bf16 => "to_dtype_f8e4m3_bf16",
+            Self::ToDtypeF8e4m3F16 => "to_dtype_f8e4m3_f16",
+            Self::ToDtypeF8e4m3F32 => "to_dtype_f8e4m3_f32",
+            Self::ToDtypeF8e4m3F64 => "to_dtype_f8e4m3_f64",
+            Self::ToDtypeBf16U8 => "to_dtype_bf16_u8",
+            Self::ToDtypeBf16U32 => "to_dtype_bf16_u32",
+            Self::ToDtypeBf16I16 => "to_dtype_bf16_i16",
+            Self::ToDtypeBf16I32 => "to_dtype_bf16_i32",
+            Self::ToDtypeBf16I64 => "to_dtype_bf16_i64",
+            Self::ToDtypeBf16F8e4m3 => "to_dtype_bf16_f8e4m3",
+            Self::ToDtypeF16U8 => "to_dtype_f16_u8",
+            Self::ToDtypeF16U32 => "to_dtype_f16_u32",
+            Self::ToDtypeF16I16 => "to_dtype_f16_i16",
+            Self::ToDtypeF16I32 => "to_dtype_f16_i32",
+            Self::ToDtypeF16I64 => "to_dtype_f16_i64",
+            Self::ToDtypeF16F8e4m3 => "to_dtype_f16_f8e4m3",
+            Self::ToDtypeF32U8 => "to_dtype_f32_u8",
+            Self::ToDtypeF32U32 => "to_dtype_f32_u32",
+            Self::ToDtypeF32I16 => "to_dtype_f32_i16",
+            Self::ToDtypeF32I32 => "to_dtype_f32_i32",
+            Self::ToDtypeF32I64 => "to_dtype_f32_i64",
+            Self::ToDtypeF32F8e4m3 => "to_dtype_f32_f8e4m3",
+            Self::ToDtypeF64U8 => "to_dtype_f64_u8",
+            Self::ToDtypeF64U32 => "to_dtype_f64_u32",
+            Self::ToDtypeF64I16 => "to_dtype_f64_i16",
+            Self::ToDtypeF64I32 => "to_dtype_f64_i32",
+            Self::ToDtypeF64I64 => "to_dtype_f64_i64",
+            Self::ToDtypeF64F8e4m3 => "to_dtype_f64_f8e4m3",
         }
     }
 }

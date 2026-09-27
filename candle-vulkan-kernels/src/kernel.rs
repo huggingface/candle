@@ -346,6 +346,84 @@ pub enum KernelName {
     ToDtypeF64F16,
     ToDtypeF64Bf16,
     ToDtypeF64F32,
+    ToDtypeU8U32,
+    ToDtypeU8I16,
+    ToDtypeU8I32,
+    ToDtypeU8I64,
+    ToDtypeU8Bf16,
+    ToDtypeU8F16,
+    ToDtypeU8F32,
+    ToDtypeU8F64,
+    ToDtypeU8F8e4m3,
+    ToDtypeU32U8,
+    ToDtypeU32I16,
+    ToDtypeU32I32,
+    ToDtypeU32I64,
+    ToDtypeU32Bf16,
+    ToDtypeU32F16,
+    ToDtypeU32F32,
+    ToDtypeU32F64,
+    ToDtypeU32F8e4m3,
+    ToDtypeI16U8,
+    ToDtypeI16U32,
+    ToDtypeI16I32,
+    ToDtypeI16I64,
+    ToDtypeI16Bf16,
+    ToDtypeI16F16,
+    ToDtypeI16F32,
+    ToDtypeI16F64,
+    ToDtypeI16F8e4m3,
+    ToDtypeI32U8,
+    ToDtypeI32U32,
+    ToDtypeI32I16,
+    ToDtypeI32I64,
+    ToDtypeI32Bf16,
+    ToDtypeI32F16,
+    ToDtypeI32F32,
+    ToDtypeI32F64,
+    ToDtypeI32F8e4m3,
+    ToDtypeI64U8,
+    ToDtypeI64U32,
+    ToDtypeI64I16,
+    ToDtypeI64I32,
+    ToDtypeI64Bf16,
+    ToDtypeI64F16,
+    ToDtypeI64F32,
+    ToDtypeI64F64,
+    ToDtypeI64F8e4m3,
+    ToDtypeF8e4m3U8,
+    ToDtypeF8e4m3U32,
+    ToDtypeF8e4m3I16,
+    ToDtypeF8e4m3I32,
+    ToDtypeF8e4m3I64,
+    ToDtypeF8e4m3Bf16,
+    ToDtypeF8e4m3F16,
+    ToDtypeF8e4m3F32,
+    ToDtypeF8e4m3F64,
+    ToDtypeBf16U8,
+    ToDtypeBf16U32,
+    ToDtypeBf16I16,
+    ToDtypeBf16I32,
+    ToDtypeBf16I64,
+    ToDtypeBf16F8e4m3,
+    ToDtypeF16U8,
+    ToDtypeF16U32,
+    ToDtypeF16I16,
+    ToDtypeF16I32,
+    ToDtypeF16I64,
+    ToDtypeF16F8e4m3,
+    ToDtypeF32U8,
+    ToDtypeF32U32,
+    ToDtypeF32I16,
+    ToDtypeF32I32,
+    ToDtypeF32I64,
+    ToDtypeF32F8e4m3,
+    ToDtypeF64U8,
+    ToDtypeF64U32,
+    ToDtypeF64I16,
+    ToDtypeF64I32,
+    ToDtypeF64I64,
+    ToDtypeF64F8e4m3,
 }
 
 impl AsRef<str> for KernelName {
@@ -674,6 +752,84 @@ impl AsRef<str> for KernelName {
             Self::ToDtypeF64F16 => "main",
             Self::ToDtypeF64Bf16 => "main",
             Self::ToDtypeF64F32 => "main",
+            Self::ToDtypeU8U32 => "main",
+            Self::ToDtypeU8I16 => "main",
+            Self::ToDtypeU8I32 => "main",
+            Self::ToDtypeU8I64 => "main",
+            Self::ToDtypeU8Bf16 => "main",
+            Self::ToDtypeU8F16 => "main",
+            Self::ToDtypeU8F32 => "main",
+            Self::ToDtypeU8F64 => "main",
+            Self::ToDtypeU8F8e4m3 => "main",
+            Self::ToDtypeU32U8 => "main",
+            Self::ToDtypeU32I16 => "main",
+            Self::ToDtypeU32I32 => "main",
+            Self::ToDtypeU32I64 => "main",
+            Self::ToDtypeU32Bf16 => "main",
+            Self::ToDtypeU32F16 => "main",
+            Self::ToDtypeU32F32 => "main",
+            Self::ToDtypeU32F64 => "main",
+            Self::ToDtypeU32F8e4m3 => "main",
+            Self::ToDtypeI16U8 => "main",
+            Self::ToDtypeI16U32 => "main",
+            Self::ToDtypeI16I32 => "main",
+            Self::ToDtypeI16I64 => "main",
+            Self::ToDtypeI16Bf16 => "main",
+            Self::ToDtypeI16F16 => "main",
+            Self::ToDtypeI16F32 => "main",
+            Self::ToDtypeI16F64 => "main",
+            Self::ToDtypeI16F8e4m3 => "main",
+            Self::ToDtypeI32U8 => "main",
+            Self::ToDtypeI32U32 => "main",
+            Self::ToDtypeI32I16 => "main",
+            Self::ToDtypeI32I64 => "main",
+            Self::ToDtypeI32Bf16 => "main",
+            Self::ToDtypeI32F16 => "main",
+            Self::ToDtypeI32F32 => "main",
+            Self::ToDtypeI32F64 => "main",
+            Self::ToDtypeI32F8e4m3 => "main",
+            Self::ToDtypeI64U8 => "main",
+            Self::ToDtypeI64U32 => "main",
+            Self::ToDtypeI64I16 => "main",
+            Self::ToDtypeI64I32 => "main",
+            Self::ToDtypeI64Bf16 => "main",
+            Self::ToDtypeI64F16 => "main",
+            Self::ToDtypeI64F32 => "main",
+            Self::ToDtypeI64F64 => "main",
+            Self::ToDtypeI64F8e4m3 => "main",
+            Self::ToDtypeF8e4m3U8 => "main",
+            Self::ToDtypeF8e4m3U32 => "main",
+            Self::ToDtypeF8e4m3I16 => "main",
+            Self::ToDtypeF8e4m3I32 => "main",
+            Self::ToDtypeF8e4m3I64 => "main",
+            Self::ToDtypeF8e4m3Bf16 => "main",
+            Self::ToDtypeF8e4m3F16 => "main",
+            Self::ToDtypeF8e4m3F32 => "main",
+            Self::ToDtypeF8e4m3F64 => "main",
+            Self::ToDtypeBf16U8 => "main",
+            Self::ToDtypeBf16U32 => "main",
+            Self::ToDtypeBf16I16 => "main",
+            Self::ToDtypeBf16I32 => "main",
+            Self::ToDtypeBf16I64 => "main",
+            Self::ToDtypeBf16F8e4m3 => "main",
+            Self::ToDtypeF16U8 => "main",
+            Self::ToDtypeF16U32 => "main",
+            Self::ToDtypeF16I16 => "main",
+            Self::ToDtypeF16I32 => "main",
+            Self::ToDtypeF16I64 => "main",
+            Self::ToDtypeF16F8e4m3 => "main",
+            Self::ToDtypeF32U8 => "main",
+            Self::ToDtypeF32U32 => "main",
+            Self::ToDtypeF32I16 => "main",
+            Self::ToDtypeF32I32 => "main",
+            Self::ToDtypeF32I64 => "main",
+            Self::ToDtypeF32F8e4m3 => "main",
+            Self::ToDtypeF64U8 => "main",
+            Self::ToDtypeF64U32 => "main",
+            Self::ToDtypeF64I16 => "main",
+            Self::ToDtypeF64I32 => "main",
+            Self::ToDtypeF64I64 => "main",
+            Self::ToDtypeF64F8e4m3 => "main",
         }
     }
 }
@@ -1145,7 +1301,86 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::ToDtypeF32F64
         | KernelName::ToDtypeF64F16
         | KernelName::ToDtypeF64Bf16
-        | KernelName::ToDtypeF64F32 => 3,
+        | KernelName::ToDtypeF64F32 
+            | KernelName::ToDtypeU8U32
+            | KernelName::ToDtypeU8I16
+            | KernelName::ToDtypeU8I32
+            | KernelName::ToDtypeU8I64
+            | KernelName::ToDtypeU8Bf16
+            | KernelName::ToDtypeU8F16
+            | KernelName::ToDtypeU8F32
+            | KernelName::ToDtypeU8F64
+            | KernelName::ToDtypeU8F8e4m3
+            | KernelName::ToDtypeU32U8
+            | KernelName::ToDtypeU32I16
+            | KernelName::ToDtypeU32I32
+            | KernelName::ToDtypeU32I64
+            | KernelName::ToDtypeU32Bf16
+            | KernelName::ToDtypeU32F16
+            | KernelName::ToDtypeU32F32
+            | KernelName::ToDtypeU32F64
+            | KernelName::ToDtypeU32F8e4m3
+            | KernelName::ToDtypeI16U8
+            | KernelName::ToDtypeI16U32
+            | KernelName::ToDtypeI16I32
+            | KernelName::ToDtypeI16I64
+            | KernelName::ToDtypeI16Bf16
+            | KernelName::ToDtypeI16F16
+            | KernelName::ToDtypeI16F32
+            | KernelName::ToDtypeI16F64
+            | KernelName::ToDtypeI16F8e4m3
+            | KernelName::ToDtypeI32U8
+            | KernelName::ToDtypeI32U32
+            | KernelName::ToDtypeI32I16
+            | KernelName::ToDtypeI32I64
+            | KernelName::ToDtypeI32Bf16
+            | KernelName::ToDtypeI32F16
+            | KernelName::ToDtypeI32F32
+            | KernelName::ToDtypeI32F64
+            | KernelName::ToDtypeI32F8e4m3
+            | KernelName::ToDtypeI64U8
+            | KernelName::ToDtypeI64U32
+            | KernelName::ToDtypeI64I16
+            | KernelName::ToDtypeI64I32
+            | KernelName::ToDtypeI64Bf16
+            | KernelName::ToDtypeI64F16
+            | KernelName::ToDtypeI64F32
+            | KernelName::ToDtypeI64F64
+            | KernelName::ToDtypeI64F8e4m3
+            | KernelName::ToDtypeF8e4m3U8
+            | KernelName::ToDtypeF8e4m3U32
+            | KernelName::ToDtypeF8e4m3I16
+            | KernelName::ToDtypeF8e4m3I32
+            | KernelName::ToDtypeF8e4m3I64
+            | KernelName::ToDtypeF8e4m3Bf16
+            | KernelName::ToDtypeF8e4m3F16
+            | KernelName::ToDtypeF8e4m3F32
+            | KernelName::ToDtypeF8e4m3F64
+            | KernelName::ToDtypeBf16U8
+            | KernelName::ToDtypeBf16U32
+            | KernelName::ToDtypeBf16I16
+            | KernelName::ToDtypeBf16I32
+            | KernelName::ToDtypeBf16I64
+            | KernelName::ToDtypeBf16F8e4m3
+            | KernelName::ToDtypeF16U8
+            | KernelName::ToDtypeF16U32
+            | KernelName::ToDtypeF16I16
+            | KernelName::ToDtypeF16I32
+            | KernelName::ToDtypeF16I64
+            | KernelName::ToDtypeF16F8e4m3
+            | KernelName::ToDtypeF32U8
+            | KernelName::ToDtypeF32U32
+            | KernelName::ToDtypeF32I16
+            | KernelName::ToDtypeF32I32
+            | KernelName::ToDtypeF32I64
+            | KernelName::ToDtypeF32F8e4m3
+            | KernelName::ToDtypeF64U8
+            | KernelName::ToDtypeF64U32
+            | KernelName::ToDtypeF64I16
+            | KernelName::ToDtypeF64I32
+            | KernelName::ToDtypeF64I64
+            | KernelName::ToDtypeF64F8e4m3
+            => 3,
     }
 }
 

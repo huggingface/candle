@@ -2810,6 +2810,1333 @@ impl BackendStorage for VulkanStorage {
                     len,
                 )?;
             }
+            (DType::U8, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8U32,
+                    KernelName::ToDtypeU8U32,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8I16,
+                    KernelName::ToDtypeU8I16,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8I32,
+                    KernelName::ToDtypeU8I32,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8I64,
+                    KernelName::ToDtypeU8I64,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8Bf16,
+                    KernelName::ToDtypeU8Bf16,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8F16,
+                    KernelName::ToDtypeU8F16,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8F32,
+                    KernelName::ToDtypeU8F32,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8F64,
+                    KernelName::ToDtypeU8F64,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8F8e4m3,
+                    KernelName::ToDtypeU8F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32U8,
+                    KernelName::ToDtypeU32U8,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32I16,
+                    KernelName::ToDtypeU32I16,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32I32,
+                    KernelName::ToDtypeU32I32,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32I64,
+                    KernelName::ToDtypeU32I64,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32Bf16,
+                    KernelName::ToDtypeU32Bf16,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32F16,
+                    KernelName::ToDtypeU32F16,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32F32,
+                    KernelName::ToDtypeU32F32,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32F64,
+                    KernelName::ToDtypeU32F64,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32F8e4m3,
+                    KernelName::ToDtypeU32F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16U8,
+                    KernelName::ToDtypeI16U8,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16U32,
+                    KernelName::ToDtypeI16U32,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16I32,
+                    KernelName::ToDtypeI16I32,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16I64,
+                    KernelName::ToDtypeI16I64,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16Bf16,
+                    KernelName::ToDtypeI16Bf16,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16F16,
+                    KernelName::ToDtypeI16F16,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16F32,
+                    KernelName::ToDtypeI16F32,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16F64,
+                    KernelName::ToDtypeI16F64,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16F8e4m3,
+                    KernelName::ToDtypeI16F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32U8,
+                    KernelName::ToDtypeI32U8,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32U32,
+                    KernelName::ToDtypeI32U32,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32I16,
+                    KernelName::ToDtypeI32I16,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32I64,
+                    KernelName::ToDtypeI32I64,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32Bf16,
+                    KernelName::ToDtypeI32Bf16,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32F16,
+                    KernelName::ToDtypeI32F16,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32F32,
+                    KernelName::ToDtypeI32F32,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32F64,
+                    KernelName::ToDtypeI32F64,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32F8e4m3,
+                    KernelName::ToDtypeI32F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64U8,
+                    KernelName::ToDtypeI64U8,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64U32,
+                    KernelName::ToDtypeI64U32,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64I16,
+                    KernelName::ToDtypeI64I16,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64I32,
+                    KernelName::ToDtypeI64I32,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64Bf16,
+                    KernelName::ToDtypeI64Bf16,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64F16,
+                    KernelName::ToDtypeI64F16,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64F32,
+                    KernelName::ToDtypeI64F32,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64F64,
+                    KernelName::ToDtypeI64F64,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64F8e4m3,
+                    KernelName::ToDtypeI64F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3U8,
+                    KernelName::ToDtypeF8e4m3U8,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3U32,
+                    KernelName::ToDtypeF8e4m3U32,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3I16,
+                    KernelName::ToDtypeF8e4m3I16,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3I32,
+                    KernelName::ToDtypeF8e4m3I32,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3I64,
+                    KernelName::ToDtypeF8e4m3I64,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3Bf16,
+                    KernelName::ToDtypeF8e4m3Bf16,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3F16,
+                    KernelName::ToDtypeF8e4m3F16,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3F32,
+                    KernelName::ToDtypeF8e4m3F32,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3F64,
+                    KernelName::ToDtypeF8e4m3F64,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16U8,
+                    KernelName::ToDtypeBf16U8,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16U32,
+                    KernelName::ToDtypeBf16U32,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16I16,
+                    KernelName::ToDtypeBf16I16,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16I32,
+                    KernelName::ToDtypeBf16I32,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16I64,
+                    KernelName::ToDtypeBf16I64,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16F8e4m3,
+                    KernelName::ToDtypeBf16F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16U8,
+                    KernelName::ToDtypeF16U8,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16U32,
+                    KernelName::ToDtypeF16U32,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16I16,
+                    KernelName::ToDtypeF16I16,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16I32,
+                    KernelName::ToDtypeF16I32,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16I64,
+                    KernelName::ToDtypeF16I64,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16F8e4m3,
+                    KernelName::ToDtypeF16F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32U8,
+                    KernelName::ToDtypeF32U8,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32U32,
+                    KernelName::ToDtypeF32U32,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32I16,
+                    KernelName::ToDtypeF32I16,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32I32,
+                    KernelName::ToDtypeF32I32,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32I64,
+                    KernelName::ToDtypeF32I64,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32F8e4m3,
+                    KernelName::ToDtypeF32F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64U8,
+                    KernelName::ToDtypeF64U8,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64U32,
+                    KernelName::ToDtypeF64U32,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64I16,
+                    KernelName::ToDtypeF64I16,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64I32,
+                    KernelName::ToDtypeF64I32,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64I64,
+                    KernelName::ToDtypeF64I64,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64F8e4m3,
+                    KernelName::ToDtypeF64F8e4m3,
+                    len,
+                )?;
+            }
+
             _ => {
                 return Err(Error::Vulkan(
                     format!(

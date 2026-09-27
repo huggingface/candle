@@ -1225,6 +1225,271 @@ fn test_vulkan_to_dtype() {
 
 /// `copy_strided_src` via `slice_scatter0` (contiguous src at a nonzero dst
 /// offset) and via `contiguous()` on a transposed view.
+
+#[test]
+fn test_vulkan_to_dtype_ints_f8() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+
+    // --- Integer round-trips (exact) ---
+    let i32_vals: Vec<i32> = (0..64).map(|i| (i as i32) * 3 - 96).collect();
+    let i32_g = candle_core::Tensor::new(i32_vals.as_slice(), &dev).unwrap();
+    let i32_c = candle_core::Tensor::new(i32_vals.as_slice(), &cpu).unwrap();
+
+    // I32 -> I16 -> I32
+    let r_g = i32_g
+        .clone()
+        .to_dtype(candle_core::DType::I16)
+        .unwrap()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap();
+    let r_c = i32_c
+        .clone()
+        .to_dtype(candle_core::DType::I16)
+        .unwrap()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<i32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<i32>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "i32->i16->i32: gpu {a} cpu {b}");
+    }
+
+    // I32 -> U8 -> I32
+    let r_g = i32_g
+        .clone()
+        .to_dtype(candle_core::DType::U8)
+        .unwrap()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap();
+    let r_c = i32_c
+        .clone()
+        .to_dtype(candle_core::DType::U8)
+        .unwrap()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<i32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<i32>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "i32->u8->i32: gpu {a} cpu {b}");
+    }
+
+    // U32 -> U8 -> U32
+    let u32_vals: Vec<u32> = (0..64).map(|i| (i as u32) * 7).collect();
+    let u32_g = candle_core::Tensor::new(u32_vals.as_slice(), &dev).unwrap();
+    let u32_c = candle_core::Tensor::new(u32_vals.as_slice(), &cpu).unwrap();
+    let r_g = u32_g
+        .clone()
+        .to_dtype(candle_core::DType::U8)
+        .unwrap()
+        .to_dtype(candle_core::DType::U32)
+        .unwrap();
+    let r_c = u32_c
+        .clone()
+        .to_dtype(candle_core::DType::U8)
+        .unwrap()
+        .to_dtype(candle_core::DType::U32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<u32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<u32>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "u32->u8->u32: gpu {a} cpu {b}");
+    }
+
+    // I64 -> I32 -> I64
+    let i64_vals: Vec<i64> = (0..64).map(|i| (i as i64) * 5 - 160).collect();
+    let i64_g = candle_core::Tensor::new(i64_vals.as_slice(), &dev).unwrap();
+    let i64_c = candle_core::Tensor::new(i64_vals.as_slice(), &cpu).unwrap();
+    let r_g = i64_g
+        .clone()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap()
+        .to_dtype(candle_core::DType::I64)
+        .unwrap();
+    let r_c = i64_c
+        .clone()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap()
+        .to_dtype(candle_core::DType::I64)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<i64>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<i64>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "i64->i32->i64: gpu {a} cpu {b}");
+    }
+
+    // --- F8E4M3 round-trips ---
+    let f32_vals: Vec<f32> = (0..64).map(|i| (i as f32) * 0.5 - 15.0).collect();
+    let f32_g = candle_core::Tensor::new(f32_vals.as_slice(), &dev).unwrap();
+    let f32_c = candle_core::Tensor::new(f32_vals.as_slice(), &cpu).unwrap();
+
+    // F32 -> F8E4M3 -> F32
+    let r_g = f32_g
+        .clone()
+        .to_dtype(candle_core::DType::F8E4M3)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    let r_c = f32_c
+        .clone()
+        .to_dtype(candle_core::DType::F8E4M3)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<f32>().unwrap().iter())
+    {
+        assert!(
+            (a - b).abs() < 0.2 * (1.0 + b.abs()),
+            "f32->f8e4m3->f32: gpu {a} cpu {b}"
+        );
+    }
+
+    // F16 -> F8E4M3 -> F32
+    let f16_g = f32_g.clone().to_dtype(candle_core::DType::F16).unwrap();
+    let f16_c = f32_c.clone().to_dtype(candle_core::DType::F16).unwrap();
+    let r_g = f16_g
+        .clone()
+        .to_dtype(candle_core::DType::F8E4M3)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    let r_c = f16_c
+        .clone()
+        .to_dtype(candle_core::DType::F8E4M3)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<f32>().unwrap().iter())
+    {
+        assert!(
+            (a - b).abs() < 0.2 * (1.0 + b.abs()),
+            "f16->f8e4m3->f32: gpu {a} cpu {b}"
+        );
+    }
+
+    // --- Int <-> Float conversions ---
+    let f32_int_vals: Vec<f32> = (0..64).map(|i| (i as f32) * 1.5 - 40.0).collect();
+    let fi_g = candle_core::Tensor::new(f32_int_vals.as_slice(), &dev).unwrap();
+    let fi_c = candle_core::Tensor::new(f32_int_vals.as_slice(), &cpu).unwrap();
+
+    // F32 -> I32 -> F32 (truncate toward zero)
+    let r_g = fi_g
+        .clone()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    let r_c = fi_c
+        .clone()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<f32>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "f32->i32->f32: gpu {a} cpu {b}");
+    }
+
+    // I32 -> F32 -> I32
+    let r_g = i32_g
+        .clone()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap();
+    let r_c = i32_c
+        .clone()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<i32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<i32>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "i32->f32->i32: gpu {a} cpu {b}");
+    }
+
+    // --- Cross-category: F8E4M3 -> I32 ---
+    let f8_g = f32_g.clone().to_dtype(candle_core::DType::F8E4M3).unwrap();
+    let f8_c = f32_c.clone().to_dtype(candle_core::DType::F8E4M3).unwrap();
+    let r_g = f8_g
+        .clone()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    let r_c = f8_c
+        .clone()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<f32>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "f8e4m3->i32->f32: gpu {a} cpu {b}");
+    }
+
+    // --- Cross-category: I32 -> BF16 ---
+    let r_g = i32_g
+        .clone()
+        .to_dtype(candle_core::DType::BF16)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    let r_c = i32_c
+        .clone()
+        .to_dtype(candle_core::DType::BF16)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<f32>().unwrap().iter())
+    {
+        assert!(
+            (a - b).abs() < 1e-2 * (1.0 + b.abs()),
+            "i32->bf16->f32: gpu {a} cpu {b}"
+        );
+    }
+
+    tracing::debug!("Vulkan device {gpu_id} to_dtype int/f8 OK");
+}
+
 #[test]
 fn test_vulkan_copy_strided_src() {
     (*INIT);
