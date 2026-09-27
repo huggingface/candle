@@ -164,8 +164,17 @@ impl FlashAttn {
         let mut dst = unsafe { dev.alloc::<T>(elem_count) }?;
         // LSE layout is (b, h, seqlen_q); the epilogue predicates its stores on actual_seq_len.
         let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * num_heads * seqlen_q)?;
-        // Must start at zero for every launch: the persistent scheduler hands out tiles from it.
-        let mut tile_count_semaphore = dev.alloc_zeros::<i32>(1)?;
+        // Global, unsplit dense attention uses StaticPersistentTileScheduler,
+        // whose Params do not contain a semaphore. Causal/local paths use the
+        // dynamic scheduler and must start its counter at zero on every call.
+        let dynamic_scheduler = (window_size_left < 0 && window_size_right == 0)
+            || (window_size_left >= 0 && window_size_left < seqlen_k as i32)
+            || (window_size_right >= 0 && window_size_right < seqlen_k as i32);
+        let mut tile_count_semaphore = if dynamic_scheduler {
+            Some(dev.alloc_zeros::<i32>(1)?)
+        } else {
+            None
+        };
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -189,7 +198,12 @@ impl FlashAttn {
             let (v_ptr, _guard) = v.device_ptr(&stream);
             let (dst_ptr, _guard) = dst.device_ptr_mut(&stream);
             let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr_mut(&stream);
-            let (tile_count_semaphore_ptr, _guard) = tile_count_semaphore.device_ptr_mut(&stream);
+            let semaphore_guard = tile_count_semaphore
+                .as_mut()
+                .map(|s| s.device_ptr_mut(&stream));
+            let tile_count_semaphore_ptr = semaphore_guard
+                .as_ref()
+                .map_or(std::ptr::null(), |(ptr, _)| *ptr as *const i32);
             ffi::run_mha_v3(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
@@ -197,7 +211,7 @@ impl FlashAttn {
                 dst_ptr as *const core::ffi::c_void,
                 softmax_lse_ptr as *const core::ffi::c_void,
                 /* alibi_slopes_ptr */ alibi_slopes_ptr,
-                /* tile_count_semaphore_ptr */ tile_count_semaphore_ptr as *const i32,
+                /* tile_count_semaphore_ptr */ tile_count_semaphore_ptr,
                 /* cu_seqlens_q_ptr */ std::ptr::null(),
                 /* cu_seqlens_k_ptr */ std::ptr::null(),
                 /* q_batch_stride */ q_stride[0] as u32,
