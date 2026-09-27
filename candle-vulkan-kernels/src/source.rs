@@ -84,6 +84,30 @@ const TEST_FILL_F8E4M3_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f8e4m3.spv"));
 const TEST_FILL_F8E8M0_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f8e8m0.spv"));
+const TO_DTYPE_F16F32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_f32.spv"));
+const TO_DTYPE_F16BF16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_bf16.spv"));
+const TO_DTYPE_F16F64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_f64.spv"));
+const TO_DTYPE_BF16F16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_f16.spv"));
+const TO_DTYPE_BF16F32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_f32.spv"));
+const TO_DTYPE_BF16F64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_f64.spv"));
+const TO_DTYPE_F32F16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_f16.spv"));
+const TO_DTYPE_F32BF16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_bf16.spv"));
+const TO_DTYPE_F32F64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_f64.spv"));
+const TO_DTYPE_F64F16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_f16.spv"));
+const TO_DTYPE_F64BF16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_bf16.spv"));
+const TO_DTYPE_F64F32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_f32.spv"));
 
 /// The set of compiled compute shaders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -163,6 +187,18 @@ pub enum Source {
     TestFillF6e3m2,
     TestFillF8e4m3,
     TestFillF8e8m0,
+    ToDtypeF16F32,
+    ToDtypeF16Bf16,
+    ToDtypeF16F64,
+    ToDtypeBf16F16,
+    ToDtypeBf16F32,
+    ToDtypeBf16F64,
+    ToDtypeF32F16,
+    ToDtypeF32Bf16,
+    ToDtypeF32F64,
+    ToDtypeF64F16,
+    ToDtypeF64Bf16,
+    ToDtypeF64F32,
 }
 
 impl Source {
@@ -482,6 +518,18 @@ impl Source {
             | KernelName::TestFillF8e4m3
             | KernelName::TestFillF8e8m0
             | KernelName::TestFillF64 => 0,
+            KernelName::ToDtypeF16F32
+            | KernelName::ToDtypeF16Bf16
+            | KernelName::ToDtypeF16F64
+            | KernelName::ToDtypeBf16F16
+            | KernelName::ToDtypeBf16F32
+            | KernelName::ToDtypeBf16F64
+            | KernelName::ToDtypeF32F16
+            | KernelName::ToDtypeF32Bf16
+            | KernelName::ToDtypeF32F64
+            | KernelName::ToDtypeF64F16
+            | KernelName::ToDtypeF64Bf16
+            | KernelName::ToDtypeF64F32 => 0,
         }
     }
 
@@ -563,6 +611,18 @@ impl Source {
             Self::TestFillF6e3m2 => TEST_FILL_F6E3M2_SPV,
             Self::TestFillF8e4m3 => TEST_FILL_F8E4M3_SPV,
             Self::TestFillF8e8m0 => TEST_FILL_F8E8M0_SPV,
+            Self::ToDtypeF16F32 => TO_DTYPE_F16F32_SPV,
+            Self::ToDtypeF16Bf16 => TO_DTYPE_F16BF16_SPV,
+            Self::ToDtypeF16F64 => TO_DTYPE_F16F64_SPV,
+            Self::ToDtypeBf16F16 => TO_DTYPE_BF16F16_SPV,
+            Self::ToDtypeBf16F32 => TO_DTYPE_BF16F32_SPV,
+            Self::ToDtypeBf16F64 => TO_DTYPE_BF16F64_SPV,
+            Self::ToDtypeF32F16 => TO_DTYPE_F32F16_SPV,
+            Self::ToDtypeF32Bf16 => TO_DTYPE_F32BF16_SPV,
+            Self::ToDtypeF32F64 => TO_DTYPE_F32F64_SPV,
+            Self::ToDtypeF64F16 => TO_DTYPE_F64F16_SPV,
+            Self::ToDtypeF64Bf16 => TO_DTYPE_F64BF16_SPV,
+            Self::ToDtypeF64F32 => TO_DTYPE_F64F32_SPV,
         };
         bytes
             .chunks_exact(4)
@@ -649,6 +709,18 @@ impl AsRef<str> for Source {
             Self::TestFillF6e3m2 => "test_fill_f6e3m2",
             Self::TestFillF8e4m3 => "test_fill_f8e4m3",
             Self::TestFillF8e8m0 => "test_fill_f8e8m0",
+            Self::ToDtypeF16F32 => "to_dtype_f16_f32",
+            Self::ToDtypeF16Bf16 => "to_dtype_f16_bf16",
+            Self::ToDtypeF16F64 => "to_dtype_f16_f64",
+            Self::ToDtypeBf16F16 => "to_dtype_bf16_f16",
+            Self::ToDtypeBf16F32 => "to_dtype_bf16_f32",
+            Self::ToDtypeBf16F64 => "to_dtype_bf16_f64",
+            Self::ToDtypeF32F16 => "to_dtype_f32_f16",
+            Self::ToDtypeF32Bf16 => "to_dtype_f32_bf16",
+            Self::ToDtypeF32F64 => "to_dtype_f32_f64",
+            Self::ToDtypeF64F16 => "to_dtype_f64_f16",
+            Self::ToDtypeF64Bf16 => "to_dtype_f64_bf16",
+            Self::ToDtypeF64F32 => "to_dtype_f64_f32",
         }
     }
 }

@@ -29,6 +29,7 @@ pub mod upsample_slang;
 pub mod conv_slang;
 pub mod scatter_slang;
 pub mod unary_slang;
+pub mod to_dtype_slang;
 
 pub use affine::call_affine_slang;
 pub use const_set::call_const_set_f32;
@@ -58,3 +59,4 @@ pub use upsample_slang::call_upsample_slang;
 pub use conv_slang::call_conv_slang;
 pub use scatter_slang::call_scatter_slang;
 pub use unary_slang::call_unary_slang;
+pub use to_dtype_slang::call_to_dtype_slang;

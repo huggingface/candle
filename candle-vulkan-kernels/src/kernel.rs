@@ -334,6 +334,18 @@ pub enum KernelName {
     TestFillF6e3m2,
     TestFillF8e4m3,
     TestFillF8e8m0,
+    ToDtypeF16F32,
+    ToDtypeF16Bf16,
+    ToDtypeF16F64,
+    ToDtypeBf16F16,
+    ToDtypeBf16F32,
+    ToDtypeBf16F64,
+    ToDtypeF32F16,
+    ToDtypeF32Bf16,
+    ToDtypeF32F64,
+    ToDtypeF64F16,
+    ToDtypeF64Bf16,
+    ToDtypeF64F32,
 }
 
 impl AsRef<str> for KernelName {
@@ -650,6 +662,18 @@ impl AsRef<str> for KernelName {
             | Self::TestFillF8e4m3
             | Self::TestFillF8e8m0
             | Self::TestFillF64 => "main",
+            Self::ToDtypeF16F32 => "main",
+            Self::ToDtypeF16Bf16 => "main",
+            Self::ToDtypeF16F64 => "main",
+            Self::ToDtypeBf16F16 => "main",
+            Self::ToDtypeBf16F32 => "main",
+            Self::ToDtypeBf16F64 => "main",
+            Self::ToDtypeF32F16 => "main",
+            Self::ToDtypeF32Bf16 => "main",
+            Self::ToDtypeF32F64 => "main",
+            Self::ToDtypeF64F16 => "main",
+            Self::ToDtypeF64Bf16 => "main",
+            Self::ToDtypeF64F32 => "main",
         }
     }
 }
@@ -1110,6 +1134,18 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::TestFillF8e4m3
         | KernelName::TestFillF8e8m0
         | KernelName::TestFillF64 => 1,
+        KernelName::ToDtypeF16F32
+        | KernelName::ToDtypeF16Bf16
+        | KernelName::ToDtypeF16F64
+        | KernelName::ToDtypeBf16F16
+        | KernelName::ToDtypeBf16F32
+        | KernelName::ToDtypeBf16F64
+        | KernelName::ToDtypeF32F16
+        | KernelName::ToDtypeF32Bf16
+        | KernelName::ToDtypeF32F64
+        | KernelName::ToDtypeF64F16
+        | KernelName::ToDtypeF64Bf16
+        | KernelName::ToDtypeF64F32 => 3,
     }
 }
 

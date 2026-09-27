@@ -9,8 +9,6 @@ use vulkano::sync::GpuFuture;
 
 pub use crate::vulkan_backend::device::{VBuf, VulkanDevice};
 
-use half::{bf16, f16};
-
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
@@ -1291,6 +1289,40 @@ impl VulkanStorage {
         }
         Ok(())
     }
+    fn dispatch_to_dtype<S: Send + Sync + 'static, D: Send + Sync + 'static>(
+        &self,
+        input: &Subbuffer<[S]>,
+        output: &Subbuffer<[D]>,
+        source: candle_vulkan_kernels::Source,
+        name: candle_vulkan_kernels::KernelName,
+        len: usize,
+    ) -> Result<()> {
+        let params_vec = vec![len as f32, 0.0f32];
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            params_vec,
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[f32]> = params_buf;
+        let kernels = self.device.kernels();
+        let (input, output, params, len) = (input.clone(), output.clone(), params.clone(), len);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_to_dtype_slang::<S, D>(
+                cbb, &kernels, source, name, &input, &output, &params, len,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(())
+    }
 }
 
 impl BackendStorage for VulkanStorage {
@@ -2553,7 +2585,10 @@ impl BackendStorage for VulkanStorage {
         Ok(out)
     }
 
+    /// Dispatch a `to_dtype` GPU kernel converting `input` (type `S`) to
+    /// `output` (type `D`) for `len` elements starting at `start`.
     fn to_dtype(&self, l: &Layout, dtype: DType) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
         let (start, len) = match l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
             _ => {
@@ -2564,74 +2599,228 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        // Host-side conversion: drain the queue, convert the contiguous
-        // block with the same `half`-crate casts as the CPU backend,
-        // upload the result.
-        let src = self.to_cpu_storage()?;
-        let converted = match (&src, dtype) {
-            (CpuStorage::F32(d), DType::F16) => CpuStorage::F16(
-                d[start..start + len]
-                    .iter()
-                    .map(|v| f16::from_f32(*v))
-                    .collect(),
-            ),
-            (CpuStorage::F16(d), DType::F32) => CpuStorage::F32(
-                d[start..start + len]
-                    .iter()
-                    .map(|v| f16::to_f32(*v))
-                    .collect(),
-            ),
-            (CpuStorage::F32(d), DType::BF16) => CpuStorage::BF16(
-                d[start..start + len]
-                    .iter()
-                    .map(|v| bf16::from_f32(*v))
-                    .collect(),
-            ),
-            (CpuStorage::BF16(d), DType::F32) => CpuStorage::F32(
-                d[start..start + len]
-                    .iter()
-                    .map(|v| bf16::to_f32(*v))
-                    .collect(),
-            ),
-            (CpuStorage::F16(d), DType::BF16) => CpuStorage::BF16(
-                d[start..start + len]
-                    .iter()
-                    .map(|v| bf16::from_f32(f16::to_f32(*v)))
-                    .collect(),
-            ),
-            (CpuStorage::BF16(d), DType::F16) => CpuStorage::F16(
-                d[start..start + len]
-                    .iter()
-                    .map(|v| f16::from_f32(bf16::to_f32(*v)))
-                    .collect(),
-            ),
-            (CpuStorage::F32(d), DType::F64) => {
-                CpuStorage::F64(d[start..start + len].iter().map(|v| *v as f64).collect())
+        if len == 0 {
+            return self.device.zeros_impl(l.shape(), dtype);
+        }
+        let out = self.device.zeros_impl(l.shape(), dtype)?;
+        let start = start as u64;
+        let end = start + len as u64;
+        match (self.dtype, dtype) {
+            (DType::F16, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16F32,
+                    KernelName::ToDtypeF16F32,
+                    len,
+                )?;
             }
-            (CpuStorage::F64(d), DType::F32) => {
-                CpuStorage::F32(d[start..start + len].iter().map(|v| *v as f32).collect())
+            (DType::F16, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16Bf16,
+                    KernelName::ToDtypeF16Bf16,
+                    len,
+                )?;
             }
-            (CpuStorage::F64(d), DType::F16) => CpuStorage::F16(
-                d[start..start + len]
-                    .iter()
-                    .map(|v| f16::from_f32(*v as f32))
-                    .collect(),
-            ),
-            (CpuStorage::F16(d), DType::F64) => CpuStorage::F64(
-                d[start..start + len]
-                    .iter()
-                    .map(|v| f16::to_f32(*v) as f64)
-                    .collect(),
-            ),
+            (DType::F16, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16F64,
+                    KernelName::ToDtypeF16F64,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16F16,
+                    KernelName::ToDtypeBf16F16,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16F32,
+                    KernelName::ToDtypeBf16F32,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16F64,
+                    KernelName::ToDtypeBf16F64,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32F16,
+                    KernelName::ToDtypeF32F16,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32Bf16,
+                    KernelName::ToDtypeF32Bf16,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32F64,
+                    KernelName::ToDtypeF32F64,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64F16,
+                    KernelName::ToDtypeF64F16,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64Bf16,
+                    KernelName::ToDtypeF64Bf16,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => unreachable!("dtype checked above"),
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => unreachable!(),
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64F32,
+                    KernelName::ToDtypeF64F32,
+                    len,
+                )?;
+            }
             _ => {
-                let msg = format!(
-                    "to_dtype: {:?} -> {:?} not supported on the Vulkan backend",
-                    self.dtype, dtype
-                );
-                return Err(Error::Vulkan(msg.into()));
+                return Err(Error::Vulkan(
+                    format!(
+                        "to_dtype: {:?} -> {:?} not supported on the Vulkan backend",
+                        self.dtype, dtype
+                    )
+                    .into(),
+                ))
             }
-        };
-        self.device.storage_from_cpu_storage(&converted)
+        }
+        Ok(out)
     }
 
     fn unary_impl<B: UnaryOpT>(&self, l: &Layout) -> Result<Self> {
