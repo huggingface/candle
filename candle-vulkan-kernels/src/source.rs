@@ -283,6 +283,42 @@ const TO_DTYPE_F64F32_SPV: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f64_i64.spv"));
     static INDEX_ADD_F64U8_SPV: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f64_u8.spv"));
+    static DEQUANT_F32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_f32.spv"));
+    static DEQUANT_F16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_f16.spv"));
+    static DEQUANT_BF16_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_bf16.spv"));
+    static DEQUANT_Q4_0_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q4_0.spv"));
+    static DEQUANT_Q4_1_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q4_1.spv"));
+    static DEQUANT_Q5_0_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q5_0.spv"));
+    static DEQUANT_Q5_1_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q5_1.spv"));
+    static DEQUANT_Q8_0_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q8_0.spv"));
+    static DEQUANT_Q8_1_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q8_1.spv"));
+    static DEQUANT_Q2K_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q2k.spv"));
+    static DEQUANT_Q3K_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q3k.spv"));
+    static DEQUANT_Q4K_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q4k.spv"));
+    static DEQUANT_Q5K_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q5k.spv"));
+    static DEQUANT_Q6K_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q6k.spv"));
+    static DEQUANT_Q8K_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q8k.spv"));
+    static RMS_NORM_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/rms_norm.spv"));
+    static SOFTMAX_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/softmax.spv"));
+    static ROPE_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/rope.spv"));
 
 /// The set of compiled compute shaders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -461,6 +497,24 @@ pub enum Source {
     IndexAddF64U32,
     IndexAddF64I64,
     IndexAddF64U8,
+    DequantF32,
+    DequantF16,
+    DequantBf16,
+    DequantQ40,
+    DequantQ41,
+    DequantQ50,
+    DequantQ51,
+    DequantQ80,
+    DequantQ81,
+    DequantQ2K,
+    DequantQ3K,
+    DequantQ4K,
+    DequantQ5K,
+    DequantQ6K,
+    DequantQ8K,
+    RmsNorm,
+    Softmax,
+    Rope,
 }
 
 impl Source {
@@ -879,6 +933,24 @@ impl Source {
             | KernelName::IndexAddF64U32
             | KernelName::IndexAddF64I64
             | KernelName::IndexAddF64U8
+            | KernelName::DequantF32
+            | KernelName::DequantF16
+            | KernelName::DequantBf16
+            | KernelName::DequantQ40
+            | KernelName::DequantQ41
+            | KernelName::DequantQ50
+            | KernelName::DequantQ51
+            | KernelName::DequantQ80
+            | KernelName::DequantQ81
+            | KernelName::DequantQ2K
+            | KernelName::DequantQ3K
+            | KernelName::DequantQ4K
+            | KernelName::DequantQ5K
+            | KernelName::DequantQ6K
+            | KernelName::DequantQ8K
+            | KernelName::RmsNorm
+            | KernelName::Softmax
+            | KernelName::Rope
             => 0,
         }
     }
@@ -1060,6 +1132,24 @@ impl Source {
             Self::IndexAddF64U32 => INDEX_ADD_F64U32_SPV,
             Self::IndexAddF64I64 => INDEX_ADD_F64I64_SPV,
             Self::IndexAddF64U8 => INDEX_ADD_F64U8_SPV,
+            Self::DequantF32 => DEQUANT_F32_SPV,
+            Self::DequantF16 => DEQUANT_F16_SPV,
+            Self::DequantBf16 => DEQUANT_BF16_SPV,
+            Self::DequantQ40 => DEQUANT_Q4_0_SPV,
+            Self::DequantQ41 => DEQUANT_Q4_1_SPV,
+            Self::DequantQ50 => DEQUANT_Q5_0_SPV,
+            Self::DequantQ51 => DEQUANT_Q5_1_SPV,
+            Self::DequantQ80 => DEQUANT_Q8_0_SPV,
+            Self::DequantQ81 => DEQUANT_Q8_1_SPV,
+            Self::DequantQ2K => DEQUANT_Q2K_SPV,
+            Self::DequantQ3K => DEQUANT_Q3K_SPV,
+            Self::DequantQ4K => DEQUANT_Q4K_SPV,
+            Self::DequantQ5K => DEQUANT_Q5K_SPV,
+            Self::DequantQ6K => DEQUANT_Q6K_SPV,
+            Self::DequantQ8K => DEQUANT_Q8K_SPV,
+            Self::RmsNorm => RMS_NORM_SPV,
+            Self::Softmax => SOFTMAX_SPV,
+            Self::Rope => ROPE_SPV,
         };
         bytes
             .chunks_exact(4)
@@ -1245,6 +1335,24 @@ impl AsRef<str> for Source {
             Self::IndexAddF64U32 => "index_add_f64_u32",
             Self::IndexAddF64I64 => "index_add_f64_i64",
             Self::IndexAddF64U8 => "index_add_f64_u8",
+            Self::DequantF32 => "dequant_f32",
+            Self::DequantF16 => "dequant_f16",
+            Self::DequantBf16 => "dequant_bf16",
+            Self::DequantQ40 => "dequant_q4_0",
+            Self::DequantQ41 => "dequant_q4_1",
+            Self::DequantQ50 => "dequant_q5_0",
+            Self::DequantQ51 => "dequant_q5_1",
+            Self::DequantQ80 => "dequant_q8_0",
+            Self::DequantQ81 => "dequant_q8_1",
+            Self::DequantQ2K => "dequant_q2k",
+            Self::DequantQ3K => "dequant_q3k",
+            Self::DequantQ4K => "dequant_q4k",
+            Self::DequantQ5K => "dequant_q5k",
+            Self::DequantQ6K => "dequant_q6k",
+            Self::DequantQ8K => "dequant_q8k",
+            Self::RmsNorm => "rms_norm",
+            Self::Softmax => "softmax",
+            Self::Rope => "rope",
         }
     }
 }

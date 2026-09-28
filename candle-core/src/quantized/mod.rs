@@ -89,7 +89,7 @@ impl Device {
             }
             Device::Vulkan(v) => {
                 let storage = vulkan::QVulkanStorage::zeros(v, elem_count, dtype)?;
-                Ok(QStorage::Vulkan(storage))
+                Ok(QStorage::Vulkan(Box::new(storage)))
             }
             Device::Cuda(cuda) => {
                 let storage = cuda::QCudaStorage::zeros(cuda, elem_count, dtype)?;
@@ -102,7 +102,7 @@ impl Device {
 pub enum QStorage {
     Cpu(Box<dyn QuantizedType>),
     Metal(metal::QMetalStorage),
-    Vulkan(vulkan::QVulkanStorage),
+    Vulkan(Box<vulkan::QVulkanStorage>),
     Cuda(cuda::QCudaStorage),
 }
 
@@ -128,22 +128,22 @@ impl QStorage {
                 GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
             },
-            Device::Vulkan(_) => match dtype {
-                GgmlDType::F32 => todo!(),
-                GgmlDType::F16 => todo!(),
-                GgmlDType::BF16 => todo!(),
-                GgmlDType::Q4_0 => todo!(),
-                GgmlDType::Q4_1 => todo!(),
-                GgmlDType::Q5_0 => todo!(),
-                GgmlDType::Q5_1 => todo!(),
-                GgmlDType::Q8_0 => todo!(),
-                GgmlDType::Q8_1 => todo!(),
-                GgmlDType::Q2K => todo!(),
-                GgmlDType::Q3K => todo!(),
-                GgmlDType::Q4K => todo!(),
-                GgmlDType::Q5K => todo!(),
-                GgmlDType::Q6K => todo!(),
-                GgmlDType::Q8K => todo!(),
+            Device::Vulkan(v) => match dtype {
+                GgmlDType::F32 => vulkan::load_quantized(v, as_t_slice::<f32>(data)),
+                GgmlDType::F16 => vulkan::load_quantized(v, as_t_slice::<f16>(data)),
+                GgmlDType::BF16 => vulkan::load_quantized(v, as_t_slice::<bf16>(data)),
+                GgmlDType::Q4_0 => vulkan::load_quantized(v, as_t_slice::<BlockQ4_0>(data)),
+                GgmlDType::Q4_1 => vulkan::load_quantized(v, as_t_slice::<BlockQ4_1>(data)),
+                GgmlDType::Q5_0 => vulkan::load_quantized(v, as_t_slice::<BlockQ5_0>(data)),
+                GgmlDType::Q5_1 => vulkan::load_quantized(v, as_t_slice::<BlockQ5_1>(data)),
+                GgmlDType::Q8_0 => vulkan::load_quantized(v, as_t_slice::<BlockQ8_0>(data)),
+                GgmlDType::Q8_1 => vulkan::load_quantized(v, as_t_slice::<BlockQ8_1>(data)),
+                GgmlDType::Q2K => vulkan::load_quantized(v, as_t_slice::<BlockQ2K>(data)),
+                GgmlDType::Q3K => vulkan::load_quantized(v, as_t_slice::<BlockQ3K>(data)),
+                GgmlDType::Q4K => vulkan::load_quantized(v, as_t_slice::<BlockQ4K>(data)),
+                GgmlDType::Q5K => vulkan::load_quantized(v, as_t_slice::<BlockQ5K>(data)),
+                GgmlDType::Q6K => vulkan::load_quantized(v, as_t_slice::<BlockQ6K>(data)),
+                GgmlDType::Q8K => vulkan::load_quantized(v, as_t_slice::<BlockQ8K>(data)),
             },
             Device::Cuda(d) => match dtype {
                 GgmlDType::F32 => cuda::load_quantized(d, as_t_slice::<f32>(data)),

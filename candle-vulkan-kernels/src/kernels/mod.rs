@@ -31,6 +31,10 @@ pub mod scatter_slang;
 pub mod unary_slang;
 pub mod to_dtype_slang;
 pub mod index_add_slang;
+pub mod dequant_slang;
+pub mod rms_norm_slang;
+pub mod softmax_slang;
+pub mod rope_slang;
 
 pub use affine::call_affine_slang;
 pub use const_set::call_const_set_f32;
@@ -62,3 +66,7 @@ pub use scatter_slang::call_scatter_slang;
 pub use unary_slang::call_unary_slang;
 pub use to_dtype_slang::call_to_dtype_slang;
 pub use index_add_slang::call_index_add_slang;
+pub use dequant_slang::call_dequantize_slang;
+pub use rms_norm_slang::call_rms_norm_slang;
+pub use softmax_slang::call_softmax_slang;
+pub use rope_slang::call_rope_slang;

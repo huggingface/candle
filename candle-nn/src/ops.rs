@@ -292,10 +292,11 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     #[cfg(feature = "vulkan")]
     fn vulkan_fwd(
         &self,
-        _storage: &candle::VulkanStorage,
-        _layout: &Layout,
+        storage: &candle::VulkanStorage,
+        layout: &Layout,
     ) -> Result<(candle::VulkanStorage, Shape)> {
-        todo!()
+        let out = storage.softmax_last_dim(layout)?;
+        Ok((out, layout.shape().clone()))
     }
 
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
@@ -460,12 +461,13 @@ impl candle::CustomOp2 for RmsNorm {
     #[cfg(feature = "vulkan")]
     fn vulkan_fwd(
         &self,
-        _s1: &candle::VulkanStorage,
-        _l1: &Layout,
-        _s2: &candle::VulkanStorage,
-        _l2: &Layout,
+        s1: &candle::VulkanStorage,
+        l1: &Layout,
+        s2: &candle::VulkanStorage,
+        l2: &Layout,
     ) -> Result<(candle::VulkanStorage, Shape)> {
-        todo!()
+        let out = s1.rms_norm(l1, s2, l2, self.eps as f64)?;
+        Ok((out, l1.shape().clone()))
     }
 
     fn cpu_fwd(

@@ -4891,3 +4891,427 @@ fn test_vulkan_try_clone() {
 
     tracing::debug!("Vulkan device {gpu_id} try_clone OK");
 }
+
+/// Dequantize test: for each `GgmlDType`, quantize a deterministic f32 tensor
+/// on the CPU, dequantize on the CPU (the reference), then load the same raw
+/// quantized bytes onto the Vulkan device and dequantize there. The two
+/// dequantizations must agree. This validates all 15 Slang dequantize kernels.
+#[test]
+fn test_vulkan_dequantize_all_dtypes() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let vk_dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu_dev = candle_core::Device::Cpu;
+    let dtypes: [candle_core::quantized::GgmlDType; 15] = [
+        candle_core::quantized::GgmlDType::F32,
+        candle_core::quantized::GgmlDType::F16,
+        candle_core::quantized::GgmlDType::BF16,
+        candle_core::quantized::GgmlDType::Q4_0,
+        candle_core::quantized::GgmlDType::Q4_1,
+        candle_core::quantized::GgmlDType::Q5_0,
+        candle_core::quantized::GgmlDType::Q5_1,
+        candle_core::quantized::GgmlDType::Q8_0,
+        candle_core::quantized::GgmlDType::Q8_1,
+        candle_core::quantized::GgmlDType::Q2K,
+        candle_core::quantized::GgmlDType::Q3K,
+        candle_core::quantized::GgmlDType::Q4K,
+        candle_core::quantized::GgmlDType::Q5K,
+        candle_core::quantized::GgmlDType::Q6K,
+        candle_core::quantized::GgmlDType::Q8K,
+    ];
+    for dtype in dtypes {
+        let tol = match dtype {
+            candle_core::quantized::GgmlDType::F32
+            | candle_core::quantized::GgmlDType::F16
+            | candle_core::quantized::GgmlDType::BF16 => 0.0,
+            _ => 1e-3,
+        };
+        let block = dtype.block_size();
+        let n_blocks = 4usize;
+        let elem_count = n_blocks * block;
+        let base: Vec<f32> = (0..elem_count).map(|i| (i as f32) * 0.13 - 3.0).collect();
+        let src = candle_core::Tensor::new(base.as_slice(), &cpu_dev).unwrap();
+        let cpu_q = candle_core::quantized::QTensor::quantize(&src, dtype).unwrap();
+        let ref_vals: Vec<f32> = cpu_q
+            .dequantize(&cpu_dev)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let bytes = cpu_q.data().unwrap();
+        let vk_storage =
+            candle_core::quantized::QStorage::from_data(bytes, &vk_dev, dtype).unwrap();
+        let vk_q = candle_core::quantized::QTensor::new(vk_storage, elem_count).unwrap();
+        let vk_vals: Vec<f32> = vk_q
+            .dequantize(&vk_dev)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        assert_eq!(vk_vals.len(), ref_vals.len(), "{dtype:?} length mismatch");
+        let max_diff = vk_vals
+            .iter()
+            .zip(ref_vals.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_diff <= tol,
+            "{dtype:?}: Vulkan dequantize max diff {max_diff} exceeds tolerance {tol}"
+        );
+        tracing::debug!("Vulkan device {gpu_id} dequantize {dtype:?} OK (max_diff={max_diff})");
+    }
+}
+
+/// Quantized matmul (fwd) test: for each `GgmlDType`, quantize a `(n, k)`
+/// weight matrix on the CPU, run the quantized matmul `x @ w^T` on Vulkan, and
+/// compare against the CPU reference computed with the dequantized weights.
+/// This validates `QVulkanStorage::fwd` for all 15 dtypes.
+#[test]
+fn test_vulkan_quantized_matmul() {
+    use candle_core::Module;
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let vk_dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu_dev = candle_core::Device::Cpu;
+    let dtypes: [candle_core::quantized::GgmlDType; 15] = [
+        candle_core::quantized::GgmlDType::F32,
+        candle_core::quantized::GgmlDType::F16,
+        candle_core::quantized::GgmlDType::BF16,
+        candle_core::quantized::GgmlDType::Q4_0,
+        candle_core::quantized::GgmlDType::Q4_1,
+        candle_core::quantized::GgmlDType::Q5_0,
+        candle_core::quantized::GgmlDType::Q5_1,
+        candle_core::quantized::GgmlDType::Q8_0,
+        candle_core::quantized::GgmlDType::Q8_1,
+        candle_core::quantized::GgmlDType::Q2K,
+        candle_core::quantized::GgmlDType::Q3K,
+        candle_core::quantized::GgmlDType::Q4K,
+        candle_core::quantized::GgmlDType::Q5K,
+        candle_core::quantized::GgmlDType::Q6K,
+        candle_core::quantized::GgmlDType::Q8K,
+    ];
+    let k = 256usize;
+    let n = 64usize;
+    let m = 4usize;
+    for dtype in dtypes {
+        let w_vals: Vec<f32> = (0..n * k).map(|i| (i as f32) * 0.11 - 2.0).collect();
+        let w_cpu = candle_core::Tensor::new(w_vals.as_slice(), &cpu_dev)
+            .unwrap()
+            .reshape((n, k))
+            .unwrap();
+        let x_vals: Vec<f32> = (0..m * k).map(|i| (i as f32) * 0.17 - 1.0).collect();
+        let x_cpu = candle_core::Tensor::new(x_vals.as_slice(), &cpu_dev)
+            .unwrap()
+            .reshape((m, k))
+            .unwrap();
+        let w_q_cpu = candle_core::quantized::QTensor::quantize(&w_cpu, dtype).unwrap();
+        let w_deq_cpu = w_q_cpu.dequantize(&cpu_dev).unwrap();
+        let ref_t = x_cpu.matmul(&w_deq_cpu.t().unwrap()).unwrap();
+        let ref_vals: Vec<f32> = ref_t.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let bytes = w_q_cpu.data().unwrap();
+        let w_q_storage =
+            candle_core::quantized::QStorage::from_data(bytes, &vk_dev, dtype).unwrap();
+        let w_q_vk = candle_core::quantized::QTensor::new(w_q_storage, (n, k)).unwrap();
+        let qm = candle_core::quantized::QMatMul::from_qtensor(w_q_vk).unwrap();
+        let x_vk = candle_core::Tensor::new(x_vals.as_slice(), &vk_dev)
+            .unwrap()
+            .reshape((m, k))
+            .unwrap();
+        let out = qm.forward(&x_vk).unwrap();
+        let out_vals: Vec<f32> = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(
+            out_vals.len(),
+            ref_vals.len(),
+            "{dtype:?} matmul length mismatch"
+        );
+        let max_err = out_vals
+            .iter()
+            .zip(ref_vals.iter())
+            .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_err <= 1e-3,
+            "{dtype:?}: Vulkan quantized matmul max_err {max_err} exceeds 1e-3"
+        );
+        tracing::debug!("Vulkan device {gpu_id} quantized matmul {dtype:?} OK (max_err={max_err})");
+    }
+}
+
+/// Quantized embedding test: for each `GgmlDType`, quantize a `(rows, hidden)`
+/// weight matrix on the CPU, gather rows on Vulkan via `QMatMul::embedding`,
+/// and compare against the CPU reference (dequantized weights, index_select).
+/// This validates `QVulkanStorage::embedding` for all 15 dtypes.
+#[test]
+fn test_vulkan_quantized_embedding() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let vk_dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu_dev = candle_core::Device::Cpu;
+    let dtypes: [candle_core::quantized::GgmlDType; 15] = [
+        candle_core::quantized::GgmlDType::F32,
+        candle_core::quantized::GgmlDType::F16,
+        candle_core::quantized::GgmlDType::BF16,
+        candle_core::quantized::GgmlDType::Q4_0,
+        candle_core::quantized::GgmlDType::Q4_1,
+        candle_core::quantized::GgmlDType::Q5_0,
+        candle_core::quantized::GgmlDType::Q5_1,
+        candle_core::quantized::GgmlDType::Q8_0,
+        candle_core::quantized::GgmlDType::Q8_1,
+        candle_core::quantized::GgmlDType::Q2K,
+        candle_core::quantized::GgmlDType::Q3K,
+        candle_core::quantized::GgmlDType::Q4K,
+        candle_core::quantized::GgmlDType::Q5K,
+        candle_core::quantized::GgmlDType::Q6K,
+        candle_core::quantized::GgmlDType::Q8K,
+    ];
+    let rows = 16usize;
+    let hidden = 256usize;
+    let ids = [5u32, 11, 2, 15];
+    for dtype in dtypes {
+        let w_vals: Vec<f32> = (0..rows * hidden)
+            .map(|i| (i as f32) * 0.07 - 2.0)
+            .collect();
+        let w_cpu = candle_core::Tensor::new(w_vals.as_slice(), &cpu_dev)
+            .unwrap()
+            .reshape((rows, hidden))
+            .unwrap();
+        let w_q_cpu = candle_core::quantized::QTensor::quantize(&w_cpu, dtype).unwrap();
+        let w_deq_cpu = w_q_cpu.dequantize(&cpu_dev).unwrap();
+        let ids_cpu = candle_core::Tensor::new(&ids, &cpu_dev).unwrap();
+        let ref_t = w_deq_cpu.index_select(&ids_cpu, 0).unwrap();
+        let ref_vals: Vec<f32> = ref_t.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let bytes = w_q_cpu.data().unwrap();
+        let w_q_storage =
+            candle_core::quantized::QStorage::from_data(bytes, &vk_dev, dtype).unwrap();
+        let w_q_vk = candle_core::quantized::QTensor::new(w_q_storage, (rows, hidden)).unwrap();
+        let qm = candle_core::quantized::QMatMul::from_qtensor(w_q_vk).unwrap();
+        let ids_vk = candle_core::Tensor::new(&ids, &vk_dev).unwrap();
+        let out = qm.embedding(&ids_vk).unwrap();
+        let out_vals: Vec<f32> = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(
+            out_vals.len(),
+            ref_vals.len(),
+            "{dtype:?} embedding length mismatch"
+        );
+        let max_err = out_vals
+            .iter()
+            .zip(ref_vals.iter())
+            .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_err <= 1e-5,
+            "{dtype:?}: Vulkan quantized embedding max_err {max_err} exceeds 1e-5"
+        );
+        tracing::debug!(
+            "Vulkan device {gpu_id} quantized embedding {dtype:?} OK (max_err={max_err})"
+        );
+    }
+}
+
+#[test]
+fn test_vulkan_rms_norm() {
+    use candle_core::backend::BackendDevice;
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let n_rows = 5usize;
+    let n = 64usize;
+    let eps: f64 = 1e-6;
+    let x_vals: Vec<f32> = (0..n_rows * n)
+        .map(|i| ((i % 7) as f32) * 0.3 - 1.0)
+        .collect();
+    let alpha_vals: Vec<f32> = (0..n).map(|i| 1.0 + ((i % 5) as f32) * 0.2).collect();
+    // CPU reference
+    let mut ref_t = vec![0.0f32; n_rows * n];
+    for i in 0..n_rows {
+        let base = i * n;
+        let sum2: f32 = (0..n).map(|j| x_vals[base + j] * x_vals[base + j]).sum();
+        let m = (sum2 / n as f32 + eps as f32).sqrt();
+        for j in 0..n {
+            ref_t[base + j] = x_vals[base + j] / m * alpha_vals[j];
+        }
+    }
+    for dtype in [candle_core::DType::F32, candle_core::DType::F16] {
+        let shape = (n_rows, n);
+        let in_storage = match dtype {
+            candle_core::DType::F32 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F32(x_vals.clone()))
+                .unwrap(),
+            _ => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F16(
+                    x_vals.iter().map(|v| half::f16::from_f32(*v)).collect(),
+                ))
+                .unwrap(),
+        };
+        let alpha_storage = match dtype {
+            candle_core::DType::F32 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F32(alpha_vals.clone()))
+                .unwrap(),
+            _ => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F16(
+                    alpha_vals.iter().map(|v| half::f16::from_f32(*v)).collect(),
+                ))
+                .unwrap(),
+        };
+        let in_l = candle_core::Layout::contiguous(shape);
+        let alpha_l = candle_core::Layout::contiguous(n);
+        let out = in_storage
+            .rms_norm(&in_l, &alpha_storage, &alpha_l, eps)
+            .unwrap();
+        assert_eq!(out.dtype(), dtype, "rms_norm output dtype mismatch");
+        let out_cpu = out.to_cpu_storage().unwrap();
+        let out_f32: Vec<f32> = match out_cpu {
+            candle_core::CpuStorage::F32(v) => v,
+            candle_core::CpuStorage::F16(v) => v.iter().map(|v| v.to_f32()).collect(),
+            _ => panic!("unexpected out dtype"),
+        };
+        assert_eq!(out_f32.len(), ref_t.len(), "rms_norm length mismatch");
+        let max_err = out_f32
+            .iter()
+            .zip(ref_t.iter())
+            .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_err <= 2e-3,
+            "{dtype:?}: rms_norm max_err {max_err} exceeds 2e-3"
+        );
+    }
+    tracing::debug!("Vulkan rms_norm OK for F32 + F16");
+}
+
+#[test]
+fn test_vulkan_softmax_last_dim() {
+    use candle_core::backend::BackendDevice;
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let n_rows = 4usize;
+    let n = 32usize;
+    let x_vals: Vec<f32> = (0..n_rows * n)
+        .map(|i| ((i % 11) as f32) * 0.4 - 2.0)
+        .collect();
+    // CPU reference (numerically-stable softmax per row)
+    let mut ref_t = vec![0.0f32; n_rows * n];
+    for i in 0..n_rows {
+        let base = i * n;
+        let mx = (0..n)
+            .map(|j| x_vals[base + j])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let exps: Vec<f32> = (0..n).map(|j| (x_vals[base + j] - mx).exp()).collect();
+        let sum: f32 = exps.iter().sum();
+        for j in 0..n {
+            ref_t[base + j] = exps[j] / sum;
+        }
+    }
+    for dtype in [candle_core::DType::F32, candle_core::DType::F16] {
+        let shape = (n_rows, n);
+        let in_storage = match dtype {
+            candle_core::DType::F32 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F32(x_vals.clone()))
+                .unwrap(),
+            _ => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F16(
+                    x_vals.iter().map(|v| half::f16::from_f32(*v)).collect(),
+                ))
+                .unwrap(),
+        };
+        let in_l = candle_core::Layout::contiguous(shape);
+        let out = in_storage.softmax_last_dim(&in_l).unwrap();
+        assert_eq!(out.dtype(), dtype, "softmax output dtype mismatch");
+        let out_cpu = out.to_cpu_storage().unwrap();
+        let out_f32: Vec<f32> = match out_cpu {
+            candle_core::CpuStorage::F32(v) => v,
+            candle_core::CpuStorage::F16(v) => v.iter().map(|v| v.to_f32()).collect(),
+            _ => panic!("unexpected out dtype"),
+        };
+        assert_eq!(out_f32.len(), ref_t.len(), "softmax length mismatch");
+        let max_err = out_f32
+            .iter()
+            .zip(ref_t.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_err <= 2e-3,
+            "{dtype:?}: softmax max_err {max_err} exceeds 2e-3"
+        );
+        // each row must sum to 1
+        for i in 0..n_rows {
+            let row_sum: f32 = (i * n..(i + 1) * n).map(|k| out_f32[k]).sum();
+            assert!(
+                (row_sum - 1.0).abs() <= 1e-3,
+                "{dtype:?}: softmax row {i} sum {row_sum} != 1"
+            );
+        }
+    }
+    tracing::debug!("Vulkan softmax_last_dim OK for F32 + F16");
+}
+
+#[test]
+fn test_vulkan_rotary_emb() {
+    use candle_core::backend::BackendDevice;
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let (b, h, t, d) = (1usize, 2usize, 4usize, 16usize);
+    let half_d = d / 2;
+    let src_vals: Vec<f32> = (0..b * h * t * d)
+        .map(|i| ((i % 9) as f32) * 0.25 - 1.0)
+        .collect();
+    let cos_vals: Vec<f32> = (0..t * half_d).map(|i| f32::cos(i as f32 * 0.3)).collect();
+    let sin_vals: Vec<f32> = (0..t * half_d).map(|i| f32::sin(i as f32 * 0.3)).collect();
+    // CPU reference (candle contiguous, non-interleaved, 2D cos/sin)
+    let mut ref_t = vec![0.0f32; b * h * t * d];
+    for bh_i in 0..b * h {
+        for i_t in 0..t {
+            for i_d in 0..half_d {
+                let i1 = bh_i * t * d + i_t * d + i_d;
+                let i2 = i1 + half_d;
+                let i_cs = i_t * half_d + i_d;
+                let s1 = src_vals[i1];
+                let s2 = src_vals[i2];
+                let c = cos_vals[i_cs];
+                let s = sin_vals[i_cs];
+                ref_t[i1] = s1 * c - s2 * s;
+                ref_t[i2] = s1 * s + s2 * c;
+            }
+        }
+    }
+    for dtype in [candle_core::DType::F32, candle_core::DType::F16] {
+        let to_storage = |vals: &Vec<f32>| match dtype {
+            candle_core::DType::F32 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F32(vals.clone()))
+                .unwrap(),
+            _ => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F16(
+                    vals.iter().map(|v| half::f16::from_f32(*v)).collect(),
+                ))
+                .unwrap(),
+        };
+        let src = to_storage(&src_vals);
+        let cos_s = to_storage(&cos_vals);
+        let sin_s = to_storage(&sin_vals);
+        let src_l = candle_core::Layout::contiguous((b, h, t, d));
+        let cos_l = candle_core::Layout::contiguous((t, half_d));
+        let out = src.rope(&src_l, &cos_s, &cos_l, &sin_s, &cos_l).unwrap();
+        assert_eq!(out.dtype(), dtype, "rope output dtype mismatch");
+        let out_cpu = out.to_cpu_storage().unwrap();
+        let out_f32: Vec<f32> = match out_cpu {
+            candle_core::CpuStorage::F32(v) => v,
+            candle_core::CpuStorage::F16(v) => v.iter().map(|v| v.to_f32()).collect(),
+            _ => panic!("unexpected out dtype"),
+        };
+        assert_eq!(out_f32.len(), ref_t.len(), "rope length mismatch");
+        let max_err = out_f32
+            .iter()
+            .zip(ref_t.iter())
+            .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_err <= 2e-3,
+            "{dtype:?}: rope max_err {max_err} exceeds 2e-3"
+        );
+    }
+    tracing::debug!("Vulkan rotary_emb OK for F32 + F16");
+}

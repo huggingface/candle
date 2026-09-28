@@ -319,14 +319,15 @@ impl candle::CustomOp3 for RotaryEmb {
     #[cfg(feature = "vulkan")]
     fn vulkan_fwd(
         &self,
-        _s1: &candle::VulkanStorage,
-        _l1: &Layout,
-        _s2: &candle::VulkanStorage,
-        _l2: &Layout,
-        _s3: &candle::VulkanStorage,
-        _l3: &Layout,
+        s1: &candle::VulkanStorage,
+        l1: &Layout,
+        s2: &candle::VulkanStorage,
+        l2: &Layout,
+        s3: &candle::VulkanStorage,
+        l3: &Layout,
     ) -> Result<(candle::VulkanStorage, Shape)> {
-        todo!()
+        let out = s1.rope(l1, s2, l2, s3, l3)?;
+        Ok((out, l1.shape().clone()))
     }
 
     fn cpu_fwd(

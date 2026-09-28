@@ -7685,3 +7685,238 @@ impl BackendStorage for VulkanStorage {
         Ok(())
     }
 }
+
+// ============================================================================
+// High-level ops (RMSNorm, softmax, rotary-embedding) for the Vulkan backend.
+// Operands are viewed as f32 (converted if needed), a dedicated Slang kernel
+// is dispatched, and the result is converted back to the original dtype.
+// ============================================================================
+impl VulkanStorage {
+    /// Return a contiguous f32 view of `s` (a no-op if `s` is already f32).
+    /// The returned `Option` keeps the conversion buffer alive when a
+    /// conversion was performed.
+    fn f32_view(
+        &self,
+        s: &VulkanStorage,
+        l: &Layout,
+    ) -> Result<(Subbuffer<[f32]>, Option<VulkanStorage>)> {
+        if s.dtype == DType::F32 {
+            let (start, len) = match l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+                _ => {
+                    return Err(Error::Vulkan(
+                        "vulkan op: non-contiguous layout not supported"
+                            .to_string()
+                            .into(),
+                    ))
+                }
+            };
+            let buf = match &s.buffer {
+                VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+                _ => unreachable!("dtype is F32"),
+            };
+            return Ok((buf, None));
+        }
+        let f32 = s.to_dtype(l, DType::F32)?;
+        let buf = match &f32.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!("converted to F32"),
+        };
+        Ok((buf, Some(f32)))
+    }
+
+    fn alloc_params(&self, params: Vec<f32>) -> Result<Subbuffer<[f32]>> {
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            params,
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        Ok(params_buf)
+    }
+
+    /// RMSNorm over the last dim: `out[i][j] = x[i][j] / m[i] * alpha[j]`
+    /// with `m[i] = sqrt(sum_j(x[i][j]^2) / n + eps)`.
+    pub fn rms_norm(
+        &self,
+        l: &Layout,
+        alpha: &VulkanStorage,
+        alpha_l: &Layout,
+        eps: f64,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() < 2 {
+            return Err(Error::Vulkan(
+                "rms_norm: needs >= 2 dims".to_string().into(),
+            ));
+        }
+        let n = *dims.last().unwrap();
+        let n_rows: usize = dims[..dims.len() - 1].iter().product();
+        if n_rows == 0 || n == 0 {
+            return self.device.zeros_impl(l.shape(), self.dtype);
+        }
+        if l.shape().elem_count() != n_rows * n {
+            return Err(Error::Vulkan(
+                "rms_norm: layout length mismatch".to_string().into(),
+            ));
+        }
+        let out_dtype = self.dtype;
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let (alpha_buf, keep_alpha) = self.f32_view(alpha, alpha_l)?;
+        let out = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        let params = self.alloc_params(vec![n_rows as f32, n as f32, eps as f32])?;
+        let kernels = self.device.kernels();
+        let (input, alpha_buf, out_buf, params) = (input, alpha_buf, out_buf, params.clone());
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_rms_norm_slang(
+                cbb,
+                &kernels,
+                Source::RmsNorm,
+                KernelName::RmsNorm,
+                &input,
+                &alpha_buf,
+                &out_buf,
+                &params,
+                n_rows,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_in, keep_alpha));
+        if out_dtype == DType::F32 {
+            return Ok(out);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out.to_dtype(&out_l, out_dtype)
+    }
+
+    /// Softmax over the last dim.
+    pub fn softmax_last_dim(&self, l: &Layout) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.is_empty() {
+            return Err(Error::Vulkan("softmax: needs >= 1 dim".to_string().into()));
+        }
+        let n = *dims.last().unwrap();
+        let n_rows: usize = dims[..dims.len() - 1].iter().product();
+        if n_rows == 0 || n == 0 {
+            return self.device.zeros_impl(l.shape(), self.dtype);
+        }
+        if l.shape().elem_count() != n_rows * n {
+            return Err(Error::Vulkan(
+                "softmax: layout length mismatch".to_string().into(),
+            ));
+        }
+        let out_dtype = self.dtype;
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let out = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        let params = self.alloc_params(vec![n_rows as f32, n as f32])?;
+        let kernels = self.device.kernels();
+        let (input, out_buf, params) = (input, out_buf, params.clone());
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_softmax_slang(
+                cbb,
+                &kernels,
+                Source::Softmax,
+                KernelName::Softmax,
+                &input,
+                &out_buf,
+                &params,
+                n_rows,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop(keep_in);
+        if out_dtype == DType::F32 {
+            return Ok(out);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out.to_dtype(&out_l, out_dtype)
+    }
+
+    /// Rotary embedding (contiguous, non-interleaved, 2D cos/sin).
+    /// `self` is `(b, h, t, d)`; `cos`/`sin` are `(t, d/2)`.
+    pub fn rope(
+        &self,
+        l: &Layout,
+        cos: &VulkanStorage,
+        cos_l: &Layout,
+        sin: &VulkanStorage,
+        sin_l: &Layout,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() != 4 {
+            return Err(Error::Vulkan(
+                "rope: needs 4 dims (b, h, t, d)".to_string().into(),
+            ));
+        }
+        let (b, h, t, d) = (dims[0], dims[1], dims[2], dims[3]);
+        let half = d / 2;
+        if half == 0 {
+            return Err(Error::Vulkan(
+                "rope: head dim must be >= 2".to_string().into(),
+            ));
+        }
+        let n_el = b * h * t * d;
+        if n_el == 0 {
+            return self.device.zeros_impl(l.shape(), self.dtype);
+        }
+        if l.shape().elem_count() != n_el {
+            return Err(Error::Vulkan(
+                "rope: layout length mismatch".to_string().into(),
+            ));
+        }
+        let out_dtype = self.dtype;
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let (cos_buf, keep_cos) = self.f32_view(cos, cos_l)?;
+        let (sin_buf, keep_sin) = self.f32_view(sin, sin_l)?;
+        let out = VulkanStorage::new(&self.device, n_el, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        let n_threads = b * h * t * half;
+        let params = self.alloc_params(vec![(b * h) as f32, t as f32, d as f32])?;
+        let kernels = self.device.kernels();
+        let (input, cos_buf, sin_buf, out_buf, params) =
+            (input, cos_buf, sin_buf, out_buf, params.clone());
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_rope_slang(
+                cbb,
+                &kernels,
+                Source::Rope,
+                KernelName::Rope,
+                &input,
+                &cos_buf,
+                &sin_buf,
+                &out_buf,
+                &params,
+                n_threads,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_in, keep_cos, keep_sin));
+        if out_dtype == DType::F32 {
+            return Ok(out);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out.to_dtype(&out_l, out_dtype)
+    }
+}
