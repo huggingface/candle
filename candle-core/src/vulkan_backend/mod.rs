@@ -306,7 +306,7 @@ impl BackendDevice for VulkanDevice {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum VulkanStorageBuffer {
     U8(Subbuffer<[u8]>),
     U32(Subbuffer<[u32]>),
@@ -353,7 +353,7 @@ impl VulkanStorageBuffer {
         }
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VulkanStorage {
     buffer: VulkanStorageBuffer,
     device: VulkanDevice,
@@ -6943,9 +6943,9 @@ impl BackendStorage for VulkanStorage {
         src_l: &Layout,
         dim: usize,
     ) -> Result<Self> {
-        // Host-side: needs float atomics for duplicate index positions, which
-        // are not part of the Vulkan core (SPV_EXT_shader_atomic_float_add is
-        // device-dependent). Drain, apply the CPU index-add semantics, upload.
+        // GPU path: atomic float add (VK_EXT_shader_atomic_float / _float2)
+        // handles duplicate index positions on the GPU. Host fallback when
+        // the device lacks the atomic extension.
         if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) || self.dtype != src.dtype {
             return Err(Error::Vulkan(
                 "index_add: unsupported dtype on the Vulkan backend"
@@ -6998,7 +6998,98 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         }
-        // Drain any deferred encodes before reading the buffer contents.
+        // GPU path: when the device supports atomic float add
+        // (VK_EXT_shader_atomic_float / _float2) and the index dtype is
+        // supported, accumulate in place on the GPU. Duplicate index
+        // positions are safe because the add is atomic.
+        if self.device.supports_atomic_fadd(self.dtype)
+            && matches!(ids.dtype, DType::U32 | DType::I64 | DType::U8)
+        {
+            let post = l.dims()[dim + 1..].iter().product::<usize>();
+            let nsrc = src_l.dims()[dim];
+            let max_idx = l.dims()[dim];
+            let params_vec = vec![src_len as f32, post as f32, nsrc as f32, max_idx as f32];
+            let params_buf = Buffer::from_iter(
+                self.device.mem_alloc(),
+                &BufferCreateInfo {
+                    usage: BufferUsage::STORAGE_BUFFER,
+                    ..Default::default()
+                },
+                &AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                        | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                    ..Default::default()
+                },
+                params_vec,
+            )
+            .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            let params_sub: Subbuffer<[f32]> = params_buf;
+            let kernels = self.device.kernels();
+            macro_rules! dispatch_index_add {
+                ($dst_variant:ident, $dst_ty:ty, $ids_variant:ident, $ids_ty:ty, $kern:ident) => {
+                    let dst_sub = match &self.buffer {
+                        VulkanStorageBuffer::$dst_variant(b) => b.clone(),
+                        _ => unreachable!("dtype checked above"),
+                    };
+                    let src_sub = match &src.buffer {
+                        VulkanStorageBuffer::$dst_variant(b) => b.clone(),
+                        _ => unreachable!("dtype checked above"),
+                    };
+                    let ids_sub = match &ids.buffer {
+                        VulkanStorageBuffer::$ids_variant(b) => b.clone(),
+                        _ => unreachable!("ids dtype checked above"),
+                    };
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_index_add_slang::<$dst_ty, $ids_ty>(
+                            cbb,
+                            &kernels,
+                            candle_vulkan_kernels::Source::$kern,
+                            candle_vulkan_kernels::KernelName::$kern,
+                            &dst_sub,
+                            &src_sub,
+                            &ids_sub,
+                            &params_sub,
+                            src_len,
+                        )
+                        .map_err(|e| e.to_string())
+                    })?;
+                };
+            }
+            match (self.dtype, ids.dtype) {
+                (DType::F32, DType::U32) => {
+                    dispatch_index_add!(F32, f32, U32, u32, IndexAddF32U32);
+                }
+                (DType::F32, DType::I64) => {
+                    dispatch_index_add!(F32, f32, I64, i64, IndexAddF32I64);
+                }
+                (DType::F32, DType::U8) => {
+                    dispatch_index_add!(F32, f32, U8, u8, IndexAddF32U8);
+                }
+                (DType::F16, DType::U32) => {
+                    dispatch_index_add!(F16, half::f16, U32, u32, IndexAddF16U32);
+                }
+                (DType::F16, DType::I64) => {
+                    dispatch_index_add!(F16, half::f16, I64, i64, IndexAddF16I64);
+                }
+                (DType::F16, DType::U8) => {
+                    dispatch_index_add!(F16, half::f16, U8, u8, IndexAddF16U8);
+                }
+                (DType::F64, DType::U32) => {
+                    dispatch_index_add!(F64, f64, U32, u32, IndexAddF64U32);
+                }
+                (DType::F64, DType::I64) => {
+                    dispatch_index_add!(F64, f64, I64, i64, IndexAddF64I64);
+                }
+                (DType::F64, DType::U8) => {
+                    dispatch_index_add!(F64, f64, U8, u8, IndexAddF64U8);
+                }
+                _ => unreachable!("dtype checked above"),
+            }
+            return Ok(self.clone());
+        }
+        // Host fallback: the device lacks atomic float add (or the index
+        // dtype is not supported by the GPU kernels). Drain, apply the CPU
+        // index-add semantics, upload.
         self.device.synchronize()?;
         let v1_cpu = match self.dtype {
             DType::F32 => {

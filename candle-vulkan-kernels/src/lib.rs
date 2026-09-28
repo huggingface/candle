@@ -13,6 +13,7 @@ pub use kernels::{
     call_test_fill_i16, call_test_fill_i32, call_test_fill_i64, call_test_fill_u32,
     call_test_fill_u8, call_binary_slang, call_cmp_slang, call_unary_slang,
     call_to_dtype_slang,
+    call_index_add_slang,
     call_where_slang,
     call_copy2d_slang,
     call_gather_idx_slang,

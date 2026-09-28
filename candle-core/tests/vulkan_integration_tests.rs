@@ -2385,6 +2385,268 @@ fn test_vulkan_index_add() {
     }
     tracing::debug!("Vulkan device {gpu_id} index_add OK");
 }
+/// `index_add` skipping the sentinel index (the dtype's max value). The CPU
+/// backend and the GPU (atomic) path both skip the sentinel, so the results
+/// must match for u32, u8, and i64 index tensors.
+#[test]
+fn test_vulkan_index_add_sentinel() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let b = 4usize;
+    let c = 5usize;
+    let base: Vec<f32> = (0..b * c).map(|i| (i as f32) * 0.25 - 2.0).collect();
+    macro_rules! run_case {
+        ($idx:expr, $dim:expr, $name:expr) => {{
+            let name = $name;
+            let dim = $dim;
+            let (sb, sc) = if dim == 0 { (4usize, c) } else { (b, 4usize) };
+            let src: Vec<f32> = (0..sb * sc).map(|i| (i as f32) * -1.1 + 1.5).collect();
+            let gid = candle_core::Tensor::new($idx, &dev).unwrap();
+            let gsr = candle_core::Tensor::new(src.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let gdst = candle_core::Tensor::new(base.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let cid = candle_core::Tensor::new($idx, &cpu).unwrap();
+            let csr = candle_core::Tensor::new(src.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let cdst = candle_core::Tensor::new(base.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let gg = gdst.index_add(&gid, &gsr, dim).unwrap();
+            let cc = cdst.index_add(&cid, &csr, dim).unwrap();
+            let gv: Vec<f32> = gg.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            let cv: Vec<f32> = cc.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            assert_eq!(gv.len(), cv.len());
+            for (i, (a, bv)) in gv.iter().zip(cv.iter()).enumerate() {
+                assert!(
+                    (a - bv).abs() < 1e-5 * (1.0 + bv.abs()),
+                    "index_add sentinel {} dim={} at {}: gpu {} cpu {}",
+                    name,
+                    dim,
+                    i,
+                    a,
+                    bv
+                );
+            }
+        }};
+    }
+    let idx_u32: Vec<u32> = vec![3, 0, u32::MAX, 1];
+    let idx_u8: Vec<u8> = vec![3, 0, u8::MAX, 1];
+    let idx_i64: Vec<i64> = vec![3, 0, i64::MAX, 1];
+    for dim in [0usize, 1usize] {
+        run_case!(idx_u32.as_slice(), dim, "u32");
+        run_case!(idx_u8.as_slice(), dim, "u8");
+        run_case!(idx_i64.as_slice(), dim, "i64");
+    }
+    tracing::debug!("Vulkan device {gpu_id} index_add sentinel OK");
+}
+/// `index_add` with out-of-bounds indexes (neither valid nor the sentinel
+/// max): the CPU backend errors, but the GPU path silently skips them.
+/// Verify the GPU neither crashes nor adds the out-of-bounds contribution.
+#[test]
+fn test_vulkan_index_add_oob() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let vdev = match &dev {
+        candle_core::Device::Vulkan(v) => v,
+        _ => unreachable!(),
+    };
+    // The GPU (atomic) path silently skips out-of-bounds indexes; the host
+    // fallback (CPU semantics) errors on them. Test whichever is active.
+    let gpu_path = vdev.supports_atomic_fadd(candle_core::DType::F32);
+    let b = 4usize;
+    let c = 5usize;
+    let base: Vec<f32> = (0..b * c).map(|i| (i as f32) * 0.25 - 2.0).collect();
+    for dim in [0usize, 1usize] {
+        // One out-of-bounds entry (99) that is neither valid nor the sentinel.
+        let idx: Vec<u32> = if dim == 0 {
+            vec![0, 2, 99, 1]
+        } else {
+            vec![0, 2, 99, 1, 3]
+        };
+        let (sb, sc) = if dim == 0 {
+            (idx.len(), c)
+        } else {
+            (b, idx.len())
+        };
+        let src: Vec<f32> = (0..sb * sc).map(|i| (i as f32) * -1.1 + 1.5).collect();
+        let gid = candle_core::Tensor::new(idx.as_slice(), &dev).unwrap();
+        let gsr = candle_core::Tensor::new(src.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((sb, sc)))
+            .unwrap();
+        let gdst = candle_core::Tensor::new(base.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c)))
+            .unwrap();
+        let res = gdst.index_add(&gid, &gsr, dim);
+        if !gpu_path {
+            assert!(
+                res.is_err(),
+                "host fallback should error on OOB index (dim={dim})"
+            );
+            continue;
+        }
+        let gg = res.unwrap();
+        let gv: Vec<f32> = gg.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        // Expected: add only the in-bounds contributions.
+        let mut exp = base.clone();
+        if dim == 0 {
+            for r in 0..idx.len() {
+                let id = idx[r] as usize;
+                if id < b {
+                    for j in 0..c {
+                        exp[id * c + j] += src[r * c + j];
+                    }
+                }
+            }
+        } else {
+            for i in 0..b {
+                for j in 0..idx.len() {
+                    let id = idx[j] as usize;
+                    if id < c {
+                        exp[i * c + id] += src[i * c + j];
+                    }
+                }
+            }
+        }
+        assert_eq!(gv.len(), exp.len());
+        for (i, (a, e)) in gv.iter().zip(exp.iter()).enumerate() {
+            assert!(
+                (a - e).abs() < 1e-5 * (1.0 + e.abs()),
+                "index_add oob dim={dim} at {i}: gpu {a} expected {e}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} index_add oob OK (gpu_path={gpu_path})");
+}
+/// `index_add` across the supported element dtypes (F32/F16/F64) with u32
+/// indexes. Duplicates are included; the CPU backend is the reference.
+#[test]
+fn test_vulkan_index_add_dtypes() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let b = 4usize;
+    let c = 5usize;
+    let idx: Vec<u32> = vec![3, 0, 3, 1];
+    for dim in [0usize, 1usize] {
+        let (sb, sc) = if dim == 0 { (4usize, c) } else { (b, 4usize) };
+        // F32
+        let base_f32: Vec<f32> = (0..b * c).map(|i| (i as f32) * 0.25 - 2.0).collect();
+        let src_f32: Vec<f32> = (0..sb * sc).map(|i| (i as f32) * -1.1 + 1.5).collect();
+        {
+            let gid = candle_core::Tensor::new(idx.as_slice(), &dev).unwrap();
+            let gsr = candle_core::Tensor::new(src_f32.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let gdst = candle_core::Tensor::new(base_f32.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let cid = candle_core::Tensor::new(idx.as_slice(), &cpu).unwrap();
+            let csr = candle_core::Tensor::new(src_f32.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let cdst = candle_core::Tensor::new(base_f32.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let gg = gdst.index_add(&gid, &gsr, dim).unwrap();
+            let cc = cdst.index_add(&cid, &csr, dim).unwrap();
+            let gv: Vec<f32> = gg.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            let cv: Vec<f32> = cc.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            for (i, (a, bv)) in gv.iter().zip(cv.iter()).enumerate() {
+                assert!(
+                    (a - bv).abs() < 1e-5 * (1.0 + bv.abs()),
+                    "index_add f32 dim={dim} at {i}: gpu {a} cpu {bv}"
+                );
+            }
+        }
+        // F16
+        let base_f16: Vec<half::f16> = base_f32.iter().map(|x| half::f16::from_f32(*x)).collect();
+        let src_f16: Vec<half::f16> = src_f32.iter().map(|x| half::f16::from_f32(*x)).collect();
+        {
+            let gid = candle_core::Tensor::new(idx.as_slice(), &dev).unwrap();
+            let gsr = candle_core::Tensor::new(src_f16.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let gdst = candle_core::Tensor::new(base_f16.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let cid = candle_core::Tensor::new(idx.as_slice(), &cpu).unwrap();
+            let csr = candle_core::Tensor::new(src_f16.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let cdst = candle_core::Tensor::new(base_f16.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let gg = gdst.index_add(&gid, &gsr, dim).unwrap();
+            let cc = cdst.index_add(&cid, &csr, dim).unwrap();
+            let gvh: Vec<half::f16> = gg.flatten_all().unwrap().to_vec1::<half::f16>().unwrap();
+            let cvh: Vec<half::f16> = cc.flatten_all().unwrap().to_vec1::<half::f16>().unwrap();
+            for (i, (a, bv)) in gvh.iter().zip(cvh.iter()).enumerate() {
+                let a = a.to_f32();
+                let bv = bv.to_f32();
+                assert!(
+                    (a - bv).abs() < 1e-2 * (1.0 + bv.abs()),
+                    "index_add f16 dim={dim} at {i}: gpu {a} cpu {bv}"
+                );
+            }
+        }
+        // F64
+        let base_f64: Vec<f64> = base_f32.iter().map(|x| *x as f64).collect();
+        let src_f64: Vec<f64> = src_f32.iter().map(|x| *x as f64).collect();
+        {
+            let gid = candle_core::Tensor::new(idx.as_slice(), &dev).unwrap();
+            let gsr = candle_core::Tensor::new(src_f64.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let gdst = candle_core::Tensor::new(base_f64.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let cid = candle_core::Tensor::new(idx.as_slice(), &cpu).unwrap();
+            let csr = candle_core::Tensor::new(src_f64.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let cdst = candle_core::Tensor::new(base_f64.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let gg = gdst.index_add(&gid, &gsr, dim).unwrap();
+            let cc = cdst.index_add(&cid, &csr, dim).unwrap();
+            let gv: Vec<f64> = gg.flatten_all().unwrap().to_vec1::<f64>().unwrap();
+            let cv: Vec<f64> = cc.flatten_all().unwrap().to_vec1::<f64>().unwrap();
+            for (i, (a, bv)) in gv.iter().zip(cv.iter()).enumerate() {
+                assert!(
+                    (a - bv).abs() < 1e-9 * (1.0 + bv.abs()),
+                    "index_add f64 dim={dim} at {i}: gpu {a} cpu {bv}"
+                );
+            }
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} index_add dtypes OK");
+}
 
 /// Binary ops for BF16 (emulated) vs the CPU backend.
 #[test]

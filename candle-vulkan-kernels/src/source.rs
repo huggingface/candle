@@ -265,6 +265,25 @@ const TO_DTYPE_F64F32_SPV: &[u8] =
     static TO_DTYPE_F64F8E4M3_SPV: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_f8e4m3.spv"));
 
+    static INDEX_ADD_F32U32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f32_u32.spv"));
+    static INDEX_ADD_F32I64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f32_i64.spv"));
+    static INDEX_ADD_F32U8_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f32_u8.spv"));
+    static INDEX_ADD_F16U32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f16_u32.spv"));
+    static INDEX_ADD_F16I64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f16_i64.spv"));
+    static INDEX_ADD_F16U8_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f16_u8.spv"));
+    static INDEX_ADD_F64U32_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f64_u32.spv"));
+    static INDEX_ADD_F64I64_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f64_i64.spv"));
+    static INDEX_ADD_F64U8_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f64_u8.spv"));
+
 /// The set of compiled compute shaders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
@@ -433,6 +452,15 @@ pub enum Source {
     ToDtypeF64I32,
     ToDtypeF64I64,
     ToDtypeF64F8e4m3,
+    IndexAddF32U32,
+    IndexAddF32I64,
+    IndexAddF32U8,
+    IndexAddF16U32,
+    IndexAddF16I64,
+    IndexAddF16U8,
+    IndexAddF64U32,
+    IndexAddF64I64,
+    IndexAddF64U8,
 }
 
 impl Source {
@@ -842,6 +870,15 @@ impl Source {
             | KernelName::ToDtypeF64I32
             | KernelName::ToDtypeF64I64
             | KernelName::ToDtypeF64F8e4m3
+            | KernelName::IndexAddF32U32
+            | KernelName::IndexAddF32I64
+            | KernelName::IndexAddF32U8
+            | KernelName::IndexAddF16U32
+            | KernelName::IndexAddF16I64
+            | KernelName::IndexAddF16U8
+            | KernelName::IndexAddF64U32
+            | KernelName::IndexAddF64I64
+            | KernelName::IndexAddF64U8
             => 0,
         }
     }
@@ -1014,6 +1051,15 @@ impl Source {
             Self::ToDtypeF64I32 => TO_DTYPE_F64I32_SPV,
             Self::ToDtypeF64I64 => TO_DTYPE_F64I64_SPV,
             Self::ToDtypeF64F8e4m3 => TO_DTYPE_F64F8E4M3_SPV,
+            Self::IndexAddF32U32 => INDEX_ADD_F32U32_SPV,
+            Self::IndexAddF32I64 => INDEX_ADD_F32I64_SPV,
+            Self::IndexAddF32U8 => INDEX_ADD_F32U8_SPV,
+            Self::IndexAddF16U32 => INDEX_ADD_F16U32_SPV,
+            Self::IndexAddF16I64 => INDEX_ADD_F16I64_SPV,
+            Self::IndexAddF16U8 => INDEX_ADD_F16U8_SPV,
+            Self::IndexAddF64U32 => INDEX_ADD_F64U32_SPV,
+            Self::IndexAddF64I64 => INDEX_ADD_F64I64_SPV,
+            Self::IndexAddF64U8 => INDEX_ADD_F64U8_SPV,
         };
         bytes
             .chunks_exact(4)
@@ -1190,6 +1236,15 @@ impl AsRef<str> for Source {
             Self::ToDtypeF64I32 => "to_dtype_f64_i32",
             Self::ToDtypeF64I64 => "to_dtype_f64_i64",
             Self::ToDtypeF64F8e4m3 => "to_dtype_f64_f8e4m3",
+            Self::IndexAddF32U32 => "index_add_f32_u32",
+            Self::IndexAddF32I64 => "index_add_f32_i64",
+            Self::IndexAddF32U8 => "index_add_f32_u8",
+            Self::IndexAddF16U32 => "index_add_f16_u32",
+            Self::IndexAddF16I64 => "index_add_f16_i64",
+            Self::IndexAddF16U8 => "index_add_f16_u8",
+            Self::IndexAddF64U32 => "index_add_f64_u32",
+            Self::IndexAddF64I64 => "index_add_f64_i64",
+            Self::IndexAddF64U8 => "index_add_f64_u8",
         }
     }
 }

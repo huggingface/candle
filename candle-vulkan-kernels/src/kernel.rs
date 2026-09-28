@@ -424,6 +424,15 @@ pub enum KernelName {
     ToDtypeF64I32,
     ToDtypeF64I64,
     ToDtypeF64F8e4m3,
+    IndexAddF32U32,
+    IndexAddF32I64,
+    IndexAddF32U8,
+    IndexAddF16U32,
+    IndexAddF16I64,
+    IndexAddF16U8,
+    IndexAddF64U32,
+    IndexAddF64I64,
+    IndexAddF64U8,
 }
 
 impl AsRef<str> for KernelName {
@@ -830,6 +839,15 @@ impl AsRef<str> for KernelName {
             Self::ToDtypeF64I32 => "main",
             Self::ToDtypeF64I64 => "main",
             Self::ToDtypeF64F8e4m3 => "main",
+            Self::IndexAddF32U32 => "main",
+            Self::IndexAddF32I64 => "main",
+            Self::IndexAddF32U8 => "main",
+            Self::IndexAddF16U32 => "main",
+            Self::IndexAddF16I64 => "main",
+            Self::IndexAddF16U8 => "main",
+            Self::IndexAddF64U32 => "main",
+            Self::IndexAddF64I64 => "main",
+            Self::IndexAddF64U8 => "main",
         }
     }
 }
@@ -979,6 +997,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::AffineBf16
         | KernelName::AffineF8e4m3 => 3,
         KernelName::GemmF32 | KernelName::GemmF16 | KernelName::GemmF64 => 4,
+        KernelName::IndexAddF32U32        | KernelName::IndexAddF32I64        | KernelName::IndexAddF32U8        | KernelName::IndexAddF16U32        | KernelName::IndexAddF16I64        | KernelName::IndexAddF16U8        | KernelName::IndexAddF64U32        | KernelName::IndexAddF64I64        | KernelName::IndexAddF64U8 => 4,
         KernelName::ConstSetF32
         | KernelName::UnaryLogF32
         | KernelName::UnaryAbsF32

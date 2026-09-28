@@ -28,7 +28,7 @@ use vulkano::VulkanLibrary;
 
 use candle_vulkan_kernels::Kernels;
 
-use crate::{Error, Result};
+use crate::{DType, Error, Result};
 
 /// A device that can be used to run computations with the Vulkan backend.
 pub struct VulkanDevice {
@@ -57,6 +57,12 @@ pub struct VulkanDevice {
     /// buffer of the batch and the allocator may recycle the memory.
     keepalive_f32: Arc<std::sync::Mutex<Vec<Subbuffer<[f32]>>>>,
     keepalive_u32: Arc<std::sync::Mutex<Vec<Subbuffer<[u32]>>>>,
+    /// Per-width atomic float add support (SPV_EXT_shader_atomic_float_add),
+    /// as enabled at device creation: F32/F64 via VK_EXT_shader_atomic_float,
+    /// F16 via VK_EXT_shader_atomic_float2.
+    atomic_f32: bool,
+    atomic_f64: bool,
+    atomic_f16: bool,
     _gpu_id: usize,
 }
 
@@ -100,6 +106,9 @@ impl Clone for VulkanDevice {
             keepalive_u32: self.keepalive_u32.clone(),
             fence_next: self.fence_next.clone(),
             pending: self.pending.clone(),
+            atomic_f32: self.atomic_f32,
+            atomic_f64: self.atomic_f64,
+            atomic_f16: self.atomic_f16,
             _gpu_id: self._gpu_id,
         }
     }
@@ -148,6 +157,12 @@ impl VulkanDevice {
         let i16 = supported.shader_int16;
         let i64 = supported.shader_int64;
         let f64 = supported.shader_float64;
+        // Atomic float add (used by `index_add`): F32/F64 need
+        // VK_EXT_shader_atomic_float, F16 needs VK_EXT_shader_atomic_float2.
+        // Enable only what the device reports, so creation never fails.
+        let atomic_f32 = supported.shader_buffer_float32_atomic_add;
+        let atomic_f64 = supported.shader_buffer_float64_atomic_add;
+        let atomic_f16 = supported.shader_buffer_float16_atomic_add;
         let queue_ci = QueueCreateInfo {
             flags: Default::default(),
             queue_family_index: queue_family as u32,
@@ -157,6 +172,8 @@ impl VulkanDevice {
         let exts = DeviceExtensions {
             khr_16bit_storage: true,
             khr_shader_float16_int8: true,
+            ext_shader_atomic_float: atomic_f32 || atomic_f64,
+            ext_shader_atomic_float2: atomic_f16,
             ..Default::default()
         };
         let feats = DeviceFeatures {
@@ -169,6 +186,9 @@ impl VulkanDevice {
             shader_int16: i16,
             shader_int64: i64,
             shader_float64: f64,
+            shader_buffer_float32_atomic_add: atomic_f32,
+            shader_buffer_float64_atomic_add: atomic_f64,
+            shader_buffer_float16_atomic_add: atomic_f16,
             ..Default::default()
         };
         let (device, queues) = Device::new(
@@ -222,8 +242,23 @@ impl VulkanDevice {
             keepalive_f32: Arc::new(std::sync::Mutex::new(Vec::new())),
             keepalive_u32: Arc::new(std::sync::Mutex::new(Vec::new())),
             pending: Arc::new(std::sync::Mutex::new(Vec::new())),
+            atomic_f32,
+            atomic_f64,
+            atomic_f16,
             _gpu_id: gpu_id,
         })
+    }
+
+    /// True when the device can execute atomic float add for `dtype`
+    /// (F32/F64 require VK_EXT_shader_atomic_float, F16 requires
+    /// VK_EXT_shader_atomic_float2), as enabled at device creation.
+    pub fn supports_atomic_fadd(&self, dtype: DType) -> bool {
+        match dtype {
+            DType::F32 => self.atomic_f32,
+            DType::F64 => self.atomic_f64,
+            DType::F16 => self.atomic_f16,
+            _ => false,
+        }
     }
 
     pub(crate) fn device(&self) -> &Arc<Device> {
