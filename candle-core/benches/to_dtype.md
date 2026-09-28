@@ -17,24 +17,65 @@ input has a nonzero offset; transposed and narrowed block views are also include
 The `blocks` view has half the size in its benchmark name, and its throughput is
 computed from its actual element count.
 
-Run the same benchmark and manifest entry on both revisions with the same
-Cargo.lock. Use separate Cargo target directories, or clean candle-core between
-builds, to prevent artifacts from another checkout being reused.
+Run these commands from the repository root. Cargo locates and runs the benchmark
+executable automatically; there is no executable literally named
+`path/to/benchmark`.
+
+### Run the complete benchmark
 
 ```console
-RUSTFLAGS="-C target-cpu=native" CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
-  cargo bench -p candle-core --bench to_dtype --no-run --locked
+RUSTFLAGS="-C target-cpu=native" \
+CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+cargo bench -p candle-core --bench to_dtype
 ```
 
-Copy each resulting executable before building the next revision. Run serially
-on the same logical CPU, with no concurrent builds. The measured filter was:
+This runs all 60 cases with Criterion's default settings. It is a convenient
+local smoke run, but it does not reproduce the shorter, filtered measurement
+protocol below. A candidate-only run does not establish a speedup.
+
+### Run the 16 cases used in the report
+
+Pass the filter and Criterion options after Cargo's `--` separator:
 
 ```console
-taskset -c 2 path/to/benchmark \
+RUSTFLAGS="-C target-cpu=native" \
+CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+cargo bench -p candle-core --bench to_dtype -- \
   'F32_to_F16/contiguous/|/(contiguous|transposed|blocks)/1048576$' \
-  --bench --noplot --sample-size 40 --warm-up-time 0.2 \
-  --measurement-time 0.7 --nresamples 5000 --save-baseline baseline-r1
+  --noplot --sample-size 40 --warm-up-time 0.2 \
+  --measurement-time 0.7 --nresamples 5000 --save-baseline blocked-r1
 ```
+
+Cargo already passes `--bench` to the executable; do not add another one after
+the separator. `--no-run` only builds the executable and does not measure it.
+The filter selects every contiguous F32-to-F16 size plus all pairs and layouts
+at the size named 1,048,576 (16 distinct cases).
+
+On Linux, CPU affinity is optional. Check the CPUs allowed for your shell with
+`taskset -pc $$`. If CPU 2 is allowed, replace `cargo bench` in the command
+above with `taskset -c 2 cargo bench`, keeping the environment assignments
+before `taskset`. Otherwise select an allowed CPU or omit `taskset`.
+CPU 2 was the choice for the reported VM, not a requirement of this benchmark.
+
+### Compare two revisions
+
+Run the same benchmark and manifest entry on both revisions with the same
+Cargo.lock, compiler flags, filter, and Criterion settings. The historical
+baseline commit below predates the benchmark: copy `to_dtype.rs` and its
+`[[bench]]` manifest entry into that checkout before building.
+
+Use separate Cargo target directories for the two checkouts (their default
+`target` directories suffice if `CARGO_TARGET_DIR` is not shared). Generate
+Cargo.lock once if necessary, reuse it in both checkouts, then add `--locked`
+before Cargo's `--` separator for the comparative runs.
+
+Run serially on the same logical CPU, with no concurrent builds. Use
+`--save-baseline baseline-r1` for the reference and
+`--save-baseline blocked-r1` for the candidate. Repeat in reverse order with
+`blocked-r2` then `baseline-r2`. These names label results; they do not switch
+the source revision. With separate target directories, compare the estimates
+from each directory's `criterion` results. Do not infer a local speedup by
+comparing one laptop run against the VM timings below.
 
 ## Local results, 2026-09-28
 
