@@ -1329,7 +1329,12 @@ impl BackendStorage for VulkanStorage {
     type Device = VulkanDevice;
 
     fn try_clone(&self, _: &Layout) -> Result<Self> {
-        todo!()
+        // Deep copy: read the data back to the host and allocate a new GPU
+        // buffer, so the returned storage is independent of this one. The
+        // host or device allocation may fail with out-of-memory, hence the
+        // fallible "try" (same contract as the CPU and CUDA backends).
+        let cpu = self.to_cpu_storage()?;
+        self.device.storage_from_cpu_storage(&cpu)
     }
 
     fn dtype(&self) -> DType {

@@ -4826,3 +4826,68 @@ fn test_vulkan_to_dtype_f64() {
         assert!((g - e).abs() < 1e-6f64, "got {} vs exp {}", g, e);
     }
 }
+
+/// `Tensor::copy` (which calls `VulkanStorage::try_clone`) must return an
+/// independent deep copy: same dtype, shape, and values as the original at
+/// snapshot time, but unaffected by later in-place mutations of the
+/// original tensor's storage.
+#[test]
+fn test_vulkan_try_clone() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+
+    // 1D F32: correctness + independence.
+    let base: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0];
+    let t = candle_core::Tensor::new(base.as_slice(), &dev).unwrap();
+    let copy = t.copy().unwrap();
+    // dtype and shape are preserved.
+    assert_eq!(copy.dtype(), candle_core::DType::F32);
+    assert_eq!(copy.dims(), t.dims());
+    // values match the original at snapshot time.
+    let cv: Vec<f32> = copy.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    assert_eq!(cv, base);
+    // Mutate the original in-place (index_add is an in-place op) and verify
+    // the copy is unaffected.
+    let ids = candle_core::Tensor::new(&[0u32], &dev).unwrap();
+    let src = candle_core::Tensor::new(&[10.0f32], &dev).unwrap();
+    let t2 = t.index_add(&ids, &src, 0).unwrap();
+    let tv: Vec<f32> = t2.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    let mut exp = base.clone();
+    exp[0] += 10.0;
+    assert_eq!(tv, exp, "in-place mutation should apply to the original");
+    let cv2: Vec<f32> = copy.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    assert_eq!(
+        cv2, base,
+        "copy must be independent of the original's mutation"
+    );
+
+    // 2D F32: correctness.
+    let m = 3usize;
+    let n = 4usize;
+    let base2: Vec<f32> = (0..m * n).map(|i| (i as f32) * 0.5 - 1.0).collect();
+    let t2d = candle_core::Tensor::new(base2.as_slice(), &dev)
+        .unwrap()
+        .reshape((m, n))
+        .unwrap();
+    let copy2d = t2d.copy().unwrap();
+    assert_eq!(copy2d.dtype(), candle_core::DType::F32);
+    assert_eq!(copy2d.dims(), [m, n].as_slice());
+    let cv2d: Vec<f32> = copy2d.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    assert_eq!(cv2d, base2);
+
+    // F16: correctness.
+    let base16: Vec<f32> = (0..8).map(|i| (i as f32) * 0.5 - 2.0).collect();
+    let f16v: Vec<half::f16> = base16.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let t16 = candle_core::Tensor::new(f16v.as_slice(), &dev).unwrap();
+    let copy16 = t16.copy().unwrap();
+    assert_eq!(copy16.dtype(), candle_core::DType::F16);
+    let cv16: Vec<half::f16> = copy16
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<half::f16>()
+        .unwrap();
+    assert_eq!(cv16, f16v);
+
+    tracing::debug!("Vulkan device {gpu_id} try_clone OK");
+}
