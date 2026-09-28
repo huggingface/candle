@@ -228,3 +228,77 @@ fn cpu_tensor_to_dtype_preserves_a_transposed_view() -> Result<()> {
     assert_eq!(converted.to_vec2::<i16>()?, [[1, 4], [2, 5]]);
     Ok(())
 }
+
+#[test]
+fn cpu_dtype_f32_to_f16_matches_scalar_bits() -> Result<()> {
+    let mut input = vec![
+        0.,
+        -0.,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+        f32::from_bits(0x7f80_0001),
+        f32::from_bits(0xff80_0001),
+        f32::from_bits(1),
+        f32::MIN_POSITIVE,
+        f32::MAX,
+        65_504.,
+        65_520.,
+    ];
+    input.extend((0..=u16::MAX).map(|bits| f16::from_bits(bits).to_f32()));
+    // Exercise both signs and adjacent f32 values around every positive finite
+    // f16 rounding midpoint, including the normal/subnormal boundary.
+    for bits in 0..0x7bff {
+        let a = f16::from_bits(bits).to_f32();
+        let b = f16::from_bits(bits + 1).to_f32();
+        let midpoint = ((a + b) * 0.5).to_bits();
+        for bits in [midpoint - 1, midpoint, midpoint + 1] {
+            let v = f32::from_bits(bits);
+            input.extend([v, -v]);
+        }
+    }
+    let mut state = 0x1234_5678_u32;
+    for _ in 0..200_000 {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        input.push(f32::from_bits(state));
+    }
+    let expected: Vec<_> = input.iter().map(|&v| f16::from_f32(v).to_bits()).collect();
+    let layout = Layout::contiguous(input.len());
+    let CpuStorage::F16(output) = CpuStorage::F32(input).to_dtype(&layout, DType::F16)? else {
+        panic!("expected f16")
+    };
+    assert_eq!(
+        output.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+        expected
+    );
+    Ok(())
+}
+
+#[test]
+fn cpu_dtype_f32_to_f16_offsets_and_tails() -> Result<()> {
+    let input: Vec<f32> = (0..4096).map(|i| (i as f32 - 64.) / 7.).collect();
+    let storage = CpuStorage::F32(input.clone());
+    for offset in [0, 1, 3, 7] {
+        for len in [
+            0, 1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 1023, 1024, 1025, 2047,
+            2048, 2049,
+        ] {
+            let layout = Layout::contiguous_with_offset(len, offset);
+            let CpuStorage::F16(output) = storage.to_dtype(&layout, DType::F16)? else {
+                panic!("expected f16")
+            };
+            let expected: Vec<_> = input[offset..offset + len]
+                .iter()
+                .map(|&v| f16::from_f32(v).to_bits())
+                .collect();
+            assert_eq!(
+                output.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                expected,
+                "offset {offset}, length {len}"
+            );
+        }
+    }
+    Ok(())
+}

@@ -3,6 +3,25 @@ use crate::backend::BackendStorage;
 use crate::{DType, Error, Layout, Result};
 use float8::F8E4M3;
 use half::{bf16, f16};
+use half::{slice::HalfFloatSliceExt, vec::HalfFloatVecExt};
+
+fn f32_to_f16_slice(src: &[f32]) -> Vec<f16> {
+    const BLOCK: usize = 1024;
+    if src.len() <= BLOCK {
+        return Vec::<f16>::from_f32_slice(src);
+    }
+    // Convert through a small initialized buffer instead of zero-initializing
+    // the entire output before overwriting it. Each output element is written
+    // once, and half never receives a reference to uninitialized memory.
+    let mut output = Vec::with_capacity(src.len());
+    let mut scratch = [f16::ZERO; BLOCK];
+    for chunk in src.chunks(BLOCK) {
+        let dst = &mut scratch[..chunk.len()];
+        dst.convert_from_f32_slice(chunk);
+        output.extend_from_slice(dst);
+    }
+    output
+}
 
 // Keep the existing FP8 conversion paths explicit, including the direct f64 path and
 // bit-preserving identity conversion, rather than using a common float pivot.
@@ -55,9 +74,7 @@ macro_rules! cast_storage {
         $src:ident; [$(($dst_variant:ident, $dst:ty)),+]) => {
         match $dtype {
             $(DType::$dst_variant => {
-                let data = unary_map($values, $layout, |v| {
-                    cast_element!(v, $src, $dst_variant, $dst)
-                });
+                let data = cast_storage!(@convert $values, $layout; $src, $dst_variant, $dst);
                 Ok(CpuStorage::$dst_variant(data))
             })+
             DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
@@ -65,12 +82,24 @@ macro_rules! cast_storage {
             }
         }
     };
+    (@convert $values:ident, $layout:ident; F32, F16, $dst:ty) => {
+        if let Some((start, end)) = $layout.contiguous_offsets() {
+            f32_to_f16_slice(&$values[start..end])
+        } else {
+            unary_map($values, $layout, f16::from_f32)
+        }
+    };
+    (@convert $values:ident, $layout:ident; $src:ident, $dst_variant:ident, $dst:ty) => {
+        unary_map($values, $layout, |v| {
+            cast_element!(v, $src, $dst_variant, $dst)
+        })
+    };
 }
 
 pub(super) fn to_dtype(storage: &CpuStorage, layout: &Layout, dtype: DType) -> Result<CpuStorage> {
     // One O(T) list generates the source and destination dispatches for T types.
     // There are still T^2 instantiated conversion pairs; converting N elements
-    // still takes O(N) time. All layouts retain the existing unary_map paths.
+    // still takes O(N) time. Non-contiguous layouts retain unary_map.
     cast_storage!(storage, layout, dtype; [
         (U8, u8),
         (U32, u32),
