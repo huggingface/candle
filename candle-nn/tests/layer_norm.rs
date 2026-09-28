@@ -63,7 +63,6 @@ fn layer_norm() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn rms_norm_from_varmap() -> Result<()> {
     // Regression for #3972: fresh VarMap must allow lazy Init, and affine=false
