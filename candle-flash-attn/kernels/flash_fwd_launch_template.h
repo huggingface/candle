@@ -3,6 +3,7 @@
  ******************************************************************************/
 
 #pragma once
+#include <type_traits>
 // #include <c10/cuda/CUDAException.h>  // For C10_CUDA_CHECK and C10_CUDA_KERNEL_LAUNCH_CHECK
 
 #include "error.h"
@@ -211,6 +212,23 @@ void run_mha_fwd_hdim32(Flash_fwd_params &params, cudaStream_t stream) {
 template<typename T, bool Is_causal>
 void run_mha_fwd_hdim64(Flash_fwd_params &params, cudaStream_t stream) {
     constexpr static int Headdim = 64;
+    // Large batches of short packed sequences waste most of a 128x128 tile.
+    // Restrict this dispatch to the noncausal BF16/Hopper shapes measured here.
+    if constexpr (std::is_same_v<T, cutlass::bfloat16_t> && !Is_causal) {
+        if (params.b >= 128 && params.d == Headdim && params.h == params.h_k
+            && params.p_dropout == 1.f && params.cu_seqlens_q && params.cu_seqlens_k
+            && params.seqlen_q > 0 && params.seqlen_q <= 32
+            && params.seqlen_k > 0 && params.seqlen_k <= 32
+            && params.window_size_left < 0 && params.window_size_right < 0
+            && params.softcap == 0.f && !params.alibi_slopes_ptr
+            && !params.block_table && !params.mm_prefix_ranges) {
+            auto [major, minor] = get_compute_capability(get_current_device());
+            if (major == 9 && minor == 0) {
+                run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 64, 64, 4, false, false, T>, false, false>(params, stream);
+                return;
+            }
+        }
+    }
     DROPOUT_SWITCH(params.p_dropout < 1.f, Is_dropout, [&] {
         if constexpr(!Is_dropout) {
             // Using 8 warps is 18% slower for seqlen=2k, 2 warps is 5% slower
