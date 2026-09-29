@@ -158,6 +158,98 @@ METAL_FUNC void im2col1d(
   }
 }
 
+// Direct 1d convolution, in the spirit of the implicit-GEMM kernels used by
+// cuDNN / MPSGraph: no im2col matrix is materialized. Each thread computes a
+// TM x TN tile of the output (TM consecutive positions x TN output channels),
+// loading each input tap once and reusing it across TN channels; padding,
+// stride and dilation are applied on the fly. Used for convolutions with a
+// small reduction dimension (e.g. depthwise) where materializing an im2col
+// buffer plus a GEMM per call costs far more than the direct computation.
+template <typename T, typename ACC>
+METAL_FUNC void conv1d_direct(
+    constant size_t &num_threads,
+    constant size_t &l_out,
+    constant size_t &c_in,
+    constant size_t &c_out,
+    constant size_t &k_size,
+    constant size_t &stride,
+    constant size_t &padding,
+    constant size_t &dilation,
+    constant size_t *src_dims,
+    constant size_t *src_strides,
+    device const T *src,
+    device const T *wgt,
+    device T *dst,
+    uint tid [[ thread_position_in_grid ]]
+) {
+  // dst: (b_size, c_out, l_out); src: (b_size, c_in, l_in); wgt: (c_out, c_in, k)
+  if (tid >= num_threads) {
+    return;
+  }
+  constexpr size_t TM = 8;
+  constexpr size_t TN = 8;
+  const size_t l_in = src_dims[2];
+  const size_t tiles_m = (l_out + TM - 1) / TM;
+  const size_t tiles_n = (c_out + TN - 1) / TN;
+
+  const size_t b_idx = tid / (tiles_n * tiles_m);
+  size_t rem = tid - b_idx * tiles_n * tiles_m;
+  const size_t n_tile = rem / tiles_m;
+  const size_t m_tile = rem - n_tile * tiles_m;
+  const size_t m0 = m_tile * TM;
+  const size_t n0 = n_tile * TN;
+
+  ACC acc[TN][TM];
+  for (size_t n = 0; n < TN; ++n) {
+    for (size_t t = 0; t < TM; ++t) {
+      acc[n][t] = static_cast<ACC>(0);
+    }
+  }
+
+  const size_t src_b = b_idx * src_strides[0];
+  const size_t base_l = m0 * stride;
+  for (size_t ci = 0; ci < c_in; ++ci) {
+    const size_t src_c = src_b + ci * src_strides[1];
+    for (size_t j = 0; j < k_size; ++j) {
+      // load the TM taps for this (ci, j) once, reuse them across TN channels
+      ACC tap[TM];
+      const size_t tap_l0 = base_l + j * dilation;
+      for (size_t t = 0; t < TM; ++t) {
+        const size_t m = m0 + t;
+        const size_t src_l = tap_l0 + t * stride;
+        if (m < l_out && src_l >= padding && src_l < l_in + padding) {
+          tap[t] = static_cast<ACC>(src[src_c + (src_l - padding) * src_strides[2]]);
+        } else {
+          tap[t] = static_cast<ACC>(0);
+        }
+      }
+      for (size_t n = 0; n < TN; ++n) {
+        const size_t n_idx = n0 + n;
+        if (n_idx < c_out) {
+          const ACC wv = static_cast<ACC>(wgt[n_idx * c_in * k_size + ci * k_size + j]);
+          for (size_t t = 0; t < TM; ++t) {
+            acc[n][t] += tap[t] * wv;
+          }
+        }
+      }
+    }
+  }
+
+  const size_t dst_b = b_idx * c_out * l_out;
+  for (size_t n = 0; n < TN; ++n) {
+    const size_t n_idx = n0 + n;
+    if (n_idx < c_out) {
+      const size_t dst_base = dst_b + n_idx * l_out;
+      for (size_t t = 0; t < TM; ++t) {
+        const size_t m = m0 + t;
+        if (m < l_out) {
+          dst[dst_base + m] = static_cast<T>(acc[n][t]);
+        }
+      }
+    }
+  }
+}
+
 template <typename T>
 METAL_FUNC void upsample_nearest2d(
     constant size_t &w_out,
@@ -668,6 +760,32 @@ IM2COL1D_OP(uint8_t, im2col1d_u8)
 IM2COL1D_OP(uint32_t, im2col1d_u32)
 #if defined(__HAVE_BFLOAT__)
 IM2COL1D_OP(bfloat, im2col1d_bf16)
+#endif
+
+#define CONV1D_DIRECT_OP(TYPENAME, ACC, FN_NAME) \
+kernel void FN_NAME(  \
+    constant size_t &num_threads, \
+    constant size_t &l_out, \
+    constant size_t &c_in, \
+    constant size_t &c_out, \
+    constant size_t &k_size, \
+    constant size_t &stride, \
+    constant size_t &padding, \
+    constant size_t &dilation, \
+    constant size_t *src_dims, \
+    constant size_t *src_strides, \
+    device const TYPENAME *src, \
+    device const TYPENAME *wgt, \
+    device TYPENAME *dst, \
+    uint tid [[ thread_position_in_grid ]] \
+) {  \
+  conv1d_direct<TYPENAME, ACC>(num_threads, l_out, c_in, c_out, k_size, stride, padding, dilation, src_dims, src_strides, src, wgt, dst, tid); \
+} \
+
+CONV1D_DIRECT_OP(float, float, conv1d_direct_f32)
+CONV1D_DIRECT_OP(half, float, conv1d_direct_f16)
+#if defined(__HAVE_BFLOAT__)
+CONV1D_DIRECT_OP(bfloat, float, conv1d_direct_bf16)
 #endif
 
 UPSAMPLE_NEAREST2D_OP(float, upsample_nearest2d_f32)

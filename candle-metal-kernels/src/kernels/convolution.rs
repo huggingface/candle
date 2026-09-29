@@ -259,6 +259,62 @@ pub fn call_pool2d(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Direct (implicit-GEMM style, no materialized im2col) 1d convolution.
+/// `input`: (b_size, c_in, l_in) with arbitrary strides; `kernel_w`:
+/// (c_out, c_in, k_size) contiguous; `output`: (b_size, c_out, l_out)
+/// contiguous. Accumulation runs in f32 for all float dtypes.
+#[allow(clippy::too_many_arguments)]
+pub fn call_conv1d_direct(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: &'static str,
+    shape: &[usize],
+    strides: &[usize],
+    (c_out, k_size, stride, padding, dilation): (usize, usize, usize, usize, usize),
+    input: &Buffer,
+    input_offset: usize,
+    kernel_w: &Buffer,
+    kernel_offset: usize,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    // tile configuration mirrored from conv.metal (TM x TN outputs per thread)
+    const TM: usize = 8;
+    const TN: usize = 8;
+    let l_out = (shape[2] + 2 * padding - dilation * (k_size - 1) - 1) / stride + 1;
+    let c_in = shape[1];
+    let num_threads = shape[0] * c_out.div_ceil(TN) * l_out.div_ceil(TM);
+    let pipeline = kernels.load_pipeline(device, Source::Conv, name)?;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_threads);
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "conv1d_direct {name} c_in={c_in} c_out={c_out} l_out={l_out}"
+    );
+    set_params!(
+        encoder,
+        (
+            num_threads,
+            l_out,
+            c_in,
+            c_out,
+            k_size,
+            stride,
+            padding,
+            dilation,
+            shape,
+            strides,
+            (input, input_offset),
+            (kernel_w, kernel_offset),
+            Output::new(output)
+        )
+    );
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
 pub fn call_conv_transpose1d(
     device: &Device,
     ep: impl EncoderProvider,

@@ -916,6 +916,83 @@ impl BackendStorage for MetalStorage {
         let dims = shape.dims();
         let strides = layout.stride();
 
+        // Direct convolution path, in the spirit of the implicit-GEMM kernels
+        // used by cuDNN / MPSGraph which never materialize the im2col matrix.
+        // The explicit im2col buffer holds l_out * c_in * k elements (k times
+        // the input size). Two cases favor the direct kernel, which computes
+        // each output from the input taps on the fly:
+        // - a small reduction dimension (c_in * k): candle lowers grouped
+        //   convs to per-group dense calls at the tensor level, so a depthwise
+        //   conv becomes many calls with c_in == 1, where the im2col + matmul
+        //   round-trip per call is far more expensive than the direct compute;
+        // - an im2col buffer above ~4 GiB, where materializing it (plus the
+        //   buffer pool retaining it) costs multiple GiB of memory for a
+        //   conv that only runs ~5x slower directly. Large dense convs keep
+        //   the im2col path, whose matmul runs ~2 TFLOP/s on Apple GPUs vs
+        //   ~0.1 for the scalar direct kernel.
+        if matches!(self.dtype, DType::F32 | DType::F16 | DType::BF16) {
+            let (b_size, c_in, _l_in) = (dims[0], dims[1], dims[2]);
+            let (c_out, _k_c_in, k_size) = {
+                let kd = kernel_l.shape().dims();
+                (kd[0], kd[1], kd[2])
+            };
+            let l_out = params.l_out();
+            let im2col_el = b_size * l_out * c_in * k_size;
+            let small_reduction = c_in * k_size <= 64;
+            let huge_im2col = im2col_el * self.dtype.size_in_bytes() > 1 << 32;
+            if small_reduction || huge_im2col {
+                let name = match self.dtype {
+                    DType::F32 => "conv1d_direct_f32",
+                    DType::F16 => "conv1d_direct_f16",
+                    _ => "conv1d_direct_bf16",
+                };
+                // the direct kernel reads the weights densely; copy strided ones
+                // first (same as the im2col path below).
+                let (kbuf, koffset) = if kernel_l.is_contiguous() {
+                    (
+                        kernel.buffer.clone(),
+                        kernel_l.start_offset() * self.dtype.size_in_bytes(),
+                    )
+                } else {
+                    let mut kernel_c =
+                        self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
+                    kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
+                    (kernel_c.buffer.clone(), 0)
+                };
+                let dst = self
+                    .device
+                    .new_buffer_builder()
+                    .with_size_for(b_size * c_out * l_out, self.dtype)
+                    .with_label("conv1d_direct")
+                    .build()?;
+                let encoder = self.device.command_encoder()?;
+                let src = buffer_o(&self.buffer, layout, self.dtype);
+                candle_metal_kernels::call_conv1d_direct(
+                    &self.device.device,
+                    &encoder,
+                    &self.device.kernels,
+                    name,
+                    &[b_size, c_in, dims[2]],
+                    strides,
+                    (
+                        c_out,
+                        k_size,
+                        params.stride,
+                        params.padding,
+                        params.dilation,
+                    ),
+                    src.buffer,
+                    src.offset_in_bytes,
+                    &kbuf,
+                    koffset,
+                    &dst,
+                )
+                .map_err(MetalError::from)?;
+                drop(encoder);
+                return Ok(Self::new(dst, device, b_size * c_out * l_out, self.dtype));
+            }
+        }
+
         let stride = params.stride;
         let dilation = params.dilation;
         let padding = params.padding;
