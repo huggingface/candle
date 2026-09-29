@@ -324,8 +324,22 @@ impl MetalDevice {
     }
 }
 
+/// Upper bound on the power-of-two rounding applied to pooled buffers.
+///
+/// Rounding small buffers up lets the pool reuse one allocation across
+/// differently shaped tensors. For very large allocations the rounding does
+/// more harm than good: an intermediate that needs e.g. 2.2 GiB gets a 4 GiB
+/// buffer, close to doubling peak memory, and the extra size can push the
+/// allocation over the GPU memory limit where the exact size would have fit.
+/// Buffers above this bound are pooled at their exact size instead.
+const POOL_POW2_MAX: usize = 1 << 24; // 16 MiB
+
 fn buf_size(size: usize) -> usize {
-    size.next_power_of_two()
+    if size <= POOL_POW2_MAX {
+        size.next_power_of_two()
+    } else {
+        size
+    }
 }
 
 /// Applies the [`BufferBuilder`] label, clearing any stale label on a reused pooled buffer.
@@ -457,6 +471,17 @@ mod tests {
         // BF16 and F16 are 2 bytes per element. A scalar tensor requests
         // a 2-byte buffer. This must not be rounded down to 1.
         assert_eq!(buf_size(2), 2);
+    }
+
+    #[test]
+    fn test_buf_size_exact_above_pool_cap() {
+        // Large allocations are pooled at their exact size: rounding a ~2.2 GiB
+        // im2col intermediate up to 4 GiB can double peak memory and exceed the
+        // GPU memory limit where the exact size would have fit.
+        assert_eq!(buf_size(POOL_POW2_MAX), POOL_POW2_MAX);
+        assert_eq!(buf_size(POOL_POW2_MAX + 1), POOL_POW2_MAX + 1);
+        assert_eq!(buf_size(1 << 31), 1 << 31);
+        assert_eq!(buf_size((1 << 31) + (1 << 20)), (1 << 31) + (1 << 20));
     }
 }
 
