@@ -228,10 +228,7 @@ pub fn load_quantized<T: GgmlType + Send + Sync + 'static>(
 ) -> Result<super::QStorage> {
     let dtype = T::DTYPE;
     let raw = unsafe {
-        std::slice::from_raw_parts(
-            data.as_ptr() as *const u8,
-            std::mem::size_of_val(data),
-        )
+        std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
     };
     let bytes = device.storage_from_cpu_storage(&CpuStorage::U8(raw.to_vec()))?;
     Ok(super::QStorage::Vulkan(Box::new(QVulkanStorage {
