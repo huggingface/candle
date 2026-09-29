@@ -3,6 +3,30 @@
 //! Device selection:
 //! `CANDLE_VULKAN_TEST_GPU=<n> cargo test --features vulkan --test vulkan_integration_tests`
 //! (defaults to physical device 0).
+//!
+//! On a Linux system with multiple GPU devices the physical-device
+//! enumeration order is not guaranteed to place the most capable discrete
+//! GPU first: on the reference machine the integrated GPU is enumerated
+//! first, so physical device 0 is the weaker integrated GPU by default. To
+//! pin a specific GPU to index 0, export the Mesa Vulkan device-select
+//! layer variable `MESA_VK_DEVICE_SELECT` with that GPU's PCI
+//! vendor:device id (`vid:did`) for the duration of the test run, e.g.
+//!
+//!   MESA_VK_DEVICE_SELECT=1002:7551 CANDLE_VULKAN_TEST_GPU=0 \
+//!       cargo test --features vulkan --test vulkan_integration_tests
+//!
+//! `1002:7551` is the vid:did of the "AMD Radeon AI PRO R9700 (RADV
+//! GFX1201)" discrete GPU on the reference machine. List the available
+//! devices and their `vid:did` with:
+//!
+//!   MESA_VK_DEVICE_SELECT=list vulkaninfo --summary
+//!
+//! Selecting a GPU with `MESA_VK_DEVICE_SELECT` only reorders the
+//! enumeration (the selected device is reported first); it does not hide
+//! the other devices. `CANDLE_VULKAN_TEST_GPU=<n>` still enumerates the
+//! full device list, so the remaining devices stay selectable by index
+//! (e.g. with the R9700 pinned to 0, the integrated GPU is still reachable
+//! via `CANDLE_VULKAN_TEST_GPU=1`).
 #![cfg(feature = "vulkan")]
 use candle_core::{backend::BackendDevice, backend::BackendStorage, VulkanDevice};
 use std::sync::LazyLock;
