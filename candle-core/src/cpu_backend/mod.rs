@@ -553,9 +553,10 @@ impl Map1 for UpsampleBilinear2D {
         let height_out = self.target_h;
         let width_out = self.target_w;
 
-        // Early return for identity case
+        // Early return for identity case. Copy through the layout so that strided or
+        // offset inputs return their logical values rather than the raw storage.
         if height_in == height_out && width_in == width_out {
-            return Ok(src.to_vec());
+            return Ok(unary_map(src, layout, |v| v));
         }
 
         let stride = layout.stride();
