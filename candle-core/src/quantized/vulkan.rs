@@ -113,7 +113,7 @@ impl QVulkanStorage {
         let out = VulkanStorage::new(&self.device, elem_count, DType::F32)?;
         let dst = match out.buffer() {
             crate::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!("out was created as F32"),
+            _ => crate::bail!("dequantize: out was created as F32"),
         };
         let src = self.src_bytes();
         // params[0] = num_blocks
@@ -196,7 +196,9 @@ impl QVulkanStorage {
             3 => (dims[0], dims[1]),
             _ => crate::bail!("quantized matmul: unsupported input rank {}", dims.len()),
         };
-        let k2 = *dims.last().unwrap();
+        let k2 = *dims.last().ok_or_else(|| {
+            crate::Error::Vulkan("quantized matmul: empty dims".to_string().into())
+        })?;
         if k2 != k {
             crate::bail!("mismatch on matmul dim {self_shape:?} {layout:?}");
         }

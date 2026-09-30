@@ -992,11 +992,19 @@ impl VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f32]> = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_pool2d_slang::<f32>(
@@ -1023,11 +1031,19 @@ impl VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_pool2d_slang::<half::f16>(
@@ -1054,11 +1070,19 @@ impl VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f64]> = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_pool2d_slang::<f64>(
@@ -1074,7 +1098,7 @@ impl VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(out)
     }
@@ -1164,19 +1188,19 @@ impl VulkanStorage {
             VulkanStorageBuffer::U32(b) => b
                 .clone()
                 .slice(ids_start as u64..(ids_start + ids_len) as u64),
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         };
         let src_sub: Subbuffer<[f32]> = match &src.buffer {
             VulkanStorageBuffer::F32(b) => b
                 .clone()
                 .slice(src_start as u64..(src_start + src_len) as u64),
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         };
         let dst_sub: Subbuffer<[f32]> = match &self.buffer {
             VulkanStorageBuffer::F32(b) => b
                 .clone()
                 .slice(dst_start as u64..(dst_start + dst_len) as u64),
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         };
         if total == 0 {
             return Ok(());
@@ -1228,13 +1252,21 @@ impl VulkanStorage {
                     VulkanStorageBuffer::F16(b) => b
                         .clone()
                         .slice(src_start as u64..(src_start + src_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let dst_sub: Subbuffer<[half::f16]> = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b
                         .clone()
                         .slice(dst_start as u64..(dst_start + dst_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let src_sub = src_sub.clone();
                 let dst_sub = dst_sub.clone();
@@ -1259,13 +1291,21 @@ impl VulkanStorage {
                     VulkanStorageBuffer::F64(b) => b
                         .clone()
                         .slice(src_start as u64..(src_start + src_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let dst_sub: Subbuffer<[f64]> = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b
                         .clone()
                         .slice(dst_start as u64..(dst_start + dst_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let src_sub = src_sub.clone();
                 let dst_sub = dst_sub.clone();
@@ -1285,7 +1325,7 @@ impl VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(())
     }
@@ -1423,11 +1463,15 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1449,11 +1493,15 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1475,11 +1523,15 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F8E4M3(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1501,11 +1553,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1527,11 +1579,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1548,7 +1600,11 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("supported dtype checked above"),
+            _ => {
+                return Err(Error::Vulkan(
+                    "supported dtype checked above".to_string().into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -1606,11 +1662,15 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1632,11 +1692,15 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1658,11 +1722,15 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F8E4M3(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1684,11 +1752,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1710,11 +1778,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1731,7 +1799,11 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("supported dtype checked above"),
+            _ => {
+                return Err(Error::Vulkan(
+                    "supported dtype checked above".to_string().into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -1785,11 +1857,15 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1811,11 +1887,15 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1837,11 +1917,15 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F8E4M3(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1863,11 +1947,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1889,11 +1973,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1910,7 +1994,11 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("supported dtype checked above"),
+            _ => {
+                return Err(Error::Vulkan(
+                    "supported dtype checked above".to_string().into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -1971,7 +2059,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_dtype = match op {
                     ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::F32,
@@ -1991,7 +2083,11 @@ impl BackendStorage for VulkanStorage {
                 let (out_f, out_i) = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => (Some(b.clone()), None),
                     VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let params_buf = Buffer::from_iter(
                     self.device.mem_alloc(),
@@ -2032,7 +2128,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_dtype = match op {
                     ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::F16,
@@ -2052,7 +2152,11 @@ impl BackendStorage for VulkanStorage {
                 let (out_f, out_i) = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => (Some(b.clone()), None),
                     VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let params_buf = Buffer::from_iter(
                     self.device.mem_alloc(),
@@ -2093,7 +2197,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_dtype = match op {
                     ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::F64,
@@ -2113,7 +2221,11 @@ impl BackendStorage for VulkanStorage {
                 let (out_f, out_i) = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => (Some(b.clone()), None),
                     VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let params_buf = Buffer::from_iter(
                     self.device.mem_alloc(),
@@ -2154,7 +2266,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_dtype = match op {
                     ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::BF16,
@@ -2174,7 +2290,11 @@ impl BackendStorage for VulkanStorage {
                 let (out_f, out_i) = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => (Some(b.clone()), None),
                     VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let params_buf = Buffer::from_iter(
                     self.device.mem_alloc(),
@@ -2210,7 +2330,7 @@ impl BackendStorage for VulkanStorage {
                 })?;
                 Ok(out)
             }
-            _ => unreachable!("dtype checked above"),
+            _ => Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
     }
 
@@ -2259,7 +2379,11 @@ impl BackendStorage for VulkanStorage {
         }
         let out_buf = match &out.buffer {
             VulkanStorageBuffer::U8(b) => b.clone(),
-            _ => unreachable!(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
         };
         let kernels = self.device.kernels();
         let lhs_dims: Vec<usize> = lhs_l.dims().to_vec();
@@ -2308,11 +2432,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqF32,
@@ -2343,11 +2467,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqBf16,
@@ -2378,11 +2502,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F8E4M3(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqF8e4m3,
@@ -2413,11 +2537,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqF16,
@@ -2448,11 +2572,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqF64,
@@ -2483,11 +2607,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::U8(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqU8,
@@ -2519,11 +2643,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::U32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqU32,
@@ -2555,11 +2679,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::I16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqI16,
@@ -2591,11 +2715,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::I32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqI32,
@@ -2627,11 +2751,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::I64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqI64,
@@ -2658,7 +2782,11 @@ impl BackendStorage for VulkanStorage {
                 })?;
             }
 
-            _ => unreachable!("supported dtype checked above"),
+            _ => {
+                return Err(Error::Vulkan(
+                    "supported dtype checked above".to_string().into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -2687,11 +2815,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2704,11 +2836,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2721,11 +2857,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2738,11 +2878,15 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2755,11 +2899,15 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2772,11 +2920,15 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2789,11 +2941,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2806,11 +2962,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2823,11 +2983,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2840,11 +3004,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2857,11 +3025,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2874,11 +3046,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2891,11 +3067,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2908,11 +3088,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2925,11 +3109,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2942,11 +3130,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2959,11 +3151,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2976,11 +3172,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -2993,11 +3193,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3010,11 +3214,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3027,11 +3235,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3044,11 +3256,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3061,11 +3277,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3078,11 +3298,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3095,11 +3319,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3112,11 +3340,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3129,11 +3361,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3146,11 +3382,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3163,11 +3403,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3180,11 +3424,15 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3197,11 +3445,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3214,11 +3466,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3231,11 +3487,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3248,11 +3508,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3265,11 +3529,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3282,11 +3550,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3299,11 +3571,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3316,11 +3592,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3333,11 +3613,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3350,11 +3634,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3367,11 +3655,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3384,11 +3676,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3401,11 +3697,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3418,11 +3718,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3435,11 +3739,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3452,11 +3760,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3469,11 +3781,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3486,11 +3802,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3503,11 +3823,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3520,11 +3844,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3537,11 +3865,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3554,11 +3886,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3571,11 +3907,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3588,11 +3928,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3605,11 +3949,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3622,11 +3970,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3639,11 +3991,15 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3656,11 +4012,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3673,11 +4033,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3690,11 +4054,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3707,11 +4075,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3724,11 +4096,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3741,11 +4117,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3758,11 +4138,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3775,11 +4159,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3792,11 +4180,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3809,11 +4201,15 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3826,11 +4222,15 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3843,11 +4243,15 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3860,11 +4264,15 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3877,11 +4285,15 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3894,11 +4306,15 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3911,11 +4327,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3928,11 +4348,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3945,11 +4369,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3962,11 +4390,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3979,11 +4411,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -3996,11 +4432,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4013,11 +4453,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4030,11 +4474,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4047,11 +4495,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4064,11 +4516,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4081,11 +4537,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4098,11 +4558,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4115,11 +4579,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4132,11 +4600,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4149,11 +4621,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4166,11 +4642,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4183,11 +4663,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4200,11 +4684,15 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.dispatch_to_dtype(
                     &input,
@@ -4283,11 +4771,15 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "log" => KernelName::UnaryLogF32,
@@ -4335,11 +4827,15 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "log" => KernelName::UnaryLogBf16,
@@ -4387,11 +4883,15 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F8E4M3(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "log" => KernelName::UnaryLogF8e4m3,
@@ -4439,11 +4939,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match B::NAME {
                     "log" => KernelName::UnaryLogF16,
@@ -4491,11 +4991,11 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match B::NAME {
                     "log" => KernelName::UnaryLogF64,
@@ -4538,7 +5038,11 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("supported dtype checked above"),
+            _ => {
+                return Err(Error::Vulkan(
+                    "supported dtype checked above".to_string().into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -4587,7 +5091,11 @@ impl BackendStorage for VulkanStorage {
         let start = if lhs_contiguous {
             match lhs_l.strided_blocks() {
                 crate::StridedBlocks::SingleBlock { start_offset, .. } => start_offset,
-                _ => unreachable!("lhs_contiguous checked above"),
+                _ => {
+                    return Err(Error::Vulkan(
+                        "lhs_contiguous checked above".to_string().into(),
+                    ))
+                }
             }
         } else {
             0
@@ -4659,15 +5167,19 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddF32,
@@ -4707,15 +5219,19 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddBf16,
@@ -4755,15 +5271,19 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddF8e4m3,
@@ -4803,15 +5323,15 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddF16,
@@ -4851,15 +5371,15 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddF64,
@@ -4899,15 +5419,15 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddU8,
@@ -4948,15 +5468,15 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddU32,
@@ -4997,15 +5517,15 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddI16,
@@ -5046,15 +5566,15 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddI32,
@@ -5095,15 +5615,15 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddI64,
@@ -5135,7 +5655,11 @@ impl BackendStorage for VulkanStorage {
                 })?;
             }
 
-            _ => unreachable!("supported dtype checked above"),
+            _ => {
+                return Err(Error::Vulkan(
+                    "supported dtype checked above".to_string().into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -5256,15 +5780,19 @@ impl BackendStorage for VulkanStorage {
             DType::F32 => {
                 let t_buf = match &t.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let f_buf = match &f.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let (t_buf, f_buf, out_buf, params) = (t_buf, f_buf, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -5286,15 +5814,19 @@ impl BackendStorage for VulkanStorage {
             DType::BF16 => {
                 let t_buf = match &t.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let f_buf = match &f.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let (t_buf, f_buf, out_buf, params) = (t_buf, f_buf, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -5316,15 +5848,19 @@ impl BackendStorage for VulkanStorage {
             DType::F8E4M3 => {
                 let t_buf = match &t.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let f_buf = match &f.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let (t_buf, f_buf, out_buf, params) = (t_buf, f_buf, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -5346,15 +5882,15 @@ impl BackendStorage for VulkanStorage {
             DType::F16 => {
                 let t_buf = match &t.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let f_buf = match &f.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let (t_buf, f_buf, out_buf, params) = (t_buf, f_buf, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -5376,15 +5912,15 @@ impl BackendStorage for VulkanStorage {
             DType::F64 => {
                 let t_buf = match &t.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let f_buf = match &f.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 };
                 let (t_buf, f_buf, out_buf, params) = (t_buf, f_buf, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -5403,7 +5939,11 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("supported dtype checked above"),
+            _ => {
+                return Err(Error::Vulkan(
+                    "supported dtype checked above".to_string().into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -5490,17 +6030,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[f32]> = match &kernel.buffer {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f32]> = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<f32>(
@@ -5522,17 +6074,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[half::f16]> = match &kernel.buffer {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<half::f16>(
@@ -5554,17 +6118,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[f64]> = match &kernel.buffer {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f64]> = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<f64>(
@@ -5581,7 +6157,7 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(out)
     }
@@ -5666,17 +6242,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[f32]> = match &kernel.buffer {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f32]> = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<f32>(
@@ -5698,17 +6286,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[half::f16]> = match &kernel.buffer {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<half::f16>(
@@ -5730,17 +6330,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[f64]> = match &kernel.buffer {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f64]> = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<f64>(
@@ -5757,7 +6369,7 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(out)
     }
@@ -5847,17 +6459,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[f32]> = match &kernel.buffer {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f32]> = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<f32>(
@@ -5879,17 +6503,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[half::f16]> = match &kernel.buffer {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<half::f16>(
@@ -5911,17 +6547,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[f64]> = match &kernel.buffer {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f64]> = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<f64>(
@@ -5938,7 +6586,7 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(out)
     }
@@ -6029,17 +6677,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[f32]> = match &kernel.buffer {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f32]> = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<f32>(
@@ -6061,17 +6721,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[half::f16]> = match &kernel.buffer {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<half::f16>(
@@ -6093,17 +6765,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[f64]> = match &kernel.buffer {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f64]> = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<f64>(
@@ -6125,17 +6809,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let w_buf: Subbuffer<[half::bf16]> = match &kernel.buffer {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[half::bf16]> = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_conv_slang::<half::bf16>(
@@ -6152,7 +6848,7 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(out)
     }
@@ -6252,11 +6948,19 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f32]> = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_upsample_slang::<f32>(
@@ -6277,11 +6981,19 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_upsample_slang::<half::f16>(
@@ -6302,11 +7014,19 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f64]> = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_upsample_slang::<f64>(
@@ -6322,7 +7042,7 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(out)
     }
@@ -6398,11 +7118,19 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f32]> = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_upsample_slang::<f32>(
@@ -6423,11 +7151,19 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_upsample_slang::<half::f16>(
@@ -6448,11 +7184,19 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f64]> = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_upsample_slang::<f64>(
@@ -6468,7 +7212,7 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(out)
     }
@@ -6578,11 +7322,19 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f32]> = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_upsample_slang::<f32>(
@@ -6603,11 +7355,19 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_upsample_slang::<half::f16>(
@@ -6628,11 +7388,19 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f64]> = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_upsample_slang::<f64>(
@@ -6648,7 +7416,7 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(out)
     }
@@ -6765,11 +7533,19 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => b
                         .clone()
                         .slice(emb_start as u64..(emb_start + emb_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f32]> = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let ids_buf = ids_buf.clone();
                 let emb_buf = emb_buf.clone();
@@ -6794,11 +7570,19 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => b
                         .clone()
                         .slice(emb_start as u64..(emb_start + emb_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let ids_buf = ids_buf.clone();
                 let emb_buf = emb_buf.clone();
@@ -6823,11 +7607,19 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => b
                         .clone()
                         .slice(emb_start as u64..(emb_start + emb_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f64]> = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let ids_buf = ids_buf.clone();
                 let emb_buf = emb_buf.clone();
@@ -6847,7 +7639,7 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(out)
     }
@@ -6936,11 +7728,11 @@ impl BackendStorage for VulkanStorage {
         self.device.synchronize()?;
         let dst_v: Vec<f32> = match &self.buffer {
             VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         };
         let src_v: Vec<f32> = match &src.buffer {
             VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         };
         let ids_cpu = match &ids.buffer {
             VulkanStorageBuffer::U32(b) => {
@@ -6970,7 +7762,11 @@ impl BackendStorage for VulkanStorage {
         let i_c = Layout::contiguous_with_offset(ids_dims.to_vec(), ids_start);
         dst_cpu.scatter_add_set(&l_c, &ids_cpu, &i_c, &src_cpu, &s_c, dim)?;
         let CpuStorage::F32(v) = dst_cpu else {
-            unreachable!("scatter_add only handles F32 data")
+            return Err(Error::Vulkan(
+                "scatter_add only handles F32 data on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
         };
         let updated = self.device.storage_from_cpu_storage(&CpuStorage::F32(v))?;
         self.buffer = updated.buffer;
@@ -7058,13 +7854,17 @@ impl BackendStorage for VulkanStorage {
             VulkanStorageBuffer::F32(b) => b
                 .clone()
                 .slice(src_start as u64..(src_start + src_len) as u64),
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         };
         let ids_buf = ids_u32.slice(ids_start as u64..(ids_start + ids_len) as u64);
         let out = VulkanStorage::new(&self.device, n_ids * dim_len, DType::F32)?;
         let out_buf = match &out.buffer {
             VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
         };
         if n_ids == 0 {
             return Ok(out);
@@ -7205,15 +8005,17 @@ impl BackendStorage for VulkanStorage {
                 ($dst_variant:ident, $dst_ty:ty, $ids_variant:ident, $ids_ty:ty, $kern:ident) => {
                     let dst_sub = match &self.buffer {
                         VulkanStorageBuffer::$dst_variant(b) => b.clone(),
-                        _ => unreachable!("dtype checked above"),
+                        _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                     };
                     let src_sub = match &src.buffer {
                         VulkanStorageBuffer::$dst_variant(b) => b.clone(),
-                        _ => unreachable!("dtype checked above"),
+                        _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                     };
                     let ids_sub = match &ids.buffer {
                         VulkanStorageBuffer::$ids_variant(b) => b.clone(),
-                        _ => unreachable!("ids dtype checked above"),
+                        _ => {
+                            return Err(Error::Vulkan("ids dtype checked above".to_string().into()))
+                        }
                     };
                     self.device.execute(move |cbb| {
                         candle_vulkan_kernels::call_index_add_slang::<$dst_ty, $ids_ty>(
@@ -7259,7 +8061,7 @@ impl BackendStorage for VulkanStorage {
                 (DType::F64, DType::U8) => {
                     dispatch_index_add!(F64, f64, U8, u8, IndexAddF64U8);
                 }
-                _ => unreachable!("dtype checked above"),
+                _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
             }
             return Ok(self.clone());
         }
@@ -7271,49 +8073,73 @@ impl BackendStorage for VulkanStorage {
             DType::F32 => {
                 let v: Vec<f32> = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 CpuStorage::F32(v)
             }
             DType::F16 => {
                 let v: Vec<half::f16> = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => Self::copy_to_host(&self.device, b)?,
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 CpuStorage::F16(v)
             }
             DType::F64 => {
                 let v: Vec<f64> = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => Self::copy_to_host(&self.device, b)?,
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 CpuStorage::F64(v)
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         };
         let src_cpu = match src.dtype {
             DType::F32 => {
                 let v: Vec<f32> = match &src.buffer {
                     VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 CpuStorage::F32(v)
             }
             DType::F16 => {
                 let v: Vec<half::f16> = match &src.buffer {
                     VulkanStorageBuffer::F16(b) => Self::copy_to_host(&self.device, b)?,
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 CpuStorage::F16(v)
             }
             DType::F64 => {
                 let v: Vec<f64> = match &src.buffer {
                     VulkanStorageBuffer::F64(b) => Self::copy_to_host(&self.device, b)?,
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 CpuStorage::F64(v)
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         };
         let ids_cpu = match &ids.buffer {
             VulkanStorageBuffer::U32(b) => {
@@ -7433,17 +8259,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => b
                         .clone()
                         .slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let rhs_buf: Subbuffer<[f32]> = match &rhs.buffer {
                     VulkanStorageBuffer::F32(b) => b
                         .clone()
                         .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f32]> = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_gemm_slang::<f32>(
@@ -7467,17 +8305,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => b
                         .clone()
                         .slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let rhs_buf: Subbuffer<[half::f16]> = match &rhs.buffer {
                     VulkanStorageBuffer::F16(b) => b
                         .clone()
                         .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_gemm_slang::<half::f16>(
@@ -7501,17 +8351,29 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => b
                         .clone()
                         .slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let rhs_buf: Subbuffer<[f64]> = match &rhs.buffer {
                     VulkanStorageBuffer::F64(b) => b
                         .clone()
                         .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let out_buf: Subbuffer<[f64]> = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_gemm_slang::<f64>(
@@ -7530,7 +8392,7 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(out)
     }
@@ -7568,13 +8430,21 @@ impl BackendStorage for VulkanStorage {
                             VulkanStorageBuffer::F32(b) => b
                                 .clone()
                                 .slice(start_offset as u64..(start_offset + len) as u64),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         let dst_sub = match &dst.buffer {
                             VulkanStorageBuffer::F32(b) => b
                                 .clone()
                                 .slice(dst_offset as u64..(dst_offset + len) as u64),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         self.device.execute(move |cbb| {
                             cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
@@ -7587,13 +8457,21 @@ impl BackendStorage for VulkanStorage {
                             VulkanStorageBuffer::F16(b) => b
                                 .clone()
                                 .slice(start_offset as u64..(start_offset + len) as u64),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         let dst_sub = match &dst.buffer {
                             VulkanStorageBuffer::F16(b) => b
                                 .clone()
                                 .slice(dst_offset as u64..(dst_offset + len) as u64),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         self.device.execute(move |cbb| {
                             cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
@@ -7606,13 +8484,21 @@ impl BackendStorage for VulkanStorage {
                             VulkanStorageBuffer::BF16(b) => b
                                 .clone()
                                 .slice(start_offset as u64..(start_offset + len) as u64),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         let dst_sub = match &dst.buffer {
                             VulkanStorageBuffer::BF16(b) => b
                                 .clone()
                                 .slice(dst_offset as u64..(dst_offset + len) as u64),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         self.device.execute(move |cbb| {
                             cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
@@ -7625,13 +8511,21 @@ impl BackendStorage for VulkanStorage {
                             VulkanStorageBuffer::U8(b) => b
                                 .clone()
                                 .slice(start_offset as u64..(start_offset + len) as u64),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         let dst_sub = match &dst.buffer {
                             VulkanStorageBuffer::U8(b) => b
                                 .clone()
                                 .slice(dst_offset as u64..(dst_offset + len) as u64),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         self.device.execute(move |cbb| {
                             cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
@@ -7639,7 +8533,7 @@ impl BackendStorage for VulkanStorage {
                             Ok(())
                         })?;
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 }
             }
             crate::StridedBlocks::UniformBlocks {
@@ -7679,11 +8573,19 @@ impl BackendStorage for VulkanStorage {
                     DType::F32 => {
                         let src_buf = match &self.buffer {
                             VulkanStorageBuffer::F32(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         let dst_buf = match &dst.buffer {
                             VulkanStorageBuffer::F32(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         self.device.execute(move |cbb| {
                             candle_vulkan_kernels::call_copy2d_slang::<f32>(
@@ -7702,11 +8604,19 @@ impl BackendStorage for VulkanStorage {
                     DType::F16 => {
                         let src_buf = match &self.buffer {
                             VulkanStorageBuffer::F16(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         let dst_buf = match &dst.buffer {
                             VulkanStorageBuffer::F16(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         self.device.execute(move |cbb| {
                             candle_vulkan_kernels::call_copy2d_slang::<half::f16>(
@@ -7725,11 +8635,19 @@ impl BackendStorage for VulkanStorage {
                     DType::BF16 => {
                         let src_buf = match &self.buffer {
                             VulkanStorageBuffer::BF16(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         let dst_buf = match &dst.buffer {
                             VulkanStorageBuffer::BF16(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         self.device.execute(move |cbb| {
                             candle_vulkan_kernels::call_copy2d_slang::<half::bf16>(
@@ -7748,11 +8666,19 @@ impl BackendStorage for VulkanStorage {
                     DType::U8 => {
                         let src_buf = match &self.buffer {
                             VulkanStorageBuffer::U8(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         let dst_buf = match &dst.buffer {
                             VulkanStorageBuffer::U8(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         self.device.execute(move |cbb| {
                             candle_vulkan_kernels::call_copy2d_slang::<u8>(
@@ -7768,7 +8694,7 @@ impl BackendStorage for VulkanStorage {
                             .map_err(|e| e.to_string())
                         })?;
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 }
             }
             crate::StridedBlocks::MultipleBlocks {
@@ -7816,11 +8742,19 @@ impl BackendStorage for VulkanStorage {
                     DType::F32 => {
                         let src_buf = match &self.buffer {
                             VulkanStorageBuffer::F32(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         let dst_buf = match &dst.buffer {
                             VulkanStorageBuffer::F32(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         self.device.execute(move |cbb| {
                             candle_vulkan_kernels::call_gather_idx_slang::<f32>(
@@ -7840,11 +8774,19 @@ impl BackendStorage for VulkanStorage {
                     DType::F16 => {
                         let src_buf = match &self.buffer {
                             VulkanStorageBuffer::F16(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         let dst_buf = match &dst.buffer {
                             VulkanStorageBuffer::F16(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         self.device.execute(move |cbb| {
                             candle_vulkan_kernels::call_gather_idx_slang::<half::f16>(
@@ -7864,11 +8806,19 @@ impl BackendStorage for VulkanStorage {
                     DType::BF16 => {
                         let src_buf = match &self.buffer {
                             VulkanStorageBuffer::BF16(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         let dst_buf = match &dst.buffer {
                             VulkanStorageBuffer::BF16(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         self.device.execute(move |cbb| {
                             candle_vulkan_kernels::call_gather_idx_slang::<half::bf16>(
@@ -7888,11 +8838,19 @@ impl BackendStorage for VulkanStorage {
                     DType::U8 => {
                         let src_buf = match &self.buffer {
                             VulkanStorageBuffer::U8(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         let dst_buf = match &dst.buffer {
                             VulkanStorageBuffer::U8(b) => b.clone(),
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
                         };
                         self.device.execute(move |cbb| {
                             candle_vulkan_kernels::call_gather_idx_slang::<u8>(
@@ -7909,7 +8867,7 @@ impl BackendStorage for VulkanStorage {
                             .map_err(|e| e.to_string())
                         })?;
                     }
-                    _ => unreachable!("dtype checked above"),
+                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
                 }
             }
         }
@@ -7966,11 +8924,19 @@ impl BackendStorage for VulkanStorage {
             DType::F32 => {
                 let src_buf = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let dst_buf = match &dst.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let src_buf = src_buf.clone();
                 let dst_buf = dst_buf.clone();
@@ -7992,11 +8958,19 @@ impl BackendStorage for VulkanStorage {
             DType::F16 => {
                 let src_buf: Subbuffer<[half::f16]> = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let dst_buf: Subbuffer<[half::f16]> = match &dst.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let src_buf = src_buf.clone();
                 let dst_buf = dst_buf.clone();
@@ -8018,11 +8992,19 @@ impl BackendStorage for VulkanStorage {
             DType::F64 => {
                 let src_buf: Subbuffer<[f64]> = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let dst_buf: Subbuffer<[f64]> = match &dst.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
                 };
                 let src_buf = src_buf.clone();
                 let dst_buf = dst_buf.clone();
@@ -8041,7 +9023,7 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(())
     }
@@ -8114,7 +9096,7 @@ impl BackendStorage for VulkanStorage {
                         .map_err(|e| e.to_string())
                 })?;
             }
-            _ => unreachable!("dtype checked above"),
+            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
         }
         Ok(())
     }
@@ -8147,14 +9129,14 @@ impl VulkanStorage {
             };
             let buf = match &s.buffer {
                 VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
-                _ => unreachable!("dtype is F32"),
+                _ => return Err(Error::Vulkan("dtype is F32".to_string().into())),
             };
             return Ok((buf, None));
         }
         let f32 = s.to_dtype(l, DType::F32)?;
         let buf = match &f32.buffer {
             VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!("converted to F32"),
+            _ => return Err(Error::Vulkan("converted to F32".to_string().into())),
         };
         Ok((buf, Some(f32)))
     }
@@ -8193,7 +9175,9 @@ impl VulkanStorage {
                 "rms_norm: needs >= 2 dims".to_string().into(),
             ));
         }
-        let n = *dims.last().unwrap();
+        let n = *dims
+            .last()
+            .ok_or_else(|| Error::Vulkan("empty dims".to_string().into()))?;
         let n_rows: usize = dims[..dims.len() - 1].iter().product();
         if n_rows == 0 || n == 0 {
             return self.device.zeros_impl(l.shape(), self.dtype);
@@ -8209,7 +9193,11 @@ impl VulkanStorage {
         let out = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
         let out_buf = match &out.buffer {
             VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
         };
         let params = self.alloc_params(vec![n_rows as f32, n as f32, eps as f32])?;
         let kernels = self.device.kernels();
@@ -8243,7 +9231,9 @@ impl VulkanStorage {
         if dims.is_empty() {
             return Err(Error::Vulkan("softmax: needs >= 1 dim".to_string().into()));
         }
-        let n = *dims.last().unwrap();
+        let n = *dims
+            .last()
+            .ok_or_else(|| Error::Vulkan("empty dims".to_string().into()))?;
         let n_rows: usize = dims[..dims.len() - 1].iter().product();
         if n_rows == 0 || n == 0 {
             return self.device.zeros_impl(l.shape(), self.dtype);
@@ -8258,7 +9248,11 @@ impl VulkanStorage {
         let out = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
         let out_buf = match &out.buffer {
             VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
         };
         let params = self.alloc_params(vec![n_rows as f32, n as f32])?;
         let kernels = self.device.kernels();
@@ -8324,7 +9318,11 @@ impl VulkanStorage {
         let out = VulkanStorage::new(&self.device, n_el, DType::F32)?;
         let out_buf = match &out.buffer {
             VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => unreachable!(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
         };
         let n_threads = b * h * t * half;
         let params = self.alloc_params(vec![(b * h) as f32, t as f32, d as f32])?;

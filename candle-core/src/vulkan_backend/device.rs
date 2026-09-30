@@ -370,7 +370,10 @@ impl VulkanDevice {
             cbb.fill_buffer(dst, 0).map_err(|e| e.to_string())?;
             Ok(())
         })?;
-        self.keepalive_f32.lock().unwrap().push(buffer.clone());
+        self.keepalive_f32
+            .lock()
+            .map_err(|e| Error::Vulkan(e.to_string().into()))?
+            .push(buffer.clone());
         Ok(buffer)
     }
 
@@ -395,7 +398,10 @@ impl VulkanDevice {
             cbb.fill_buffer(dst, 0).map_err(|e| e.to_string())?;
             Ok(())
         })?;
-        self.keepalive_u32.lock().unwrap().push(buffer.clone());
+        self.keepalive_u32
+            .lock()
+            .map_err(|e| Error::Vulkan(e.to_string().into()))?
+            .push(buffer.clone());
         Ok(buffer)
     }
 
@@ -414,7 +420,10 @@ impl VulkanDevice {
             + Send
             + 'static,
     {
-        self.pending.lock().unwrap().push(Box::new(encode));
+        self.pending
+            .lock()
+            .map_err(|e| Error::Vulkan(e.to_string().into()))?
+            .push(Box::new(encode));
         Ok(())
     }
 
@@ -423,11 +432,15 @@ impl VulkanDevice {
     /// the buffers it uses alive until the work completes, since the
     /// allocators recycle dropped resources), and waits for completion.
     pub fn synchronize(&self) -> Result<()> {
-        let encodes = std::mem::take(&mut *self.pending.lock().unwrap());
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let encodes = std::mem::take(&mut *pending);
         if std::env::var("CANDLE_VULKAN_TRACE").is_ok() && !encodes.is_empty() {
             let counts = candle_vulkan_kernels::trace_counts();
             let total: u64 = counts.iter().map(|(_, c)| c).sum();
-            eprintln!(
+            tracing::debug!(
                 "vulkan: drain {} dispatches ({})",
                 encodes.len(),
                 counts
@@ -460,8 +473,13 @@ impl VulkanDevice {
                 % FENCE_RING_SIZE;
             let cbb_submit = cbb.clone();
             let fence = {
-                let mut ring = self.fence_ring.lock().unwrap();
-                let slot = ring.get_mut(idx).expect("fence ring index in range");
+                let mut ring = self
+                    .fence_ring
+                    .lock()
+                    .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                let slot = ring.get_mut(idx).ok_or_else(|| {
+                    Error::Vulkan("fence ring index out of range".to_string().into())
+                })?;
                 if slot.cbb.is_some() {
                     slot.fence
                         .wait(None)
@@ -490,10 +508,16 @@ impl VulkanDevice {
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
             // The batch is done on the GPU: release the keep-alive refs so
             // the allocator can recycle the memory for the next batch.
-            self.keepalive_f32.lock().unwrap().clear();
-            self.keepalive_u32.lock().unwrap().clear();
+            self.keepalive_f32
+                .lock()
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?
+                .clear();
+            self.keepalive_u32
+                .lock()
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?
+                .clear();
             if std::env::var("CANDLE_VULKAN_PROFILE").is_ok() {
-                eprintln!(
+                tracing::debug!(
                     "vulkan profile: {} encodes, encode+build {:?}, submit+wait {:?}",
                     n_encodes,
                     t_build,
