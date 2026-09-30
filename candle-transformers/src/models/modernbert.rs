@@ -8,8 +8,8 @@
 
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
-    embedding, layer_norm_no_bias, linear, linear_no_bias, ops::softmax, Embedding, LayerNorm,
-    Linear, Module, VarBuilder,
+    embedding, layer_norm_no_bias, linear, linear_no_bias, ops::softmax, Activation, Embedding,
+    LayerNorm, Linear, Module, VarBuilder,
 };
 use serde::Deserialize;
 
@@ -31,6 +31,9 @@ pub struct Config {
     pub global_rope_theta: f64,
     pub local_attention: usize,
     pub local_rope_theta: f64,
+    /// Activation used in the gated MLP, defaults to `gelu` as in the reference implementation.
+    #[serde(default)]
+    pub hidden_activation: Activation,
     #[serde(default)]
     #[serde(flatten)]
     pub classifier_config: Option<ClassifierConfig>,
@@ -152,6 +155,7 @@ impl ModernBertAttention {
 pub struct ModernBertMLP {
     wi: Linear,
     wo: Linear,
+    act: Activation,
 }
 
 impl ModernBertMLP {
@@ -162,7 +166,11 @@ impl ModernBertMLP {
             vb.pp("Wi"),
         )?;
         let wo = linear_no_bias(config.intermediate_size, config.hidden_size, vb.pp("Wo"))?;
-        Ok(Self { wi, wo })
+        Ok(Self {
+            wi,
+            wo,
+            act: config.hidden_activation,
+        })
     }
 }
 
@@ -170,7 +178,7 @@ impl Module for ModernBertMLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = xs.apply(&self.wi)?;
         let xs = xs.chunk(2, D::Minus1)?;
-        let xs = (&xs[0].gelu_erf()? * &xs[1])?.apply(&self.wo)?; // GeGLU
+        let xs = (&xs[0].apply(&self.act)? * &xs[1])?.apply(&self.wo)?; // GeGLU, SwiGLU when silu
         Ok(xs)
     }
 }
@@ -500,5 +508,60 @@ impl ModernBertForSequenceClassification {
             .forward(&last_hidden_state)?
             .apply(&self.classifier)?;
         Ok(xs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    fn config_json(hidden_activation: Option<&str>) -> String {
+        let hidden_activation = match hidden_activation {
+            Some(activation) => format!("\"hidden_activation\": \"{activation}\","),
+            None => String::new(),
+        };
+        format!(
+            r#"{{
+            "architectures": [
+              "ModernBertForMaskedLM"
+            ],
+            "attention_bias": false,
+            "global_attn_every_n_layers": 3,
+            "global_rope_theta": 160000.0,
+            {hidden_activation}
+            "hidden_size": 768,
+            "intermediate_size": 1152,
+            "layer_norm_eps": 1e-05,
+            "local_attention": 128,
+            "local_rope_theta": 10000.0,
+            "max_position_embeddings": 8192,
+            "model_type": "modernbert",
+            "norm_bias": false,
+            "num_attention_heads": 12,
+            "num_hidden_layers": 22,
+            "pad_token_id": 50283,
+            "vocab_size": 50368
+          }}"#
+        )
+    }
+
+    #[test]
+    fn test_config_json_load() {
+        let config: Config = serde_json::from_str(&config_json(Some("gelu"))).unwrap();
+        assert_eq!(Activation::Gelu, config.hidden_activation);
+        assert_eq!(1e-5, config.layer_norm_eps);
+    }
+
+    #[test]
+    fn test_config_json_load_silu_activation() {
+        let config: Config = serde_json::from_str(&config_json(Some("silu"))).unwrap();
+        assert_eq!(Activation::Silu, config.hidden_activation);
+    }
+
+    #[test]
+    fn test_config_json_load_default_activation() {
+        let config: Config = serde_json::from_str(&config_json(None)).unwrap();
+        assert_eq!(Activation::Gelu, config.hidden_activation);
     }
 }
