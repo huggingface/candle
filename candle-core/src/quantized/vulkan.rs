@@ -95,6 +95,11 @@ impl QVulkanStorage {
         }
     }
 
+    /// Replaces the quantized bytes with `bytes` (same dtype and size).
+    pub fn set_bytes(&mut self, bytes: VulkanStorage) {
+        self.bytes = bytes;
+    }
+
     /// Dequantizes `elem_count` elements to an f32 `VulkanStorage`.
     pub fn dequantize(&self, elem_count: usize) -> Result<VulkanStorage> {
         let block = self.dtype.block_size();

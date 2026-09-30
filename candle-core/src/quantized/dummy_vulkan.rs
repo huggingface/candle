@@ -81,6 +81,8 @@ impl QVulkanStorage {
         Err(Error::NotCompiledWithVulkanSupport)
     }
 
+    pub fn set_bytes(&mut self, _bytes: VulkanStorage) {}
+
     pub fn indexed_moe_forward(
         &self,
         _: &crate::Shape,

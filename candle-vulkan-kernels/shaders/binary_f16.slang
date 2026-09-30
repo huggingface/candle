@@ -32,6 +32,31 @@ uint rhs_offset(uint i)
     return off;
 }
 
+uint lhs_offset(uint i)
+{
+    // Map the output linear index to an index into the (possibly broadcast)
+    // lhs data. Decompose over the output dims, then re-encode over the lhs
+    // data dims (broadcast dims of 1 contribute 0).
+    uint lhs_ndim = uint(g_Params[1]);
+    uint lhs_data_ndim = uint(g_Params[11]);
+    if (lhs_data_ndim == 0u) { return 0u; }
+    uint idx[4];
+    uint rem = i;
+    for (uint d = 0u; d < lhs_ndim; d += 1u)
+    {
+        uint dim = uint(g_Params[3u + (lhs_ndim - 1u - d)]);
+        idx[lhs_ndim - 1u - d] = rem % dim;
+        rem = rem / dim;
+    }
+    uint off = 0u;
+    for (uint j = 0u; j < lhs_data_ndim; j += 1u)
+    {
+        uint l = uint(g_Params[12u + j]);
+        uint lidx = idx[lhs_ndim - lhs_data_ndim + j];
+        off = off * l + (l != 1u ? lidx : 0u);
+    }
+    return off;
+}
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main_maximum(uint3 dispatchThreadID : SV_DispatchThreadID)
@@ -39,7 +64,7 @@ void main_maximum(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint idx = dispatchThreadID.x;
     if (idx < uint(g_Params[0]))
     {
-        g_Out[idx] = max(g_In[idx], g_Rhs[rhs_offset(idx)]);
+        g_Out[idx] = max(g_In[lhs_offset(idx)], g_Rhs[rhs_offset(idx)]);
     }
 }
 
@@ -50,7 +75,7 @@ void main_minimum(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint idx = dispatchThreadID.x;
     if (idx < uint(g_Params[0]))
     {
-        g_Out[idx] = min(g_In[idx], g_Rhs[rhs_offset(idx)]);
+        g_Out[idx] = min(g_In[lhs_offset(idx)], g_Rhs[rhs_offset(idx)]);
     }
 }
 [shader("compute")]
@@ -60,7 +85,7 @@ void main_add(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint idx = dispatchThreadID.x;
     if (idx < uint(g_Params[0]))
     {
-        g_Out[idx] = g_In[idx] + g_Rhs[rhs_offset(idx)];
+        g_Out[idx] = g_In[lhs_offset(idx)] + g_Rhs[rhs_offset(idx)];
     }
 }
 [shader("compute")]
@@ -70,7 +95,7 @@ void main_sub(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint idx = dispatchThreadID.x;
     if (idx < uint(g_Params[0]))
     {
-        g_Out[idx] = g_In[idx] - g_Rhs[rhs_offset(idx)];
+        g_Out[idx] = g_In[lhs_offset(idx)] - g_Rhs[rhs_offset(idx)];
     }
 }
 [shader("compute")]
@@ -80,7 +105,7 @@ void main_mul(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint idx = dispatchThreadID.x;
     if (idx < uint(g_Params[0]))
     {
-        g_Out[idx] = g_In[idx] * g_Rhs[rhs_offset(idx)];
+        g_Out[idx] = g_In[lhs_offset(idx)] * g_Rhs[rhs_offset(idx)];
     }
 }
 [shader("compute")]
@@ -90,6 +115,6 @@ void main_div(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint idx = dispatchThreadID.x;
     if (idx < uint(g_Params[0]))
     {
-        g_Out[idx] = g_In[idx] / g_Rhs[rhs_offset(idx)];
+        g_Out[idx] = g_In[lhs_offset(idx)] / g_Rhs[rhs_offset(idx)];
     }
 }

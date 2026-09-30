@@ -7,6 +7,9 @@ const GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm.spv"));
 const GEMM_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm_f16.spv"));
 const GEMM_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm_f64.spv"));
 const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
+const CONST_SET_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f16.spv"));
+const CONST_SET_BF16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/const_set_bf16.spv"));
 const UNARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary.spv"));
 const BINARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary.spv"));
 const CMP_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp.spv"));
@@ -44,12 +47,17 @@ const CMP_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_i64.spv
 const COPY2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d.spv"));
 const COPY2D_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_f16.spv"));
 const COPY2D_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_f64.spv"));
+const COPY2D_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_bf16.spv"));
+const COPY2D_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_u8.spv"));
 const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx.spv"));
 const GATHER_IDX_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_f16.spv"));
 const GATHER_IDX_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_f64.spv"));
+const GATHER_IDX_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_bf16.spv"));
+const GATHER_IDX_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_u8.spv"));
 const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_ops.spv"));
 const REDUCE_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f16.spv"));
 const REDUCE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f64.spv"));
+const REDUCE_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_bf16.spv"));
 const POOL2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d.spv"));
 const POOL2D_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d_f16.spv"));
 const POOL2D_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d_f64.spv"));
@@ -59,6 +67,7 @@ const UPSAMPLE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/upsamp
 const CONV_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv.spv"));
 const CONV_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv_f16.spv"));
 const CONV_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv_f64.spv"));
+const CONV_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv_bf16.spv"));
 const SCATTER_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scatter.spv"));
 const SCATTER_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scatter_f16.spv"));
 const SCATTER_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scatter_f64.spv"));
@@ -328,6 +337,8 @@ pub enum Source {
     GemmF16,
     GemmF64,
     ConstSet,
+    ConstSetF16,
+    ConstSetBf16,
     UnarySlang,
     BinarySlang,
     CmpSlang,
@@ -365,12 +376,17 @@ pub enum Source {
     Copy2dSlang,
     Copy2dF16,
     Copy2dF64,
+    Copy2dBf16,
+    Copy2dU8,
     GatherIdxSlang,
     GatherIdxF16,
     GatherIdxF64,
+    GatherIdxBf16,
+    GatherIdxU8,
     ReduceSlang,
     ReduceF16,
     ReduceF64,
+    ReduceBf16,
     Pool2dSlang,
     Pool2dF16,
     Pool2dF64,
@@ -380,6 +396,7 @@ pub enum Source {
     ConvSlang,
     ConvF16,
     ConvF64,
+    ConvBf16,
     ScatterSlang,
     ScatterF16,
     ScatterF64,
@@ -523,7 +540,7 @@ impl Source {
     /// accesses, otherwise dispatch fails validation.
     pub fn push_constant_size(self, name: KernelName) -> u32 {
         match name {
-            KernelName::ConstSetF32 => 0,
+            KernelName::ConstSetF32 | KernelName::ConstSetF16 | KernelName::ConstSetBf16 => 0,
             KernelName::UnaryLogF32
             | KernelName::UnaryAbsF32
             | KernelName::UnaryRecipF32
@@ -751,6 +768,8 @@ impl Source {
             | KernelName::Copy2dF32
             | KernelName::Copy2dF16
             | KernelName::Copy2dF64
+            | KernelName::Copy2dBf16
+            | KernelName::Copy2dU8
             | KernelName::GatherIdxF32
             | KernelName::GatherRowsF32
             | KernelName::IndexSelectF32
@@ -758,6 +777,8 @@ impl Source {
             | KernelName::GatherRowsF16
             | KernelName::IndexSelectF16
             | KernelName::GatherIdxF64
+            | KernelName::GatherIdxBf16
+            | KernelName::GatherIdxU8
             | KernelName::GatherRowsF64
             | KernelName::IndexSelectF64
             | KernelName::ReduceMinF32
@@ -775,6 +796,11 @@ impl Source {
             | KernelName::ReduceMinF64
             | KernelName::ReduceArgMinF64
             | KernelName::ReduceArgMaxF64
+            | KernelName::ReduceSumBf16
+            | KernelName::ReduceMaxBf16
+            | KernelName::ReduceMinBf16
+            | KernelName::ReduceArgMinBf16
+            | KernelName::ReduceArgMaxBf16
             | KernelName::AffineF32
             | KernelName::BinaryAddF32
             | KernelName::BinarySubF32
@@ -816,6 +842,7 @@ impl Source {
             | KernelName::Conv2dF64
             | KernelName::ConvTranspose1dF64
             | KernelName::ConvTranspose2dF64
+            | KernelName::ConvTranspose2dBf16
             | KernelName::ScatterF32
             | KernelName::ScatterF16
             | KernelName::ScatterF64 => 0,
@@ -963,6 +990,8 @@ impl Source {
             Self::GemmF16 => GEMM_F16_SPV,
             Self::GemmF64 => GEMM_F64_SPV,
             Self::ConstSet => CONST_SET_SPV,
+            Self::ConstSetF16 => CONST_SET_F16_SPV,
+            Self::ConstSetBf16 => CONST_SET_BF16_SPV,
             Self::UnarySlang => UNARY_SLANG_SPV,
             Self::BinarySlang => BINARY_SLANG_SPV,
             Self::CmpSlang => CMP_SLANG_SPV,
@@ -1000,12 +1029,17 @@ impl Source {
             Self::Copy2dSlang => COPY2D_SLANG_SPV,
             Self::Copy2dF16 => COPY2D_F16_SPV,
             Self::Copy2dF64 => COPY2D_F64_SPV,
+            Self::Copy2dBf16 => COPY2D_BF16_SPV,
+            Self::Copy2dU8 => COPY2D_U8_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
             Self::GatherIdxF16 => GATHER_IDX_F16_SPV,
             Self::GatherIdxF64 => GATHER_IDX_F64_SPV,
+            Self::GatherIdxBf16 => GATHER_IDX_BF16_SPV,
+            Self::GatherIdxU8 => GATHER_IDX_U8_SPV,
             Self::ReduceSlang => REDUCE_SLANG_SPV,
             Self::ReduceF16 => REDUCE_F16_SPV,
             Self::ReduceF64 => REDUCE_F64_SPV,
+            Self::ReduceBf16 => REDUCE_BF16_SPV,
             Self::Pool2dSlang => POOL2D_SLANG_SPV,
             Self::Pool2dF16 => POOL2D_F16_SPV,
             Self::Pool2dF64 => POOL2D_F64_SPV,
@@ -1015,6 +1049,7 @@ impl Source {
             Self::ConvSlang => CONV_SLANG_SPV,
             Self::ConvF16 => CONV_F16_SPV,
             Self::ConvF64 => CONV_F64_SPV,
+            Self::ConvBf16 => CONV_BF16_SPV,
             Self::ScatterSlang => SCATTER_SLANG_SPV,
             Self::ScatterF16 => SCATTER_F16_SPV,
             Self::ScatterF64 => SCATTER_F64_SPV,
@@ -1166,6 +1201,8 @@ impl AsRef<str> for Source {
             Self::GemmF16 => "gemm_f16",
             Self::GemmF64 => "gemm_f64",
             Self::ConstSet => "const_set",
+            Self::ConstSetF16 => "const_set_f16",
+            Self::ConstSetBf16 => "const_set_bf16",
             Self::UnarySlang => "unary",
             Self::BinarySlang => "binary",
             Self::CmpSlang => "cmp",
@@ -1203,12 +1240,17 @@ impl AsRef<str> for Source {
             Self::Copy2dSlang => "copy2d",
             Self::Copy2dF16 => "copy2d_f16",
             Self::Copy2dF64 => "copy2d_f64",
+            Self::Copy2dBf16 => "copy2d_bf16",
+            Self::Copy2dU8 => "copy2d_u8",
             Self::GatherIdxSlang => "gather_idx",
             Self::GatherIdxF16 => "gather_idx_f16",
             Self::GatherIdxF64 => "gather_idx_f64",
+            Self::GatherIdxBf16 => "gather_idx_bf16",
+            Self::GatherIdxU8 => "gather_idx_u8",
             Self::ReduceSlang => "reduce",
             Self::ReduceF16 => "reduce_f16",
             Self::ReduceF64 => "reduce_f64",
+            Self::ReduceBf16 => "reduce_bf16",
             Self::Pool2dSlang => "pool2d",
             Self::Pool2dF16 => "pool2d_f16",
             Self::Pool2dF64 => "pool2d_f64",
@@ -1218,6 +1260,7 @@ impl AsRef<str> for Source {
             Self::ConvSlang => "conv",
             Self::ConvF16 => "conv_f16",
             Self::ConvF64 => "conv_f64",
+            Self::ConvBf16 => "conv_bf16",
             Self::ScatterSlang => "scatter",
             Self::ScatterF16 => "scatter_f16",
             Self::ScatterF64 => "scatter_f64",

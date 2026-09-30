@@ -1,5 +1,6 @@
 use crate::{
-    backend::BackendStorage, CpuStorage, DType, Device, Result, Shape, Storage, Tensor, D,
+    backend::{BackendDevice, BackendStorage},
+    CpuStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
 use k_quants::*;
 use std::borrow::Cow;
@@ -208,6 +209,24 @@ impl QStorage {
             }
             (QStorage::Metal(storage), Storage::Metal(src)) => storage.quantize(src)?,
             (QStorage::Cuda(storage), Storage::Cuda(src)) => storage.quantize(src)?,
+            (QStorage::Vulkan(storage), Storage::Vulkan(src)) => {
+                // No GPU quantize kernel: read the float data back to the CPU,
+                // quantize with the CPU path, then upload the quantized bytes.
+                let cpu = src.to_cpu_storage()?;
+                let f32_data = match cpu {
+                    crate::CpuStorage::F32(b) => b,
+                    _ => crate::bail!("vulkan quantize: expected an f32 source"),
+                };
+                let elem_count = f32_data.len();
+                let dtype = storage.dtype();
+                let mut cpu_q = Device::Cpu.qzeros(elem_count, dtype)?;
+                cpu_q.quantize(&Storage::Cpu(crate::CpuStorage::F32(f32_data)))?;
+                let bytes = cpu_q.data()?.into_owned();
+                let vulkan_bytes = storage
+                    .device()
+                    .storage_from_cpu_storage(&crate::CpuStorage::U8(bytes))?;
+                storage.set_bytes(vulkan_bytes);
+            }
             _ => crate::bail!("Invalid quantize storage locations do not match"),
         }
         Ok(())

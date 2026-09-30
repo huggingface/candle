@@ -30,6 +30,8 @@ pub enum KernelName {
     GemmF16,
     GemmF64,
     ConstSetF32,
+    ConstSetF16,
+    ConstSetBf16,
     UnaryLogF32,
     UnaryAbsF32,
     UnaryRecipF32,
@@ -267,6 +269,8 @@ pub enum KernelName {
     Copy2dF32,
     Copy2dF16,
     Copy2dF64,
+    Copy2dBf16,
+    Copy2dU8,
     GatherIdxF32,
     GatherRowsF32,
     IndexSelectF32,
@@ -274,6 +278,8 @@ pub enum KernelName {
     GatherRowsF16,
     IndexSelectF16,
     GatherIdxF64,
+    GatherIdxBf16,
+    GatherIdxU8,
     GatherRowsF64,
     IndexSelectF64,
     ReduceMinF32,
@@ -289,6 +295,11 @@ pub enum KernelName {
     ReduceMinF64,
     ReduceArgMinF64,
     ReduceArgMaxF64,
+    ReduceSumBf16,
+    ReduceMaxBf16,
+    ReduceMinBf16,
+    ReduceArgMinBf16,
+    ReduceArgMaxBf16,
     AvgPool2dF32,
     MaxPool2dF32,
     UpsampleNearest1dF32,
@@ -316,6 +327,7 @@ pub enum KernelName {
     Conv2dF64,
     ConvTranspose1dF64,
     ConvTranspose2dF64,
+    ConvTranspose2dBf16,
     ScatterF32,
     ScatterF16,
     ScatterF64,
@@ -463,6 +475,8 @@ impl AsRef<str> for KernelName {
             Self::GemmF16 => "main",
             Self::GemmF64 => "main",
             Self::ConstSetF32 => "main",
+            Self::ConstSetF16 => "main",
+            Self::ConstSetBf16 => "main",
             Self::UnaryLogF32 => "main_log",
             Self::UnaryAbsF32 => "main_abs",
             Self::UnaryRecipF32 => "main_recip",
@@ -700,6 +714,8 @@ impl AsRef<str> for KernelName {
             Self::Copy2dF32 => "main",
             Self::Copy2dF16 => "main",
             Self::Copy2dF64 => "main",
+            Self::Copy2dBf16 => "main",
+            Self::Copy2dU8 => "main",
             Self::GatherIdxF32 => "main",
             Self::GatherRowsF32 => "main_gather_rows",
             Self::IndexSelectF32 => "main_index_select",
@@ -707,6 +723,8 @@ impl AsRef<str> for KernelName {
             Self::GatherRowsF16 => "main_gather_rows",
             Self::IndexSelectF16 => "main_index_select",
             Self::GatherIdxF64 => "main",
+            Self::GatherIdxBf16 => "main",
+            Self::GatherIdxU8 => "main",
             Self::GatherRowsF64 => "main_gather_rows",
             Self::IndexSelectF64 => "main_index_select",
             Self::ReduceMinF32 => "main_reduce_min",
@@ -722,6 +740,12 @@ impl AsRef<str> for KernelName {
             Self::ReduceMinF64 => "main_reduce_min",
             Self::ReduceArgMinF64 => "main_reduce_argmin",
             Self::ReduceArgMaxF64 => "main_reduce_argmax",
+            Self::ReduceSumBf16 => "main_reduce_sum",
+            Self::ReduceMaxBf16 => "main_reduce_max",
+            Self::ReduceMinBf16 => "main_reduce_min",
+            Self::ReduceArgMinBf16 => "main_reduce_argmin",
+            Self::ReduceArgMaxBf16 => "main_reduce_argmax",
+
             Self::AvgPool2dF32 => "main_avg_pool2d",
             Self::MaxPool2dF32 => "main_max_pool2d",
             Self::UpsampleNearest1dF32 => "main_upsample_nearest1d",
@@ -749,6 +773,7 @@ impl AsRef<str> for KernelName {
             Self::Conv2dF64 => "main_conv2d",
             Self::ConvTranspose1dF64 => "main_conv_transpose1d",
             Self::ConvTranspose2dF64 => "main_conv_transpose2d",
+            Self::ConvTranspose2dBf16 => "main_conv_transpose2d",
             Self::ScatterF32 => "main",
             Self::ScatterF16 => "main",
             Self::ScatterF64 => "main",
@@ -1039,6 +1064,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         KernelName::Softmax => 3,
         KernelName::Rope => 5,
         KernelName::ConstSetF32
+        | KernelName::ConstSetF16
+        | KernelName::ConstSetBf16
         | KernelName::UnaryLogF32
         | KernelName::UnaryAbsF32
         | KernelName::UnaryRecipF32
@@ -1275,6 +1302,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         KernelName::Copy2dF32
         | KernelName::Copy2dF16
         | KernelName::Copy2dF64
+        | KernelName::Copy2dBf16
+        | KernelName::Copy2dU8
         => 3,
         KernelName::GatherIdxF32 => 4,
         KernelName::GatherRowsF32 => 4,
@@ -1283,6 +1312,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::GatherRowsF16
         | KernelName::IndexSelectF16
         | KernelName::GatherIdxF64
+        | KernelName::GatherIdxBf16
+        | KernelName::GatherIdxU8
         | KernelName::GatherRowsF64
         | KernelName::IndexSelectF64
         => 4,
@@ -1301,6 +1332,11 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::ReduceMinF64
         | KernelName::ReduceArgMinF64
         | KernelName::ReduceArgMaxF64
+        | KernelName::ReduceSumBf16
+        | KernelName::ReduceMaxBf16
+        | KernelName::ReduceMinBf16
+        | KernelName::ReduceArgMinBf16
+        | KernelName::ReduceArgMaxBf16
         | KernelName::AvgPool2dF32
         | KernelName::MaxPool2dF32
         | KernelName::UpsampleNearest1dF32
@@ -1329,6 +1365,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Conv2dF64
         | KernelName::ConvTranspose1dF64
         | KernelName::ConvTranspose2dF64
+        | KernelName::ConvTranspose2dBf16
         => 4,
         KernelName::ScatterF32
         | KernelName::ScatterF16
