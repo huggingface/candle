@@ -1,7 +1,12 @@
 //! Chat template support for LLM examples
 //!
-//! This module provides Jinja-based chat template rendering compatible with
-//! HuggingFace's `tokenizer.apply_chat_template()` functionality.
+//! This renders a model's Jinja chat template the same way
+//! `transformers.apply_chat_template(..., tokenize=False)` does, by delegating to the
+//! [`hf-chat-template`](https://crates.io/crates/hf-chat-template) crate. That crate is checked
+//! byte-for-byte against `transformers` over a corpus of real models, so templates that use
+//! Python string methods (`strip`, `split`, `startswith`, ...), `strftime_now`, named
+//! sub-templates, or Jinja `trim_blocks`/`lstrip_blocks` behaviour render correctly here too.
+//! The public API of this module is unchanged.
 //!
 //! # Example
 //!
@@ -32,8 +37,12 @@
 //! # }
 //! ```
 
-use minijinja::{context, Environment};
+use hf_chat_template::{
+    ChatTemplate as Renderer, ChatTemplateField, Message as RenderMessage, RenderInput, TokenField,
+    TokenizerConfig,
+};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
 use std::path::Path;
 
 /// A chat message with role and content
@@ -98,128 +107,48 @@ impl ChatTemplateOptions {
     }
 }
 
-/// Token configuration loaded from tokenizer_config.json
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct TokenConfig {
-    #[serde(default)]
-    pub bos_token: Option<StringOrToken>,
-    #[serde(default)]
-    pub eos_token: Option<StringOrToken>,
-    #[serde(default)]
-    pub unk_token: Option<StringOrToken>,
-    #[serde(default)]
-    pub pad_token: Option<StringOrToken>,
-    #[serde(default)]
-    pub chat_template: Option<ChatTemplateConfig>,
-}
-
-/// Handle both string and object token formats in tokenizer_config.json
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-pub enum StringOrToken {
-    String(String),
-    Token { content: String },
-}
-
-impl StringOrToken {
-    pub fn as_str(&self) -> &str {
-        match self {
-            StringOrToken::String(s) => s,
-            StringOrToken::Token { content } => content,
-        }
-    }
-}
-
-impl Default for StringOrToken {
-    fn default() -> Self {
-        StringOrToken::String(String::new())
-    }
-}
-
-/// Chat template can be a single string or multiple named templates
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-pub enum ChatTemplateConfig {
-    Single(String),
-    Multiple(Vec<NamedTemplate>),
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct NamedTemplate {
-    pub name: String,
-    pub template: String,
-}
-
-/// Chat template renderer using MiniJinja
+/// Chat template renderer, backed by `hf-chat-template`.
 pub struct ChatTemplate {
-    env: Environment<'static>,
-    bos_token: String,
-    eos_token: String,
+    renderer: Renderer,
 }
 
 impl ChatTemplate {
-    /// Create from a Jinja template string
+    /// Create from a Jinja template string with explicit `bos`/`eos` tokens.
     pub fn new(
         template: impl Into<String>,
         bos_token: impl Into<String>,
         eos_token: impl Into<String>,
     ) -> Result<Self, ChatTemplateError> {
-        let mut env = Environment::new();
-        // Add the raise_exception function that HF templates use
-        env.add_function("raise_exception", |msg: String| -> Result<String, _> {
-            Err(minijinja::Error::new(
-                minijinja::ErrorKind::InvalidOperation,
-                msg,
-            ))
-        });
-
-        env.add_template_owned("chat".to_string(), template.into())
-            .map_err(|e| ChatTemplateError::TemplateError(e.to_string()))?;
-
-        Ok(Self {
-            env,
-            bos_token: bos_token.into(),
-            eos_token: eos_token.into(),
-        })
+        let config = TokenizerConfig {
+            chat_template: Some(ChatTemplateField::Single(template.into())),
+            bos_token: Some(TokenField::Str(bos_token.into())),
+            eos_token: Some(TokenField::Str(eos_token.into())),
+            ..Default::default()
+        };
+        Self::from_config(&config)
     }
 
     /// Load chat template from a tokenizer_config.json file
     pub fn from_tokenizer_config(path: impl AsRef<Path>) -> Result<Self, ChatTemplateError> {
         let content = std::fs::read_to_string(path.as_ref())
             .map_err(|e| ChatTemplateError::IoError(e.to_string()))?;
-
         Self::from_tokenizer_config_str(&content)
     }
 
     /// Load chat template from tokenizer_config.json content
     pub fn from_tokenizer_config_str(json: &str) -> Result<Self, ChatTemplateError> {
-        let config: TokenConfig =
+        let config: TokenizerConfig =
             serde_json::from_str(json).map_err(|e| ChatTemplateError::ParseError(e.to_string()))?;
+        Self::from_config(&config)
+    }
 
-        let template = match config.chat_template {
-            Some(ChatTemplateConfig::Single(t)) => t,
-            Some(ChatTemplateConfig::Multiple(templates)) => {
-                // Use "default" template if available, otherwise first one
-                templates
-                    .iter()
-                    .find(|t| t.name == "default")
-                    .or_else(|| templates.first())
-                    .map(|t| t.template.clone())
-                    .ok_or(ChatTemplateError::NoTemplate)?
-            }
-            None => return Err(ChatTemplateError::NoTemplate),
-        };
-
-        let bos = config
-            .bos_token
-            .map(|t| t.as_str().to_string())
-            .unwrap_or_default();
-        let eos = config
-            .eos_token
-            .map(|t| t.as_str().to_string())
-            .unwrap_or_default();
-
-        Self::new(template, bos, eos)
+    fn from_config(config: &TokenizerConfig) -> Result<Self, ChatTemplateError> {
+        if config.chat_template.is_none() {
+            return Err(ChatTemplateError::NoTemplate);
+        }
+        let renderer = Renderer::from_tokenizer_config(config)
+            .map_err(|e| ChatTemplateError::TemplateError(e.to_string()))?;
+        Ok(Self { renderer })
     }
 
     /// ChatML template used by SmolLM, Qwen, and many other models
@@ -334,23 +263,33 @@ impl ChatTemplate {
         messages: &[Message],
         options: &ChatTemplateOptions,
     ) -> Result<String, ChatTemplateError> {
-        let template = self
-            .env
-            .get_template("chat")
-            .map_err(|e| ChatTemplateError::TemplateError(e.to_string()))?;
-
-        let result = template
-            .render(context! {
-                messages => messages,
-                add_generation_prompt => options.add_generation_prompt,
-                continue_final_message => options.continue_final_message,
-                enable_thinking => options.enable_thinking,
-                bos_token => &self.bos_token,
-                eos_token => &self.eos_token,
-            })
-            .map_err(|e| ChatTemplateError::RenderError(e.to_string()))?;
-
-        Ok(result.trim_start().to_string())
+        let mut input = RenderInput {
+            messages: messages
+                .iter()
+                .map(|m| RenderMessage::new(&m.role, &m.content))
+                .collect(),
+            add_generation_prompt: options.add_generation_prompt,
+            ..Default::default()
+        };
+        // Only inject these when set. transformers leaves an unpassed kwarg out of the template
+        // globals, letting the template's own default apply (e.g. Qwen3 defaults thinking on);
+        // always forcing `false` would override that default and diverge.
+        if options.enable_thinking {
+            input
+                .extra
+                .insert("enable_thinking".to_string(), Json::Bool(true));
+        }
+        if options.continue_final_message {
+            input
+                .extra
+                .insert("continue_final_message".to_string(), Json::Bool(true));
+        }
+        for (k, v) in &options.extra_context {
+            input.extra.insert(k.clone(), Json::String(v.clone()));
+        }
+        self.renderer
+            .render(&input)
+            .map_err(|e| ChatTemplateError::RenderError(e.to_string()))
     }
 
     /// Convenience method: apply with add_generation_prompt=true
@@ -528,5 +467,24 @@ mod tests {
         let result = template.apply_for_generation(&messages).unwrap();
 
         assert!(result.contains("user: test"));
+    }
+
+    // A real Qwen2.5 template (the no-tools branch) rendered byte-for-byte. This is the kind of
+    // output `transformers.apply_chat_template(tokenize=False)` produces, including the injected
+    // default system prompt; candle's previous hand-rolled renderer did not match it.
+    #[test]
+    fn test_qwen2_5_byte_exact() {
+        let json = r#"{
+            "bos_token": null,
+            "eos_token": "<|im_end|>",
+            "chat_template": "{%- if messages[0]['role'] == 'system' %}\n    {{- '<|im_start|>system\n' + messages[0]['content'] + '<|im_end|>\n' }}\n{%- else %}\n    {{- '<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n' }}\n{%- endif %}\n{%- for message in messages %}\n    {%- if message.role != 'system' %}\n        {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>\n' }}\n    {%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}\n    {{- '<|im_start|>assistant\n' }}\n{%- endif %}"
+        }"#;
+        let template = ChatTemplate::from_tokenizer_config_str(json).unwrap();
+        let messages = vec![Message::user("What's the capital of France?")];
+        let result = template.apply_for_generation(&messages).unwrap();
+        assert_eq!(
+            result,
+            "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n<|im_start|>user\nWhat's the capital of France?<|im_end|>\n<|im_start|>assistant\n"
+        );
     }
 }
