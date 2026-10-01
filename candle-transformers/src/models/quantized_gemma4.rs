@@ -37,6 +37,13 @@ impl Config {
         if architecture != "gemma4" {
             candle::bail!("model architecture is {architecture}, expected gemma4")
         }
+        // The 26B-A4B mixture-of-experts files share the architecture; running only their dense
+        // feed-forward weights would load and silently produce wrong logits.
+        if let Some(experts) = content.metadata.get("gemma4.expert_count") {
+            if experts.to_u32()? > 0 {
+                candle::bail!("Gemma 4 mixture-of-experts GGUF files are not supported yet")
+            }
+        }
         let dtype = match content.metadata.get("general.dtype") {
             Some(value) => match value.to_u32()? {
                 0 => DType::F32,
@@ -238,52 +245,95 @@ impl RotaryEmbedding {
     }
 }
 
+/// Keys, values and the absolute position of each key.
+type AttentionView = (Tensor, Tensor, Vec<usize>);
+
 #[derive(Debug)]
 enum KvCache {
     Global(ConcatKvCache),
-    Local(RotatingKvCache),
+    /// The sliding window, plus what the last multi-token forward attended to, for the layers
+    /// that share this cache.
+    Local(RotatingKvCache, Option<AttentionView>),
 }
 
 impl KvCache {
     fn new(is_sliding: bool, sliding_window: usize) -> Self {
         if is_sliding {
-            Self::Local(RotatingKvCache::new(2, sliding_window))
+            Self::Local(RotatingKvCache::new(2, sliding_window), None)
         } else {
             Self::Global(ConcatKvCache::new(2))
         }
     }
 
-    fn append(&mut self, key: &Tensor, value: &Tensor) -> Result<(Tensor, Tensor)> {
+    /// Appends `key`/`value` and returns every key/value the new positions may attend to.
+    ///
+    /// A multi-token forward on a sliding layer attends to the previous window and all of its
+    /// own positions; the ring keeps only the last window of them, so a chunk that reaches or
+    /// crosses the window would otherwise lose keys its earlier queries still need.
+    fn append_for_attention(&mut self, key: &Tensor, value: &Tensor) -> Result<AttentionView> {
+        let sequence = key.dim(2)?;
         match self {
-            Self::Global(cache) => cache.append(key, value),
-            Self::Local(cache) => cache.append(key, value),
+            Self::Global(cache) => {
+                let (key, value) = cache.append(key, value)?;
+                let positions = (0..cache.current_seq_len()).collect();
+                Ok((key, value, positions))
+            }
+            Self::Local(cache, view) if sequence > 1 => {
+                let start = cache.current_seq_len();
+                let new_positions = start..start + sequence;
+                // Concatenate before appending: the ring overwrites the previous window in place.
+                let attention = match (cache.k()?, cache.v()?) {
+                    (Some(prior_key), Some(prior_value)) => {
+                        let mut positions = cache.positions(0);
+                        positions.extend(new_positions);
+                        (
+                            Tensor::cat(&[&prior_key, key], 2)?,
+                            Tensor::cat(&[&prior_value, value], 2)?,
+                            positions,
+                        )
+                    }
+                    _ => (key.clone(), value.clone(), new_positions.collect()),
+                };
+                cache.append(key, value)?;
+                *view = Some(attention.clone());
+                Ok(attention)
+            }
+            Self::Local(cache, view) => {
+                *view = None;
+                let positions = cache.positions(sequence);
+                let (key, value) = cache.append(key, value)?;
+                Ok((key, value, positions))
+            }
         }
     }
 
-    fn tensors(&self) -> Result<(Tensor, Tensor)> {
+    /// Keys/values for layers that reuse another layer's cache: the same set its owner attended
+    /// to in this forward.
+    fn attention_view(&self) -> Result<AttentionView> {
         match self {
             Self::Global(cache) => match (cache.k(), cache.v()) {
-                (Some(key), Some(value)) => Ok((key.clone(), value.clone())),
+                (Some(key), Some(value)) => Ok((
+                    key.clone(),
+                    value.clone(),
+                    (0..cache.current_seq_len()).collect(),
+                )),
                 _ => candle::bail!("Gemma 4 shared global KV cache is empty"),
             },
-            Self::Local(cache) => match (cache.k()?, cache.v()?) {
-                (Some(key), Some(value)) => Ok((key, value)),
+            Self::Local(_, Some(view)) => Ok(view.clone()),
+            Self::Local(cache, None) => match (cache.k()?, cache.v()?) {
+                (Some(key), Some(value)) => Ok((key, value, cache.positions(0))),
                 _ => candle::bail!("Gemma 4 shared local KV cache is empty"),
             },
-        }
-    }
-
-    fn key_positions(&self) -> Vec<usize> {
-        match self {
-            Self::Global(cache) => (0..cache.current_seq_len()).collect(),
-            Self::Local(cache) => cache.positions(0),
         }
     }
 
     fn reset(&mut self) {
         match self {
             Self::Global(cache) => cache.reset(),
-            Self::Local(cache) => cache.reset(),
+            Self::Local(cache, view) => {
+                *view = None;
+                cache.reset();
+            }
         }
     }
 }
@@ -427,12 +477,11 @@ impl Attention {
             .map(|value| value_norm(&value, self.rms_norm_eps))
             .transpose()?;
         let (query, key) = self.rotary.apply(&query, key.as_ref(), offset)?;
-        let (key, value) = match (key, value) {
-            (Some(key), Some(value)) => cache.append(&key, &value)?,
-            (None, None) => cache.tensors()?,
+        let (key, value, key_positions) = match (key, value) {
+            (Some(key), Some(value)) => cache.append_for_attention(&key, &value)?,
+            (None, None) => cache.attention_view()?,
             _ => candle::bail!("Gemma 4 key and value ownership differ"),
         };
-        let key_positions = cache.key_positions();
         let key = repeat_kv(key, self.attention_heads / self.kv_heads)?.contiguous()?;
         let value = repeat_kv(value, self.attention_heads / self.kv_heads)?.contiguous()?;
         let mut scores = query.matmul(&key.transpose(2, 3)?)?;
@@ -488,7 +537,10 @@ impl Mlp {
     }
 
     fn forward(&self, hidden: &Tensor) -> Result<Tensor> {
-        let gate = self.gate.forward(hidden)?.apply(&Activation::Gelu)?;
+        let gate = self
+            .gate
+            .forward(hidden)?
+            .apply(&Activation::GeluPytorchTanh)?;
         self.down.forward(&(gate * self.up.forward(hidden)?)?)
     }
 }
@@ -629,7 +681,9 @@ impl Layer {
             &self.per_layer_post_norm,
         ) {
             (Some(input_gate), Some(projection), Some(post_norm)) => {
-                let gated_input = input_gate.forward(&hidden)?.apply(&Activation::Gelu)?;
+                let gated_input = input_gate
+                    .forward(&hidden)?
+                    .apply(&Activation::GeluPytorchTanh)?;
                 let per_layer_output = projection.forward(&(gated_input * per_layer_input)?)?;
                 hidden + post_norm.forward(&per_layer_output)?
             }
@@ -769,8 +823,11 @@ fn attention_mask(
         .flat_map(|query_index| {
             let query_position = offset + query_index;
             key_positions.iter().map(move |&key_position| {
+                // A sliding layer sees its own position and the `window - 1` before it, as in
+                // the reference (`kv_idx > q_idx - sliding_window`); decode steps attend to the
+                // ring, which holds exactly that many keys.
                 let outside_window =
-                    sliding_window.is_some_and(|window| key_position + window < query_position);
+                    sliding_window.is_some_and(|window| key_position + window <= query_position);
                 if key_position > query_position || outside_window {
                     f32::NEG_INFINITY
                 } else {
@@ -860,4 +917,88 @@ fn qmatmul<R: Read + Seek>(
     device: &Device,
 ) -> Result<QMatMul> {
     QMatMul::from_qtensor(content.tensor(reader, name, device)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn visible(mask: &Tensor, query: usize) -> Vec<usize> {
+        let row = mask
+            .squeeze(0)
+            .unwrap()
+            .squeeze(0)
+            .unwrap()
+            .get(query)
+            .unwrap();
+        row.to_vec1::<f32>()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| **value == 0.0)
+            .map(|(key, _)| key)
+            .collect()
+    }
+
+    /// A window of 3 lets each query see itself and the two positions before it, no more.
+    #[test]
+    fn sliding_mask_keeps_the_current_and_window_minus_one_positions() -> Result<()> {
+        let mask = attention_mask(5, 0, &[0, 1, 2, 3, 4], Some(3), &Device::Cpu, DType::F32)?;
+        assert_eq!(visible(&mask, 0), [0]);
+        assert_eq!(visible(&mask, 2), [0, 1, 2]);
+        assert_eq!(visible(&mask, 4), [2, 3, 4]);
+        Ok(())
+    }
+
+    fn keys(start: usize, count: usize) -> Result<Tensor> {
+        Tensor::arange(start as f32, (start + count) as f32, &Device::Cpu)?
+            .reshape((1, 1, count, 1))
+    }
+
+    /// A prefill chunk that crosses the window keeps every key its own queries need, and the
+    /// layers sharing the cache see that same set; decode then attends to the ring.
+    #[test]
+    fn sliding_cache_returns_the_window_and_the_whole_chunk() -> Result<()> {
+        let mut cache = KvCache::new(true, 4);
+        let (_, _, positions) = cache.append_for_attention(&keys(0, 3)?, &keys(0, 3)?)?;
+        assert_eq!(positions, [0, 1, 2]);
+        // Positions 3..9 overflow the 4-slot ring; queries at 3 and 4 still need keys 0..4.
+        let (key, _, positions) = cache.append_for_attention(&keys(3, 6)?, &keys(3, 6)?)?;
+        let mut stored = key.flatten_all()?.to_vec1::<f32>()?;
+        stored.sort_by(f32::total_cmp);
+        assert_eq!(stored, [0., 1., 2., 3., 4., 5., 6., 7., 8.]);
+        let mut sorted = positions.clone();
+        sorted.sort();
+        assert_eq!(sorted, (0..9).collect::<Vec<_>>());
+        let (shared, _, shared_positions) = cache.attention_view()?;
+        assert_eq!(shared.dims(), key.dims());
+        assert_eq!(shared_positions, positions);
+        let (key, _, positions) = cache.append_for_attention(&keys(9, 1)?, &keys(9, 1)?)?;
+        assert_eq!(key.dim(2)?, 4);
+        let mut sorted = positions;
+        sorted.sort();
+        assert_eq!(sorted, [6, 7, 8, 9]);
+        Ok(())
+    }
+
+    #[test]
+    fn mixture_of_experts_files_are_rejected() {
+        let content = gguf_file::Content {
+            magic: gguf_file::VersionedMagic::GgufV3,
+            metadata: [
+                (
+                    "general.architecture",
+                    gguf_file::Value::String("gemma4".into()),
+                ),
+                ("gemma4.expert_count", gguf_file::Value::U32(128)),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect(),
+            tensor_infos: Default::default(),
+            tensor_data_offset: 0,
+        };
+        let error = Config::from_gguf(&content).unwrap_err().to_string();
+        assert!(error.contains("mixture-of-experts"), "{error}");
+    }
 }

@@ -403,6 +403,101 @@ mod tests {
     }
 
     #[test]
+    fn gemma4_pretokenizer_isolates_newlines_and_marks_spaces() {
+        assert_eq!(
+            splits("gemma4", "Hi there\n\nok  go"),
+            ["Hi\u{2581}there", "\n\n", "ok\u{2581}\u{2581}go"]
+        );
+    }
+
+    /// A Gemma 4 GGUF tokenizer: SentencePiece-style pieces and merges, `<0xNN>` byte pieces for
+    /// byte fallback, and a BOS token added on request.
+    fn gemma4_tokenizer(add_bos: bool) -> Tokenizer {
+        use gguf_file::Value;
+        let mut tokens = ["<pad>", "<eos>", "<bos>", "<unk>", "\n", "\n\n"]
+            .into_iter()
+            .chain([
+                "\u{2581}",
+                "H",
+                "i",
+                "t",
+                "h",
+                "e",
+                "r",
+                "o",
+                "k",
+                "Hi",
+                "\u{2581}t",
+                "\u{2581}th",
+            ])
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        tokens.extend((0..=255).map(|byte| format!("<0x{byte:02X}>")));
+        let strings =
+            |values: Vec<String>| Value::Array(values.into_iter().map(Value::String).collect());
+        let merges = ["H i", "\u{2581} t", "\u{2581}t h", "\n \n"]
+            .map(str::to_string)
+            .to_vec();
+        let metadata = [
+            ("tokenizer.ggml.model", Value::String("gemma4".into())),
+            ("tokenizer.ggml.tokens", strings(tokens)),
+            ("tokenizer.ggml.merges", strings(merges)),
+            ("tokenizer.ggml.bos_token_id", Value::U32(2)),
+            ("tokenizer.ggml.eos_token_id", Value::U32(1)),
+            ("tokenizer.ggml.unknown_token_id", Value::U32(3)),
+            ("tokenizer.ggml.add_bos_token", Value::Bool(add_bos)),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect();
+        let content = gguf_file::Content {
+            magic: gguf_file::VersionedMagic::GgufV3,
+            metadata,
+            tensor_infos: Default::default(),
+            tensor_data_offset: 0,
+        };
+        Tokenizer::from_gguf(&content).unwrap()
+    }
+
+    #[test]
+    fn gemma4_tokenizer_round_trips_spaces_newlines_and_bytes() {
+        let tokenizer = gemma4_tokenizer(false);
+        let text = "Hi there\n\nok é";
+        let encoding = tokenizer.encode(text, false).unwrap();
+        assert_eq!(
+            encoding.get_tokens(),
+            [
+                "Hi",
+                "\u{2581}th",
+                "e",
+                "r",
+                "e",
+                "\n\n",
+                "o",
+                "k",
+                "\u{2581}",
+                "<0xC3>",
+                "<0xA9>"
+            ]
+        );
+        assert_eq!(tokenizer.decode(encoding.get_ids(), false).unwrap(), text);
+    }
+
+    #[test]
+    fn gemma4_tokenizer_adds_bos_only_when_requested() {
+        let with_bos = gemma4_tokenizer(true).encode("Hi", true).unwrap();
+        assert_eq!(with_bos.get_ids(), [2, 15]);
+        let without_bos = gemma4_tokenizer(false).encode("Hi", true).unwrap();
+        assert_eq!(without_bos.get_ids(), [15]);
+        assert_eq!(
+            gemma4_tokenizer(true)
+                .decode(with_bos.get_ids(), true)
+                .unwrap(),
+            "Hi"
+        );
+    }
+
+    #[test]
     fn llama3_pretokenizer_splits() {
         // Differs from qwen2 only in digit grouping: `\p{N}{1,3}` vs `\p{N}`.
         assert_eq!(
