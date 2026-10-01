@@ -814,7 +814,7 @@ impl candle::CustomOp3 for LayerNorm {
         s3: &candle::SyclStorage,
         l3: &Layout,
     ) -> Result<(candle::SyclStorage, Shape)> {
-        crate::sycl_cpu_shim::via_cpu_3(s1, l1, s2, l2, s3, l3, |a, b, c, d, e, f| {
+        crate::sycl_cpu_shim::layer_norm(self.eps, s1, l1, s2, l2, s3, l3, |a, b, c, d, e, f| {
             self.cpu_fwd(a, b, c, d, e, f)
         })
     }

@@ -111,6 +111,31 @@ pub fn rms_norm(
     via_cpu_2(s1, l1, s2, l2, cpu)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn layer_norm(
+    eps: f32,
+    s1: &SyclStorage,
+    l1: &Layout,
+    s2: &SyclStorage,
+    l2: &Layout,
+    s3: &SyclStorage,
+    l3: &Layout,
+    cpu: impl FnOnce(
+        &CpuStorage,
+        &Layout,
+        &CpuStorage,
+        &Layout,
+        &CpuStorage,
+        &Layout,
+    ) -> Result<(CpuStorage, Shape)>,
+) -> Result<(SyclStorage, Shape)> {
+    if float_contig(s1, l1) && float_contig(s2, l2) && float_contig(s3, l3) {
+        let out = candle::sycl_backend::nn_ops::layer_norm(s1, l1, s2, l2, s3, l3, eps)?;
+        return Ok((out, l1.shape().clone()));
+    }
+    via_cpu_3(s1, l1, s2, l2, s3, l3, cpu)
+}
+
 /// `mode`: 0 interleaved (b,h,t,d), 1 half-split (b,h,t,d), 2 half-split (b,t,h,d).
 #[allow(clippy::too_many_arguments)]
 pub fn rope(

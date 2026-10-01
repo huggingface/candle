@@ -1,7 +1,11 @@
 // Reductions: sum / min / max / argmin / argmax over a set of trailing
 // (post-reorder) dims. `lin` describes the source with the reduced dims moved
 // last, so the flat index `out_i * reduce_el + r` decomposes directly.
-// One work-group per output element; work-items cooperatively reduce.
+// Long reductions: one work-group per output element, work-items cooperate.
+// Short ones (at most `SHORT_REDUCE` elements, e.g. a MoE combine summing
+// top-k expert outputs): one work-item per output scans its elements, since a
+// whole work-group would idle all but a few lanes through the tree, and
+// `out_el * WG` work-items overflow the launch range for large outputs.
 #include "common.hpp"
 #include <limits>
 
@@ -26,6 +30,7 @@ template <> struct RAcc<uint8_t> {
 };
 
 constexpr size_t WG = 256;
+constexpr size_t SHORT_REDUCE = 64;
 
 } // namespace
 
@@ -43,6 +48,39 @@ extern "C" int candle_sycl_reduce(CandleSyclQueue *q, uint32_t op, CandleSyclDTy
     // A contiguous source is the common case — skip the per-element index math.
     bool dense = (L.num_dims == 0);
     try {
+      if (reduce_el <= SHORT_REDUCE) {
+        q->q.parallel_for(sycl::range<1>(out_el), [=](sycl::id<1> idx) {
+          size_t i = idx[0];
+          size_t base = i * reduce_el;
+          if (op == R_SUM) {
+            A acc = 0;
+            for (size_t r = 0; r < reduce_el; ++r) {
+              size_t si = dense ? base + r : strided_index((int64_t)(base + r), L);
+              acc += static_cast<A>(in[si]);
+            }
+            o_val[i] = static_cast<T>(acc);
+            return;
+          }
+          // A strict comparison keeps the first index on ties, as the
+          // work-group path does.
+          T best = want_min ? std::numeric_limits<T>::max() : std::numeric_limits<T>::lowest();
+          uint32_t best_r = 0;
+          for (size_t r = 0; r < reduce_el; ++r) {
+            size_t si = dense ? base + r : strided_index((int64_t)(base + r), L);
+            T v = in[si];
+            if (want_min ? (v < best) : (v > best)) {
+              best = v;
+              best_r = (uint32_t)r;
+            }
+          }
+          if (want_index) {
+            o_idx[i] = best_r;
+          } else {
+            o_val[i] = best;
+          }
+        });
+        return CANDLE_SYCL_OK;
+      }
       q->q.submit([&](sycl::handler &h) {
         sycl::local_accessor<T, 1> lv(sycl::range<1>(WG), h);
         sycl::local_accessor<uint32_t, 1> li(sycl::range<1>(WG), h);

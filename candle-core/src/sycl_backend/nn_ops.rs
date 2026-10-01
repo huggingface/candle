@@ -116,6 +116,39 @@ pub fn rms_norm(
     Ok(out)
 }
 
+pub fn layer_norm(
+    x: &SyclStorage,
+    xl: &Layout,
+    alpha: &SyclStorage,
+    al: &Layout,
+    beta: &SyclStorage,
+    bl: &Layout,
+    eps: f32,
+) -> Result<SyclStorage> {
+    let x = densify(x, xl, "layer_norm x")?;
+    let x = x.get();
+    let alpha = densify(alpha, al, "layer_norm alpha")?;
+    let alpha = alpha.get();
+    let beta = densify(beta, bl, "layer_norm beta")?;
+    let beta = beta.get();
+    let dims = xl.dims();
+    let d = dims[dims.len() - 1];
+    let rows = xl.shape().elem_count() / d.max(1);
+    let out = same_dense(x, xl.shape().elem_count())?;
+    wrap(k::layer_norm(
+        x.device().queue(),
+        to_sycl_dtype(x.dtype())?,
+        x.buf(),
+        alpha.buf(),
+        beta.buf(),
+        out.buf(),
+        rows,
+        d,
+        eps,
+    ))?;
+    Ok(out)
+}
+
 /// `mode`: 0 interleaved (b,h,t,d), 1 half-split (b,h,t,d), 2 half-split (b,t,h,d).
 #[allow(clippy::too_many_arguments)]
 pub fn rope(

@@ -7,6 +7,10 @@ repository = "https://github.com/huggingface/candle"
 keywords = ["blas", "tensor", "machine-learning"]
 categories = ["science"]
 license = "MIT OR Apache-2.0"
+# Declares the native `libcandle_sycl.so` this crate links; also makes Cargo
+# run direct dependents' build scripts after ours, with `DEP_CANDLE_SYCL_LIB_DIR`
+# (see build.rs).
+links = "candle_sycl"
 
 # NOTE: this crate is deliberately excluded from the candle workspace (see the
 # root Cargo.toml `exclude` list), exactly like `candle-kernels` and

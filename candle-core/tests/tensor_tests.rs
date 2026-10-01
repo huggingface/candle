@@ -2358,3 +2358,74 @@ fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
     assert_ne!(id1, id2);
     Ok(())
 }
+
+/// SYCL reductions against the CPU, over both kernel paths: short reductions
+/// (one work-item per output) and long ones (one work-group per output), on
+/// contiguous and strided (non-trailing dim) layouts, with ties for arg*.
+#[cfg(feature = "sycl")]
+#[test]
+fn sycl_reduce_matches_cpu() -> Result<()> {
+    if !candle_core::utils::sycl_is_available() {
+        return Ok(());
+    }
+    let sycl = Device::new_sycl(0)?;
+    // Rounded values, so arg* sees ties and must pick the first index.
+    let x = (Tensor::randn(0f32, 1.0, (37, 8, 300), &Device::Cpu)? * 2.0)?.round()?;
+    let xs = x.to_device(&sycl)?;
+    // dims 0 and 1 are short and strided, dim 2 is long and contiguous.
+    for dim in 0..3 {
+        let pairs = [
+            (x.sum_keepdim(dim)?, xs.sum_keepdim(dim)?),
+            (x.max_keepdim(dim)?, xs.max_keepdim(dim)?),
+            (x.min_keepdim(dim)?, xs.min_keepdim(dim)?),
+        ];
+        for (want, got) in pairs {
+            let diff = (want - got.to_device(&Device::Cpu)?)?.abs()?.max_all()?;
+            assert!(diff.to_scalar::<f32>()? < 1e-3, "dim {dim}");
+        }
+        for (want, got) in [
+            (x.argmax_keepdim(dim)?, xs.argmax_keepdim(dim)?),
+            (x.argmin_keepdim(dim)?, xs.argmin_keepdim(dim)?),
+        ] {
+            assert_eq!(
+                want.flatten_all()?.to_vec1::<u32>()?,
+                got.flatten_all()?.to_vec1::<u32>()?,
+                "dim {dim}"
+            );
+        }
+    }
+    // A short reduction with more outputs than the work-group path's launch
+    // range could hold (out_el * 256 > i32::MAX).
+    let big = Tensor::ones((4100, 8, 2048), DType::F32, &sycl)?;
+    let sum = big.sum(1)?.to_device(&Device::Cpu)?;
+    assert_eq!(sum.min_all()?.to_scalar::<f32>()?, 8.0);
+    assert_eq!(sum.max_all()?.to_scalar::<f32>()?, 8.0);
+    Ok(())
+}
+
+// `set_seed` makes `rand`/`randn` reproducible, as on CUDA (the CPU device cannot be seeded).
+#[cfg(feature = "sycl")]
+#[test]
+fn sycl_seeded_rand() -> Result<()> {
+    let dev = Device::new_sycl(0)?;
+    let draw = |seed| -> Result<Vec<f32>> {
+        dev.set_seed(seed)?;
+        Tensor::randn(0f32, 1., 1000, &dev)?.to_vec1()
+    };
+    assert_eq!(draw(7)?, draw(7)?);
+    assert_ne!(draw(7)?, draw(8)?);
+    assert_eq!(dev.get_current_seed()?, 8);
+    let u = Tensor::rand(
+        half::bf16::from_f32(2.),
+        half::bf16::from_f32(3.),
+        1000,
+        &dev,
+    )?;
+    assert_eq!(u.dtype(), DType::BF16);
+    let u = u.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+    assert!(
+        u.iter().all(|v| (2.0..=3.0).contains(v)),
+        "uniform out of range"
+    );
+    Ok(())
+}

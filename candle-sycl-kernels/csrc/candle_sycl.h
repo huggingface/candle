@@ -207,6 +207,9 @@ int candle_sycl_softmax_lastdim(CandleSyclQueue *q, CandleSyclDType dt, const vo
                                 void *out, size_t rows, size_t d);
 int candle_sycl_rms_norm(CandleSyclQueue *q, CandleSyclDType dt, const void *inp,
                          const void *alpha, void *out, size_t rows, size_t d, float eps);
+int candle_sycl_layer_norm(CandleSyclQueue *q, CandleSyclDType dt, const void *inp,
+                           const void *alpha, const void *beta, void *out, size_t rows,
+                           size_t d, float eps);
 // mode: 0 interleaved (bhtd), 1 half-split (bhtd), 2 half-split (bthd).
 int candle_sycl_rope(CandleSyclQueue *q, uint32_t mode, CandleSyclDType dt, const void *inp,
                      const void *cosb, const void *sinb, void *out, size_t b, size_t h,

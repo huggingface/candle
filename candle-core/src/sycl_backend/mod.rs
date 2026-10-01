@@ -120,10 +120,24 @@ fn cpu_from_bytes(dtype: DType, bytes: &[u8], n: usize) -> Result<CpuStorage> {
 
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+/// Seed and generator behind `rand_uniform`/`rand_normal`.
+type SeededRng = (u64, rand::rngs::StdRng);
+
+#[derive(Clone)]
 pub struct SyclDevice {
     ordinal: usize,
     queue: Arc<Queue>,
+    rng: Arc<std::sync::Mutex<SeededRng>>,
+}
+
+// By hand, to keep the generator's state out of it.
+impl std::fmt::Debug for SyclDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyclDevice")
+            .field("ordinal", &self.ordinal)
+            .field("queue", &self.queue)
+            .finish()
+    }
 }
 
 impl SyclDevice {
@@ -133,6 +147,38 @@ impl SyclDevice {
 
     pub fn queue(&self) -> &Arc<Queue> {
         &self.queue
+    }
+
+    /// Samples `dist` on the host from this device's seeded generator, uploads
+    /// the result and casts it to `dtype` (floating point dtypes only).
+    fn rand_storage(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        op: &'static str,
+        dist: impl rand_distr::Distribution<f64>,
+    ) -> Result<SyclStorage> {
+        use rand_distr::Distribution;
+        if !matches!(dtype, DType::F16 | DType::BF16 | DType::F32 | DType::F64) {
+            return Err(crate::Error::UnsupportedDTypeForOp(dtype, op).bt());
+        }
+        let data: Vec<f64> = {
+            let mut rng = self.rng.lock().unwrap();
+            (&dist)
+                .sample_iter(&mut rng.1)
+                .take(shape.elem_count())
+                .collect()
+        };
+        let cpu = match dtype {
+            DType::F64 => CpuStorage::F64(data),
+            _ => CpuStorage::F32(data.into_iter().map(|v| v as f32).collect()),
+        };
+        let storage = self.storage_from_cpu_storage(&cpu)?;
+        if storage.dtype() == dtype {
+            Ok(storage)
+        } else {
+            storage.to_dtype(&Layout::contiguous(shape.clone()), dtype)
+        }
     }
 
     pub fn new_with_stream(ordinal: usize) -> Result<Self> {
@@ -1325,8 +1371,19 @@ impl BackendDevice for SyclDevice {
     type Storage = SyclStorage;
 
     fn new(ordinal: usize) -> Result<Self> {
+        use rand::SeedableRng;
         let queue = wrap(Queue::new(ordinal))?;
-        Ok(Self { ordinal, queue })
+        // Same default seed as the CUDA backend.
+        let seed = 299792458;
+        let rng = Arc::new(std::sync::Mutex::new((
+            seed,
+            rand::rngs::StdRng::seed_from_u64(seed),
+        )));
+        Ok(Self {
+            ordinal,
+            queue,
+            rng,
+        })
     }
 
     fn location(&self) -> crate::DeviceLocation {
@@ -1370,10 +1427,10 @@ impl BackendDevice for SyclDevice {
     }
 
     fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, up: f64) -> Result<Self::Storage> {
-        // No on-device RNG yet: generate on the CPU and upload. Correct, just an
+        // No on-device RNG yet: generate on the host and upload. Correct, just an
         // extra host->device copy (~33 GB/s on Meteor Lake, per Phase 0).
-        let cpu = crate::cpu_backend::CpuDevice.rand_uniform(shape, dtype, lo, up)?;
-        self.storage_from_cpu_storage(&cpu)
+        let dist = rand_distr::Uniform::new(lo, up).map_err(crate::Error::wrap)?;
+        self.rand_storage(shape, dtype, "rand_uniform", dist)
     }
 
     fn rand_normal(
@@ -1383,16 +1440,18 @@ impl BackendDevice for SyclDevice {
         mean: f64,
         std: f64,
     ) -> Result<Self::Storage> {
-        let cpu = crate::cpu_backend::CpuDevice.rand_normal(shape, dtype, mean, std)?;
-        self.storage_from_cpu_storage(&cpu)
+        let dist = rand_distr::Normal::new(mean, std).map_err(crate::Error::wrap)?;
+        self.rand_storage(shape, dtype, "rand_normal", dist)
     }
 
-    fn set_seed(&self, _: u64) -> Result<()> {
-        sycl_bail!("set_seed")
+    fn set_seed(&self, seed: u64) -> Result<()> {
+        use rand::SeedableRng;
+        *self.rng.lock().unwrap() = (seed, rand::rngs::StdRng::seed_from_u64(seed));
+        Ok(())
     }
 
     fn get_current_seed(&self) -> Result<u64> {
-        sycl_bail!("get_current_seed")
+        Ok(self.rng.lock().unwrap().0)
     }
 
     fn synchronize(&self) -> Result<()> {

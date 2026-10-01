@@ -104,6 +104,60 @@ int candle_sycl_rms_norm(CandleSyclQueue *q, CandleSyclDType dt, const void *inp
   });
 }
 
+// x: (rows, d) contiguous, alpha/beta: (d,).
+// d[j] = (x[j] - mean) / sqrt(var + eps) * alpha[j] + beta[j], var = mean(x^2) - mean^2.
+// Sums accumulate in f32 (matches candle CPU).
+int candle_sycl_layer_norm(CandleSyclQueue *q, CandleSyclDType dt, const void *inp,
+                           const void *alpha, const void *beta, void *out, size_t rows,
+                           size_t d, float eps) {
+  constexpr size_t WG = 256;
+  return dispatch_float(dt, [&]<typename T>() -> int {
+    const T *x = static_cast<const T *>(inp);
+    const T *a = static_cast<const T *>(alpha);
+    const T *b = static_cast<const T *>(beta);
+    T *o = static_cast<T *>(out);
+    try {
+      q->q.submit([&](sycl::handler &h) {
+        sycl::local_accessor<float, 1> red(sycl::range<1>(WG), h);
+        sycl::local_accessor<float, 1> red2(sycl::range<1>(WG), h);
+        h.parallel_for(
+            sycl::nd_range<1>(sycl::range<1>(rows * WG), sycl::range<1>(WG)),
+            [=](sycl::nd_item<1> it) {
+              size_t row = it.get_group(0);
+              size_t lid = it.get_local_id(0);
+              const T *xr = x + row * d;
+              T *orow = o + row * d;
+              float s = 0.f, s2 = 0.f;
+              for (size_t j = lid; j < d; j += WG) {
+                float v = (float)xr[j];
+                s += v;
+                s2 += v * v;
+              }
+              red[lid] = s;
+              red2[lid] = s2;
+              it.barrier(sycl::access::fence_space::local_space);
+              for (size_t st = WG / 2; st > 0; st >>= 1) {
+                if (lid < st) {
+                  red[lid] += red[lid + st];
+                  red2[lid] += red2[lid + st];
+                }
+                it.barrier(sycl::access::fence_space::local_space);
+              }
+              float mean = red[0] / (float)d;
+              float var = red2[0] / (float)d - mean * mean;
+              float inv_std = 1.f / sycl::sqrt(var + eps);
+              for (size_t j = lid; j < d; j += WG) {
+                orow[j] = (T)(((float)xr[j] - mean) * inv_std * (float)a[j] + (float)b[j]);
+              }
+            });
+      });
+      return CANDLE_SYCL_OK;
+    } catch (...) {
+      return CANDLE_SYCL_ERR_LAUNCH;
+    }
+  });
+}
+
 // mode: 0 interleaved (bhtd), 1 half-split (bhtd), 2 half-split thd (bthd).
 // cos/sin: (t, d/2) or (b, t, d/2) when cos_batched.
 int candle_sycl_rope(CandleSyclQueue *q, uint32_t mode, CandleSyclDType dt, const void *inp,

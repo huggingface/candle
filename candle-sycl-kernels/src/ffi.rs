@@ -453,6 +453,18 @@ extern "C" {
         eps: f32,
     ) -> c_int;
     #[allow(clippy::too_many_arguments)]
+    pub fn candle_sycl_layer_norm(
+        q: *mut CandleSyclQueue,
+        dt: u32,
+        inp: *const c_void,
+        alpha: *const c_void,
+        beta: *const c_void,
+        out: *mut c_void,
+        rows: usize,
+        d: usize,
+        eps: f32,
+    ) -> c_int;
+    #[allow(clippy::too_many_arguments)]
     pub fn candle_sycl_rope(
         q: *mut CandleSyclQueue,
         mode: u32,

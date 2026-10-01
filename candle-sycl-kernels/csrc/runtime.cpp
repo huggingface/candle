@@ -100,7 +100,7 @@ void candle_sycl_free(CandleSyclQueue *q, void *ptr) {
   }
 }
 
-int candle_sycl_memcpy_htod(CandleSyclQueue *q, void *dst, const void *src, size_t bytes) {
+int candle_sycl_memcpy_dtod(CandleSyclQueue *q, void *dst, const void *src, size_t bytes) {
   try {
     if (bytes) q->q.memcpy(dst, src, bytes).wait_and_throw();
     return CANDLE_SYCL_OK;
@@ -108,10 +108,23 @@ int candle_sycl_memcpy_htod(CandleSyclQueue *q, void *dst, const void *src, size
     return CANDLE_SYCL_ERR_EXCEPTION;
   }
 }
-int candle_sycl_memcpy_dtoh(CandleSyclQueue *q, void *dst, const void *src, size_t bytes) {
-  return candle_sycl_memcpy_htod(q, dst, src, bytes);
+// A copy to or from pageable host memory (a Vec, an mmap'd safetensors file)
+// that is enqueued behind kernels still running makes the Level-Zero V1
+// adapter fault the device (UR_RESULT_ERROR_DEVICE_LOST, seen on Arc Pro B70
+// loading BiRefNet). Drain the queue first so the copy runs on an idle queue.
+// Free: the copy blocks until the queue has drained anyway (in-order queue).
+int candle_sycl_memcpy_htod(CandleSyclQueue *q, void *dst, const void *src, size_t bytes) {
+  try {
+    if (bytes) {
+      q->q.wait_and_throw();
+      q->q.memcpy(dst, src, bytes).wait_and_throw();
+    }
+    return CANDLE_SYCL_OK;
+  } catch (...) {
+    return CANDLE_SYCL_ERR_EXCEPTION;
+  }
 }
-int candle_sycl_memcpy_dtod(CandleSyclQueue *q, void *dst, const void *src, size_t bytes) {
+int candle_sycl_memcpy_dtoh(CandleSyclQueue *q, void *dst, const void *src, size_t bytes) {
   return candle_sycl_memcpy_htod(q, dst, src, bytes);
 }
 
