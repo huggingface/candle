@@ -197,7 +197,14 @@ pub struct Queue {
     pool: std::sync::Mutex<Pool>,
     /// Buffers the pool declined, waiting to be freed behind a synchronize.
     /// See [`Queue::defer_free`].
-    pending_free: std::sync::Mutex<Vec<*mut c_void>>,
+    pending_free: std::sync::Mutex<PendingFree>,
+}
+
+/// Declined buffers awaiting their batched free, and how many bytes they hold.
+#[derive(Default)]
+struct PendingFree {
+    ptrs: Vec<*mut c_void>,
+    bytes: usize,
 }
 
 /// Freed device buffers, keyed by exact byte size, plus a running total.
@@ -221,6 +228,11 @@ const POOL_MAX_BYTES: usize = 1 << 30;
 /// free them all.
 const PENDING_FREE_FLUSH: usize = 64;
 
+/// ...or how many bytes, whichever comes first. A count alone lets a prefill
+/// that frees 100 MB-scale temporaries hold GBs here, and allocations made
+/// outside this crate (oneMKL scratch, Level Zero) cannot drain it.
+const PENDING_FREE_MAX_BYTES: usize = 256 << 20;
+
 impl Queue {
     pub fn new(ordinal: usize) -> Result<Arc<Self>> {
         let raw = unsafe { candle_sycl_queue_new(ordinal as c_int) };
@@ -233,7 +245,7 @@ impl Queue {
         Ok(Arc::new(Self {
             raw,
             pool: std::sync::Mutex::new(Pool::default()),
-            pending_free: std::sync::Mutex::new(Vec::new()),
+            pending_free: std::sync::Mutex::new(PendingFree::default()),
         }))
     }
 
@@ -265,15 +277,17 @@ impl Queue {
     ///
     /// `sycl::free` does not wait for work already submitted to the queue, so
     /// freeing a buffer whose kernels are merely enqueued is a use-after-free.
-    /// Batch the frees and pay one synchronize per [`PENDING_FREE_FLUSH`].
-    fn defer_free(&self, ptr: *mut c_void) {
+    /// Batch the frees and pay one synchronize per [`PENDING_FREE_FLUSH`]
+    /// buffers or [`PENDING_FREE_MAX_BYTES`], whichever comes first.
+    fn defer_free(&self, ptr: *mut c_void, len: usize) {
         let batch = {
             let mut pending = self.pending_free.lock().unwrap();
-            pending.push(ptr);
-            if pending.len() < PENDING_FREE_FLUSH {
+            pending.ptrs.push(ptr);
+            pending.bytes += len;
+            if pending.ptrs.len() < PENDING_FREE_FLUSH && pending.bytes < PENDING_FREE_MAX_BYTES {
                 return;
             }
-            std::mem::take(&mut *pending)
+            std::mem::take(&mut *pending).ptrs
         };
         let _ = self.synchronize();
         for p in batch {
@@ -287,7 +301,7 @@ impl Queue {
         // pointer's `DeviceBuffer` was dropped, which says nothing about whether
         // the kernels reading it have run.
         let _ = self.synchronize();
-        let pending = std::mem::take(&mut *self.pending_free.lock().unwrap());
+        let pending = std::mem::take(&mut *self.pending_free.lock().unwrap()).ptrs;
         let mut pool = self.pool.lock().unwrap();
         for (_, ptrs) in pool.buckets.drain() {
             for p in ptrs {
@@ -353,7 +367,7 @@ impl Queue {
 
 impl Drop for Queue {
     fn drop(&mut self) {
-        for p in std::mem::take(self.pending_free.get_mut().unwrap()) {
+        for p in std::mem::take(self.pending_free.get_mut().unwrap()).ptrs {
             unsafe { candle_sycl_free(self.raw, p) }
         }
         for (_, ptrs) in self.pool.get_mut().unwrap().buckets.drain() {
@@ -511,7 +525,7 @@ impl Drop for DeviceBuffer {
         // Park the allocation in the queue's cache; if the cache declines it,
         // hand it to `defer_free` rather than freeing here — see that method.
         if !self.queue.pool_give(self.len_bytes, self.ptr) {
-            self.queue.defer_free(self.ptr);
+            self.queue.defer_free(self.ptr, self.len_bytes);
         }
     }
 }
@@ -1467,29 +1481,35 @@ pub fn gemm(
     off_a: i64,
     off_b: i64,
 ) -> Result<()> {
-    check(
-        unsafe {
-            candle_sycl_gemm(
-                q.raw,
-                dt as u32,
-                transa as c_int,
-                transb as c_int,
-                m,
-                n,
-                k,
-                alpha,
-                beta,
-                a.ptr,
-                b.ptr,
-                c.ptr,
-                batch,
-                stride_a,
-                stride_b,
-                stride_c,
-                off_a,
-                off_b,
-            )
-        },
-        "gemm",
-    )
+    // oneMKL allocates its scratch outside this crate, so a full pool or a
+    // pending-free batch can make it fail where `DeviceBuffer::alloc` would
+    // have drained and retried. Do the same here.
+    let run = || unsafe {
+        candle_sycl_gemm(
+            q.raw,
+            dt as u32,
+            transa as c_int,
+            transb as c_int,
+            m,
+            n,
+            k,
+            alpha,
+            beta,
+            a.ptr,
+            b.ptr,
+            c.ptr,
+            batch,
+            stride_a,
+            stride_b,
+            stride_c,
+            off_a,
+            off_b,
+        )
+    };
+    let status = run();
+    if status == 0 {
+        return Ok(());
+    }
+    q.drain_pool();
+    check(run(), "gemm")
 }
