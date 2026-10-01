@@ -12,6 +12,19 @@ use candle::{Device, Result, Tensor};
 pub fn device(cpu: bool) -> Result<Device> {
     if cpu {
         Ok(Device::Cpu)
+    } else if std::env::var("CANDLE_BACKEND").is_ok_and(|v| v == "vulkan") {
+        #[cfg(feature = "vulkan")]
+        {
+            let ordinal = std::env::var("CANDLE_VULKAN_TEST_GPU")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            return Device::new_vulkan(ordinal);
+        }
+        #[cfg(not(feature = "vulkan"))]
+        {
+            candle::bail!("CANDLE_BACKEND=vulkan requires --features vulkan");
+        }
     } else if cuda_is_available() {
         Ok(Device::new_cuda(0)?)
     } else if metal_is_available() {
