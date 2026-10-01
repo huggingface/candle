@@ -2,9 +2,9 @@
 #include<stdint.h>
 
 #if __CUDA_ARCH__ >= 800
-BINARY_OP(__nv_bfloat16, badd_bf16, x + y)
+BINARY_OP_BF16_VEC(badd_bf16, __hadd2, x + y)
+BINARY_OP_BF16_VEC(bmul_bf16, __hmul2, x * y)
 BINARY_OP(__nv_bfloat16, bdiv_bf16, x / y)
-BINARY_OP(__nv_bfloat16, bmul_bf16, x * y)
 BINARY_OP(__nv_bfloat16, bsub_bf16, x - y)
 BINARY_OP(__nv_bfloat16, bmaximum_bf16, maxg(x, y))
 BINARY_OP(__nv_bfloat16, bminimum_bf16, ming(x, y))
@@ -46,17 +46,17 @@ BINARY_OP_OUT(__half, uint8_t, gt_f16, x > y)
 BINARY_OP_OUT(__half, uint8_t, ge_f16, x >= y)
 #endif
 
-BINARY_OP(float, badd_f32, x + y)
+BINARY_OP_F32_VEC(badd_f32, a.x += b.x; a.y += b.y; a.z += b.z; a.w += b.w;, x + y)
+BINARY_OP_F32_VEC(bdiv_f32, a.x /= b.x; a.y /= b.y; a.z /= b.z; a.w /= b.w;, x / y)
+BINARY_OP_F32_VEC(bmul_f32, a.x *= b.x; a.y *= b.y; a.z *= b.z; a.w *= b.w;, x * y)
 BINARY_OP(double, badd_f64, x + y);
 BINARY_OP(uint8_t, badd_u8, x + y);
 BINARY_OP(uint32_t, badd_u32, x + y);
 BINARY_OP(int64_t, badd_i64, x + y);
-BINARY_OP(float, bdiv_f32, x / y)
 BINARY_OP(double, bdiv_f64, x / y);
 BINARY_OP(uint8_t, bdiv_u8, x / y);
 BINARY_OP(uint32_t, bdiv_u32, x / y);
 BINARY_OP(int64_t, bdiv_i64, x / y);
-BINARY_OP(float, bmul_f32, x * y)
 BINARY_OP(double, bmul_f64, x * y);
 BINARY_OP(uint8_t, bmul_u8, x * y);
 BINARY_OP(uint32_t, bmul_u32, x * y);

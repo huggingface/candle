@@ -435,7 +435,7 @@ fn simple_eval_(
             "LogSoftmax" => {
                 let input = get(&node.input[0])?;
                 let output = match get_attr_opt::<i64>(node, "axis")? {
-                    None => candle_nn::ops::softmax_last_dim(input)?,
+                    None => candle_nn::ops::log_softmax(input, candle::D::Minus1)?,
                     Some(&axis) => {
                         let axis = input.normalize_axis(axis)?;
                         candle_nn::ops::log_softmax(input, axis)?

@@ -622,11 +622,13 @@ fn test_logsoftmax_operation() -> Result<()> {
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-    let results = z.to_vec2::<f32>()?;
+    // Without an axis attribute the reduction runs over the last dimension, and the
+    // result is log(softmax(x)), not softmax(x).
+    let results = to_vec2_round(z, 4)?;
 
     assert_eq!(
         results,
-        vec![vec![0.26894143, 0.7310586], vec![0.26894143, 0.7310586]]
+        vec![vec![-1.3133, -0.3133], vec![-1.3133, -0.3133]]
     );
 
     Ok(())
