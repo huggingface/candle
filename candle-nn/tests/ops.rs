@@ -380,3 +380,68 @@ test_device!(
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);
+
+/// Gradients must flow through the fused rope kernels and match the gradients
+/// of the pure-tensor slow implementations.
+fn rope_grad(device: &Device) -> Result<()> {
+    use candle::Var;
+    use rand::{rngs::StdRng, Rng, SeedableRng};
+
+    let (b_size, num_head, seq_len, head_dim) = (2, 3, 5, 8);
+    let el_count = b_size * num_head * seq_len * head_dim;
+    let mut rng = StdRng::seed_from_u64(299792458);
+    let src: Vec<f32> = (0..el_count).map(|_| rng.random::<f32>()).collect();
+    let cos: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let sin: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let weight: Vec<f32> = (0..el_count).map(|_| rng.random::<f32>()).collect();
+    let src = Tensor::from_vec(src, (b_size, num_head, seq_len, head_dim), device)?;
+    let cos = Tensor::from_vec(cos, (seq_len, head_dim / 2), device)?;
+    let sin = Tensor::from_vec(sin, (seq_len, head_dim / 2), device)?;
+    let weight = Tensor::from_vec(weight, (b_size, num_head, seq_len, head_dim), device)?;
+
+    let grad_of =
+        |rope_fn: &dyn Fn(&Tensor, &Tensor, &Tensor) -> Result<Tensor>| -> Result<Tensor> {
+            let var = Var::from_tensor(&src)?;
+            let loss = (rope_fn(var.as_tensor(), &cos, &sin)? * &weight)?.sum_all()?;
+            let grads = loss.backward()?;
+            grads
+                .get(&var)
+                .cloned()
+                .ok_or_else(|| candle::Error::Msg("no gradient for rope input".to_string()))
+        };
+
+    for (fused, slow) in [
+        (
+            &candle_nn::rotary_emb::rope as &dyn Fn(&Tensor, &Tensor, &Tensor) -> Result<Tensor>,
+            &candle_nn::rotary_emb::rope_slow
+                as &dyn Fn(&Tensor, &Tensor, &Tensor) -> Result<Tensor>,
+        ),
+        (
+            &candle_nn::rotary_emb::rope_i,
+            &candle_nn::rotary_emb::rope_i_slow,
+        ),
+        (
+            &|xs: &Tensor, cos: &Tensor, sin: &Tensor| {
+                candle_nn::rotary_emb::rope_thd(xs, cos, sin)
+            },
+            &|xs: &Tensor, cos: &Tensor, sin: &Tensor| {
+                // rope_thd expects (b, t, h, d); reference via rope_slow on (b, h, t, d).
+                let xs = xs.transpose(1, 2)?.contiguous()?;
+                candle_nn::rotary_emb::rope_slow(&xs, cos, sin)?
+                    .transpose(1, 2)?
+                    .contiguous()
+            },
+        ),
+    ] {
+        let g_fused = grad_of(fused)?;
+        let g_slow = grad_of(slow)?;
+        let diff = (&g_fused - &g_slow)?.abs()?.max_all()?.to_vec0::<f32>()?;
+        assert!(diff < 1e-5, "fused/slow grad mismatch: {diff}");
+    }
+    Ok(())
+}
+test_device!(rope_grad, rope_grad_cpu, rope_grad_gpu, rope_grad_metal);
