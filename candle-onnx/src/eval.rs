@@ -1598,11 +1598,12 @@ fn simple_eval_(
 
                 let mut result = input.clone();
                 for (dim, &repeat) in repeats.iter().enumerate() {
-                    if repeat > 1 {
-                        let repeat = repeat as usize;
-                        let tensors: Vec<_> = (0..repeat).map(|_| result.clone()).collect();
-                        result = Tensor::cat(&tensors, dim)?;
-                    }
+                    result = match repeat {
+                        0 => result.narrow(dim, 0, 0)?,
+                        1 => result,
+                        repeat if repeat > 1 => Tensor::cat(&vec![&result; repeat as usize], dim)?,
+                        repeat => bail!("Tile: repeats must be non-negative, got {repeat}"),
+                    };
                 }
                 values.insert(node.output[0].clone(), result);
             }
