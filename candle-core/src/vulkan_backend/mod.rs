@@ -2822,6 +2822,14 @@ impl BackendStorage for VulkanStorage {
     /// `output` (type `D`) for `len` elements starting at `start`.
     fn to_dtype(&self, l: &Layout, dtype: DType) -> Result<Self> {
         use candle_vulkan_kernels::{KernelName, Source};
+        // Materialize non-contiguous inputs first.
+        if !matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            let elem_count = l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, l)?;
+            let mat_l = crate::Layout::contiguous_with_offset(l.shape(), 0);
+            return materialized.to_dtype(&mat_l, dtype);
+        }
         let (start, len) = match l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
             _ => {
