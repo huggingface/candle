@@ -261,7 +261,14 @@ impl Tensor {
 
                         let grad_kernel = arg
                             .transpose(0, 1)?
-                            .conv1d(&grad.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
+                            .contiguous()?
+                            .conv1d(
+                                &grad.transpose(0, 1)?.contiguous()?,
+                                *padding,
+                                *dilation,
+                                *stride,
+                                1,
+                            )?
                             .transpose(0, 1)?;
                         let sum_grad = grads.or_insert(kernel)?;
                         let (_, _, k0) = kernel.dims3()?;
@@ -299,7 +306,14 @@ impl Tensor {
 
                         let grad_kernel = arg
                             .transpose(0, 1)?
-                            .conv2d(&grad.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
+                            .contiguous()?
+                            .conv2d(
+                                &grad.transpose(0, 1)?.contiguous()?,
+                                *padding,
+                                *dilation,
+                                *stride,
+                                1,
+                            )?
                             .transpose(0, 1)?;
                         let sum_grad = grads.or_insert(kernel)?;
                         let (_, _, k0, k1) = kernel.dims4()?;
@@ -328,7 +342,14 @@ impl Tensor {
 
                         let grad_kernel = grad
                             .transpose(0, 1)?
-                            .conv2d(&arg.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
+                            .contiguous()?
+                            .conv2d(
+                                &arg.transpose(0, 1)?.contiguous()?,
+                                *padding,
+                                *dilation,
+                                *stride,
+                                1,
+                            )?
                             .transpose(0, 1)?;
                         let sum_grad = grads.or_insert(kernel)?;
                         let (_, _, k0, k1) = kernel.dims4()?;
