@@ -8986,12 +8986,12 @@ impl BackendStorage for VulkanStorage {
         src_offset: usize,
         dst_offset: usize,
     ) -> Result<()> {
-        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64)
-            || !matches!(dst.dtype, DType::F32 | DType::F16 | DType::F64)
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64 | DType::BF16 | DType::U8 | DType::U32)
+            || !matches!(dst.dtype, DType::F32 | DType::F16 | DType::F64 | DType::BF16 | DType::U8 | DType::U32)
+            || self.dtype != dst.dtype
         {
             return Err(Error::Vulkan(
-                "copy2d: unsupported dtype on the Vulkan backend"
-                    .to_string()
+                format!("copy2d: unsupported dtype on the Vulkan backend (src={:?}, dst={:?})", self.dtype, dst.dtype)
                     .into(),
             ));
         }
@@ -9117,6 +9117,108 @@ impl BackendStorage for VulkanStorage {
                         &kernels,
                         candle_vulkan_kernels::Source::Copy2dF64,
                         candle_vulkan_kernels::KernelName::Copy2dF64,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let src_buf: Subbuffer<[half::bf16]> = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_buf: Subbuffer<[half::bf16]> = match &dst.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+                let params = params.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dSlang,
+                        candle_vulkan_kernels::KernelName::Copy2dBf16,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::U8 => {
+                let src_buf: Subbuffer<[u8]> = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_buf: Subbuffer<[u8]> = match &dst.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+                let params = params.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<u8>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dSlang,
+                        candle_vulkan_kernels::KernelName::Copy2dU8,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::U32 => {
+                let src_buf: Subbuffer<[u32]> = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_buf: Subbuffer<[u32]> = match &dst.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+                let params = params.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<u32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dSlang,
+                        candle_vulkan_kernels::KernelName::Copy2dU32,
                         &src_buf,
                         &dst_buf,
                         &params,

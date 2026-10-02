@@ -382,6 +382,7 @@ pub enum Source {
     Copy2dF64,
     Copy2dBf16,
     Copy2dU8,
+    Copy2dU32,
     GatherIdxSlang,
     GatherIdxF16,
     GatherIdxF64,
@@ -776,6 +777,7 @@ impl Source {
             | KernelName::Copy2dF64
             | KernelName::Copy2dBf16
             | KernelName::Copy2dU8
+            | KernelName::Copy2dU32
             | KernelName::GatherIdxF32
             | KernelName::GatherRowsF32
             | KernelName::IndexSelectF32
@@ -1039,6 +1041,7 @@ impl Source {
             Self::Copy2dF64 => COPY2D_F64_SPV,
             Self::Copy2dBf16 => COPY2D_BF16_SPV,
             Self::Copy2dU8 => COPY2D_U8_SPV,
+            Self::Copy2dU32 => COPY2D_SLANG_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
             Self::GatherIdxF16 => GATHER_IDX_F16_SPV,
             Self::GatherIdxF64 => GATHER_IDX_F64_SPV,
@@ -1251,6 +1254,8 @@ impl AsRef<str> for Source {
             Self::Copy2dF16 => "copy2d_f16",
             Self::Copy2dF64 => "copy2d_f64",
             Self::Copy2dBf16 => "copy2d_bf16",
+
+            Self::Copy2dU32 => "copy2d",
             Self::Copy2dU8 => "copy2d_u8",
             Self::GatherIdxSlang => "gather_idx",
             Self::GatherIdxF16 => "gather_idx_f16",
