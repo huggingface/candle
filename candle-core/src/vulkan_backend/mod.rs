@@ -7816,7 +7816,15 @@ impl BackendStorage for VulkanStorage {
     }
 
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
-        if self.dtype != DType::F32 {
+        // Convert source to F32 if needed.
+        let self_f32;
+        let self_ref: &VulkanStorage = if self.dtype == DType::F32 {
+            self
+        } else {
+            self_f32 = self.to_dtype(l, DType::F32)?;
+            &self_f32
+        };
+        if self_ref.dtype != DType::F32 {
             return Err(Error::Vulkan(
                 "index_select: only F32 supported on the Vulkan backend"
                     .to_string()
@@ -7856,7 +7864,15 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         }
-        let ids_u32 = match &ids.buffer {
+        // Convert ids to U32 if needed.
+        let ids_u32_storage;
+        let ids_ref: &VulkanStorage = if ids.dtype == DType::U32 {
+            ids
+        } else {
+            ids_u32_storage = ids.to_dtype(&ids_l, DType::U32)?;
+            &ids_u32_storage
+        };
+        let ids_u32 = match &ids_ref.buffer {
             VulkanStorageBuffer::U32(b) => b.clone(),
             _ => {
                 return Err(Error::Vulkan(
@@ -7892,7 +7908,7 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         }
-        let src_buf = match &self.buffer {
+        let src_buf = match &self_ref.buffer {
             VulkanStorageBuffer::F32(b) => b
                 .clone()
                 .slice(src_start as u64..(src_start + src_len) as u64),
