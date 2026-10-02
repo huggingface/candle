@@ -895,8 +895,15 @@ impl Storage {
         rhs_layout: &Layout,
     ) -> Result<Self> {
         self.same_device(rhs, "matmul")?;
-        self.same_dtype(rhs, "matmul")?;
-        match (self, rhs) {
+        // Allow mixed dtypes: convert rhs to match self.dtype if needed.
+        let rhs_converted;
+        let rhs_ref = if self.dtype() == rhs.dtype() {
+            rhs
+        } else {
+            rhs_converted = rhs.to_dtype(rhs_layout, self.dtype())?;
+            &rhs_converted
+        };
+        match (self, rhs_ref) {
             (Self::Cpu(lhs), Self::Cpu(rhs)) => {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Cpu(storage))

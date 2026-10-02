@@ -8301,13 +8301,23 @@ impl BackendStorage for VulkanStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) || self.dtype != rhs.dtype {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64 | DType::BF16)
+            || !matches!(rhs.dtype, DType::F32 | DType::F16 | DType::F64 | DType::BF16)
+        {
             return Err(Error::Vulkan(
                 "matmul: unsupported or mismatched dtype on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
         }
+        // Convert rhs to match self.dtype if needed.
+        let rhs_converted;
+        let rhs_ref: &VulkanStorage = if self.dtype == rhs.dtype {
+            rhs
+        } else {
+            rhs_converted = rhs.to_dtype(&rhs_l, self.dtype)?;
+            &rhs_converted
+        };
         let (bsz, m, n, k) = bmnk;
         if m == 0 || n == 0 || k == 0 || bsz == 0 {
             return VulkanStorage::new(&self.device, 0, self.dtype);
@@ -8396,7 +8406,7 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let rhs_buf: Subbuffer<[f32]> = match &rhs.buffer {
+                let rhs_buf: Subbuffer<[f32]> = match &rhs_ref.buffer {
                     VulkanStorageBuffer::F32(b) => b
                         .clone()
                         .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
@@ -8442,7 +8452,7 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let rhs_buf: Subbuffer<[half::f16]> = match &rhs.buffer {
+                let rhs_buf: Subbuffer<[half::f16]> = match &rhs_ref.buffer {
                     VulkanStorageBuffer::F16(b) => b
                         .clone()
                         .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
@@ -8488,7 +8498,7 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let rhs_buf: Subbuffer<[f64]> = match &rhs.buffer {
+                let rhs_buf: Subbuffer<[f64]> = match &rhs_ref.buffer {
                     VulkanStorageBuffer::F64(b) => b
                         .clone()
                         .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
