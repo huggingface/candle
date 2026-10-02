@@ -8195,6 +8195,13 @@ impl BackendStorage for VulkanStorage {
         if m == 0 || n == 0 || k == 0 || bsz == 0 {
             return VulkanStorage::new(&self.device, 0, self.dtype);
         }
+        if !matches!(lhs_l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            let lhs_elem = lhs_l.shape().elem_count();
+            let mut lhs_mat = VulkanStorage::new(&self.device, lhs_elem, self.dtype)?;
+            self.copy_strided_src(&mut lhs_mat, 0, lhs_l)?;
+            let lhs_mat_l = crate::Layout::contiguous_with_offset(lhs_l.shape(), 0);
+            return lhs_mat.matmul(rhs, bmnk, &lhs_mat_l, rhs_l);
+        }
         let (lhs_start, lhs_len) = match lhs_l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
             _ => {
@@ -8228,11 +8235,11 @@ impl BackendStorage for VulkanStorage {
         let transposed =
             rs[rank - 2] == 1 && rs[rank - 1] == k && (rank == 2 || rs[rank - 3] == n * k);
         if !standard && !transposed {
-            return Err(Error::Vulkan(
-                "matmul: non-contiguous rhs not supported on the Vulkan backend"
-                    .to_string()
-                    .into(),
-            ));
+            let rhs_elem = rhs_l.shape().elem_count();
+            let mut rhs_mat = VulkanStorage::new(&self.device, rhs_elem, rhs.dtype)?;
+            rhs.copy_strided_src(&mut rhs_mat, 0, rhs_l)?;
+            let rhs_mat_l = crate::Layout::contiguous_with_offset(rhs_l.shape(), 0);
+            return self.matmul(&rhs_mat, bmnk, lhs_l, &rhs_mat_l);
         }
         let rhs_transposed = transposed && !standard;
         let rhs_start = rhs_l.start_offset();
@@ -9039,8 +9046,52 @@ impl BackendStorage for VulkanStorage {
         use crate::scalar::Scalar;
         let value = match (self.dtype, &scalar) {
             (DType::F32, Scalar::F32(v)) => *v,
+            (DType::F32, Scalar::F16(v)) => v.to_f32(),
+            (DType::F32, Scalar::BF16(v)) => v.to_f32(),
+            (DType::F32, Scalar::F64(v)) => *v as f32,
+            (DType::F16, Scalar::F32(v)) => *v,
             (DType::F16, Scalar::F16(v)) => v.to_f32(),
+            (DType::F16, Scalar::BF16(v)) => v.to_f32(),
+            (DType::F16, Scalar::F64(v)) => *v as f32,
+            (DType::BF16, Scalar::F32(v)) => *v,
+            (DType::BF16, Scalar::F16(v)) => v.to_f32(),
             (DType::BF16, Scalar::BF16(v)) => v.to_f32(),
+            (DType::BF16, Scalar::F64(v)) => *v as f32,
+            (DType::F64, Scalar::F32(v)) => *v,
+            (DType::F64, Scalar::F16(v)) => v.to_f32(),
+            (DType::F64, Scalar::BF16(v)) => v.to_f32(),
+            (DType::F64, Scalar::F64(v)) => *v as f32,
+            (DType::F8E4M3, Scalar::F32(v)) => *v,
+            (DType::F8E4M3, Scalar::F16(v)) => v.to_f32(),
+            (DType::F8E4M3, Scalar::BF16(v)) => v.to_f32(),
+            (DType::F8E4M3, Scalar::F64(v)) => *v as f32,
+            (DType::F8E4M3, Scalar::F8E4M3(v)) => v.to_f32(),
+            (DType::I32, Scalar::I32(v)) => *v as f32,
+            (DType::I32, Scalar::I64(v)) => *v as f32,
+            (DType::I32, Scalar::I16(v)) => *v as f32,
+            (DType::I32, Scalar::U8(v)) => *v as f32,
+            (DType::I32, Scalar::U32(v)) => *v as f32,
+            (DType::I32, Scalar::F32(v)) => *v,
+            (DType::I64, Scalar::I64(v)) => *v as f32,
+            (DType::I64, Scalar::I32(v)) => *v as f32,
+            (DType::I64, Scalar::I16(v)) => *v as f32,
+            (DType::I64, Scalar::U8(v)) => *v as f32,
+            (DType::I64, Scalar::U32(v)) => *v as f32,
+            (DType::I16, Scalar::I16(v)) => *v as f32,
+            (DType::I16, Scalar::I32(v)) => *v as f32,
+            (DType::I16, Scalar::I64(v)) => *v as f32,
+            (DType::I16, Scalar::U8(v)) => *v as f32,
+            (DType::I16, Scalar::U32(v)) => *v as f32,
+            (DType::U8, Scalar::U8(v)) => *v as f32,
+            (DType::U8, Scalar::U32(v)) => *v as f32,
+            (DType::U8, Scalar::I32(v)) => *v as f32,
+            (DType::U8, Scalar::I64(v)) => *v as f32,
+            (DType::U8, Scalar::I16(v)) => *v as f32,
+            (DType::U32, Scalar::U32(v)) => *v as f32,
+            (DType::U32, Scalar::U8(v)) => *v as f32,
+            (DType::U32, Scalar::I32(v)) => *v as f32,
+            (DType::U32, Scalar::I64(v)) => *v as f32,
+            (DType::U32, Scalar::I16(v)) => *v as f32,
             _ => {
                 return Err(Error::Vulkan(
                     "const_set: unsupported scalar/dtype combination"
