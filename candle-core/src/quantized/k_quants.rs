@@ -2429,12 +2429,15 @@ pub fn matmul<T: GgmlType>(
         T::VecDotType::BLCK_SIZE,
         "Mismatched block sizes"
     );
-    debug_assert_eq!(
+    // Real asserts rather than debug ones: the workers below write `dst` through a raw pointer,
+    // so an undersized `dst` would otherwise be written out of bounds instead of panicking.
+    assert_eq!(
         m * k,
         lhs.len(),
         "unexpected lhs length {} ({m},{k},{n})",
         lhs.len()
     );
+    assert!(dst.len() >= m * n, "dst too small: {} < {}", dst.len(), m * n);
     let k_in_blocks = k.div_ceil(T::BLCK_SIZE);
 
     // Thread-local scratch buffer reused across calls to avoid per-matmul

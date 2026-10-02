@@ -1714,6 +1714,20 @@ fn qmatmul_batched_rows_match_single_row_cpu() -> Result<()> {
     Ok(())
 }
 
+// `k_quants::matmul` is a safe fn that writes `dst` through a raw pointer from the pool threads, so
+// an undersized `dst` has to be rejected up front rather than written out of bounds.
+#[test]
+#[should_panic(expected = "dst too small")]
+fn qmatmul_cpu_rejects_undersized_dst() {
+    let (m, k, n) = (2, 32, 4);
+    let lhs = vec![1f32; m * k];
+    let rhs = vec![1f32; k * n];
+    let mut rhs_t = vec![k_quants::BlockQ4_0::zeros(); n * k / 32];
+    k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t);
+    let mut dst = vec![0f32; n];
+    let _ = k_quants::matmul((m, k, n), &lhs, &rhs_t, &mut dst);
+}
+
 // Timing harness for the CPU quantized matmul prefill path, not a correctness test. Run with:
 // cargo test -p candle-core --release --test quantized_tests -- --ignored --nocapture bench_qmatmul_prefill_cpu
 #[test]
