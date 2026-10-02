@@ -1669,3 +1669,104 @@ fn bf16_lhs_matmul_matches_f32() -> Result<()> {
     }
     Ok(())
 }
+
+// The batched CPU matmul must produce exactly the same values as running the input one row at a
+// time: both paths call the same `vec_dot` kernels per output element, only the loop order differs.
+// `n` is kept away from the repacked-kernel shapes (multiples of 4/8/16) so that this exercises the
+// generic `k_quants::matmul` on every architecture, and `CustomOp1` is applied directly so that the
+// float weight types are not dequantized by `QMatMul`.
+#[test]
+fn qmatmul_batched_rows_match_single_row_cpu() -> Result<()> {
+    let dev = Device::Cpu;
+    let (n, k) = (23usize, 512usize);
+    for dtype in [
+        GgmlDType::F32,
+        GgmlDType::F16,
+        GgmlDType::BF16,
+        GgmlDType::Q4_0,
+        GgmlDType::Q4_1,
+        GgmlDType::Q5_0,
+        GgmlDType::Q5_1,
+        GgmlDType::Q8_0,
+        GgmlDType::Q8_1,
+        GgmlDType::Q2K,
+        GgmlDType::Q3K,
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+        GgmlDType::Q8K,
+    ] {
+        let w = Tensor::rand(-1f32, 1f32, (n, k), &dev)?;
+        let qtensor = quantized::QTensor::quantize(&w, dtype)?;
+        for m in [2usize, 3, 4, 7, 8, 9, 16, 17, 33, 64] {
+            let lhs = Tensor::rand(-1f32, 1f32, (m, k), &dev)?;
+            let batched = lhs.apply_op1_no_bwd(&qtensor)?.to_vec2::<f32>()?;
+            for (row_idx, batched_row) in batched.iter().enumerate() {
+                let row = lhs.narrow(0, row_idx, 1)?;
+                let single = row.apply_op1_no_bwd(&qtensor)?.to_vec2::<f32>()?;
+                assert_eq!(
+                    batched_row, &single[0],
+                    "{dtype:?} m={m}: row {row_idx} differs from the single-row result"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+// `k_quants::matmul` is a safe fn that writes `dst` through a raw pointer from the pool threads, so
+// an undersized `dst` has to be rejected up front rather than written out of bounds.
+#[test]
+#[should_panic(expected = "dst too small")]
+fn qmatmul_cpu_rejects_undersized_dst() {
+    let (m, k, n) = (2, 32, 4);
+    let lhs = vec![1f32; m * k];
+    let rhs = vec![1f32; k * n];
+    let mut rhs_t = vec![k_quants::BlockQ4_0::zeros(); n * k / 32];
+    k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t);
+    let mut dst = vec![0f32; n];
+    let _ = k_quants::matmul((m, k, n), &lhs, &rhs_t, &mut dst);
+}
+
+// Timing harness for the CPU quantized matmul prefill path, not a correctness test. Run with:
+// cargo test -p candle-core --release --test quantized_tests -- --ignored --nocapture bench_qmatmul_prefill_cpu
+#[test]
+#[ignore]
+fn bench_qmatmul_prefill_cpu() -> Result<()> {
+    let dev = Device::Cpu;
+    // (dtype, n, k, batch sizes). n = 2040 and n = 8184 are not multiples of 16, which keeps Q4K
+    // and Q8_0 on the generic path on x86 even when the repacked kernels are available; the
+    // 8184 x 8192 weights (38 MB / 71 MB) do not fit in a typical LLC.
+    let cases: [(GgmlDType, usize, usize, &[usize]); 8] = [
+        (GgmlDType::Q4K, 2048, 2048, &[1, 32, 128, 512]),
+        (GgmlDType::Q8_0, 2048, 2048, &[1, 32, 128, 512]),
+        (GgmlDType::Q4K, 2040, 2048, &[1, 32, 128, 512]),
+        (GgmlDType::Q4_0, 2048, 2048, &[1, 32, 128, 512]),
+        (GgmlDType::Q5K, 2048, 2048, &[1, 32, 128, 512]),
+        (GgmlDType::Q2K, 2048, 2048, &[1, 32, 128, 512]),
+        (GgmlDType::Q4K, 8184, 8192, &[1, 32, 128]),
+        (GgmlDType::Q8_0, 8184, 8192, &[1, 32, 128]),
+    ];
+    for (dtype, n, k, ms) in cases {
+        let w = Tensor::rand(-1f32, 1f32, (n, k), &dev)?;
+        let matmul = quantized::QMatMul::from_qtensor(quantized::QTensor::quantize(&w, dtype)?)?;
+        for &m in ms {
+            let lhs = Tensor::rand(-1f32, 1f32, (m, k), &dev)?;
+            for _ in 0..3 {
+                std::hint::black_box(matmul.forward(&lhs)?);
+            }
+            let iters = (4096 / m).clamp(4, 200);
+            let start = std::time::Instant::now();
+            for _ in 0..iters {
+                std::hint::black_box(matmul.forward(&lhs)?);
+            }
+            let secs = start.elapsed().as_secs_f64() / iters as f64;
+            println!(
+                "{dtype:?} n={n} k={k} m={m:>4}: {:>9.3} ms/call {:>9.0} rows/s",
+                secs * 1e3,
+                m as f64 / secs
+            );
+        }
+    }
+    Ok(())
+}
