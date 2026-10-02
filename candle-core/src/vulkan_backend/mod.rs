@@ -1424,6 +1424,14 @@ impl BackendStorage for VulkanStorage {
                 .into(),
             ));
         }
+        // Materialize non-contiguous inputs first.
+        if !matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            let elem_count = l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, l)?;
+            let mat_l = crate::Layout::contiguous_with_offset(l.shape(), 0);
+            return materialized.affine(&mat_l, mul, add);
+        }
         let (start, len) = match l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
             _ => {
