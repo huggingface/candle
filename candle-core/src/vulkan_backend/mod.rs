@@ -4732,6 +4732,13 @@ impl BackendStorage for VulkanStorage {
                 .into(),
             ));
         }
+        if !matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            let elem_count = l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, l)?;
+            let mat_layout = crate::Layout::contiguous_with_offset(l.shape(), 0);
+            return materialized.unary_impl::<B>(&mat_layout);
+        }
         let (start, len) = match l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
             _ => {
@@ -9304,6 +9311,13 @@ impl VulkanStorage {
             return Err(Error::Vulkan(
                 format!("sigmoid: dtype {:?} not supported", dtype).into(),
             ));
+        }
+        if !matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            let elem_count = l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, l)?;
+            let mat_layout = crate::Layout::contiguous_with_offset(l.shape(), 0);
+            return materialized.sigmoid(&mat_layout);
         }
         let (start, len) = match l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
