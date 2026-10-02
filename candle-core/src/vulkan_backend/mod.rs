@@ -2023,10 +2023,37 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         }
-        // Only the last axis is reducible on the Vulkan backend for now.
+        // If the reduction axis is not the last one, permute the layout to
+        // move it to the last position, materialize, reduce, then permute back.
+        if reduce_dims.len() == 1 && reduce_dims[0] != ndim - 1 {
+            let rd = reduce_dims[0];
+            let perm: Vec<usize> = (0..ndim).filter(|&i| i != rd).chain(std::iter::once(rd)).collect();
+            let perm_l = l.permute(&perm)?;
+            let elem_count = perm_l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, l)?;
+            let mat_l = crate::Layout::contiguous_with_offset(perm_l.shape(), 0);
+            let reduced = materialized.reduce_op(op, &mat_l, &[ndim - 1])?;
+            // Build the result shape: original dims minus the reduced dim
+            let result_dims: Vec<usize> = (0..ndim).filter(|&i| i != rd).map(|i| l.shape().dims()[i]).collect();
+            let result_shape = crate::Shape::from(result_dims);
+            // The reduced tensor has shape = perm_l.shape() minus last dim.
+            // We need to reorder it to match the original dim order.
+            // perm = [d0, d1, ..., d_{rd-1}, d_{rd+1}, ..., d_{ndim-2}, rd]
+            // reduced shape = [d0, d1, ..., d_{rd-1}, d_{rd+1}, ..., d_{ndim-2}]
+            // We need to permute the reduced tensor so that dim i in the result
+            // corresponds to the original dim i (skipping rd).
+            // The reduced tensor is already in the correct order (all non-rd dims
+            // in their original relative order), so no permutation is needed.
+            // Just materialize it to ensure it's contiguous.
+            let mut result = VulkanStorage::new(&self.device, result_shape.elem_count(), reduced.dtype)?;
+            let red_l = crate::Layout::contiguous_with_offset(&result_shape, 0);
+            reduced.copy_strided_src(&mut result, 0, &red_l)?;
+            return Ok(result);
+        }
         if reduce_dims != [ndim - 1] {
             return Err(Error::Vulkan(
-                "reduce_op: only the last axis can be reduced on the Vulkan backend"
+                "reduce_op: only single-axis reduction supported on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
