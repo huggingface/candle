@@ -6013,7 +6013,36 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         }
-        let (in_start, in_len) = match l.strided_blocks() {
+        // Materialize non-contiguous inputs and kernels first.
+        let in_mat = if matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            None
+        } else {
+            let elem_count = l.shape().elem_count();
+            let mut mat = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut mat, 0, l)?;
+            Some(mat)
+        };
+        let kernel_mat = if matches!(kernel_l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            None
+        } else {
+            let elem_count = kernel_l.shape().elem_count();
+            let mut mat = VulkanStorage::new(&self.device, elem_count, kernel.dtype)?;
+            kernel.copy_strided_src(&mut mat, 0, kernel_l)?;
+            Some(mat)
+        };
+        let self_ref: &VulkanStorage = in_mat.as_ref().unwrap_or(self);
+        let kernel_ref: &VulkanStorage = kernel_mat.as_ref().unwrap_or(kernel);
+        let in_l = if in_mat.is_some() {
+            crate::Layout::contiguous_with_offset(l.shape(), 0)
+        } else {
+            l.clone()
+        };
+        let kernel_l = if kernel_mat.is_some() {
+            crate::Layout::contiguous_with_offset(kernel_l.shape(), 0)
+        } else {
+            kernel_l.clone()
+        };
+        let (in_start, in_len) = match in_l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
             _ => {
                 return Err(Error::Vulkan(
@@ -6076,7 +6105,7 @@ impl BackendStorage for VulkanStorage {
         let params_sub: Subbuffer<[f32]> = params_buf;
         match self.dtype {
             DType::F32 => {
-                let in_buf: Subbuffer<[f32]> = match &self.buffer {
+                let in_buf: Subbuffer<[f32]> = match &self_ref.buffer {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
@@ -6086,7 +6115,7 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let w_buf: Subbuffer<[f32]> = match &kernel.buffer {
+                let w_buf: Subbuffer<[f32]> = match &kernel_ref.buffer {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
@@ -6120,7 +6149,7 @@ impl BackendStorage for VulkanStorage {
                 })?;
             }
             DType::F16 => {
-                let in_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                let in_buf: Subbuffer<[half::f16]> = match &self_ref.buffer {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
@@ -6130,7 +6159,7 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let w_buf: Subbuffer<[half::f16]> = match &kernel.buffer {
+                let w_buf: Subbuffer<[half::f16]> = match &kernel_ref.buffer {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
@@ -6164,7 +6193,7 @@ impl BackendStorage for VulkanStorage {
                 })?;
             }
             DType::F64 => {
-                let in_buf: Subbuffer<[f64]> = match &self.buffer {
+                let in_buf: Subbuffer<[f64]> = match &self_ref.buffer {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(in_start as u64..(in_start + in_len) as u64)
                     }
@@ -6174,7 +6203,7 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let w_buf: Subbuffer<[f64]> = match &kernel.buffer {
+                let w_buf: Subbuffer<[f64]> = match &kernel_ref.buffer {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(w_start as u64..(w_start + w_len) as u64)
                     }
