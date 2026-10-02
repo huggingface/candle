@@ -22,6 +22,7 @@ pub use kernels::{
     call_rope_slang,
     call_where_slang,
     call_copy2d_slang,
+    call_rotary_emb_int_slang,
     call_gather_idx_slang,
     call_reduce_slang,
     call_pool2d_slang,

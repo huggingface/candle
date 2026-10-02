@@ -9510,6 +9510,72 @@ impl VulkanStorage {
         let out_l = Layout::contiguous(l.shape());
         out.to_dtype(&out_l, out_dtype)
     }
+    pub fn rope_int(
+        &self,
+        l: &Layout,
+        cos: &VulkanStorage,
+        cos_l: &Layout,
+        sin: &VulkanStorage,
+        sin_l: &Layout,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() != 4 {
+            return Err(Error::Vulkan(
+                "rope_int: needs 4 dims (b, h, t, d)".to_string().into(),
+            ));
+        }
+        let (b, h, t, d) = (dims[0], dims[1], dims[2], dims[3]);
+        let half = d / 2;
+        if half == 0 {
+            return Err(Error::Vulkan(
+                "rope_int: head dim must be >= 2".to_string().into(),
+            ));
+        }
+        let n_el = b * h * t * d;
+        if n_el == 0 {
+            return self.device.zeros_impl(l.shape(), self.dtype);
+        }
+        let out_dtype = self.dtype;
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let (cos_buf, keep_cos) = self.f32_view(cos, cos_l)?;
+        let (sin_buf, keep_sin) = self.f32_view(sin, sin_l)?;
+        let out = VulkanStorage::new(&self.device, n_el, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let unbatched = if cos_l.dims().len() == 3 { 1.0f32 } else { 0.0f32 };
+        let params = self.alloc_params(vec![b as f32, h as f32, t as f32, d as f32, unbatched])?;
+        let kernels = self.device.kernels();
+        let (input, cos_buf, sin_buf, out_buf, params) =
+            (input, cos_buf, sin_buf, out_buf, params.clone());
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_rotary_emb_int_slang(
+                cbb,
+                &kernels,
+                Source::RotaryEmbInt,
+                KernelName::RotaryEmbInt,
+                &input,
+                &out_buf,
+                &cos_buf,
+                &sin_buf,
+                &params,
+                n_el,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_in, keep_cos, keep_sin));
+        if out_dtype == DType::F32 {
+            return Ok(out);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out.to_dtype(&out_l, out_dtype)
+    }
 
     /// LayerNorm over the last dim:
     /// `out[i][j] = (x[i][j] - mean[i]) * inv_std[i] * alpha[j] + beta[j]`

@@ -272,6 +272,7 @@ pub enum KernelName {
     Copy2dBf16,
     Copy2dU8,
     Copy2dU32,
+    RotaryEmbInt,
     GatherIdxF32,
     GatherRowsF32,
     IndexSelectF32,
@@ -720,6 +721,7 @@ impl AsRef<str> for KernelName {
             Self::Copy2dBf16 => "main",
             Self::Copy2dU8 => "main",
             Self::Copy2dU32 => "main",
+            Self::RotaryEmbInt => "main",
             Self::GatherIdxF32 => "main",
             Self::GatherRowsF32 => "main_gather_rows",
             Self::IndexSelectF32 => "main_index_select",
@@ -1071,6 +1073,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         KernelName::Sigmoid => 3,
         KernelName::Softmax => 3,
         KernelName::Rope => 5,
+        KernelName::RotaryEmbInt => 5,
         KernelName::ConstSetF32
         | KernelName::ConstSetF16
         | KernelName::ConstSetBf16
@@ -1313,6 +1316,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Copy2dBf16
         | KernelName::Copy2dU8
         | KernelName::Copy2dU32
+        | KernelName::RotaryEmbInt
         => 3,
         KernelName::GatherIdxF32 => 4,
         KernelName::GatherRowsF32 => 4,

@@ -45,6 +45,7 @@ const CMP_I32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_i32.spv
 const BINARY_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary_i64.spv"));
 const CMP_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_i64.spv"));
 const COPY2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d.spv"));
+const ROTARY_EMB_INT_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rotary_emb_int.spv"));
 const COPY2D_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_f16.spv"));
 const COPY2D_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_f64.spv"));
 const COPY2D_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_bf16.spv"));
@@ -383,6 +384,7 @@ pub enum Source {
     Copy2dBf16,
     Copy2dU8,
     Copy2dU32,
+    RotaryEmbInt,
     GatherIdxSlang,
     GatherIdxF16,
     GatherIdxF64,
@@ -778,6 +780,7 @@ impl Source {
             | KernelName::Copy2dBf16
             | KernelName::Copy2dU8
             | KernelName::Copy2dU32
+            | KernelName::RotaryEmbInt
             | KernelName::GatherIdxF32
             | KernelName::GatherRowsF32
             | KernelName::IndexSelectF32
@@ -1042,6 +1045,7 @@ impl Source {
             Self::Copy2dBf16 => COPY2D_BF16_SPV,
             Self::Copy2dU8 => COPY2D_U8_SPV,
             Self::Copy2dU32 => COPY2D_SLANG_SPV,
+            Self::RotaryEmbInt => ROTARY_EMB_INT_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
             Self::GatherIdxF16 => GATHER_IDX_F16_SPV,
             Self::GatherIdxF64 => GATHER_IDX_F64_SPV,
@@ -1256,6 +1260,7 @@ impl AsRef<str> for Source {
             Self::Copy2dBf16 => "copy2d_bf16",
 
             Self::Copy2dU32 => "copy2d",
+            Self::RotaryEmbInt => "rotary_emb_int",
             Self::Copy2dU8 => "copy2d_u8",
             Self::GatherIdxSlang => "gather_idx",
             Self::GatherIdxF16 => "gather_idx_f16",
