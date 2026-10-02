@@ -34,6 +34,7 @@ pub mod index_add_slang;
 pub mod dequant_slang;
 pub mod rms_norm_slang;
 pub mod layer_norm_slang;
+pub mod sigmoid_slang;
 pub mod softmax_slang;
 pub mod rope_slang;
 
@@ -70,5 +71,6 @@ pub use index_add_slang::call_index_add_slang;
 pub use dequant_slang::call_dequantize_slang;
 pub use rms_norm_slang::call_rms_norm_slang;
 pub use layer_norm_slang::call_layer_norm_slang;
+pub use sigmoid_slang::call_sigmoid_slang;
 pub use softmax_slang::call_softmax_slang;
 pub use rope_slang::call_rope_slang;

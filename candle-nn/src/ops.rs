@@ -82,6 +82,16 @@ impl candle::CustomOp1 for Sigmoid {
         Ok((storage, layout.shape().clone()))
     }
 
+    #[cfg(feature = "vulkan")]
+    fn vulkan_fwd(
+        &self,
+        storage: &candle::VulkanStorage,
+        layout: &Layout,
+    ) -> Result<(candle::VulkanStorage, Shape)> {
+        let out = storage.sigmoid(layout)?;
+        Ok((out, layout.shape().clone()))
+    }
+
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,

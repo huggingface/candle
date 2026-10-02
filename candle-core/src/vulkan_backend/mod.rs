@@ -9296,6 +9296,58 @@ impl VulkanStorage {
         out.to_dtype(&out_l, out_dtype)
     }
 
+    /// Sigmoid: `out[i] = 1 / (1 + exp(-x[i]))`
+    pub fn sigmoid(&self, l: &Layout) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        if dtype != DType::F32 && dtype != DType::F16 && dtype != DType::BF16 && dtype != DType::F64 {
+            return Err(Error::Vulkan(
+                format!("sigmoid: dtype {:?} not supported", dtype).into(),
+            ));
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "sigmoid: non-contiguous layout not supported".to_string().into(),
+                ))
+            }
+        };
+        let out = self.device.zeros_impl(l.shape(), dtype)?;
+        if len == 0 {
+            return Ok(out);
+        }
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let out_dtype = dtype;
+        let out_f32 = VulkanStorage::new(&self.device, len, DType::F32)?;
+        let out_buf = match &out_f32.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => return Err(Error::Vulkan("unexpected state".to_string().into())),
+        };
+        let params = self.alloc_params(vec![len as f32, 0.0f32])?;
+        let kernels = self.device.kernels();
+        let (input, out_buf, params) = (input, out_buf, params.clone());
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_sigmoid_slang(
+                cbb,
+                &kernels,
+                Source::Sigmoid,
+                KernelName::Sigmoid,
+                &input,
+                &out_buf,
+                &params,
+                len,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop(keep_in);
+        if out_dtype == DType::F32 {
+            return Ok(out_f32);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out_f32.to_dtype(&out_l, out_dtype)
+    }
+
     /// Softmax over the last dim.
     pub fn softmax_last_dim(&self, l: &Layout) -> Result<Self> {
         use candle_vulkan_kernels::{KernelName, Source};

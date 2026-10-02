@@ -462,6 +462,7 @@ pub enum KernelName {
     DequantQ8K,
     RmsNorm,
     LayerNorm,
+    Sigmoid,
     Softmax,
     Rope,
 }
@@ -909,6 +910,7 @@ impl AsRef<str> for KernelName {
             Self::DequantQ8K => "main",
             Self::RmsNorm => "main",
             Self::LayerNorm => "main",
+            Self::Sigmoid => "main",
             Self::Softmax => "main",
             Self::Rope => "main",
         }
@@ -1064,6 +1066,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         KernelName::DequantF32 | KernelName::DequantF16 | KernelName::DequantBf16 | KernelName::DequantQ40 | KernelName::DequantQ41 | KernelName::DequantQ50 | KernelName::DequantQ51 | KernelName::DequantQ80 | KernelName::DequantQ81 | KernelName::DequantQ2K | KernelName::DequantQ3K | KernelName::DequantQ4K | KernelName::DequantQ5K | KernelName::DequantQ6K | KernelName::DequantQ8K => 3,
         KernelName::RmsNorm => 4,
         KernelName::LayerNorm => 5,
+        KernelName::Sigmoid => 3,
         KernelName::Softmax => 3,
         KernelName::Rope => 5,
         KernelName::ConstSetF32

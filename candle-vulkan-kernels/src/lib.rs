@@ -17,6 +17,7 @@ pub use kernels::{
     call_dequantize_slang,
     call_rms_norm_slang,
     call_layer_norm_slang,
+    call_sigmoid_slang,
     call_softmax_slang,
     call_rope_slang,
     call_where_slang,
