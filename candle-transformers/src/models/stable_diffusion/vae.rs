@@ -306,6 +306,10 @@ impl DiagonalGaussianDistribution {
         Ok(DiagonalGaussianDistribution { mean, std })
     }
 
+    pub fn mode(&self) -> Result<Tensor> {
+        Ok(self.mean.clone())
+    }
+
     pub fn sample(&self) -> Result<Tensor> {
         let sample = self.mean.randn_like(0., 1.);
         &self.mean + &self.std * sample
@@ -399,5 +403,34 @@ impl AutoEncoderKL {
             Some(post_quant_conv) => &post_quant_conv.forward(xs)?,
         };
         self.decoder.forward(xs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DiagonalGaussianDistribution;
+    use candle::{Device, Tensor};
+
+    #[test]
+    fn diagonal_gaussian_mode_returns_mean() {
+        let dev = Device::Cpu;
+        let parameters = Tensor::from_vec(
+            vec![
+                1.0f32, 2.0, 3.0, 4.0, // mean
+                99.0, 98.0, 97.0, 96.0, // logvar
+            ],
+            (1, 8, 1, 1),
+            &dev,
+        )
+        .unwrap();
+        let dist = DiagonalGaussianDistribution::new(&parameters).unwrap();
+        let vals = dist
+            .mode()
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        assert_eq!(vals, vec![1.0, 2.0, 3.0, 4.0]);
     }
 }
