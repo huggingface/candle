@@ -2437,7 +2437,12 @@ pub fn matmul<T: GgmlType>(
         "unexpected lhs length {} ({m},{k},{n})",
         lhs.len()
     );
-    assert!(dst.len() >= m * n, "dst too small: {} < {}", dst.len(), m * n);
+    assert!(
+        dst.len() >= m * n,
+        "dst too small: {} < {}",
+        dst.len(),
+        m * n
+    );
     let k_in_blocks = k.div_ceil(T::BLCK_SIZE);
 
     // Thread-local scratch buffer reused across calls to avoid per-matmul
