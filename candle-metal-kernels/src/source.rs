@@ -3,6 +3,7 @@ pub const BINARY: &str = include_str!("metal_src/binary.metal");
 pub const CAST: &str = include_str!("metal_src/cast.metal");
 pub const CONV: &str = include_str!("metal_src/conv.metal");
 pub const FILL: &str = include_str!("metal_src/fill.metal");
+pub const GDN: &str = include_str!("metal_src/gdn.metal");
 pub const INDEXING: &str = include_str!("metal_src/indexing.metal");
 pub const GEMV: &str = include_str!("metal_src/gemv.metal");
 pub const MLX_GEMM: &str = include_str!("metal_src/mlx_gemm.metal");
@@ -22,6 +23,7 @@ pub enum Source {
     Cast,
     Conv,
     Fill,
+    Gdn,
     Gemm,
     Gemv,
     Indexing,
