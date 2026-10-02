@@ -324,6 +324,8 @@ const TO_DTYPE_F64F32_SPV: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q8k.spv"));
     static RMS_NORM_SPV: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/rms_norm.spv"));
+    static LAYER_NORM_SPV: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/layer_norm.spv"));
     static SOFTMAX_SPV: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/softmax.spv"));
     static ROPE_SPV: &[u8] =
@@ -530,6 +532,7 @@ pub enum Source {
     DequantQ6K,
     DequantQ8K,
     RmsNorm,
+    LayerNorm,
     Softmax,
     Rope,
 }
@@ -976,6 +979,7 @@ impl Source {
             | KernelName::DequantQ6K
             | KernelName::DequantQ8K
             | KernelName::RmsNorm
+            | KernelName::LayerNorm
             | KernelName::Softmax
             | KernelName::Rope
             => 0,
@@ -1183,6 +1187,7 @@ impl Source {
             Self::DequantQ6K => DEQUANT_Q6K_SPV,
             Self::DequantQ8K => DEQUANT_Q8K_SPV,
             Self::RmsNorm => RMS_NORM_SPV,
+            Self::LayerNorm => LAYER_NORM_SPV,
             Self::Softmax => SOFTMAX_SPV,
             Self::Rope => ROPE_SPV,
         };
@@ -1394,6 +1399,7 @@ impl AsRef<str> for Source {
             Self::DequantQ6K => "dequant_q6k",
             Self::DequantQ8K => "dequant_q8k",
             Self::RmsNorm => "rms_norm",
+            Self::LayerNorm => "layer_norm",
             Self::Softmax => "softmax",
             Self::Rope => "rope",
         }

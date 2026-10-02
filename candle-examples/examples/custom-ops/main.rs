@@ -51,6 +51,25 @@ impl CustomOp1 for LayerNorm {
         Ok((storage, layout.shape().clone()))
     }
 
+    #[cfg(feature = "vulkan")]
+    fn vulkan_fwd(
+        &self,
+        storage: &candle::VulkanStorage,
+        layout: &Layout,
+    ) -> Result<(candle::VulkanStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        let n = layout.shape().dims()[1];
+        let device = candle::Device::Vulkan(storage.device().clone());
+        let alpha = Tensor::ones(n, candle::DType::F32, &device)?;
+        let (alpha_storage_ref, alpha_l) = alpha.storage_and_layout();
+        let alpha_storage = match &*alpha_storage_ref {
+            candle::Storage::Vulkan(s) => s.clone(),
+            _ => return Err(candle::Error::Msg("not vulkan".to_string())),
+        };
+        let out = storage.rms_norm(layout, &alpha_storage, &alpha_l, self.eps as f64)?;
+        Ok((out, layout.shape().clone()))
+    }
+
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,

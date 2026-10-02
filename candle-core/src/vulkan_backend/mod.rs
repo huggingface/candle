@@ -9224,6 +9224,78 @@ impl VulkanStorage {
         out.to_dtype(&out_l, out_dtype)
     }
 
+    /// LayerNorm over the last dim:
+    /// `out[i][j] = (x[i][j] - mean[i]) * inv_std[i] * alpha[j] + beta[j]`
+    /// where `mean[i] = sum_j(x[i][j]) / n`, `var[i] = sum_j(x[i][j]^2) / n - mean[i]^2`,
+    /// `inv_std[i] = 1 / sqrt(var[i] + eps)`.
+    pub fn layer_norm(
+        &self,
+        l: &Layout,
+        alpha: &VulkanStorage,
+        alpha_l: &Layout,
+        beta: &VulkanStorage,
+        beta_l: &Layout,
+        eps: f64,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() < 2 {
+            return Err(Error::Vulkan(
+                "layer_norm: needs >= 2 dims".to_string().into(),
+            ));
+        }
+        let n = *dims
+            .last()
+            .ok_or_else(|| Error::Vulkan("empty dims".to_string().into()))?;
+        let n_rows: usize = dims[..dims.len() - 1].iter().product();
+        if n_rows == 0 || n == 0 {
+            return self.device.zeros_impl(l.shape(), self.dtype);
+        }
+        if l.shape().elem_count() != n_rows * n {
+            return Err(Error::Vulkan(
+                "layer_norm: layout length mismatch".to_string().into(),
+            ));
+        }
+        let out_dtype = self.dtype;
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let (alpha_buf, keep_alpha) = self.f32_view(alpha, alpha_l)?;
+        let (beta_buf, keep_beta) = self.f32_view(beta, beta_l)?;
+        let out = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let params = self.alloc_params(vec![n_rows as f32, n as f32, eps as f32])?;
+        let kernels = self.device.kernels();
+        let (input, alpha_buf, beta_buf, out_buf, params) =
+            (input, alpha_buf, beta_buf, out_buf, params.clone());
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_layer_norm_slang(
+                cbb,
+                &kernels,
+                Source::LayerNorm,
+                KernelName::LayerNorm,
+                &input,
+                &alpha_buf,
+                &beta_buf,
+                &out_buf,
+                &params,
+                n_rows,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_in, keep_alpha, keep_beta));
+        if out_dtype == DType::F32 {
+            return Ok(out);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out.to_dtype(&out_l, out_dtype)
+    }
+
     /// Softmax over the last dim.
     pub fn softmax_last_dim(&self, l: &Layout) -> Result<Self> {
         use candle_vulkan_kernels::{KernelName, Source};
