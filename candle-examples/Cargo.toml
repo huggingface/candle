@@ -123,10 +123,6 @@ name = "whisper"
 required-features = ["symphonia"]
 
 [[example]]
-name = "qwen3-vulkan"
-required-features = ["vulkan"]
-
-[[example]]
 name = "whisper-microphone"
 required-features = ["microphone"]
 
