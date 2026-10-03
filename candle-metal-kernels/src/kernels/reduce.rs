@@ -21,7 +21,7 @@ pub fn call_reduce_contiguous(
     let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
 
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
@@ -79,7 +79,7 @@ pub fn call_reduce_strided(
     let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
 
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
@@ -137,7 +137,7 @@ pub fn call_last_softmax(
 ) -> Result<(), MetalKernelError> {
     let work_per_threadgroup = elements;
 
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -193,7 +193,7 @@ pub fn call_rms_norm(
     alpha_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -254,7 +254,7 @@ pub fn call_layer_norm(
     beta_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -317,7 +317,7 @@ pub fn call_rope_i(
     sin_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -359,7 +359,7 @@ pub fn call_rope_thd(
     sin_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -402,7 +402,7 @@ pub fn call_rope(
     sin_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
