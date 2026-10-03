@@ -2300,9 +2300,30 @@ impl BackendStorage for VulkanStorage {
             reduced.copy_strided_src(&mut result, 0, &red_l)?;
             return Ok(result);
         }
+        // Multi-axis reduction: reduce one axis at a time, starting from the
+        // highest axis index to avoid index shifting issues.
+        if reduce_dims.len() > 1 {
+            let mut current = self.clone();
+            let mut current_l = l.clone();
+            let mut current_ndim = ndim;
+            // Sort reduce_dims in descending order to avoid index shifting
+            let mut sorted_dims: Vec<usize> = reduce_dims.to_vec();
+            sorted_dims.sort_unstable_by(|a, b| b.cmp(a));
+            for &rd in &sorted_dims {
+                current = current.reduce_op(op, &current_l, &[rd])?;
+                // Update the layout: the reduced dim is removed
+                let new_dims: Vec<usize> = (0..current_ndim)
+                    .filter(|&i| i != rd)
+                    .map(|i| current_l.dims()[i])
+                    .collect();
+                current_l = crate::Layout::contiguous(crate::Shape::from(new_dims));
+                current_ndim -= 1;
+            }
+            return Ok(current);
+        }
         if reduce_dims != [ndim - 1] {
             return Err(Error::Vulkan(
-                "reduce_op: only single-axis reduction supported on the Vulkan backend"
+                "reduce_op: only last-axis reduction supported on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
