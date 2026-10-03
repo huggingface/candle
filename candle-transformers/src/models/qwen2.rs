@@ -105,9 +105,19 @@ impl MLP {
 
 impl Module for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let input_dtype = xs.dtype();
+        let needs_upcast = !xs.device().is_cuda()
+            && (input_dtype == candle::DType::F16 || input_dtype == candle::DType::BF16);
         let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
         let rhs = xs.apply(&self.up_proj)?;
-        (lhs * rhs)?.apply(&self.down_proj)
+        // Upcast element-wise multiply to F32 to avoid F16 overflow
+        let prod = if needs_upcast {
+            (lhs.to_dtype(candle::DType::F32)? * rhs.to_dtype(candle::DType::F32)?)?
+                .to_dtype(input_dtype)?
+        } else {
+            (lhs * rhs)?
+        };
+        prod.apply(&self.down_proj)
     }
 }
 
@@ -193,20 +203,46 @@ impl Attention {
             crate::utils::repeat_kv(value_states, self.num_kv_groups)?.contiguous()?;
 
         let attn_output = {
+            let input_dtype = query_states.dtype();
+            let needs_upcast = !query_states.device().is_cuda()
+                && (input_dtype == candle::DType::F16 || input_dtype == candle::DType::BF16);
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
-            let attn_weights = (query_states.matmul(&key_states.transpose(2, 3)?)? * scale)?;
 
+            // Upcast Q/K/V to F32 on CPU to avoid F16 overflow in matmul + softmax
+            let (q, k, v) = if needs_upcast {
+                (
+                    query_states.to_dtype(candle::DType::F32)?,
+                    key_states.to_dtype(candle::DType::F32)?,
+                    value_states.to_dtype(candle::DType::F32)?,
+                )
+            } else {
+                (query_states, key_states, value_states)
+            };
+
+            let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
             let attn_weights = match attention_mask {
                 None => attn_weights,
-                Some(mask) => attn_weights.broadcast_add(mask)?,
+                Some(mask) => {
+                    let mask = if needs_upcast { mask.to_dtype(candle::DType::F32)? } else { mask.clone() };
+                    attn_weights.broadcast_add(&mask)?
+                }
             };
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-            attn_weights.matmul(&value_states)?
+            let out = attn_weights.matmul(&v)?;
+            if needs_upcast { out.to_dtype(input_dtype)? } else { out }
         };
         attn_output
             .transpose(1, 2)?
             .reshape((b_sz, q_len, self.hidden_size))?
             .apply(&self.o_proj)
+    }
+
+    fn set_kv_cache(&mut self, k: Tensor, v: Tensor) {
+        self.kv_cache = Some((k, v));
+    }
+
+    fn get_kv_cache(&self) -> Option<(Tensor, Tensor)> {
+        self.kv_cache.clone()
     }
 
     fn clear_kv_cache(&mut self) {
@@ -247,13 +283,35 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
+        let input_dtype = xs.dtype();
+        let needs_upcast = !xs.device().is_cuda()
+            && (input_dtype == candle::DType::F16 || input_dtype == candle::DType::BF16);
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self.self_attn.forward(&xs, attention_mask, seqlen_offset)?;
-        let xs = (xs + residual)?;
+        // Upcast residual add to F32 to avoid F16 overflow
+        let xs = if needs_upcast {
+            (xs.to_dtype(candle::DType::F32)? + residual.to_dtype(candle::DType::F32)?)?
+                .to_dtype(input_dtype)?
+        } else {
+            (xs + residual)?
+        };
         let residual = &xs;
         let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
-        residual + xs
+        if needs_upcast {
+            (residual.to_dtype(candle::DType::F32)? + xs.to_dtype(candle::DType::F32)?)?
+                .to_dtype(input_dtype)
+        } else {
+            residual + xs
+        }
+    }
+
+    fn set_kv_cache(&mut self, k: Tensor, v: Tensor) {
+        self.self_attn.set_kv_cache(k, v);
+    }
+
+    fn get_kv_cache(&self) -> Option<(Tensor, Tensor)> {
+        self.self_attn.get_kv_cache()
     }
 
     fn clear_kv_cache(&mut self) {
@@ -269,6 +327,10 @@ pub struct Model {
     sliding_window: usize,
     device: Device,
     dtype: DType,
+    /// When true, `forward_embeds` skips the final RmsNorm.
+    /// Used by VibeVoice-Streaming where the lower LM should not normalise
+    /// its output (the Python reference replaces the norm with `nn.Identity()`).
+    skip_final_norm: bool,
 }
 
 impl Model {
@@ -291,6 +353,7 @@ impl Model {
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
+            skip_final_norm: false,
         })
     }
 
@@ -314,7 +377,7 @@ impl Model {
             .collect();
         let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
         let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), self.dtype, &self.device)?;
+            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), mask.dtype(), &self.device)?;
             Tensor::cat(&[&mask0, &mask], D::Minus1)?
         } else {
             mask
@@ -343,7 +406,18 @@ impl Model {
         seqlen_offset: usize,
         attn_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
-        let (b_size, seq_len) = input_ids.dims2()?;
+        let xs = self.embed_tokens.forward(input_ids)?;
+        self.forward_embeds(&xs, seqlen_offset, attn_mask)
+    }
+
+    /// Forward pass starting from pre-computed embeddings instead of token ids.
+    pub fn forward_embeds(
+        &mut self,
+        inputs_embeds: &Tensor,
+        seqlen_offset: usize,
+        attn_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let (b_size, seq_len, _) = inputs_embeds.dims3()?;
         let attention_mask: Option<Tensor> = match attn_mask {
             Some(mask) => Some(self.prepare_attention_mask(mask)?),
             None => {
@@ -354,11 +428,62 @@ impl Model {
                 }
             }
         };
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = inputs_embeds.clone();
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
         }
-        xs.apply(&self.norm)
+        if self.skip_final_norm {
+            Ok(xs)
+        } else {
+            xs.apply(&self.norm)
+        }
+    }
+
+    /// When set to `true`, `forward` / `forward_embeds` will skip the final
+    /// RmsNorm.  This replicates the `nn.Identity()` replacement used in the
+    /// Python VibeVoice-Streaming lower LM.
+    pub fn set_skip_final_norm(&mut self, skip: bool) {
+        self.skip_final_norm = skip;
+    }
+
+    pub fn embed_tokens(&self) -> &candle_nn::Embedding {
+        &self.embed_tokens
+    }
+
+    /// Set pre-computed KV caches for all layers (e.g., from a voice prompt).
+    /// `kv_pairs`: Vec of (key, value) tensors, one per layer.
+    pub fn set_kv_cache(&mut self, kv_pairs: &[(Tensor, Tensor)]) {
+        for (layer, (k, v)) in self.layers.iter_mut().zip(kv_pairs.iter()) {
+            layer.set_kv_cache(k.clone(), v.clone());
+        }
+    }
+
+    pub fn num_layers(&self) -> usize {
+        self.layers.len()
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    /// Save current KV caches (for swapping between positive/negative CFG paths).
+    pub fn save_kv_cache(&self) -> Vec<Option<(Tensor, Tensor)>> {
+        self.layers.iter().map(|l| l.get_kv_cache()).collect()
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
+    /// Restore previously saved KV caches.
+    pub fn restore_kv_cache(&mut self, cache: &[Option<(Tensor, Tensor)>]) {
+        for (layer, kv) in self.layers.iter_mut().zip(cache.iter()) {
+            if let Some((k, v)) = kv {
+                layer.set_kv_cache(k.clone(), v.clone());
+            } else {
+                layer.clear_kv_cache();
+            }
+        }
     }
 
     pub fn clear_kv_cache(&mut self) {
