@@ -570,8 +570,7 @@ impl candle::CustomOp2 for RmsNorm {
         }
     }
 
-
-#[cfg(feature = "cuda")]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
         s1: &candle::CudaStorage,
@@ -806,7 +805,7 @@ impl candle::CustomOp3 for LayerNorm {
         }
     }
 
-        #[cfg(feature = "vulkan")]
+    #[cfg(feature = "vulkan")]
     fn vulkan_fwd(
         &self,
         s1: &candle::VulkanStorage,
@@ -820,7 +819,7 @@ impl candle::CustomOp3 for LayerNorm {
         Ok((out, l1.shape().clone()))
     }
 
-#[cfg(feature = "cuda")]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
         s1: &candle::CudaStorage,

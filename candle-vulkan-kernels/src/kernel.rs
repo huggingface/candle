@@ -1316,7 +1316,6 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Copy2dBf16
         | KernelName::Copy2dU8
         | KernelName::Copy2dU32
-        | KernelName::RotaryEmbInt
         => 3,
         KernelName::GatherIdxF32 => 4,
         KernelName::GatherRowsF32 => 4,

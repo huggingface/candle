@@ -2035,7 +2035,10 @@ impl BackendStorage for VulkanStorage {
         // move it to the last position, materialize, reduce, then permute back.
         if reduce_dims.len() == 1 && reduce_dims[0] != ndim - 1 {
             let rd = reduce_dims[0];
-            let perm: Vec<usize> = (0..ndim).filter(|&i| i != rd).chain(std::iter::once(rd)).collect();
+            let perm: Vec<usize> = (0..ndim)
+                .filter(|&i| i != rd)
+                .chain(std::iter::once(rd))
+                .collect();
             let perm_l = l.permute(&perm)?;
             let elem_count = perm_l.shape().elem_count();
             let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
@@ -2043,7 +2046,10 @@ impl BackendStorage for VulkanStorage {
             let mat_l = crate::Layout::contiguous_with_offset(perm_l.shape(), 0);
             let reduced = materialized.reduce_op(op, &mat_l, &[ndim - 1])?;
             // Build the result shape: original dims minus the reduced dim
-            let result_dims: Vec<usize> = (0..ndim).filter(|&i| i != rd).map(|i| l.shape().dims()[i]).collect();
+            let result_dims: Vec<usize> = (0..ndim)
+                .filter(|&i| i != rd)
+                .map(|i| l.shape().dims()[i])
+                .collect();
             let result_shape = crate::Shape::from(result_dims);
             // The reduced tensor has shape = perm_l.shape() minus last dim.
             // We need to reorder it to match the original dim order.
@@ -2054,7 +2060,8 @@ impl BackendStorage for VulkanStorage {
             // The reduced tensor is already in the correct order (all non-rd dims
             // in their original relative order), so no permutation is needed.
             // Just materialize it to ensure it's contiguous.
-            let mut result = VulkanStorage::new(&self.device, result_shape.elem_count(), reduced.dtype)?;
+            let mut result =
+                VulkanStorage::new(&self.device, result_shape.elem_count(), reduced.dtype)?;
             let red_l = crate::Layout::contiguous_with_offset(&result_shape, 0);
             reduced.copy_strided_src(&mut result, 0, &red_l)?;
             return Ok(result);
@@ -6022,7 +6029,10 @@ impl BackendStorage for VulkanStorage {
             self.copy_strided_src(&mut mat, 0, l)?;
             Some(mat)
         };
-        let kernel_mat = if matches!(kernel_l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+        let kernel_mat = if matches!(
+            kernel_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
             None
         } else {
             let elem_count = kernel_l.shape().elem_count();
@@ -6477,7 +6487,10 @@ impl BackendStorage for VulkanStorage {
             self.copy_strided_src(&mut mat, 0, l)?;
             Some(mat)
         };
-        let kernel_mat = if matches!(kernel_l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+        let kernel_mat = if matches!(
+            kernel_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
             None
         } else {
             let elem_count = kernel_l.shape().elem_count();
@@ -7935,7 +7948,7 @@ impl BackendStorage for VulkanStorage {
         let ids_ref: &VulkanStorage = if ids.dtype == DType::U32 {
             ids
         } else {
-            ids_u32_storage = ids.to_dtype(&ids_l, DType::U32)?;
+            ids_u32_storage = ids.to_dtype(ids_l, DType::U32)?;
             &ids_u32_storage
         };
         let ids_u32 = match &ids_ref.buffer {
@@ -8301,9 +8314,13 @@ impl BackendStorage for VulkanStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64 | DType::BF16)
-            || !matches!(rhs.dtype, DType::F32 | DType::F16 | DType::F64 | DType::BF16)
-        {
+        if !matches!(
+            self.dtype,
+            DType::F32 | DType::F16 | DType::F64 | DType::BF16
+        ) || !matches!(
+            rhs.dtype,
+            DType::F32 | DType::F16 | DType::F64 | DType::BF16
+        ) {
             return Err(Error::Vulkan(
                 "matmul: unsupported or mismatched dtype on the Vulkan backend"
                     .to_string()
@@ -8315,14 +8332,17 @@ impl BackendStorage for VulkanStorage {
         let rhs_ref: &VulkanStorage = if self.dtype == rhs.dtype {
             rhs
         } else {
-            rhs_converted = rhs.to_dtype(&rhs_l, self.dtype)?;
+            rhs_converted = rhs.to_dtype(rhs_l, self.dtype)?;
             &rhs_converted
         };
         let (bsz, m, n, k) = bmnk;
         if m == 0 || n == 0 || k == 0 || bsz == 0 {
             return VulkanStorage::new(&self.device, 0, self.dtype);
         }
-        if !matches!(lhs_l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+        if !matches!(
+            lhs_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
             let lhs_elem = lhs_l.shape().elem_count();
             let mut lhs_mat = VulkanStorage::new(&self.device, lhs_elem, self.dtype)?;
             self.copy_strided_src(&mut lhs_mat, 0, lhs_l)?;
@@ -9025,13 +9045,20 @@ impl BackendStorage for VulkanStorage {
         src_offset: usize,
         dst_offset: usize,
     ) -> Result<()> {
-        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64 | DType::BF16 | DType::U8 | DType::U32)
-            || !matches!(dst.dtype, DType::F32 | DType::F16 | DType::F64 | DType::BF16 | DType::U8 | DType::U32)
-            || self.dtype != dst.dtype
+        if !matches!(
+            self.dtype,
+            DType::F32 | DType::F16 | DType::F64 | DType::BF16 | DType::U8 | DType::U32
+        ) || !matches!(
+            dst.dtype,
+            DType::F32 | DType::F16 | DType::F64 | DType::BF16 | DType::U8 | DType::U32
+        ) || self.dtype != dst.dtype
         {
             return Err(Error::Vulkan(
-                format!("copy2d: unsupported dtype on the Vulkan backend (src={:?}, dst={:?})", self.dtype, dst.dtype)
-                    .into(),
+                format!(
+                    "copy2d: unsupported dtype on the Vulkan backend (src={:?}, dst={:?})",
+                    self.dtype, dst.dtype
+                )
+                .into(),
             ));
         }
         let total = d1 * d2;
@@ -9549,7 +9576,11 @@ impl VulkanStorage {
                 ))
             }
         };
-        let unbatched = if cos_l.dims().len() == 3 { 1.0f32 } else { 0.0f32 };
+        let unbatched = if cos_l.dims().len() == 3 {
+            1.0f32
+        } else {
+            0.0f32
+        };
         let params = self.alloc_params(vec![b as f32, h as f32, t as f32, d as f32, unbatched])?;
         let kernels = self.device.kernels();
         let (input, cos_buf, sin_buf, out_buf, params) =
@@ -9653,7 +9684,8 @@ impl VulkanStorage {
     pub fn sigmoid(&self, l: &Layout) -> Result<Self> {
         use candle_vulkan_kernels::{KernelName, Source};
         let dtype = self.dtype;
-        if dtype != DType::F32 && dtype != DType::F16 && dtype != DType::BF16 && dtype != DType::F64 {
+        if dtype != DType::F32 && dtype != DType::F16 && dtype != DType::BF16 && dtype != DType::F64
+        {
             return Err(Error::Vulkan(
                 format!("sigmoid: dtype {:?} not supported", dtype).into(),
             ));
@@ -9665,11 +9697,13 @@ impl VulkanStorage {
             let mat_layout = crate::Layout::contiguous_with_offset(l.shape(), 0);
             return materialized.sigmoid(&mat_layout);
         }
-        let (start, len) = match l.strided_blocks() {
+        let (_start, len) = match l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
             _ => {
                 return Err(Error::Vulkan(
-                    "sigmoid: non-contiguous layout not supported".to_string().into(),
+                    "sigmoid: non-contiguous layout not supported"
+                        .to_string()
+                        .into(),
                 ))
             }
         };

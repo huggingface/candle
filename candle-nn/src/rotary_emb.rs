@@ -102,7 +102,7 @@ impl candle::CustomOp3 for RotaryEmbI {
         }
     }
 
-        #[cfg(feature = "vulkan")]
+    #[cfg(feature = "vulkan")]
     fn vulkan_fwd(
         &self,
         s1: &candle::VulkanStorage,
@@ -116,7 +116,7 @@ impl candle::CustomOp3 for RotaryEmbI {
         Ok((out, l1.shape().clone()))
     }
 
-#[cfg(feature = "cuda")]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
         s1: &candle::CudaStorage,

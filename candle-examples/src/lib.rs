@@ -19,7 +19,7 @@ pub fn device(cpu: bool) -> Result<Device> {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0);
-            return Device::new_vulkan(ordinal);
+            Device::new_vulkan(ordinal)
         }
         #[cfg(not(feature = "vulkan"))]
         {
