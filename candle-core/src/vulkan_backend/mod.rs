@@ -1369,12 +1369,240 @@ impl BackendStorage for VulkanStorage {
     type Device = VulkanDevice;
 
     fn try_clone(&self, _: &Layout) -> Result<Self> {
-        // Deep copy: read the data back to the host and allocate a new GPU
-        // buffer, so the returned storage is independent of this one. The
-        // host or device allocation may fail with out-of-memory, hence the
+        // Deep copy VRAM→VRAM: allocate a new GPU buffer and use a device-side
+        // buffer copy, so the returned storage is independent of this one.
+        // The device allocation may fail with out-of-memory, hence the
         // fallible "try" (same contract as the CPU and CUDA backends).
-        let cpu = self.to_cpu_storage()?;
-        self.device.storage_from_cpu_storage(&cpu)
+        let n: usize = match &self.buffer {
+            VulkanStorageBuffer::U8(b) => b.len() as usize,
+            VulkanStorageBuffer::U32(b) => b.len() as usize,
+            VulkanStorageBuffer::I16(b) => b.len() as usize,
+            VulkanStorageBuffer::I32(b) => b.len() as usize,
+            VulkanStorageBuffer::I64(b) => b.len() as usize,
+            VulkanStorageBuffer::BF16(b) => b.len() as usize,
+            VulkanStorageBuffer::F16(b) => b.len() as usize,
+            VulkanStorageBuffer::F32(b) => b.len() as usize,
+            VulkanStorageBuffer::F64(b) => b.len() as usize,
+            VulkanStorageBuffer::F8E4M3(b) => b.len() as usize,
+            VulkanStorageBuffer::F6E2M3(b) => b.len() as usize,
+            VulkanStorageBuffer::F6E3M2(b) => b.len() as usize,
+            VulkanStorageBuffer::F4(b) => b.len() as usize,
+            VulkanStorageBuffer::F8E8M0(b) => b.len() as usize,
+        };
+        let out = VulkanStorage::new(&self.device, n, self.dtype)?;
+        match self.dtype {
+            DType::U8 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::U32 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::I16 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::I32 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::I64 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::BF16 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F16 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F32 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F64 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F6E2M3 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F6E2M3(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F6E2M3(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F6E3M2 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F6E3M2(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F6E3M2(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F4 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F4(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F4(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F8E8M0 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F8E8M0(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F8E8M0(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+        }
+        Ok(out)
     }
 
     fn dtype(&self) -> DType {
