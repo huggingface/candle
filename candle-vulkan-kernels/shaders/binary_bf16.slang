@@ -7,7 +7,8 @@
 // pattern of the winner (|v1 > v2 { v2 } else { v1 }), matching candle's CPU.
 //
 // Params layout: [0]=total, [1]=lhs_ndim, [2]=rhs_ndim,
-//                [3..7]=lhs dims, [7..11]=rhs dims.
+//                [3..11]=lhs dims, [11..19]=rhs dims,
+//                [19]=lhs_data_ndim, [20..28]=lhs_data_dims.
 StructuredBuffer<uint16_t> g_In;
 StructuredBuffer<uint16_t> g_Rhs;
 RWStructuredBuffer<uint16_t> g_Out;
@@ -36,7 +37,7 @@ uint rhs_offset(uint i)
     uint rhs_ndim = uint(g_Params[2]);
     if (rhs_ndim == 0u) { return 0u; }
     uint lhs_ndim = uint(g_Params[1]);
-    uint idx[4];
+    uint idx[8];
     uint rem = i;
     for (uint d = 0u; d < lhs_ndim; d += 1u)
     {
@@ -47,7 +48,7 @@ uint rhs_offset(uint i)
     uint off = 0u;
     for (uint j = 0u; j < rhs_ndim; j += 1u)
     {
-        uint r = uint(g_Params[7u + j]);
+        uint r = uint(g_Params[11u + j]);
         uint lidx = idx[lhs_ndim - rhs_ndim + j];
         off = off * r + (r != 1u ? lidx : 0u);
     }
@@ -60,9 +61,9 @@ uint lhs_offset(uint i)
     // lhs data. Decompose over the output dims, then re-encode over the lhs
     // data dims (broadcast dims of 1 contribute 0).
     uint lhs_ndim = uint(g_Params[1]);
-    uint lhs_data_ndim = uint(g_Params[11]);
+    uint lhs_data_ndim = uint(g_Params[19]);
     if (lhs_data_ndim == 0u) { return 0u; }
-    uint idx[4];
+    uint idx[8];
     uint rem = i;
     for (uint d = 0u; d < lhs_ndim; d += 1u)
     {
@@ -73,7 +74,7 @@ uint lhs_offset(uint i)
     uint off = 0u;
     for (uint j = 0u; j < lhs_data_ndim; j += 1u)
     {
-        uint l = uint(g_Params[12u + j]);
+        uint l = uint(g_Params[20u + j]);
         uint lidx = idx[lhs_ndim - lhs_data_ndim + j];
         off = off * l + (l != 1u ? lidx : 0u);
     }

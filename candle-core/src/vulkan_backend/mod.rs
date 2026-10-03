@@ -2663,9 +2663,9 @@ impl BackendStorage for VulkanStorage {
         };
         let kernels = self.device.kernels();
         let lhs_dims: Vec<usize> = lhs_l.dims().to_vec();
-        if lhs_dims.len() > 4 {
+        if lhs_dims.len() > 8 {
             return Err(Error::Vulkan(
-                "cmp: more than 4 dims not supported on the Vulkan backend"
+                "cmp: more than 8 dims not supported on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -5401,9 +5401,9 @@ impl BackendStorage for VulkanStorage {
         }
         let kernels = self.device.kernels();
         let lhs_dims: Vec<usize> = lhs_l.dims().to_vec();
-        if lhs_dims.len() > 4 {
+        if lhs_dims.len() > 8 {
             return Err(Error::Vulkan(
-                "binary: more than 4 dims not supported on the Vulkan backend"
+                "binary: more than 8 dims not supported on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -5421,18 +5421,18 @@ impl BackendStorage for VulkanStorage {
             .zip(lhs_l.stride().iter())
             .map(|(d, s)| if *s == 0 { 1 } else { *d })
             .collect();
-        let mut params = [0.0f32; 16];
+        let mut params = [0.0f32; 32];
         params[0] = len as f32;
         params[1] = lhs_dims.len() as f32;
         params[2] = rhs_dims.len() as f32;
-        for (slot, d) in params[3..7].iter_mut().zip(lhs_dims.iter()) {
+        for (slot, d) in params[3..11].iter_mut().zip(lhs_dims.iter()) {
             *slot = *d as f32;
         }
-        for (slot, d) in params[7..11].iter_mut().zip(rhs_dims.iter()) {
+        for (slot, d) in params[11..19].iter_mut().zip(rhs_dims.iter()) {
             *slot = *d as f32;
         }
-        params[11] = lhs_data_dims.len() as f32;
-        for (slot, d) in params[12..16].iter_mut().zip(lhs_data_dims.iter()) {
+        params[19] = lhs_data_dims.len() as f32;
+        for (slot, d) in params[20..28].iter_mut().zip(lhs_data_dims.iter()) {
             *slot = *d as f32;
         }
         let params_buf = Buffer::from_iter(
@@ -6024,9 +6024,9 @@ impl BackendStorage for VulkanStorage {
         }
         let kernels = self.device.kernels();
         let ndim = l.dims().len();
-        if ndim > 4 {
+        if ndim > 8 {
             return Err(Error::Vulkan(
-                "where_cond: more than 4 dims not supported on the Vulkan backend"
+                "where_cond: more than 8 dims not supported on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
