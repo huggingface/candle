@@ -1098,7 +1098,13 @@ impl VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -1188,19 +1194,37 @@ impl VulkanStorage {
             VulkanStorageBuffer::U32(b) => b
                 .clone()
                 .slice(ids_start as u64..(ids_start + ids_len) as u64),
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         };
         let src_sub: Subbuffer<[f32]> = match &src.buffer {
             VulkanStorageBuffer::F32(b) => b
                 .clone()
                 .slice(src_start as u64..(src_start + src_len) as u64),
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         };
         let dst_sub: Subbuffer<[f32]> = match &self.buffer {
             VulkanStorageBuffer::F32(b) => b
                 .clone()
                 .slice(dst_start as u64..(dst_start + dst_len) as u64),
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         };
         if total == 0 {
             return Ok(());
@@ -1325,7 +1349,13 @@ impl VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(())
     }
@@ -1707,7 +1737,13 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -1737,7 +1773,13 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -1767,7 +1809,13 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F8E4M3(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -1797,11 +1845,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1823,11 +1883,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -1846,7 +1918,9 @@ impl BackendStorage for VulkanStorage {
             }
             _ => {
                 return Err(Error::Vulkan(
-                    "supported dtype checked above".to_string().into(),
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
                 ))
             }
         }
@@ -1906,7 +1980,13 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -1936,7 +2016,13 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -1966,7 +2052,13 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F8E4M3(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -1996,11 +2088,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -2022,11 +2126,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -2045,7 +2161,9 @@ impl BackendStorage for VulkanStorage {
             }
             _ => {
                 return Err(Error::Vulkan(
-                    "supported dtype checked above".to_string().into(),
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
                 ))
             }
         }
@@ -2101,7 +2219,13 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -2131,7 +2255,13 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -2161,7 +2291,13 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F8E4M3(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -2191,11 +2327,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -2217,11 +2365,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -2240,7 +2400,9 @@ impl BackendStorage for VulkanStorage {
             }
             _ => {
                 return Err(Error::Vulkan(
-                    "supported dtype checked above".to_string().into(),
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
                 ))
             }
         }
@@ -2635,7 +2797,11 @@ impl BackendStorage for VulkanStorage {
                 })?;
                 Ok(out)
             }
-            _ => Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => Err(Error::Vulkan(
+                format!("dtype checked above (dtype={:?})", self.dtype)
+                    .to_string()
+                    .into(),
+            )),
         }
     }
 
@@ -2666,6 +2832,17 @@ impl BackendStorage for VulkanStorage {
             return Err(Error::Vulkan(
                 format!("cmp: dtype {:?} not supported on the Vulkan backend", dtype).into(),
             ));
+        }
+        // Materialize non-contiguous lhs first.
+        if !matches!(
+            lhs_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
+            let elem_count = lhs_l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, lhs_l)?;
+            let mat_l = crate::Layout::contiguous_with_offset(lhs_l.shape(), 0);
+            return materialized.cmp(op, rhs, &mat_l, rhs_l);
         }
         let (start, len) = match lhs_l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
@@ -2737,11 +2914,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqF32,
@@ -2772,11 +2961,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqBf16,
@@ -2807,11 +3008,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F8E4M3(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqF8e4m3,
@@ -2842,11 +3055,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqF16,
@@ -2877,11 +3102,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqF64,
@@ -2912,11 +3149,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::U8(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqU8,
@@ -2948,11 +3197,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::U32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqU32,
@@ -2984,11 +3245,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::I16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqI16,
@@ -3020,11 +3293,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::I32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqI32,
@@ -3056,11 +3341,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::I64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match op {
                     CmpOp::Eq => KernelName::CmpEqI64,
@@ -3089,7 +3386,9 @@ impl BackendStorage for VulkanStorage {
 
             _ => {
                 return Err(Error::Vulkan(
-                    "supported dtype checked above".to_string().into(),
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
                 ))
             }
         }
@@ -3131,7 +3430,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -3152,7 +3457,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -3173,7 +3484,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
@@ -3194,7 +3511,13 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
@@ -3215,7 +3538,13 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -3236,7 +3565,13 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
@@ -3257,7 +3592,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
@@ -3278,7 +3619,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -3299,7 +3646,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
@@ -3320,7 +3673,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
@@ -3341,7 +3700,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -3362,7 +3727,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -3383,7 +3754,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
@@ -3404,7 +3781,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
@@ -3425,7 +3808,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
@@ -3446,7 +3835,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
@@ -3467,7 +3862,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -3488,7 +3889,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
@@ -3509,7 +3916,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -3530,7 +3943,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
@@ -3551,7 +3970,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U8, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -3572,7 +3997,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
@@ -3593,7 +4024,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
@@ -3614,7 +4051,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
@@ -3635,7 +4078,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
@@ -3656,7 +4105,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -3677,7 +4132,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
@@ -3698,7 +4159,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -3719,7 +4186,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
@@ -3740,7 +4213,13 @@ impl BackendStorage for VulkanStorage {
             (DType::U32, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -3761,7 +4240,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
@@ -3782,7 +4267,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
@@ -3803,7 +4294,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
@@ -3824,7 +4321,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
@@ -3845,7 +4348,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -3866,7 +4375,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
@@ -3887,7 +4402,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -3908,7 +4429,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
@@ -3929,7 +4456,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I16, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -3950,7 +4483,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
@@ -3971,7 +4510,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
@@ -3992,7 +4537,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
@@ -4013,7 +4564,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
@@ -4034,7 +4591,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -4055,7 +4618,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
@@ -4076,7 +4645,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -4097,7 +4672,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
@@ -4118,7 +4699,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I32, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -4139,7 +4726,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
@@ -4160,7 +4753,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
@@ -4181,7 +4780,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
@@ -4202,7 +4807,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
@@ -4223,7 +4834,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -4244,7 +4861,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
@@ -4265,7 +4888,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -4286,7 +4915,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
@@ -4307,7 +4942,13 @@ impl BackendStorage for VulkanStorage {
             (DType::I64, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -4328,7 +4969,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
@@ -4349,7 +4996,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
@@ -4370,7 +5023,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
@@ -4391,7 +5050,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
@@ -4412,7 +5077,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
@@ -4433,7 +5104,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::BF16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -4454,7 +5131,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::F16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
@@ -4475,7 +5158,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::F32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -4496,7 +5185,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F8E4M3, DType::F64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
@@ -4517,7 +5212,13 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
@@ -4538,7 +5239,13 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
@@ -4559,7 +5266,13 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
@@ -4580,7 +5293,13 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
@@ -4601,7 +5320,13 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
@@ -4622,7 +5347,13 @@ impl BackendStorage for VulkanStorage {
             (DType::BF16, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -4643,7 +5374,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
@@ -4664,7 +5401,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
@@ -4685,7 +5428,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
@@ -4706,7 +5455,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
@@ -4727,7 +5482,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
@@ -4748,7 +5509,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F16, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -4769,7 +5536,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
@@ -4790,7 +5563,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
@@ -4811,7 +5590,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
@@ -4832,7 +5617,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
@@ -4853,7 +5644,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
@@ -4874,7 +5671,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F32, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -4895,7 +5698,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::U8) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
@@ -4916,7 +5725,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::U32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
@@ -4937,7 +5752,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::I16) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
@@ -4958,7 +5779,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::I32) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
@@ -4979,7 +5806,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::I64) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
@@ -5000,7 +5833,13 @@ impl BackendStorage for VulkanStorage {
             (DType::F64, DType::F8E4M3) => {
                 let input = match &self.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let output = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -5094,7 +5933,13 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F32(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -5150,7 +5995,13 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::BF16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -5206,7 +6057,13 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F8E4M3(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -5262,11 +6119,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F16(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "log" => KernelName::UnaryLogF16,
@@ -5314,11 +6183,23 @@ impl BackendStorage for VulkanStorage {
                     VulkanStorageBuffer::F64(b) => {
                         b.clone().slice(start as u64..(start + len) as u64)
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "log" => KernelName::UnaryLogF64,
@@ -5363,7 +6244,9 @@ impl BackendStorage for VulkanStorage {
             }
             _ => {
                 return Err(Error::Vulkan(
-                    "supported dtype checked above".to_string().into(),
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
                 ))
             }
         }
@@ -5490,11 +6373,23 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -5542,11 +6437,23 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -5594,11 +6501,23 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -5646,15 +6565,33 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddF16,
@@ -5694,15 +6631,33 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddF64,
@@ -5742,15 +6697,33 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::U8(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddU8,
@@ -5791,15 +6764,33 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::U32(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddU32,
@@ -5840,15 +6831,33 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::I16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddI16,
@@ -5889,15 +6898,33 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::I32(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddI32,
@@ -5938,15 +6965,33 @@ impl BackendStorage for VulkanStorage {
                             b.clone()
                         }
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let rhs_buf = match &rhs.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::I64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let name = match B::NAME {
                     "add" => KernelName::BinaryAddI64,
@@ -5980,7 +7025,9 @@ impl BackendStorage for VulkanStorage {
 
             _ => {
                 return Err(Error::Vulkan(
-                    "supported dtype checked above".to_string().into(),
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
                 ))
             }
         }
@@ -6103,11 +7150,23 @@ impl BackendStorage for VulkanStorage {
             DType::F32 => {
                 let t_buf = match &t.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let f_buf = match &f.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F32(b) => b.clone(),
@@ -6137,11 +7196,23 @@ impl BackendStorage for VulkanStorage {
             DType::BF16 => {
                 let t_buf = match &t.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let f_buf = match &f.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::BF16(b) => b.clone(),
@@ -6171,11 +7242,23 @@ impl BackendStorage for VulkanStorage {
             DType::F8E4M3 => {
                 let t_buf = match &t.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let f_buf = match &f.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F8E4M3(b) => b.clone(),
@@ -6205,15 +7288,33 @@ impl BackendStorage for VulkanStorage {
             DType::F16 => {
                 let t_buf = match &t.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let f_buf = match &f.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F16(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let (t_buf, f_buf, out_buf, params) = (t_buf, f_buf, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -6235,15 +7336,33 @@ impl BackendStorage for VulkanStorage {
             DType::F64 => {
                 let t_buf = match &t.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let f_buf = match &f.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let out_buf = match &out.buffer {
                     VulkanStorageBuffer::F64(b) => b.clone(),
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 };
                 let (t_buf, f_buf, out_buf, params) = (t_buf, f_buf, out_buf, params.clone());
                 self.device.execute(move |cbb| {
@@ -6264,7 +7383,9 @@ impl BackendStorage for VulkanStorage {
             }
             _ => {
                 return Err(Error::Vulkan(
-                    "supported dtype checked above".to_string().into(),
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
                 ))
             }
         }
@@ -6512,7 +7633,13 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -6724,7 +7851,13 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -6973,7 +8106,13 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -7235,7 +8374,13 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -7429,7 +8574,13 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -7599,7 +8750,13 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -7803,7 +8960,13 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -8026,7 +9189,13 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -8115,11 +9284,23 @@ impl BackendStorage for VulkanStorage {
         self.device.synchronize()?;
         let dst_v: Vec<f32> = match &self.buffer {
             VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         };
         let src_v: Vec<f32> = match &src.buffer {
             VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         };
         let ids_cpu = match &ids.buffer {
             VulkanStorageBuffer::U32(b) => {
@@ -8257,7 +9438,13 @@ impl BackendStorage for VulkanStorage {
             VulkanStorageBuffer::F32(b) => b
                 .clone()
                 .slice(src_start as u64..(src_start + src_len) as u64),
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         };
         let ids_buf = ids_u32.slice(ids_start as u64..(ids_start + ids_len) as u64);
         let out = VulkanStorage::new(&self.device, n_ids * dim_len, DType::F32)?;
@@ -8408,16 +9595,32 @@ impl BackendStorage for VulkanStorage {
                 ($dst_variant:ident, $dst_ty:ty, $ids_variant:ident, $ids_ty:ty, $kern:ident) => {
                     let dst_sub = match &self.buffer {
                         VulkanStorageBuffer::$dst_variant(b) => b.clone(),
-                        _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                        _ => {
+                            return Err(Error::Vulkan(
+                                format!("dtype checked above (dtype={:?})", self.dtype)
+                                    .to_string()
+                                    .into(),
+                            ))
+                        }
                     };
                     let src_sub = match &src.buffer {
                         VulkanStorageBuffer::$dst_variant(b) => b.clone(),
-                        _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                        _ => {
+                            return Err(Error::Vulkan(
+                                format!("dtype checked above (dtype={:?})", self.dtype)
+                                    .to_string()
+                                    .into(),
+                            ))
+                        }
                     };
                     let ids_sub = match &ids.buffer {
                         VulkanStorageBuffer::$ids_variant(b) => b.clone(),
                         _ => {
-                            return Err(Error::Vulkan("ids dtype checked above".to_string().into()))
+                            return Err(Error::Vulkan(
+                                format!("ids dtype checked above (ids_dtype={:?})", ids.dtype)
+                                    .to_string()
+                                    .into(),
+                            ))
                         }
                     };
                     self.device.execute(move |cbb| {
@@ -8464,7 +9667,13 @@ impl BackendStorage for VulkanStorage {
                 (DType::F64, DType::U8) => {
                     dispatch_index_add!(F64, f64, U8, u8, IndexAddF64U8);
                 }
-                _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                _ => {
+                    return Err(Error::Vulkan(
+                        format!("dtype checked above (dtype={:?})", self.dtype)
+                            .to_string()
+                            .into(),
+                    ))
+                }
             }
             return Ok(self.clone());
         }
@@ -8506,7 +9715,13 @@ impl BackendStorage for VulkanStorage {
                 };
                 CpuStorage::F64(v)
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         };
         let src_cpu = match src.dtype {
             DType::F32 => {
@@ -8542,7 +9757,13 @@ impl BackendStorage for VulkanStorage {
                 };
                 CpuStorage::F64(v)
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         };
         let ids_cpu = match &ids.buffer {
             VulkanStorageBuffer::U32(b) => {
@@ -8819,7 +10040,13 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(out)
     }
@@ -8987,7 +10214,13 @@ impl BackendStorage for VulkanStorage {
                             Ok(())
                         })?;
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 }
             }
             crate::StridedBlocks::UniformBlocks {
@@ -9148,7 +10381,13 @@ impl BackendStorage for VulkanStorage {
                             .map_err(|e| e.to_string())
                         })?;
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 }
             }
             crate::StridedBlocks::MultipleBlocks {
@@ -9321,7 +10560,13 @@ impl BackendStorage for VulkanStorage {
                             .map_err(|e| e.to_string())
                         })?;
                     }
-                    _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
                 }
             }
         }
@@ -9586,7 +10831,13 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(())
     }
@@ -9703,7 +10954,13 @@ impl BackendStorage for VulkanStorage {
                         .map_err(|e| e.to_string())
                 })?;
             }
-            _ => return Err(Error::Vulkan("dtype checked above".to_string().into())),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
         }
         Ok(())
     }
