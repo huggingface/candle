@@ -129,8 +129,16 @@ fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) ->
         // contiguous and non overlapping with the view's data.
         // We're downgrading the `c` pointer from T to u8, which removes alignment
         // constraints.
+        // `elem_count` is rounded down, so `c` holds `elem_count * size_of::<T>()`
+        // bytes. Copying `data.len()` bytes overruns it whenever the length is not
+        // a multiple of the element size. Copy whole elements only, which is also
+        // what the aligned branch above exposes.
         unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), c.as_mut_ptr() as *mut u8, data.len());
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                c.as_mut_ptr() as *mut u8,
+                elem_count * std::mem::size_of::<T>(),
+            );
             c.set_len(elem_count)
         }
         Tensor::from_slice(&c, shape, device)
@@ -160,8 +168,16 @@ fn convert_slice_with_cast<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>
         // contiguous and non overlapping with the view's data.
         // We're downgrading the `c` pointer from T to u8, which removes alignment
         // constraints.
+        // `elem_count` is rounded down, so `c` holds `elem_count * size_of::<T>()`
+        // bytes. Copying `data.len()` bytes overruns it whenever the length is not
+        // a multiple of the element size. Copy whole elements only, which is also
+        // what the aligned branch above exposes.
         unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), c.as_mut_ptr() as *mut u8, data.len());
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                c.as_mut_ptr() as *mut u8,
+                elem_count * std::mem::size_of::<T>(),
+            );
             c.set_len(elem_count)
         }
         let c = c.into_iter().map(conv).collect::<Result<Vec<_>>>()?;
