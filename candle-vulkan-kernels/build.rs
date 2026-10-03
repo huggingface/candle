@@ -53,7 +53,7 @@ fn compile_slang(source_path: &Path, out_path: &Path) {
         .args(&[
             source_path.to_string_lossy().into_owned().as_str(),
             "-profile",
-            "glsl_450",
+            "glsl_460",
             "-target",
             "spirv",
             "-o",
