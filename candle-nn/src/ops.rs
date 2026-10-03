@@ -1076,7 +1076,8 @@ impl candle::CustomOp3 for Sdpa {
         let k_seq = k_l.dim(2)?;
 
         let mut implementation_supports_use_case = q_head == k_head;
-        let supported_head_dim = q_head == 32
+        let supported_full_head_dim = q_head == 32
+            || q_head == 48
             || q_head == 64
             || q_head == 72
             || q_head == 80
@@ -1084,19 +1085,22 @@ impl candle::CustomOp3 for Sdpa {
             || q_head == 128
             || q_head == 256
             || q_head == 512;
+        let supported_vector_head_dim =
+            q_head == 32 || q_head == 64 || q_head == 96 || q_head == 128 || q_head == 256 || q_head == 512;
+        let supported_head_dim = supported_full_head_dim;
 
         let supports_sdpa_full_mask = self.mask.is_none() || q_seq <= k_seq;
         // F32 full attention at head_dim=512 exceeds 32KB Metal threadgroup memory
         let supports_sdpa_full_dtype = !(q_head == 512 && q.dtype() == DType::F32);
+        let supports_sdpa_vector = q_seq == 1 && supported_vector_head_dim && q_seq <= k_seq;
         let supports_sdpa_full =
-            q_seq > 1 && supported_head_dim && supports_sdpa_full_mask && supports_sdpa_full_dtype;
-        let supports_sdpa_vector = q_seq == 1 && supported_head_dim && q_seq <= k_seq;
+            (q_seq > 1 || !supports_sdpa_vector) && supported_full_head_dim && supports_sdpa_full_mask && supports_sdpa_full_dtype;
 
         implementation_supports_use_case &= supports_sdpa_full || supports_sdpa_vector;
 
         if !supported_head_dim {
             candle::bail!(
-                "Meta SDPA does not support q head dim {q_head}: q dims {:?}, k dims {:?}, v dims {:?}.",
+                "Metal SDPA does not support q head dim {q_head}: q dims {:?}, k dims {:?}, v dims {:?}.",
                 q_l.dims(),
                 k_l.dims(),
                 v_l.dims()
@@ -1104,7 +1108,7 @@ impl candle::CustomOp3 for Sdpa {
         }
         if !implementation_supports_use_case {
             candle::bail!(
-                "Meta SDPA does not support q dims {:?}, k dims {:?}, v dims {:?}.",
+                "Metal SDPA does not support q dims {:?}, k dims {:?}, v dims {:?}.",
                 q_l.dims(),
                 k_l.dims(),
                 v_l.dims()

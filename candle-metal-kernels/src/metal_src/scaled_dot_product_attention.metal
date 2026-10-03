@@ -2319,6 +2319,7 @@ template <
     instantiate_attn(iname, itype, 32, 32,  80, 4, 1, mname, mtype) \
     instantiate_attn(iname, itype, 32, 32,  72, 4, 1, mname, mtype) \
     instantiate_attn(iname, itype, 32, 32,  64, 4, 1, mname, mtype) \
+    instantiate_attn(iname, itype, 32, 32,  48, 4, 1, mname, mtype) \
     instantiate_attn(iname, itype, 32, 32,  32, 4, 1, mname, mtype)
 
 #define instantiate_attn_mask_helper(iname, itype) \
