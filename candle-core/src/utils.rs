@@ -599,6 +599,10 @@ pub fn metal_is_available() -> bool {
     cfg!(feature = "metal")
 }
 
+pub fn sycl_is_available() -> bool {
+    cfg!(feature = "sycl")
+}
+
 pub fn with_avx() -> bool {
     crate::cpu::features::get().avx2
 }

@@ -1,0 +1,20 @@
+[package]
+name = "candle-sycl-kernels"
+version = "0.11.0"
+edition = "2021"
+description = "SYCL (Intel oneAPI) kernels and host runtime for Candle"
+repository = "https://github.com/huggingface/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+
+# NOTE: this crate is deliberately excluded from the candle workspace (see the
+# root Cargo.toml `exclude` list), exactly like `candle-kernels` and
+# `candle-metal-kernels`. A plain `cargo build` at the workspace root never
+# builds it and therefore never needs `icpx` / oneAPI installed. It is only
+# pulled in by `candle-core`'s `sycl` feature.
+
+[dependencies]
+half = { version = "2.5.0", features = ["num-traits"] }
+
+[build-dependencies]

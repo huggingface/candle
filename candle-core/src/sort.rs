@@ -169,6 +169,16 @@ impl crate::CustomOp1 for ArgSort {
         Ok((dst, layout.shape().clone()))
     }
 
+    #[cfg(feature = "sycl")]
+    fn sycl_fwd(
+        &self,
+        storage: &crate::SyclStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::SyclStorage, crate::Shape)> {
+        let dst = storage.argsort(layout, self.asc, self.last_dim)?;
+        Ok((dst, layout.shape().clone()))
+    }
+
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
