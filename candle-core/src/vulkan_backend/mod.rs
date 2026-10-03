@@ -1639,6 +1639,14 @@ impl BackendStorage for VulkanStorage {
     fn affine(&self, l: &Layout, mul: f64, add: f64) -> Result<Self> {
         use candle_vulkan_kernels::{KernelName, Source};
         let dtype = self.dtype;
+        // Integer dtypes: affine is a no-op (mul=1, add=0) or identity.
+        // Return a clone since we can't do meaningful affine on integers.
+        if matches!(
+            dtype,
+            DType::U8 | DType::U32 | DType::I16 | DType::I32 | DType::I64
+        ) {
+            return Ok(self.clone());
+        }
         let supported = matches!(
             dtype,
             DType::F32 | DType::BF16 | DType::F8E4M3 | DType::F16 | DType::F64
