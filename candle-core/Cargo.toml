@@ -43,6 +43,9 @@ tokenizers = { workspace = true, features = ["fancy-regex"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
 criterion = { workspace = true }
+malevich = { workspace = true, features = ["pixel"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [features]
 default = []
