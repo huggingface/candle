@@ -187,6 +187,8 @@ define_binary_op(bmul, x * y);
 define_binary_op(bdiv, x / y);
 define_binary_op(bminimum, MIN(x, y));
 define_binary_op(bmaximum, MAX(x, y));
+// Fused SiLU(x) * y: (x / (1 + exp(-x))) * y. Float-only (uses exp).
+define_binary_op(bsilu_mul, (x / (1 + exp(-x))) * y);
 
 // Define binary ops that return a bool
 define_binary_bool_op(beq, x == y);
@@ -196,6 +198,19 @@ define_binary_bool_op(blt, x < y);
 define_binary_bool_op(bge, x >= y);
 define_binary_bool_op(bgt, x > y)
 
+// Float-only binary init (subset of init_binary, no integer types since
+// we use exp which is only valid for floating-point types).
+#if defined(__HAVE_BFLOAT__)
+#define init_binary_float(bop)                          \
+    init_binary_k(bop, bop, f32, float, float)          \
+    init_binary_k(bop, bop, f16, half, half)            \
+    init_binary_k(bop, bop, bf16, bfloat, bfloat)
+#else
+#define init_binary_float(bop)                          \
+    init_binary_k(bop, bop, f32, float, float)          \
+    init_binary_k(bop, bop, f16, half, half)
+#endif
+
 // Initialize kernels
 init_binary(badd);
 init_binary(bsub);
@@ -203,6 +218,7 @@ init_binary(bmul);
 init_binary(bdiv);
 init_binary(bminimum);
 init_binary(bmaximum);
+init_binary_float(bsilu_mul);
 
 init_boolean_binary(eq, beq);
 init_boolean_binary(ne, bne);
