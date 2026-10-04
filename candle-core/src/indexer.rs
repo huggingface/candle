@@ -54,10 +54,135 @@ impl Tensor {
                     current_dim += 1;
                     out
                 }
+                TensorIndexer::Step(range) => {
+                    let out = range.index(&x, current_dim)?;
+                    current_dim += 1;
+                    out
+                }
                 TensorIndexer::Err(e) => crate::bail!("indexing error {e:?}"),
             };
         }
         Ok(x)
+    }
+}
+
+/// A range of tensor indices traversed with a nonzero signed step.
+///
+/// Bounds are nonnegative indices. With a positive step, omitted bounds are
+/// zero and the dimension's length. With a negative step, they are the last
+/// index and a position before zero. An excluded start moves one position in
+/// the direction of the step; an included end permits that position.
+/// Bounds are checked against the dimension rather than clipped.
+/// A zero step returns an error when the range is used for indexing.
+///
+/// ```
+/// use candle_core::{Device, IndexOp, StepRange, Tensor};
+/// let xs = Tensor::arange(0u32, 8, &Device::Cpu)?;
+/// assert_eq!(xs.i(StepRange::new(.., 2))?.to_vec1::<u32>()?, [0, 2, 4, 6]);
+/// assert_eq!(xs.i(StepRange::new(6..1, -2))?.to_vec1::<u32>()?, [6, 4, 2]);
+/// assert_eq!(xs.i(StepRange::new(.., -2))?.to_vec1::<u32>()?, [7, 5, 3, 1]);
+/// # Ok::<(), candle_core::Error>(())
+/// ```
+#[derive(Debug, Clone)]
+pub struct StepRange {
+    start: Bound<usize>,
+    end: Bound<usize>,
+    step: isize,
+}
+
+impl StepRange {
+    /// Creates a stepped range. Validation takes place when indexing a tensor.
+    pub fn new<R: RangeBounds<usize>>(range: R, step: isize) -> Self {
+        Self {
+            start: range.start_bound().cloned(),
+            end: range.end_bound().cloned(),
+            step,
+        }
+    }
+
+    fn index(&self, tensor: &Tensor, dim: usize) -> Result<Tensor, Error> {
+        if self.step == 0 {
+            crate::bail!("step size cannot be zero")
+        }
+        let len = tensor.dim(dim)? as i128;
+        if let Bound::Included(n) = self.end {
+            if n as i128 >= len {
+                crate::bail!(
+                    "step indexing inclusive end {n} out of range for dimension of size {len}"
+                )
+            }
+        }
+        let forward = self.step > 0;
+        let direction = if forward { 1 } else { -1 };
+        let start = match self.start {
+            Bound::Included(n) => n as i128,
+            Bound::Excluded(n) => n as i128 + direction,
+            Bound::Unbounded => {
+                if forward {
+                    0
+                } else {
+                    len - 1
+                }
+            }
+        };
+        let end = match self.end {
+            Bound::Included(n) => n as i128 + direction,
+            Bound::Excluded(n) => n as i128,
+            Bound::Unbounded => {
+                if forward {
+                    len
+                } else {
+                    -1
+                }
+            }
+        };
+        let valid = if forward {
+            (0..=len).contains(&start) && (0..=len).contains(&end)
+        } else {
+            (-1..len).contains(&start) && (-1..len).contains(&end)
+        };
+        if !valid {
+            crate::bail!(
+                "step indexing bounds {:?}..{:?} out of range for dimension of size {len}",
+                self.start,
+                self.end
+            )
+        }
+        if (forward && start >= end) || (!forward && start <= end) {
+            return tensor.narrow(dim, 0, 0);
+        }
+        if self.step == 1 {
+            return tensor.narrow(dim, start as usize, (end - start) as usize);
+        }
+        if tensor.elem_count() == 0 {
+            let distance = (end - start).abs();
+            let count = (distance - 1) / (self.step as i128).abs() + 1;
+            return tensor.narrow(dim, 0, count as usize);
+        }
+        if len > i64::MAX as i128 {
+            crate::bail!("step indexing dimension is too large for i64 indices")
+        }
+        // Widen before adding: even a small tensor may be indexed with
+        // isize::MIN/MAX, and the final unused position can exceed i64.
+        let mut position = start;
+        let mut indices = Vec::new();
+        while if forward {
+            position < end
+        } else {
+            position > end
+        } {
+            indices.push(position as i64);
+            position += self.step as i128;
+        }
+        let count = indices.len();
+        let indices = Tensor::from_vec(indices, count, tensor.device())?;
+        tensor.contiguous()?.index_select(&indices, dim)
+    }
+}
+
+impl From<StepRange> for TensorIndexer {
+    fn from(range: StepRange) -> Self {
+        Self::Step(range)
     }
 }
 
@@ -68,6 +193,8 @@ pub enum TensorIndexer {
     Select(usize),
     /// This is a regular slice, purely indexing a chunk of the tensor
     Narrow(Bound<usize>, Bound<usize>),
+    /// Indexing via a range with a signed step.
+    Step(StepRange),
     /// Indexing via a 1d tensor
     IndexSelect(Tensor),
     Err(Error),
