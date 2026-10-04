@@ -15,7 +15,7 @@
 //!
 
 use crate::models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm};
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
@@ -49,17 +49,23 @@ impl RotaryEmbedding {
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+            .map(|i| 1f32 / (cfg.rope_theta as f32).powf(i as f32 / dim as f32))
             .collect();
         let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
+
+        // Keep in f32 for precision
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?; // f32
         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
+            .to_dtype(DType::F32)? // f32, not model dtype
             .reshape((max_seq_len, 1))?;
-        let freqs = t.matmul(&inv_freq)?;
+
+        // Compute freqs, sin, cos all in f32 for precision
+        let freqs = t.matmul(&inv_freq)?; // f32 matmul
+
+        // Only cast to model dtype at the very end
         Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
+            sin: freqs.sin()?.to_dtype(dtype)?,
+            cos: freqs.cos()?.to_dtype(dtype)?,
         })
     }
 
@@ -200,6 +206,9 @@ impl Attention {
                 None => attn_weights,
                 Some(mask) => attn_weights.broadcast_add(mask)?,
             };
+            // Metal uses online softmax which handles numerical stability internally.
+            // CUDA accumulates in float for f16/bf16 inputs.
+            // TODO: Implement online softmax for CUDA to match Metal's single-pass approach.
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&value_states)?
         };
@@ -211,6 +220,16 @@ impl Attention {
 
     fn clear_kv_cache(&mut self) {
         self.kv_cache = None
+    }
+
+    /// Extract the current KV cache (returns owned copy)
+    pub fn extract_kv_cache(&self) -> Option<(Tensor, Tensor)> {
+        self.kv_cache.clone()
+    }
+
+    /// Restore a previously extracted KV cache
+    pub fn restore_kv_cache(&mut self, cache: Option<(Tensor, Tensor)>) {
+        self.kv_cache = cache;
     }
 }
 
@@ -259,6 +278,14 @@ impl DecoderLayer {
     fn clear_kv_cache(&mut self) {
         self.self_attn.clear_kv_cache()
     }
+
+    pub fn extract_kv_cache(&self) -> Option<(Tensor, Tensor)> {
+        self.self_attn.extract_kv_cache()
+    }
+
+    pub fn restore_kv_cache(&mut self, cache: Option<(Tensor, Tensor)>) {
+        self.self_attn.restore_kv_cache(cache);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -296,31 +323,48 @@ impl Model {
 
     fn prepare_causal_attention_mask(
         &self,
-        b_size: usize,
+        _b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
-        // Sliding window mask?
+        // Total key/value length (cached + current input)
+        let total_len = seqlen_offset + tgt_len;
+
+        // Create mask of shape [tgt_len, total_len] where:
+        // - Query positions are 0..tgt_len (relative), absolute = seqlen_offset + i
+        // - Key positions are 0..total_len (absolute)
+        //
+        // For each query at absolute position (seqlen_offset + i):
+        // - Causal: can attend to key positions j where j <= seqlen_offset + i
+        // - Sliding window: can attend to key positions j where j >= (seqlen_offset + i) - sliding_window
+        // Use f32::MIN (finite large negative) like PyTorch's torch.finfo(dtype).min
+        // This is consistent with prepare_4d_causal_attention_mask_with_cache_position
+        let min_dtype = f32::MIN;
+
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| {
-                (0..tgt_len).map(move |j| {
-                    if i < j || j + self.sliding_window < i {
-                        f32::NEG_INFINITY
+                let abs_query_pos = seqlen_offset + i;
+                (0..total_len).map(move |j| {
+                    // Causal check: can't attend to future positions
+                    let is_future = j > abs_query_pos;
+                    // Sliding window check: can't attend to positions too far in the past
+                    let is_too_old = j + self.sliding_window < abs_query_pos;
+
+                    if is_future || is_too_old {
+                        min_dtype
                     } else {
                         0.
                     }
                 })
             })
             .collect();
-        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
-        let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), self.dtype, &self.device)?;
-            Tensor::cat(&[&mask0, &mask], D::Minus1)?
-        } else {
-            mask
-        };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
-            .to_dtype(self.dtype)
+
+        let mask = Tensor::from_slice(&mask, (tgt_len, total_len), &self.device)?;
+        // Expand to [1, 1, tgt_len, total_len] - will broadcast to batch size during attention
+        let final_mask = mask
+            .expand((1, 1, tgt_len, total_len))?
+            .to_dtype(self.dtype)?;
+        Ok(final_mask)
     }
 
     fn prepare_attention_mask(&self, attn_mask: &Tensor) -> Result<Tensor> {
@@ -331,7 +375,8 @@ impl Model {
         }
         let mask = Tensor::cat(&mask, 0)?;
         let on_true = mask.zeros_like()?.to_dtype(self.dtype)?;
-        let on_false = Tensor::new(f32::NEG_INFINITY, &self.device)?
+        // Use f32::MIN like PyTorch's torch.finfo(dtype).min for consistency
+        let on_false = Tensor::new(f32::MIN, &self.device)?
             .broadcast_as(mask.shape())?
             .to_dtype(self.dtype)?;
         mask.where_cond(&on_true, &on_false)
@@ -346,17 +391,12 @@ impl Model {
         let (b_size, seq_len) = input_ids.dims2()?;
         let attention_mask: Option<Tensor> = match attn_mask {
             Some(mask) => Some(self.prepare_attention_mask(mask)?),
-            None => {
-                if seq_len <= 1 {
-                    None
-                } else {
-                    Some(self.prepare_causal_attention_mask(b_size, seq_len, seqlen_offset)?)
-                }
-            }
+            None => Some(self.prepare_causal_attention_mask(b_size, seq_len, seqlen_offset)?),
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
+
         for layer in self.layers.iter_mut() {
-            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
+            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?;
         }
         xs.apply(&self.norm)
     }
@@ -366,6 +406,22 @@ impl Model {
             layer.clear_kv_cache()
         }
     }
+
+    /// Extract all KV caches from all layers
+    pub fn extract_kv_cache(&self) -> Vec<Option<(Tensor, Tensor)>> {
+        self.layers
+            .iter()
+            .map(|layer| layer.extract_kv_cache())
+            .collect()
+    }
+
+    /// Restore KV caches to all layers
+    pub fn restore_kv_cache(&mut self, caches: Vec<Option<(Tensor, Tensor)>>) {
+        for (layer, cache) in self.layers.iter_mut().zip(caches.into_iter()) {
+            layer.restore_kv_cache(cache);
+        }
+    }
+
 }
 
 #[derive(Debug, Clone)]
