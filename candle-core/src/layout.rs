@@ -12,6 +12,12 @@ pub struct Layout {
 
 impl Layout {
     pub fn new(shape: Shape, stride: Vec<usize>, start_offset: usize) -> Self {
+        assert!(
+            start_offset.checked_add(shape.elem_count()).is_some(),
+            "start_offset {} overflows with shape {:?}",
+            start_offset,
+            shape,
+        );
         Self {
             shape,
             stride,
@@ -22,6 +28,12 @@ impl Layout {
     pub fn contiguous_with_offset<S: Into<Shape>>(shape: S, start_offset: usize) -> Self {
         let shape = shape.into();
         let stride = shape.stride_contiguous();
+        assert!(
+            start_offset.checked_add(shape.elem_count()).is_some(),
+            "start_offset {} overflows with shape {:?}",
+            start_offset,
+            shape,
+        );
         Self {
             shape,
             stride,
