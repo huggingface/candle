@@ -198,6 +198,7 @@ And then head over to
 - [`atoma-infer`](https://github.com/atoma-network/atoma-infer): A Rust library for fast inference at scale, leveraging FlashAttention2 for efficient attention computation, PagedAttention for efficient KV-cache memory management, and multi-GPU support. It is OpenAI api compatible.
 - [`llms-from-scratch-rs`](https://github.com/nerdai/llms-from-scratch-rs): A comprehensive Rust translation of the code from Sebastian Raschka's Build an LLM from Scratch book.
 - [`vllm.rs`](https://github.com/guoqingbao/vllm.rs): A minimalist vLLM implementation in Rust based on Candle.
+- [`candle-mi`](https://github.com/mi-for-the-rust-of-us/candle-mi): Mechanistic interpretability for language models in Rust. TransformerLens-style hook points built into the forward pass (capture plus typed interventions), attention knockout and steering, logit lens, cross-layer transcoders and SAEs — over a config-driven generic transformer (LLaMA, Qwen, Gemma, Phi-3, StarCoder2), RWKV-6/7, and masked-diffusion LMs. Runs on consumer GPUs.
 
 If you have an addition to this list, please submit a pull request.
 
