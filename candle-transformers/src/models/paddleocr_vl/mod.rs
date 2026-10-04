@@ -61,11 +61,15 @@ impl PaddleOCRVLModel {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let text_cfg: TextConfig = cfg.into();
         // Vision model is at "visual.vision_model"
+        // Always load vision weights in F32: the encoder performs most math in F32
+        // internally (RoPE, attention softmax, position interpolation), and many
+        // backends don't support Conv2d/LayerNorm in BF16/F16 on CPU. This matches
+        // the Python PaddleOCR reference which converts float16 weights to float32.
         let vision = VisionModel::new(
             &cfg.vision_config,
             cfg.hidden_size,
-            vb.pp("visual").pp("vision_model"),
-            vb.pp("mlp_AR"), // Projector is separate at "mlp_AR"
+            vb.pp("visual").pp("vision_model").to_dtype(DType::F32),
+            vb.pp("mlp_AR").to_dtype(DType::F32),
         )?;
         // Language model is at "model" (not "language_model.model")
         let text = TextModel::new(&text_cfg, vb.clone())?;
