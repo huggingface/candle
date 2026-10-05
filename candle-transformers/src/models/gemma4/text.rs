@@ -5,11 +5,14 @@
 use std::sync::Arc;
 
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_b as linear_bias, Activation, Linear, VarBuilder};
+use candle_nn::{linear_b as linear_bias, linear_no_bias, Activation, Linear, VarBuilder};
 
 use super::config::Gemma4TextConfig;
 
-// ── RmsNorm (Gemma-style with +1 offset) ────────────────────────────────────
+// ── RmsNorm ─────────────────────────────────────────────────────────────────
+//
+// Gemma 4 stores the full scale in `weight` (initialized to ones) and multiplies
+// by it directly. This is not the Gemma 3 `(1 + weight)` offset.
 
 #[derive(Debug, Clone)]
 struct RmsNorm {
@@ -35,9 +38,8 @@ impl Module for RmsNorm {
         let x = x.to_dtype(internal_dtype)?;
         let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        x_normed
-            .to_dtype(x_dtype)?
-            .broadcast_mul(&(&self.weight + 1.0)?)
+        let weight = self.weight.to_dtype(internal_dtype)?;
+        x_normed.broadcast_mul(&weight)?.to_dtype(x_dtype)
     }
 }
 
@@ -220,21 +222,50 @@ enum KvCache {
 #[derive(Debug, Clone)]
 struct Attention {
     q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
+    /// Absent on KV-shared layers; those reuse an earlier layer's K/V.
+    k_proj: Option<Linear>,
+    v_proj: Option<Linear>,
     o_proj: Linear,
     q_norm: RmsNorm,
-    k_norm: RmsNorm,
+    k_norm: Option<RmsNorm>,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
     rms_norm_eps: f64,
     is_sliding: bool,
+    is_kv_shared: bool,
+    store_full_length_kv: bool,
+    sliding_window: usize,
     rotary_emb_global: Arc<ProportionalRotaryEmbedding>,
     rotary_emb_local: Arc<RotaryEmbedding>,
-    kv_cache: KvCache,
+    kv_cache: Option<KvCache>,
     use_flash_attn: bool,
+}
+
+/// Full-length K/V published by the last non-shared layer of each attention type.
+#[derive(Debug, Clone, Default)]
+struct SharedKvStates {
+    sliding: Option<(Tensor, Tensor)>,
+    full: Option<(Tensor, Tensor)>,
+}
+
+impl SharedKvStates {
+    fn get(&self, sliding: bool) -> Option<&(Tensor, Tensor)> {
+        if sliding {
+            self.sliding.as_ref()
+        } else {
+            self.full.as_ref()
+        }
+    }
+
+    fn set(&mut self, sliding: bool, kv: (Tensor, Tensor)) {
+        if sliding {
+            self.sliding = Some(kv);
+        } else {
+            self.full = Some(kv);
+        }
+    }
 }
 
 impl Attention {
@@ -261,23 +292,32 @@ impl Attention {
         };
 
         let num_kv_groups = num_heads / num_kv_heads;
+        let is_kv_shared = cfg.is_kv_shared_layer(layer_idx);
+        let store_full_length_kv = cfg.stores_full_length_kv(layer_idx);
         let q_proj = linear_bias(hidden_sz, num_heads * head_dim, bias, vb.pp("q_proj"))?;
-        let k_proj = linear_bias(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("k_proj"))?;
-        let v_proj = linear_bias(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("v_proj"))?;
         let o_proj = linear_bias(num_heads * head_dim, hidden_sz, bias, vb.pp("o_proj"))?;
         let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
-        let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
-
-        let kv_cache = if is_sliding {
-            KvCache::Rotating(candle_nn::kv_cache::RotatingKvCache::new(
-                2,
-                cfg.effective_sliding_window(),
-            ))
+        // Shared layers reuse an earlier layer's K/V. Those tensors may still
+        // be present in the checkpoint, but Hugging Face ignores them.
+        let (k_proj, v_proj, k_norm, kv_cache) = if is_kv_shared {
+            (None, None, None, None)
         } else {
-            KvCache::Normal(candle_nn::kv_cache::KvCache::new(
-                2,
-                cfg.max_position_embeddings,
-            ))
+            let k_proj = linear_bias(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("k_proj"))?;
+            let v_proj = linear_bias(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("v_proj"))?;
+            let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
+            // The donor of each type must keep the full sequence, not a sliding window.
+            let kv_cache = if is_sliding && !store_full_length_kv {
+                KvCache::Rotating(candle_nn::kv_cache::RotatingKvCache::new(
+                    2,
+                    cfg.effective_sliding_window(),
+                ))
+            } else {
+                KvCache::Normal(candle_nn::kv_cache::KvCache::new(
+                    2,
+                    cfg.max_position_embeddings,
+                ))
+            };
+            (Some(k_proj), Some(v_proj), Some(k_norm), Some(kv_cache))
         };
 
         Ok(Self {
@@ -293,6 +333,9 @@ impl Attention {
             head_dim,
             rms_norm_eps: cfg.rms_norm_eps,
             is_sliding,
+            is_kv_shared,
+            store_full_length_kv,
+            sliding_window: cfg.effective_sliding_window(),
             rotary_emb_global,
             rotary_emb_local,
             kv_cache,
@@ -303,6 +346,7 @@ impl Attention {
     fn forward(
         &mut self,
         xs: &Tensor,
+        shared_kv: &mut SharedKvStates,
         attention_mask: Option<&Tensor>,
         sliding_attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
@@ -310,37 +354,58 @@ impl Attention {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let mut q = self.q_proj.forward(xs)?;
-        let mut k = self.k_proj.forward(xs)?;
-        let v = self.v_proj.forward(xs)?;
-
         q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-        k = k
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        let v = v
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
-
-        // Q/K norms
         q = self.q_norm.forward(&q)?;
-        k = self.k_norm.forward(&k)?;
-        // V norm (RMS without learned weight)
-        let v = v_norm(&v, self.rms_norm_eps)?;
-
-        // Apply RoPE
-        let (q, k) = if self.is_sliding {
+        let (q, _) = if self.is_sliding {
             self.rotary_emb_local
-                .apply_rotary_emb_qkv(&q, &k, seqlen_offset)?
+                .apply_rotary_emb_qkv(&q, &q, seqlen_offset)?
         } else {
             self.rotary_emb_global
-                .apply_rotary_emb_qkv(&q, &k, seqlen_offset)?
+                .apply_rotary_emb_qkv(&q, &q, seqlen_offset)?
         };
 
-        let (k, v) = match &mut self.kv_cache {
-            KvCache::Normal(cache) => cache.append(&k, &v)?,
-            KvCache::Rotating(cache) => cache.append(&k, &v)?,
+        let (k, v) = if self.is_kv_shared {
+            let (k, v) = shared_kv.get(self.is_sliding).ok_or_else(|| {
+                candle::Error::Msg("missing shared KV for Gemma 4 layer".into())
+            })?;
+            (k.clone(), v.clone())
+        } else {
+            let k_proj = self.k_proj.as_ref().unwrap();
+            let v_proj = self.v_proj.as_ref().unwrap();
+            let k_norm = self.k_norm.as_ref().unwrap();
+            let mut k = k_proj.forward(xs)?;
+            let v = v_proj.forward(xs)?;
+            k = k
+                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            k = k_norm.forward(&k)?;
+            let v = v_norm(&v, self.rms_norm_eps)?;
+            let (_, k) = if self.is_sliding {
+                self.rotary_emb_local
+                    .apply_rotary_emb_qkv(&k, &k, seqlen_offset)?
+            } else {
+                self.rotary_emb_global
+                    .apply_rotary_emb_qkv(&k, &k, seqlen_offset)?
+            };
+            let (k, v) = match self.kv_cache.as_mut().unwrap() {
+                KvCache::Normal(cache) => cache.append(&k, &v)?,
+                KvCache::Rotating(cache) => cache.append(&k, &v)?,
+            };
+            if self.store_full_length_kv {
+                shared_kv.set(self.is_sliding, (k.clone(), v.clone()));
+            }
+            (k, v)
+        };
+
+        let (k, v) = if self.is_sliding && q_len == 1 {
+            take_last_kv(&k, &v, self.sliding_window)?
+        } else {
+            (k, v)
         };
 
         let k = crate::utils::repeat_kv(k, self.num_kv_groups)?.contiguous()?;
@@ -352,16 +417,14 @@ impl Attention {
             attention_mask
         };
 
+        // Gemma 4 sets attention scaling to 1. Position is already in RoPE.
         let attn_output = if self.use_flash_attn {
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
             let v = v.transpose(1, 2)?;
-            let scale = 1f32 / (self.head_dim as f32).sqrt();
-            flash_attn(&q, &k, &v, scale, mask.is_some())?.transpose(1, 2)?
+            flash_attn(&q, &k, &v, 1.0, mask.is_some())?.transpose(1, 2)?
         } else {
-            let scale = 1f64 / f64::sqrt(self.head_dim as f64);
-            let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-
+            let attn_weights = q.matmul(&k.transpose(2, 3)?)?;
             let attn_weights = match mask {
                 None => attn_weights,
                 Some(mask) => attn_weights.broadcast_add(mask)?,
@@ -376,10 +439,100 @@ impl Attention {
     }
 
     fn clear_kv_cache(&mut self) {
-        match &mut self.kv_cache {
-            KvCache::Normal(c) => c.reset(),
-            KvCache::Rotating(c) => c.reset(),
+        match self.kv_cache.as_mut() {
+            Some(KvCache::Normal(c)) => c.reset(),
+            Some(KvCache::Rotating(c)) => c.reset(),
+            None => {}
         }
+    }
+}
+
+fn take_last_kv(k: &Tensor, v: &Tensor, window: usize) -> Result<(Tensor, Tensor)> {
+    let len = k.dim(2)?;
+    if len <= window {
+        return Ok((k.clone(), v.clone()));
+    }
+    let start = len - window;
+    Ok((k.narrow(2, start, window)?, v.narrow(2, start, window)?))
+}
+
+// ── Per-layer embeddings (PLE) ──────────────────────────────────────────────
+//
+// E2B/E4B feed a small residual into every decoder layer. Larger Gemma 4
+// variants set `hidden_size_per_layer_input` to 0 and omit these weights.
+
+#[derive(Debug, Clone)]
+struct PerLayerEmbeddings {
+    embed_tokens: candle_nn::Embedding,
+    model_projection: Linear,
+    projection_norm: RmsNorm,
+    ple_dim: usize,
+    num_layers: usize,
+    embed_scale: f64,
+    proj_scale: f64,
+    combine_scale: f64,
+}
+
+impl PerLayerEmbeddings {
+    fn new(cfg: &Gemma4TextConfig, vb: VarBuilder) -> Result<Self> {
+        let ple_dim = cfg.hidden_size_per_layer_input;
+        let num_layers = cfg.num_hidden_layers;
+        let packed = num_layers * ple_dim;
+        Ok(Self {
+            embed_tokens: candle_nn::embedding(
+                cfg.vocab_size_per_layer_input,
+                packed,
+                vb.pp("embed_tokens_per_layer"),
+            )?,
+            model_projection: linear_no_bias(cfg.hidden_size, packed, vb.pp("per_layer_model_projection"))?,
+            projection_norm: RmsNorm::new(ple_dim, cfg.rms_norm_eps, vb.pp("per_layer_projection_norm"))?,
+            ple_dim,
+            num_layers,
+            embed_scale: (ple_dim as f64).sqrt(),
+            proj_scale: 1.0 / (cfg.hidden_size as f64).sqrt(),
+            combine_scale: 1.0 / 2.0f64.sqrt(),
+        })
+    }
+
+    /// `[batch, seq, num_layers, ple_dim]`
+    fn forward(&self, input_ids: &Tensor, inputs_embeds: &Tensor) -> Result<Tensor> {
+        let (b_sz, seq_len) = input_ids.dims2()?;
+        let token = (self.embed_tokens.forward(input_ids)? * self.embed_scale)?;
+        let token = token.reshape((b_sz, seq_len, self.num_layers, self.ple_dim))?;
+
+        let context = (self.model_projection.forward(inputs_embeds)? * self.proj_scale)?;
+        let context = context.reshape((b_sz, seq_len, self.num_layers, self.ple_dim))?;
+        let context = self.projection_norm.forward(&context)?;
+        (token + context)? * self.combine_scale
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PerLayerInput {
+    gate: Linear,
+    projection: Linear,
+    post_norm: RmsNorm,
+    act: Activation,
+}
+
+impl PerLayerInput {
+    fn new(cfg: &Gemma4TextConfig, vb: VarBuilder) -> Result<Self> {
+        let ple_dim = cfg.hidden_size_per_layer_input;
+        Ok(Self {
+            gate: linear_no_bias(cfg.hidden_size, ple_dim, vb.pp("per_layer_input_gate"))?,
+            projection: linear_no_bias(ple_dim, cfg.hidden_size, vb.pp("per_layer_projection"))?,
+            post_norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("post_per_layer_input_norm"))?,
+            act: cfg.hidden_activation,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor, per_layer_input: &Tensor) -> Result<Tensor> {
+        let residual = xs;
+        let xs = xs.apply(&self.gate)?.apply(&self.act)?;
+        let xs = (xs * per_layer_input)?;
+        let xs = xs.apply(&self.projection)?;
+        let xs = self.post_norm.forward(&xs)?;
+        residual + xs
     }
 }
 
@@ -393,6 +546,9 @@ struct DecoderLayer {
     post_attention_layernorm: RmsNorm,
     pre_feedforward_layernorm: RmsNorm,
     post_feedforward_layernorm: RmsNorm,
+    per_layer_input: Option<PerLayerInput>,
+    /// Learned per-layer scale. Absent only on non-HF exports.
+    layer_scalar: Option<Tensor>,
     #[allow(dead_code)]
     is_sliding: bool,
 }
@@ -437,6 +593,16 @@ impl DecoderLayer {
             cfg.rms_norm_eps,
             vb.pp("post_feedforward_layernorm"),
         )?;
+        let per_layer_input = if cfg.uses_per_layer_embeddings() {
+            Some(PerLayerInput::new(cfg, vb.clone())?)
+        } else {
+            None
+        };
+        let layer_scalar = if vb.contains_tensor("layer_scalar") {
+            Some(vb.get(1, "layer_scalar")?)
+        } else {
+            None
+        };
         Ok(Self {
             self_attn,
             mlp,
@@ -444,6 +610,8 @@ impl DecoderLayer {
             post_attention_layernorm,
             pre_feedforward_layernorm,
             post_feedforward_layernorm,
+            per_layer_input,
+            layer_scalar,
             is_sliding,
         })
     }
@@ -451,22 +619,35 @@ impl DecoderLayer {
     fn forward(
         &mut self,
         xs: &Tensor,
+        per_layer_input: Option<&Tensor>,
+        shared_kv: &mut SharedKvStates,
         attention_mask: Option<&Tensor>,
         sliding_attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs =
-            self.self_attn
-                .forward(&xs, attention_mask, sliding_attention_mask, seqlen_offset)?;
+        let xs = self.self_attn.forward(
+            &xs,
+            shared_kv,
+            attention_mask,
+            sliding_attention_mask,
+            seqlen_offset,
+        )?;
         let xs = xs.apply(&self.post_attention_layernorm)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = xs.apply(&self.pre_feedforward_layernorm)?;
         let xs = xs.apply(&self.mlp)?;
         let xs = xs.apply(&self.post_feedforward_layernorm)?;
-        residual + xs
+        let mut xs = (residual + xs)?;
+        if let (Some(block), Some(per_layer_input)) = (&self.per_layer_input, per_layer_input) {
+            xs = block.forward(&xs, per_layer_input)?;
+        }
+        if let Some(scale) = &self.layer_scalar {
+            xs = xs.broadcast_mul(scale)?;
+        }
+        Ok(xs)
     }
 
     fn clear_kv_cache(&mut self) {
@@ -517,6 +698,7 @@ fn prepare_decoder_attention_mask(
 #[derive(Debug, Clone)]
 pub struct TextModel {
     embed_tokens: candle_nn::Embedding,
+    per_layer_embeddings: Option<PerLayerEmbeddings>,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Linear,
@@ -528,10 +710,18 @@ pub struct TextModel {
 }
 
 impl TextModel {
+    /// Create a text model from weights rooted at the language-model module.
+    ///
+    /// For Hugging Face `Gemma4ForConditionalGeneration` checkpoints, pass a
+    /// `VarBuilder` already scoped to `model.language_model`.
     pub fn new(cfg: &Gemma4TextConfig, vb: VarBuilder) -> Result<Self> {
-        let vb_m = vb.pp("model");
         let embed_tokens =
-            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
+        let per_layer_embeddings = if cfg.uses_per_layer_embeddings() {
+            Some(PerLayerEmbeddings::new(cfg, vb.clone())?)
+        } else {
+            None
+        };
 
         let rotary_emb_global = Arc::new(ProportionalRotaryEmbedding::new(
             vb.dtype(),
@@ -539,18 +729,18 @@ impl TextModel {
             cfg.rope_theta,
             cfg.partial_rotary_factor(),
             cfg.max_position_embeddings,
-            vb_m.device(),
+            vb.device(),
         )?);
         let rotary_emb_local = Arc::new(RotaryEmbedding::new(
             vb.dtype(),
             cfg.head_dim,
             cfg.rope_local_base_freq(),
             cfg.max_position_embeddings,
-            vb_m.device(),
+            vb.device(),
         )?);
 
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
-        let vb_l = vb_m.pp("layers");
+        let vb_l = vb.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(
                 rotary_emb_global.clone(),
@@ -561,7 +751,7 @@ impl TextModel {
             )?;
             layers.push(layer)
         }
-        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm"))?;
         let lm_head = if cfg.tie_word_embeddings {
             Linear::new(embed_tokens.embeddings().clone(), None)
         } else {
@@ -569,6 +759,7 @@ impl TextModel {
         };
         Ok(Self {
             embed_tokens,
+            per_layer_embeddings,
             layers,
             norm,
             lm_head,
@@ -616,7 +807,7 @@ impl TextModel {
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         let xs = self.embed_tokens(input_ids)?;
-        self.forward_embeds(&xs, seqlen_offset, b_size, seq_len)
+        self.forward_embeds_with_ids(&xs, Some(input_ids), seqlen_offset, b_size, seq_len)
     }
 
     pub fn forward_embeds(
@@ -626,13 +817,41 @@ impl TextModel {
         batch_size: usize,
         seq_len: usize,
     ) -> Result<Tensor> {
+        self.forward_embeds_with_ids(xs, None, seqlen_offset, batch_size, seq_len)
+    }
+
+    /// Decode from embeddings. `input_ids` is required only for models that use
+    /// per-layer embeddings (E2B/E4B); other Gemma 4 variants ignore it.
+    pub fn forward_embeds_with_ids(
+        &mut self,
+        xs: &Tensor,
+        input_ids: Option<&Tensor>,
+        seqlen_offset: usize,
+        batch_size: usize,
+        seq_len: usize,
+    ) -> Result<Tensor> {
         let (attention_mask, sliding_attention_mask) =
             self.create_attention_masks(batch_size, seq_len, seqlen_offset)?;
 
+        let per_layer_inputs = match (&self.per_layer_embeddings, input_ids) {
+            (Some(ple), Some(input_ids)) => Some(ple.forward(input_ids, xs)?),
+            (Some(_), None) => {
+                candle::bail!("Gemma 4 per-layer embeddings require input_ids")
+            }
+            (None, _) => None,
+        };
+
         let mut xs = xs.clone();
-        for layer in self.layers.iter_mut() {
+        let mut shared_kv = SharedKvStates::default();
+        for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
+            let layer_ple = match &per_layer_inputs {
+                Some(ple) => Some(ple.narrow(2, layer_idx, 1)?.squeeze(2)?),
+                None => None,
+            };
             xs = layer.forward(
                 &xs,
+                layer_ple.as_ref(),
+                &mut shared_kv,
                 attention_mask.as_ref(),
                 sliding_attention_mask.as_ref(),
                 seqlen_offset,
