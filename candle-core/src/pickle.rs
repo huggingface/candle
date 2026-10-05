@@ -666,7 +666,8 @@ pub struct TensorInfo {
 /// # Arguments
 /// * `file` - The path to the .pth file.
 /// * `verbose` - Whether to print debug information.
-/// * `key` - Optional key to retrieve `state_dict` from the pth file.
+/// * `key` - Optional dictionary key or numeric tuple index to retrieve `state_dict`
+///   from the pth file.
 pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
     file: P,
     verbose: bool,
@@ -711,14 +712,22 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
 
         // If key is provided, then we need to extract the state_dict from the object.
         let obj = if let Some(key) = key {
-            if let Object::Dict(key_values) = obj {
-                key_values
+            match obj {
+                Object::Dict(key_values) => key_values
                     .into_iter()
                     .find(|(k, _)| *k == Object::Unicode(key.to_owned()))
                     .map(|(_, v)| v)
-                    .ok_or_else(|| E::Msg(format!("key {key} not found")))?
-            } else {
-                obj
+                    .ok_or_else(|| E::Msg(format!("key {key} not found")))?,
+                Object::Tuple(values) => {
+                    let index = key
+                        .parse::<usize>()
+                        .map_err(|err| E::Msg(format!("invalid tuple index {key}: {err}")))?;
+                    values
+                        .into_iter()
+                        .nth(index)
+                        .ok_or_else(|| E::Msg(format!("tuple index {index} out of bounds")))?
+                }
+                obj => obj,
             }
         } else {
             obj
@@ -815,8 +824,9 @@ impl PthTensors {
 ///
 /// # Arguments
 /// * `path` - Path to the pth file.
-/// * `key` - Optional key to retrieve `state_dict` from the pth file. Sometimes the pth file
-///   contains multiple objects and the state_dict is the one we are interested in.
+/// * `key` - Optional dictionary key or numeric tuple index to retrieve `state_dict`
+///   from the pth file. Sometimes the pth file contains multiple objects and the
+///   state_dict is the one we are interested in.
 pub fn read_all_with_key<P: AsRef<std::path::Path>>(
     path: P,
     key: Option<&str>,
