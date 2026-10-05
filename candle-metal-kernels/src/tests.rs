@@ -1,5 +1,5 @@
 use super::*;
-use crate::metal::{Commands, ResidencySet};
+use crate::metal::{Commands, CommandsGuard, ResidencySet};
 use core::ffi::c_void;
 use half::{bf16, f16};
 use rand::prelude::SliceRandom;
@@ -25,6 +25,37 @@ fn new_buffer<T>(device: &Device, data: &[T]) -> Buffer {
     let ptr = data.as_ptr() as *const c_void;
     let size = std::mem::size_of_val(data);
     device.new_buffer_with_data(ptr, size, options).unwrap()
+}
+
+// Real per-expert row counts for a `call_quantized_matmul_mm_id[_chunked]`
+// test call, via the same `call_mm_id_expert_counts` kernel production code
+// uses (candle-core/src/quantized/metal.rs) -- not a CPU-computed stand-in,
+// so these tests exercise the counts kernel itself rather than assuming it.
+fn expert_counts_buffer(
+    device: &Device,
+    encoder: &CommandsGuard<'_>,
+    kernels: &Kernels,
+    ids_shape: &[usize],
+    ids_stride: &[usize],
+    ids_buf: &Buffer,
+    n_expert: usize,
+) -> Buffer {
+    let mut counts = device
+        .new_buffer(n_expert * std::mem::size_of::<u32>(), RESOURCE_OPTIONS)
+        .unwrap();
+    call_mm_id_expert_counts(
+        device,
+        encoder,
+        kernels,
+        ids_shape,
+        ids_stride,
+        ids_buf,
+        0,
+        n_expert as i64,
+        &mut counts,
+    )
+    .unwrap();
+    counts
 }
 
 fn device() -> Device {
@@ -2490,4 +2521,1659 @@ fn residency_set_batch_insert_remove() {
     set.insert_batch(std::iter::empty());
     set.remove_batch(std::iter::empty());
     assert_eq!(raw.allocationCount(), base);
+}
+
+// De-risk spike for wiring `kernel_mul_mm_id` (ggml's indexed matmul, used
+// for MoE expert dispatch). Confirms the kernel this whole effort depends
+// on actually loads as a Metal compute pipeline from the compiled
+// metallib, since it has `[[host_name]]` instantiations but (at the time
+// this test was added) zero Rust callers anywhere in this crate or
+// candle-core -- named kernels aren't dead-code-eliminated from the
+// metallib, but that's an assumption worth confirming before building on
+// it, not taking on faith.
+#[test]
+fn kernel_mul_mm_id_q4_k_pipeline_loads() {
+    let device = device();
+    let kernels = Kernels::new();
+    kernels
+        .load_pipeline(&device, Source::Quantized, "kernel_mul_mm_id_q4_K_f32")
+        .expect("kernel_mul_mm_id_q4_K_f32 should load as a Metal compute pipeline");
+}
+
+#[test]
+fn kernel_mul_mm_id_q6_k_pipeline_loads() {
+    let device = device();
+    let kernels = Kernels::new();
+    kernels
+        .load_pipeline(&device, Source::Quantized, "kernel_mul_mm_id_q6_K_f32")
+        .expect("kernel_mul_mm_id_q6_K_f32 should load as a Metal compute pipeline");
+}
+
+// Correctness test for `call_quantized_matmul_mm_id`, the Rust binding for
+// ggml's indexed/routed matmul. Uses GgmlDType::F32 rather than a real
+// quantized type so the test exercises
+// only the id-routing/dispatch logic this binding is responsible for
+// (rowids scan, per-expert threadgroup dispatch, output scatter) without
+// also depending on GGUF block dequantization, which is already covered
+// by the existing dense-matmul tests. Reference values are computed with
+// plain f32 dot products and compared with a tolerance loose enough to
+// absorb the GPU's different summation order.
+#[test]
+fn kernel_mul_mm_id_f32_matches_reference() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 2usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_tokens = 4usize;
+    let n_expert_used = 1usize;
+
+    // src0: [n_expert, n_out, n_in], row-major.
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    // src1: [n_tokens, n_expert_used, n_in], row-major.
+    let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+        .map(|idx| {
+            let t = idx / n_in;
+            let k = idx % n_in;
+            (t as f32 * 100.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    // ids: [n_tokens, n_expert_used] -- token t picks expert ids[t].
+    let ids: Vec<i32> = vec![0, 1, 0, 1];
+    assert_eq!(ids.len(), n_tokens * n_expert_used);
+
+    // Reference: dst[t][s][j] = sum_k src0[ids[t*n_expert_used+s]][j][k] * src1[t][s][k]
+    let mut expected = vec![0f32; n_tokens * n_expert_used * n_out];
+    for t in 0..n_tokens {
+        for s in 0..n_expert_used {
+            let e = ids[t * n_expert_used + s] as usize;
+            for j in 0..n_out {
+                let mut acc = 0f32;
+                for k in 0..n_in {
+                    acc += src0[e * n_out * n_in + j * n_in + k]
+                        * src1[t * n_expert_used * n_in + s * n_in + k];
+                }
+                expected[t * n_expert_used * n_out + s * n_out + j] = acc;
+            }
+        }
+    }
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let dst_buf = device
+        .new_buffer(
+            expected.len() * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
+    // Strides are in bytes (matches call_quantized_matmul_mm_t's convention,
+    // see candle-core/src/quantized/metal.rs's caller) -- not element counts.
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, n_expert_used, n_in],
+        &[n_expert_used * n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &dst_buf,
+        &counts_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got: Vec<f32> = read_to_vec(&dst_buf, expected.len());
+
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        let diff = (g - e).abs();
+        assert!(
+            diff <= 1e-3 + 1e-3 * e.abs(),
+            "mismatch at index {i}: got {g}, expected {e} (diff {diff})"
+        );
+    }
+}
+
+// Same as above but with n_expert_used=2 (real MoE models route to top-k>1
+// experts per token, e.g. k=8 for Qwen3-30B-A3B). The n_expert_used=1 case
+// above never exercises the kernel's `id[0] % ne11` broadcast indexing in a
+// way that could be wrong and still pass (mod 1 is always 0), so this is
+// the case that actually proves per-slot indexing is right, not just
+// per-token indexing.
+#[test]
+fn kernel_mul_mm_id_f32_topk_matches_reference() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 4usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_tokens = 3usize;
+    let n_expert_used = 2usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+        .map(|idx| {
+            let t = idx / (n_expert_used * n_in);
+            let s = (idx / n_in) % n_expert_used;
+            let k = idx % n_in;
+            (t as f32 * 100.0 + s as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let ids: Vec<i32> = vec![0, 1, 2, 3, 1, 2];
+    assert_eq!(ids.len(), n_tokens * n_expert_used);
+
+    let mut expected = vec![0f32; n_tokens * n_expert_used * n_out];
+    for t in 0..n_tokens {
+        for s in 0..n_expert_used {
+            let e = ids[t * n_expert_used + s] as usize;
+            for j in 0..n_out {
+                let mut acc = 0f32;
+                for k in 0..n_in {
+                    acc += src0[e * n_out * n_in + j * n_in + k]
+                        * src1[t * n_expert_used * n_in + s * n_in + k];
+                }
+                expected[t * n_expert_used * n_out + s * n_out + j] = acc;
+            }
+        }
+    }
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let dst_buf = device
+        .new_buffer(
+            expected.len() * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, n_expert_used, n_in],
+        &[n_expert_used * n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &dst_buf,
+        &counts_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got: Vec<f32> = read_to_vec(&dst_buf, expected.len());
+
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        let diff = (g - e).abs();
+        assert!(
+            diff <= 1e-3 + 1e-3 * e.abs(),
+            "mismatch at index {i}: got {g}, expected {e} (diff {diff})"
+        );
+    }
+}
+
+// n_tokens=1 is the actual decode hot path (one token generated at a time),
+// well below ggml's own ne21>=32 threshold for preferring this mm kernel
+// over mul_mv_id -- callers here dispatch it unconditionally regardless of
+// that heuristic, so this is a real, not just theoretical, tiling boundary
+// to cover: BLOCK_SIZE_N=32 means a single token produces a heavily
+// under-filled tile.
+#[test]
+fn kernel_mul_mm_id_f32_single_token_matches_reference() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 3usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_tokens = 1usize;
+    let n_expert_used = 2usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+        .map(|idx| {
+            let s = (idx / n_in) % n_expert_used;
+            let k = idx % n_in;
+            (s as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let ids: Vec<i32> = vec![2, 0];
+    assert_eq!(ids.len(), n_tokens * n_expert_used);
+
+    let mut expected = vec![0f32; n_tokens * n_expert_used * n_out];
+    for s in 0..n_expert_used {
+        let e = ids[s] as usize;
+        for j in 0..n_out {
+            let mut acc = 0f32;
+            for k in 0..n_in {
+                acc += src0[e * n_out * n_in + j * n_in + k] * src1[s * n_in + k];
+            }
+            expected[s * n_out + j] = acc;
+        }
+    }
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let dst_buf = device
+        .new_buffer(
+            expected.len() * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, n_expert_used, n_in],
+        &[n_expert_used * n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &dst_buf,
+        &counts_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got: Vec<f32> = read_to_vec(&dst_buf, expected.len());
+
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        let diff = (g - e).abs();
+        assert!(
+            diff <= 1e-3 + 1e-3 * e.abs(),
+            "mismatch at index {i}: got {g}, expected {e} (diff {diff})"
+        );
+    }
+}
+
+// Closes a gap review found: call_quantized_matmul_mm_id maps
+// GgmlDType::BF16 to this kernel name, but no such instantiation existed in
+// quantized.metal until this same change added it (mirroring the existing
+// dense kernel_mul_mm_bf16_f32's #if defined(__HAVE_BFLOAT__) guard).
+#[test]
+fn kernel_mul_mm_id_bf16_pipeline_loads() {
+    let device = device();
+    let kernels = Kernels::new();
+    kernels
+        .load_pipeline(&device, Source::Quantized, "kernel_mul_mm_id_bf16_f32")
+        .expect("kernel_mul_mm_id_bf16_f32 should load as a Metal compute pipeline");
+}
+
+// Closes another gap review found: kernel_mul_mm_id_f32_topk_matches_reference
+// gives every (token, slot) its own distinct input row (in_dim1==topk), which
+// never exercises the kernel's `id[0] % ne11` broadcast modulo in a way that
+// could be wrong and still pass. The real gate/up production shape (see
+// FusedMoeGGUF::forward's Metal branch) is in_dim1==1 with n_expert_used>1 --
+// one token embedding, shared across all its selected experts -- so this is
+// the case that actually proves the broadcast indexing, not just the
+// distinct-per-slot indexing the topk test already covers.
+#[test]
+fn kernel_mul_mm_id_f32_broadcast_matches_reference() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 4usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_tokens = 3usize;
+    let n_expert_used = 3usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    // in_dim1 == 1: one embedding per token, broadcast across all its slots.
+    let src1: Vec<f32> = (0..n_tokens * n_in)
+        .map(|idx| {
+            let t = idx / n_in;
+            let k = idx % n_in;
+            (t as f32 * 100.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let ids: Vec<i32> = vec![0, 1, 2, 1, 2, 3, 3, 0, 1];
+    assert_eq!(ids.len(), n_tokens * n_expert_used);
+
+    let mut expected = vec![0f32; n_tokens * n_expert_used * n_out];
+    for t in 0..n_tokens {
+        for s in 0..n_expert_used {
+            let e = ids[t * n_expert_used + s] as usize;
+            for j in 0..n_out {
+                let mut acc = 0f32;
+                for k in 0..n_in {
+                    acc += src0[e * n_out * n_in + j * n_in + k] * src1[t * n_in + k];
+                }
+                expected[t * n_expert_used * n_out + s * n_out + j] = acc;
+            }
+        }
+    }
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let dst_buf = device
+        .new_buffer(
+            expected.len() * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, 1, n_in],
+        &[n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &dst_buf,
+        &counts_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got: Vec<f32> = read_to_vec(&dst_buf, expected.len());
+
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        let diff = (g - e).abs();
+        assert!(
+            diff <= 1e-3 + 1e-3 * e.abs(),
+            "mismatch at index {i}: got {g}, expected {e} (diff {diff})"
+        );
+    }
+}
+
+// Closes a review-found gap: the threadgroup-memory-size check added to
+// call_quantized_matmul_mm_id (mirroring ggml's own host-side assert) should
+// reject an over-budget request with a clean error, not dispatch anyway and
+// let the driver fail unpredictably. Doesn't need real buffer contents --
+// the function must return Err before any dispatch happens.
+#[test]
+fn kernel_mul_mm_id_rejects_oversized_threadgroup_memory() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    // nei0*nei1*4 alone must exceed a real device's threadgroup memory
+    // budget (commonly 32KiB) once the fixed 8192-byte tile is added.
+    let nei0 = 4096usize;
+    let nei1 = 4096usize;
+    let n_expert = 1usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+
+    let src0 = vec![0f32; n_expert * n_out * n_in];
+    let src1 = vec![0f32; nei1 * nei0 * n_in];
+    let ids = vec![0i32; nei1 * nei0];
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let dst_buf = device
+        .new_buffer(
+            nei1 * nei0 * n_out * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
+        .unwrap();
+
+    // Counts content is irrelevant here -- the threadgroup-memory bound is
+    // checked before dispatch, so this call must fail before `expert_counts`
+    // is ever read. A zeroed buffer just needs to satisfy the signature.
+    let counts_buf = device
+        .new_buffer(n_expert * std::mem::size_of::<u32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let result = call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[nei1, nei0, n_in],
+        &[nei0 * n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &[nei1, nei0],
+        &[nei0 * 4, 4],
+        &ids_buf,
+        0,
+        &[nei1, nei0, n_out],
+        0,
+        &dst_buf,
+        &counts_buf,
+    );
+
+    assert!(
+        result.is_err(),
+        "expected an error for an oversized threadgroup memory request, got Ok"
+    );
+}
+
+// De-risk spike for `call_quantized_matmul_mv_id`: a differential test
+// against `call_quantized_matmul_mm_id`, not a hand-computed reference. At
+// n_tokens=1 both kernels implement the identical ggml op, and mm_id is
+// already validated by the tests above -- so mm_id's own output is a
+// complete, free correctness oracle for mv_id's binding order, dispatch
+// shape, and the `ne1 = nei0` field (a bug class this same kind of mm_id
+// binding has been caught with before, see candle's own upstream PR
+// #3555). Same F32 dtype and shape as
+// kernel_mul_mm_id_f32_single_token_matches_reference above (the real
+// decode boundary: n_tokens=1, n_expert_used=2) so this is a true apples-
+// to-apples comparison at the shape mv_id actually targets.
+#[test]
+fn kernel_mul_mv_id_f32_matches_mm_id() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 3usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_tokens = 1usize;
+    let n_expert_used = 2usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+        .map(|idx| {
+            let s = (idx / n_in) % n_expert_used;
+            let k = idx % n_in;
+            (s as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let ids: Vec<i32> = vec![2, 0];
+    assert_eq!(ids.len(), n_tokens * n_expert_used);
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let out_elems = n_tokens * n_expert_used * n_out;
+    let mm_dst_buf = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+    let mv_dst_buf = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, n_expert_used, n_in],
+        &[n_expert_used * n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &mm_dst_buf,
+        &counts_buf,
+    )
+    .unwrap();
+    call_quantized_matmul_mv_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, n_expert_used, n_in],
+        &[n_expert_used * n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &[n_tokens, n_expert_used],
+        &[n_expert_used * 4, 4],
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &mv_dst_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let mm_got: Vec<f32> = read_to_vec(&mm_dst_buf, out_elems);
+    let mv_got: Vec<f32> = read_to_vec(&mv_dst_buf, out_elems);
+
+    for (i, (mm, mv)) in mm_got.iter().zip(mv_got.iter()).enumerate() {
+        let diff = (mm - mv).abs();
+        assert!(
+            diff <= 1e-3 + 1e-3 * mm.abs(),
+            "mv_id diverges from mm_id at index {i}: mm_id={mm}, mv_id={mv} (diff {diff})"
+        );
+    }
+}
+
+// Confirms the four mandatory-coverage quantized kernel names -- one per
+// distinct (nth0, nth1, width_divisor) tuning class reachable from
+// call_quantized_matmul_mv_id -- actually load as real Metal compute
+// pipelines from the compiled metallib. Q4_K and Q6_K are common
+// production quantization dtypes; Q4_0 and Q2_K cover the remaining
+// tuning classes. Mirrors kernel_mul_mm_id_q4_k_pipeline_loads's own
+// de-risk-spike-before-wiring precedent.
+#[test]
+fn kernel_mul_mv_id_pipelines_load() {
+    let device = device();
+    let kernels = Kernels::new();
+    for name in [
+        "kernel_mul_mv_id_q4_K_f32",
+        "kernel_mul_mv_id_q6_K_f32",
+        "kernel_mul_mv_id_q4_0_f32",
+        "kernel_mul_mv_id_q2_K_f32",
+    ] {
+        kernels
+            .load_pipeline(&device, Source::Quantized, name)
+            .unwrap_or_else(|e| panic!("{name} should load as a Metal compute pipeline: {e}"));
+    }
+}
+
+// Closes a review-found gap: kernel_mul_mv_id_f32_matches_mm_id above uses
+// in_dim1==n_expert_used (the down-projection shape, non-broadcast). The
+// real gate/up production shape (FusedMoeGGUF::forward's Metal branch) is
+// in_dim1==1 -- one token embedding, shared across all its selected
+// experts -- which exercises the kernel's `i11 = idx % ne11` broadcast
+// modulo in a way n_expert_used-per-slot input never does (mod 1 is always
+// 0, trivially correct even if the broadcast wiring were wrong). Mirrors
+// kernel_mul_mm_id_f32_broadcast_matches_reference's own precedent from
+// Phase 1, at the real n_tokens=1 decode shape mv_id targets.
+#[test]
+fn kernel_mul_mv_id_f32_broadcast_matches_mm_id() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 3usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_tokens = 1usize;
+    let n_expert_used = 2usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    // in_dim1 == 1: one embedding for the token, broadcast across both
+    // selected experts.
+    let src1: Vec<f32> = (0..n_tokens * n_in)
+        .map(|idx| (idx as f32) * 0.001)
+        .collect();
+
+    let ids: Vec<i32> = vec![2, 0];
+    assert_eq!(ids.len(), n_tokens * n_expert_used);
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let out_elems = n_tokens * n_expert_used * n_out;
+    let mm_dst_buf = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+    let mv_dst_buf = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
+    // src1 is [n_tokens, 1, n_in] -- nb11 == nb12 (stride collapses since
+    // dim1 has size 1), matching how QMetalStorage::indexed_moe_forward's
+    // caller (FusedMoeGGUF::forward) actually broadcasts.
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, 1, n_in],
+        &[n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &mm_dst_buf,
+        &counts_buf,
+    )
+    .unwrap();
+    call_quantized_matmul_mv_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, 1, n_in],
+        &[n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &mv_dst_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let mm_got: Vec<f32> = read_to_vec(&mm_dst_buf, out_elems);
+    let mv_got: Vec<f32> = read_to_vec(&mv_dst_buf, out_elems);
+
+    for (i, (mm, mv)) in mm_got.iter().zip(mv_got.iter()).enumerate() {
+        let diff = (mm - mv).abs();
+        assert!(
+            diff <= 1e-3 + 1e-3 * mm.abs(),
+            "mv_id diverges from mm_id at broadcast index {i}: mm_id={mm}, mv_id={mv} (diff {diff})"
+        );
+    }
+}
+
+// Phase 1 de-risk spike for extending `call_quantized_matmul_mv_id` beyond
+// `n_tokens == 1` (Metal MoE speculative-decoding verify-step investigation, see
+// the crate's own MoE dispatch documentation): every existing mv_id test above
+// only ever exercises `n_tokens == 1`, and the Rust-side wrapper
+// (`QMetalStorage::indexed_moe_forward`) has only ever been called that way
+// in production -- but the kernel's own dispatch-grid math
+// (`depth: nei0 * nei1`, each threadgroup independently decoding one
+// (token, expert-slot) pair from `tgpig.z`) is batch-general by
+// construction, not hardcoded to `nei1 == 1`. This proves that generality
+// holds for the untested stride/offset plumbing (src1's per-token stride,
+// ids' per-token row stride, dst's per-token write offset), at the real
+// production expert/top-k ratio (256 experts, top-8) so the ids pattern
+// below is realistic, not just a toy shape. `n_tokens` in `2..=8` matches
+// the entire speculative-decode verify-window range this investigation cares about.
+// Deliberately compares against N independent `n_tokens == 1` calls (each
+// already fully validated by the tests above), not against `mm_id` --
+// every (token, slot) threadgroup does byte-identical work with identical
+// float accumulation order whether it's dispatched as part of a batch-N
+// call or a standalone batch-1 call, so this must be bit-exact, not
+// tolerance-based; a tolerance-based comparison here would hide exactly the
+// stride/offset bug class this test exists to catch.
+#[test]
+fn kernel_mul_mv_id_at_batch_n_matches_sequential_single_token_calls_bit_exact() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 256usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_expert_used = 8usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.0001
+        })
+        .collect();
+    let src0_buf = new_buffer(&device, &src0);
+
+    for n_tokens in [2usize, 3, 5, 8] {
+        // Deterministic pseudo-routing: distinct enough per (token, slot) to
+        // exercise real spread across 256 experts, but with deliberate
+        // repeats across tokens (e.g. token 0 slot 0 and token 3 slot 2 can
+        // land on the same expert) -- the "multiple tokens share an expert"
+        // case batch-1-only tests structurally can never produce.
+        let ids: Vec<i32> = (0..n_tokens * n_expert_used)
+            .map(|idx| {
+                let t = idx / n_expert_used;
+                let s = idx % n_expert_used;
+                ((t * 37 + s * 13 + s * s) % n_expert) as i32
+            })
+            .collect();
+        let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+            .map(|idx| {
+                let t = idx / (n_expert_used * n_in);
+                let s = (idx / n_in) % n_expert_used;
+                let k = idx % n_in;
+                (t as f32 * 100.0 + s as f32 * 10.0 + k as f32) * 0.0001
+            })
+            .collect();
+        let src1_buf = new_buffer(&device, &src1);
+        let ids_buf = new_buffer(&device, &ids);
+
+        let out_elems = n_tokens * n_expert_used * n_out;
+        let batched_dst_buf = device
+            .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+            .unwrap();
+
+        let batched_commands = commands(&device);
+        let encoder = batched_commands.command_encoder().unwrap();
+        call_quantized_matmul_mv_id(
+            &device,
+            &encoder,
+            &kernels,
+            GgmlDType::F32,
+            &[n_expert, n_out, n_in],
+            &[n_out * n_in * 4, n_in * 4, 4],
+            &src0_buf,
+            0,
+            &[n_tokens, n_expert_used, n_in],
+            &[n_expert_used * n_in * 4, n_in * 4, 4],
+            &src1_buf,
+            0,
+            &[n_tokens, n_expert_used],
+            &[n_expert_used * 4, 4],
+            &ids_buf,
+            0,
+            &[n_tokens, n_expert_used, n_out],
+            0,
+            &batched_dst_buf,
+        )
+        .unwrap();
+        drop(encoder);
+        batched_commands.wait_until_completed().unwrap();
+        let batched_got: Vec<f32> = read_to_vec(&batched_dst_buf, out_elems);
+
+        // N independent n_tokens == 1 calls, one per token, each reading
+        // that token's own slice of src1/ids via a nonzero byte offset --
+        // exercising exactly the offset plumbing a batch-1-only caller
+        // never needed to get right.
+        for t in 0..n_tokens {
+            let single_dst_buf = device
+                .new_buffer(
+                    n_expert_used * n_out * std::mem::size_of::<f32>(),
+                    RESOURCE_OPTIONS,
+                )
+                .unwrap();
+            let single_commands = commands(&device);
+            let encoder = single_commands.command_encoder().unwrap();
+            call_quantized_matmul_mv_id(
+                &device,
+                &encoder,
+                &kernels,
+                GgmlDType::F32,
+                &[n_expert, n_out, n_in],
+                &[n_out * n_in * 4, n_in * 4, 4],
+                &src0_buf,
+                0,
+                &[1, n_expert_used, n_in],
+                &[n_expert_used * n_in * 4, n_in * 4, 4],
+                &src1_buf,
+                t * n_expert_used * n_in * 4,
+                &[1, n_expert_used],
+                &[n_expert_used * 4, 4],
+                &ids_buf,
+                t * n_expert_used * 4,
+                &[1, n_expert_used, n_out],
+                0,
+                &single_dst_buf,
+            )
+            .unwrap();
+            drop(encoder);
+            single_commands.wait_until_completed().unwrap();
+            let single_got: Vec<f32> = read_to_vec(&single_dst_buf, n_expert_used * n_out);
+
+            let batched_slice =
+                &batched_got[t * n_expert_used * n_out..(t + 1) * n_expert_used * n_out];
+            assert_eq!(
+                batched_slice,
+                single_got.as_slice(),
+                "n_tokens={n_tokens}, token={t}: batched mv_id call diverges from an \
+                 independent single-token mv_id call on the same data -- must be bit-exact \
+                 (identical per-threadgroup work either way), so any difference is a real \
+                 stride/offset bug in the batch-N plumbing"
+            );
+        }
+    }
+}
+
+// Phase 1 companion to the bit-exact spike above: mv_id(batch=N) against
+// mm_id(batch=N) at the same production expert/top-k ratio, for two
+// representative points in the speculative-decode verify-window range (2, the
+// minimum useful window; 8, the maximum this investigation targets).
+// Different accumulation order between the two kernels (matrix-vector vs.
+// matrix-matrix), so tolerance-based like the existing batch-1 mv-vs-mm
+// spikes above, not bit-exact.
+#[test]
+fn kernel_mul_mv_id_at_batch_n_matches_mm_id_within_tolerance() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 256usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_expert_used = 8usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.0001
+        })
+        .collect();
+    let src0_buf = new_buffer(&device, &src0);
+
+    for n_tokens in [2usize, 8] {
+        let ids: Vec<i32> = (0..n_tokens * n_expert_used)
+            .map(|idx| {
+                let t = idx / n_expert_used;
+                let s = idx % n_expert_used;
+                ((t * 41 + s * 17 + s * s) % n_expert) as i32
+            })
+            .collect();
+        let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+            .map(|idx| {
+                let t = idx / (n_expert_used * n_in);
+                let s = (idx / n_in) % n_expert_used;
+                let k = idx % n_in;
+                (t as f32 * 100.0 + s as f32 * 10.0 + k as f32) * 0.0001
+            })
+            .collect();
+        let src1_buf = new_buffer(&device, &src1);
+        let ids_buf = new_buffer(&device, &ids);
+
+        let out_elems = n_tokens * n_expert_used * n_out;
+        let mm_dst_buf = device
+            .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+            .unwrap();
+        let mv_dst_buf = device
+            .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+            .unwrap();
+
+        let commands = commands(&device);
+        let encoder = commands.command_encoder().unwrap();
+        let ids_shape = [n_tokens, n_expert_used];
+        let ids_stride = [n_expert_used * 4, 4];
+        let counts_buf = expert_counts_buffer(
+            &device,
+            &encoder,
+            &kernels,
+            &ids_shape,
+            &ids_stride,
+            &ids_buf,
+            n_expert,
+        );
+        call_quantized_matmul_mm_id(
+            &device,
+            &encoder,
+            &kernels,
+            GgmlDType::F32,
+            &[n_expert, n_out, n_in],
+            &[n_out * n_in * 4, n_in * 4, 4],
+            &src0_buf,
+            0,
+            &[n_tokens, n_expert_used, n_in],
+            &[n_expert_used * n_in * 4, n_in * 4, 4],
+            &src1_buf,
+            0,
+            &ids_shape,
+            &ids_stride,
+            &ids_buf,
+            0,
+            &[n_tokens, n_expert_used, n_out],
+            0,
+            &mm_dst_buf,
+            &counts_buf,
+        )
+        .unwrap();
+        call_quantized_matmul_mv_id(
+            &device,
+            &encoder,
+            &kernels,
+            GgmlDType::F32,
+            &[n_expert, n_out, n_in],
+            &[n_out * n_in * 4, n_in * 4, 4],
+            &src0_buf,
+            0,
+            &[n_tokens, n_expert_used, n_in],
+            &[n_expert_used * n_in * 4, n_in * 4, 4],
+            &src1_buf,
+            0,
+            &ids_shape,
+            &ids_stride,
+            &ids_buf,
+            0,
+            &[n_tokens, n_expert_used, n_out],
+            0,
+            &mv_dst_buf,
+        )
+        .unwrap();
+        drop(encoder);
+        commands.wait_until_completed().unwrap();
+
+        let mm_got: Vec<f32> = read_to_vec(&mm_dst_buf, out_elems);
+        let mv_got: Vec<f32> = read_to_vec(&mv_dst_buf, out_elems);
+
+        for (i, (mm, mv)) in mm_got.iter().zip(mv_got.iter()).enumerate() {
+            let diff = (mm - mv).abs();
+            assert!(
+                diff <= 1e-3 + 1e-3 * mm.abs(),
+                "n_tokens={n_tokens}: mv_id diverges from mm_id at index {i}: mm_id={mm}, \
+                 mv_id={mv} (diff {diff})"
+            );
+        }
+    }
+}
+
+// Phase 1 timing table (Metal MoE speculative-decoding verify-step investigation, see
+// the crate's own MoE dispatch documentation): mv_id vs. mm_id wall-clock at
+// batch sizes spanning decode (1) through the speculative-decode verify window
+// (2-8) and out past it (16-64), at production expert/top-k/hidden shape
+// (256 experts, top-8, gate/up's real 2048-in/512-out). F32, not real
+// quantized weights (this crate has no block-quantization encoder of its
+// own to hand-build real Q4_K bytes with, and correctness doesn't depend on
+// dtype here) -- this almost certainly *understates* mv_id's real
+// production advantage, not overstates it: quantized weights mean less
+// real per-row compute/bandwidth than F32, so mm_id's ~fixed `ne02`-
+// threadgroup dispatch tax would dominate an even larger share of a real
+// quantized call's time than it does here. `#[ignore]`d -- a manual timing
+// tool (`cargo test ... -- --ignored --nocapture`), not a correctness
+// check, and not something that should slow down every default test run.
+#[test]
+#[ignore]
+fn mv_id_vs_mm_id_timing_at_batch_sizes() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 256usize;
+    let n_out = 512usize; // moe_intermediate_size, gate/up production shape
+    let n_in = 2048usize; // hidden_size
+    let n_expert_used = 8usize;
+    const REPS: usize = 50;
+    // A fresh `commands(&device)` allocates a brand-new MTLCommandQueue +
+    // ResidencySet -- real, heavyweight Metal driver objects a real forward
+    // pass creates once and reuses for the process lifetime, never per
+    // dispatch. Creating it inside the timed loop (an earlier version of
+    // this test did) makes queue-allocation cost dominate everything else
+    // being measured, drowning out the actual mv_id-vs-mm_id dispatch-cost
+    // difference this test exists to find. One shared queue for the whole
+    // test, matching real usage.
+    let mv_commands = commands(&device);
+    let mm_commands = commands(&device);
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            ((e * 1000 + j * 10 + k) % 997) as f32 * 0.0001
+        })
+        .collect();
+    let src0_buf = new_buffer(&device, &src0);
+
+    println!("mv_id_vs_mm_id_timing_at_batch_sizes ({REPS} reps each, n_expert={n_expert}, n_expert_used={n_expert_used}, n_out={n_out}, n_in={n_in}):");
+
+    for n_tokens in [1usize, 2, 4, 8, 16, 32, 64] {
+        let ids: Vec<i32> = (0..n_tokens * n_expert_used)
+            .map(|idx| {
+                let t = idx / n_expert_used;
+                let s = idx % n_expert_used;
+                ((t * 37 + s * 13 + s * s) % n_expert) as i32
+            })
+            .collect();
+        let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+            .map(|idx| ((idx * 7 + 3) % 991) as f32 * 0.0001)
+            .collect();
+        let src1_buf = new_buffer(&device, &src1);
+        let ids_buf = new_buffer(&device, &ids);
+        let out_elems = n_tokens * n_expert_used * n_out;
+        let ids_shape = [n_tokens, n_expert_used];
+        let ids_stride = [n_expert_used * 4, 4];
+
+        let mv_dst_buf = device
+            .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+            .unwrap();
+        // Warmup: first dispatch on a freshly touched buffer set pays a
+        // real, one-time pipeline-state/paging cost; excluded from the
+        // timed measurement below.
+        {
+            let encoder = mv_commands.command_encoder().unwrap();
+            call_quantized_matmul_mv_id(
+                &device,
+                &encoder,
+                &kernels,
+                GgmlDType::F32,
+                &[n_expert, n_out, n_in],
+                &[n_out * n_in * 4, n_in * 4, 4],
+                &src0_buf,
+                0,
+                &[n_tokens, n_expert_used, n_in],
+                &[n_expert_used * n_in * 4, n_in * 4, 4],
+                &src1_buf,
+                0,
+                &ids_shape,
+                &ids_stride,
+                &ids_buf,
+                0,
+                &[n_tokens, n_expert_used, n_out],
+                0,
+                &mv_dst_buf,
+            )
+            .unwrap();
+            drop(encoder);
+            mv_commands.wait_until_completed().unwrap();
+        }
+        let mv_start = std::time::Instant::now();
+        for _ in 0..REPS {
+            let encoder = mv_commands.command_encoder().unwrap();
+            call_quantized_matmul_mv_id(
+                &device,
+                &encoder,
+                &kernels,
+                GgmlDType::F32,
+                &[n_expert, n_out, n_in],
+                &[n_out * n_in * 4, n_in * 4, 4],
+                &src0_buf,
+                0,
+                &[n_tokens, n_expert_used, n_in],
+                &[n_expert_used * n_in * 4, n_in * 4, 4],
+                &src1_buf,
+                0,
+                &ids_shape,
+                &ids_stride,
+                &ids_buf,
+                0,
+                &[n_tokens, n_expert_used, n_out],
+                0,
+                &mv_dst_buf,
+            )
+            .unwrap();
+            drop(encoder);
+            mv_commands.wait_until_completed().unwrap();
+        }
+        let mv_elapsed = mv_start.elapsed();
+
+        let mm_dst_buf = device
+            .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+            .unwrap();
+        {
+            let encoder = mm_commands.command_encoder().unwrap();
+            let counts_buf = expert_counts_buffer(
+                &device,
+                &encoder,
+                &kernels,
+                &ids_shape,
+                &ids_stride,
+                &ids_buf,
+                n_expert,
+            );
+            call_quantized_matmul_mm_id(
+                &device,
+                &encoder,
+                &kernels,
+                GgmlDType::F32,
+                &[n_expert, n_out, n_in],
+                &[n_out * n_in * 4, n_in * 4, 4],
+                &src0_buf,
+                0,
+                &[n_tokens, n_expert_used, n_in],
+                &[n_expert_used * n_in * 4, n_in * 4, 4],
+                &src1_buf,
+                0,
+                &ids_shape,
+                &ids_stride,
+                &ids_buf,
+                0,
+                &[n_tokens, n_expert_used, n_out],
+                0,
+                &mm_dst_buf,
+                &counts_buf,
+            )
+            .unwrap();
+            drop(encoder);
+            mm_commands.wait_until_completed().unwrap();
+        }
+        let mm_start = std::time::Instant::now();
+        for _ in 0..REPS {
+            let encoder = mm_commands.command_encoder().unwrap();
+            let counts_buf = expert_counts_buffer(
+                &device,
+                &encoder,
+                &kernels,
+                &ids_shape,
+                &ids_stride,
+                &ids_buf,
+                n_expert,
+            );
+            call_quantized_matmul_mm_id(
+                &device,
+                &encoder,
+                &kernels,
+                GgmlDType::F32,
+                &[n_expert, n_out, n_in],
+                &[n_out * n_in * 4, n_in * 4, 4],
+                &src0_buf,
+                0,
+                &[n_tokens, n_expert_used, n_in],
+                &[n_expert_used * n_in * 4, n_in * 4, 4],
+                &src1_buf,
+                0,
+                &ids_shape,
+                &ids_stride,
+                &ids_buf,
+                0,
+                &[n_tokens, n_expert_used, n_out],
+                0,
+                &mm_dst_buf,
+                &counts_buf,
+            )
+            .unwrap();
+            drop(encoder);
+            mm_commands.wait_until_completed().unwrap();
+        }
+        let mm_elapsed = mm_start.elapsed();
+
+        println!(
+            "  n_tokens={n_tokens:3}: mv_id {:>9.1}us/call  mm_id {:>9.1}us/call  mv/mm ratio {:.3}",
+            mv_elapsed.as_secs_f64() * 1e6 / REPS as f64,
+            mm_elapsed.as_secs_f64() * 1e6 / REPS as f64,
+            mv_elapsed.as_secs_f64() / mm_elapsed.as_secs_f64(),
+        );
+    }
+}
+
+// De-risk spike for `call_quantized_matmul_mm_id_chunked`: unlike the
+// mv_id spike above, this compares the chunked wrapper against the *same*
+// kernel
+// (`call_quantized_matmul_mm_id`) called unchunked, on a disjoint partition
+// of token-independent output rows -- so, per the design, the oracle is
+// bit-exact equality, not `allclose`. `max_nei1` is forced far below what
+// this device's real threadgroup-memory budget would ever require, so the
+// chunk loop actually runs multiple iterations regardless of the real
+// device's memory size (deriving the threshold from
+// `mm_id_max_nei1` here would make this a vacuous single-chunk spike on any
+// real Metal device).
+#[allow(clippy::too_many_arguments)]
+fn run_mm_id_chunked_case(
+    n_expert: usize,
+    n_out: usize,
+    n_in: usize,
+    n_tokens: usize,
+    n_expert_used: usize,
+    broadcast: bool,
+    max_nei1: i64,
+) {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let ne11 = if broadcast { 1 } else { n_expert_used };
+    let src1: Vec<f32> = (0..n_tokens * ne11 * n_in)
+        .map(|idx| {
+            let t = idx / (ne11 * n_in);
+            let s = (idx / n_in) % ne11;
+            let k = idx % n_in;
+            (t as f32 * 1.7 + s as f32 * 0.3 + k as f32 * 0.01).sin()
+        })
+        .collect();
+
+    // Deterministic pseudo-random spread over [0, n_expert), not a fixed
+    // small hand-written array -- n_tokens here is large enough (this spike
+    // needs >= 4 chunks plus a ragged final one) that a literal ids list
+    // would be unwieldy, and a real routing table has no special structure
+    // this formula needs to preserve.
+    let ids: Vec<i32> = (0..n_tokens * n_expert_used)
+        .map(|idx| ((idx * 7 + 3) % n_expert) as i32)
+        .collect();
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let out_elems = n_tokens * n_expert_used * n_out;
+    let unchunked_dst = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+    let chunked_dst = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    let src0_shape = [n_expert, n_out, n_in];
+    let src0_stride = [n_out * n_in * 4, n_in * 4, 4];
+    let src1_shape = [n_tokens, ne11, n_in];
+    let src1_stride = [ne11 * n_in * 4, n_in * 4, 4];
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let dst_shape = [n_tokens, n_expert_used, n_out];
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &src0_shape,
+        &src0_stride,
+        &src0_buf,
+        0,
+        &src1_shape,
+        &src1_stride,
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &dst_shape,
+        0,
+        &unchunked_dst,
+        &counts_buf,
+    )
+    .unwrap();
+    call_quantized_matmul_mm_id_chunked(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &src0_shape,
+        &src0_stride,
+        &src0_buf,
+        0,
+        &src1_shape,
+        &src1_stride,
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &dst_shape,
+        0,
+        &chunked_dst,
+        max_nei1,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let unchunked: Vec<f32> = read_to_vec(&unchunked_dst, out_elems);
+    let chunked: Vec<f32> = read_to_vec(&chunked_dst, out_elems);
+
+    for (i, (u, c)) in unchunked.iter().zip(chunked.iter()).enumerate() {
+        assert_eq!(
+            u.to_bits(),
+            c.to_bits(),
+            "chunked output diverges from unchunked at index {i}: unchunked={u}, chunked={c} \
+             (expected bit-exact -- same kernel, disjoint token-independent output rows)"
+        );
+    }
+}
+
+// down/topk shape (ne11 == n_expert_used): n_tokens=37, max_nei1=5 forces 8
+// chunks (5,5,5,5,5,5,5,2) -- covers >=4 chunks, a ragged final chunk, and a
+// chunk size that is not a multiple of the kernel's own 32-wide tile, all in
+// one case.
+#[test]
+fn kernel_mul_mm_id_chunked_matches_unchunked_topk_shape() {
+    run_mm_id_chunked_case(6, 64, 32, 37, 3, false, 5);
+}
+
+// Same ragged/non-32-multiple chunking, but the broadcast (gate/up) shape --
+// the production case where a per-chunk src1 offset that used the wrong
+// stride (nei0*n_in instead of the broadcast ne11=1's n_in) would show up
+// as a real, catchable divergence.
+#[test]
+fn kernel_mul_mm_id_chunked_matches_unchunked_broadcast_shape() {
+    run_mm_id_chunked_case(6, 64, 32, 37, 3, true, 5);
+}
+
+// n_tokens=1 (a single chunk covering the whole batch) must be identical to
+// calling call_quantized_matmul_mm_id directly -- the wrapper's own
+// early-return path, not just the multi-chunk loop.
+#[test]
+fn kernel_mul_mm_id_chunked_single_chunk_matches_unchunked() {
+    run_mm_id_chunked_case(4, 64, 32, 3, 3, false, 100);
+}
+
+// Proves the ceiling chunking exists to remove is actually gone: at
+// nei0=8 (a realistic MoE top-k) and a token count derived from the real
+// device's own `mm_id_max_nei1`, an unchunked call fails exactly the way
+// `kernel_mul_mm_id_rejects_oversized_threadgroup_memory` above already
+// proves it should, while the chunked call -- given that same real
+// device-derived threshold, not a test-forced one -- succeeds.
+#[test]
+fn kernel_mul_mm_id_chunked_succeeds_above_the_real_device_ceiling() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 16usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let nei0 = 8usize; // a realistic MoE top-k
+
+    let max_nei1 = mm_id_max_nei1(&device, nei0 as i64);
+    assert!(
+        max_nei1 > 0,
+        "test assumption: this device can fit at least one chunk"
+    );
+    let n_tokens = (max_nei1 as usize) + 50;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+    let src1: Vec<f32> = (0..n_tokens * nei0 * n_in)
+        .map(|idx| {
+            let t = idx / (nei0 * n_in);
+            let s = (idx / n_in) % nei0;
+            let k = idx % n_in;
+            (t as f32 * 1.7 + s as f32 * 0.3 + k as f32 * 0.01).sin()
+        })
+        .collect();
+    let ids: Vec<i32> = (0..n_tokens * nei0)
+        .map(|idx| ((idx * 7 + 3) % n_expert) as i32)
+        .collect();
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let out_elems = n_tokens * nei0 * n_out;
+    let dst_buf = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    let src0_shape = [n_expert, n_out, n_in];
+    let src0_stride = [n_out * n_in * 4, n_in * 4, 4];
+    let src1_shape = [n_tokens, nei0, n_in];
+    let src1_stride = [nei0 * n_in * 4, n_in * 4, 4];
+    let ids_shape = [n_tokens, nei0];
+    let ids_stride = [nei0 * 4, 4];
+    let dst_shape = [n_tokens, nei0, n_out];
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let counts_buf = expert_counts_buffer(
+        &device,
+        &encoder,
+        &kernels,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        n_expert,
+    );
+
+    let unchunked_result = call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &src0_shape,
+        &src0_stride,
+        &src0_buf,
+        0,
+        &src1_shape,
+        &src1_stride,
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &dst_shape,
+        0,
+        &dst_buf,
+        &counts_buf,
+    );
+    assert!(
+        unchunked_result.is_err(),
+        "test assumption violated: n_tokens={n_tokens} should exceed this device's real mm_id ceiling"
+    );
+
+    call_quantized_matmul_mm_id_chunked(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &src0_shape,
+        &src0_stride,
+        &src0_buf,
+        0,
+        &src1_shape,
+        &src1_stride,
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &dst_shape,
+        0,
+        &dst_buf,
+        max_nei1,
+    )
+    .expect("chunked dispatch should succeed above the unchunked ceiling");
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    // Spot-check a handful of rows against a direct reference computation --
+    // cheap relative to the full O(n_tokens) reference the bit-exact tests
+    // above already cover at small scale; this test's job is proving the
+    // ceiling is gone, with a correctness sanity check, not re-proving
+    // full-array correctness redundantly.
+    let got: Vec<f32> = read_to_vec(&dst_buf, out_elems);
+    for &t in &[0usize, n_tokens / 2, n_tokens - 1] {
+        for s in 0..nei0 {
+            let e = ids[t * nei0 + s] as usize;
+            let mut acc = 0f32;
+            for k in 0..n_in {
+                acc += src0[e * n_out * n_in + k] * src1[t * nei0 * n_in + s * n_in + k];
+            }
+            let expected = acc; // j=0 row only, cheap spot check
+            let got_val = got[t * nei0 * n_out + s * n_out];
+            let diff = (got_val - expected).abs();
+            assert!(
+                diff <= 1e-2 + 1e-2 * expected.abs(),
+                "spot check failed at token {t}, slot {s}: got {got_val}, expected {expected}"
+            );
+        }
+    }
 }
