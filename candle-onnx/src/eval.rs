@@ -1335,7 +1335,8 @@ fn simple_eval_(
                     None
                 };
 
-                let axes = if let Some(axes) = axes {
+                // Explicitly empty axes follow the same reduce-all/no-op policy as omitted axes.
+                let axes = if let Some(axes) = axes.filter(|axes| !axes.is_empty()) {
                     let rank = input.rank();
                     let mut axes_set = HashSet::new();
 
@@ -1444,7 +1445,8 @@ fn simple_eval_(
                     None
                 };
 
-                let axes = if let Some(axes) = axes {
+                // Explicitly empty axes follow the same reduce-all/no-op policy as omitted axes.
+                let axes = if let Some(axes) = axes.filter(|axes| !axes.is_empty()) {
                     let rank = input.rank();
                     let mut axes_set = HashSet::new();
 
