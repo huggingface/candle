@@ -2185,11 +2185,11 @@ impl BackendStorage for VulkanStorage {
         let (start, len) = match l.strided_blocks() {
             crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
             _ => {
-                return Err(Error::Vulkan(
-                    "elu: non-contiguous layouts not supported on the Vulkan backend"
-                        .to_string()
-                        .into(),
-                ))
+                // Materialize non-contiguous to contiguous, then recurse.
+                let contiguous = Layout::contiguous_with_offset(l.shape(), 0);
+                let mut materialized = unsafe { self.device.alloc_uninit(l.shape(), dtype)? };
+                self.copy_strided_src(&mut materialized, 0, l)?;
+                return materialized.elu(&contiguous, alpha);
             }
         };
         let out = self.device.zeros_impl(l.shape(), dtype)?;
@@ -10104,7 +10104,7 @@ impl BackendStorage for VulkanStorage {
         }
         if !matches!(
             self.dtype,
-            DType::F32 | DType::F16 | DType::BF16 | DType::U8 | DType::U32
+            DType::F32 | DType::F16 | DType::BF16 | DType::U8 | DType::U32 | DType::I64
         ) {
             return Err(Error::Vulkan(
                 format!(
@@ -10243,6 +10243,33 @@ impl BackendStorage for VulkanStorage {
                         };
                         let dst_sub = match &dst.buffer {
                             VulkanStorageBuffer::U32(b) => b
+                                .clone()
+                                .slice(dst_offset as u64..(dst_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
+                                .map_err(|e| e.to_string())?;
+                            Ok(())
+                        })?;
+                    }
+                    DType::I64 => {
+                        let src_sub = match &self.buffer {
+                            VulkanStorageBuffer::I64(b) => b
+                                .clone()
+                                .slice(start_offset as u64..(start_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_sub = match &dst.buffer {
+                            VulkanStorageBuffer::I64(b) => b
                                 .clone()
                                 .slice(dst_offset as u64..(dst_offset + len) as u64),
                             _ => {
@@ -10455,6 +10482,37 @@ impl BackendStorage for VulkanStorage {
                             .map_err(|e| e.to_string())
                         })?;
                     }
+                    DType::I64 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::I64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::I64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_copy2d_slang::<i64>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::Copy2dI64,
+                                candle_vulkan_kernels::KernelName::Copy2dI64,
+                                &src_buf,
+                                &dst_buf,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -10657,6 +10715,38 @@ impl BackendStorage for VulkanStorage {
                                 &kernels,
                                 candle_vulkan_kernels::Source::GatherIdxU32,
                                 candle_vulkan_kernels::KernelName::GatherIdxU32,
+                                &src_buf,
+                                &dst_buf,
+                                &idx,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::I64 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::I64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::I64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_gather_idx_slang::<i64>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::GatherIdxI64,
+                                candle_vulkan_kernels::KernelName::GatherIdxI64,
                                 &src_buf,
                                 &dst_buf,
                                 &idx,

@@ -272,6 +272,7 @@ pub enum KernelName {
     Copy2dBf16,
     Copy2dU8,
     Copy2dU32,
+    Copy2dI64,
     RotaryEmbInt,
     GatherIdxF32,
     GatherRowsF32,
@@ -283,6 +284,7 @@ pub enum KernelName {
     GatherIdxBf16,
     GatherIdxU8,
     GatherIdxU32,
+    GatherIdxI64,
     GatherRowsF64,
     IndexSelectF64,
     ReduceMinF32,
@@ -722,6 +724,7 @@ impl AsRef<str> for KernelName {
             Self::Copy2dBf16 => "main",
             Self::Copy2dU8 => "main",
             Self::Copy2dU32 => "main",
+            Self::Copy2dI64 => "main",
             Self::RotaryEmbInt => "main",
             Self::GatherIdxF32 => "main",
             Self::GatherRowsF32 => "main_gather_rows",
@@ -733,6 +736,7 @@ impl AsRef<str> for KernelName {
             Self::GatherIdxBf16 => "main",
             Self::GatherIdxU8 => "main",
             Self::GatherIdxU32 => "main",
+            Self::GatherIdxI64 => "main",
             Self::GatherRowsF64 => "main_gather_rows",
             Self::IndexSelectF64 => "main_index_select",
             Self::ReduceMinF32 => "main_reduce_min",
@@ -1318,6 +1322,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Copy2dBf16
         | KernelName::Copy2dU8
         | KernelName::Copy2dU32
+        | KernelName::Copy2dI64
         => 3,
         KernelName::GatherIdxF32 => 4,
         KernelName::GatherRowsF32 => 4,
@@ -1329,6 +1334,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::GatherIdxBf16
         | KernelName::GatherIdxU8
         | KernelName::GatherIdxU32
+        | KernelName::GatherIdxI64
         | KernelName::GatherRowsF64
         | KernelName::IndexSelectF64
         => 4,

@@ -88,6 +88,25 @@ impl Storage {
             Ok(())
         }
     }
+    /// Determine the common dtype for a binary op between two operands.
+    fn promote_binary_dtype(lhs: DType, rhs: DType) -> DType {
+        if lhs == rhs {
+            return lhs;
+        }
+        let is_float = |dt: DType| {
+            matches!(
+                dt,
+                DType::F32 | DType::F64 | DType::BF16 | DType::F16 | DType::F8E4M3
+            )
+        };
+        if matches!(lhs, DType::F64) || matches!(rhs, DType::F64) {
+            DType::F64
+        } else if is_float(lhs) || is_float(rhs) {
+            DType::F32
+        } else {
+            DType::F32
+        }
+    }
 
     pub(crate) fn const_set(&mut self, v: Scalar, l: &Layout) -> Result<()> {
         match self {
@@ -399,8 +418,26 @@ impl Storage {
         rhs_layout: &Layout,
     ) -> Result<Self> {
         self.same_device(rhs, B::NAME)?;
-        self.same_dtype(rhs, B::NAME)?;
-        match (self, rhs) {
+        // Promote mixed dtypes to a common type before dispatching.
+        let (lhs_s, rhs_s) = if self.dtype() != rhs.dtype() {
+            let target = Self::promote_binary_dtype(self.dtype(), rhs.dtype());
+            let lhs_s = if self.dtype() != target {
+                Some(self.to_dtype(lhs_layout, target)?)
+            } else {
+                None
+            };
+            let rhs_s = if rhs.dtype() != target {
+                Some(rhs.to_dtype(rhs_layout, target)?)
+            } else {
+                None
+            };
+            (lhs_s, rhs_s)
+        } else {
+            (None, None)
+        };
+        let lhs = lhs_s.as_ref().unwrap_or(self);
+        let rhs = rhs_s.as_ref().unwrap_or(rhs);
+        match (lhs, rhs) {
             (Storage::Cpu(lhs), Storage::Cpu(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Cpu(storage))
