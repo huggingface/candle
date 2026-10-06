@@ -14,6 +14,15 @@ fn test_pth_with_key() {
 }
 
 #[test]
+fn test_pth_bool_storage() {
+    let tensors = candle_core::pickle::PthTensors::new("tests/boolean.pt", None).unwrap();
+    let tensor = tensors.get("bool").unwrap().unwrap();
+
+    assert_eq!(tensor.dtype(), candle_core::DType::U8);
+    assert_eq!(tensor.to_vec2::<u8>().unwrap(), [[1, 0], [0, 1]]);
+}
+
+#[test]
 fn test_pth_fortran_contiguous() {
     let tensors =
         candle_core::pickle::PthTensors::new("tests/fortran_tensor_3d.pth", None).unwrap();
