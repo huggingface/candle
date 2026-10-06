@@ -55,6 +55,7 @@ const GATHER_IDX_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gath
 const GATHER_IDX_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_f64.spv"));
 const GATHER_IDX_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_bf16.spv"));
 const GATHER_IDX_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_u8.spv"));
+const GATHER_IDX_U32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_u32.spv"));
 const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_ops.spv"));
 const REDUCE_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f16.spv"));
 const REDUCE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f64.spv"));
@@ -390,6 +391,7 @@ pub enum Source {
     GatherIdxF64,
     GatherIdxBf16,
     GatherIdxU8,
+    GatherIdxU32,
     ReduceSlang,
     ReduceF16,
     ReduceF64,
@@ -790,6 +792,7 @@ impl Source {
             | KernelName::GatherIdxF64
             | KernelName::GatherIdxBf16
             | KernelName::GatherIdxU8
+            | KernelName::GatherIdxU32
             | KernelName::GatherRowsF64
             | KernelName::IndexSelectF64
             | KernelName::ReduceMinF32
@@ -1051,6 +1054,7 @@ impl Source {
             Self::GatherIdxF64 => GATHER_IDX_F64_SPV,
             Self::GatherIdxBf16 => GATHER_IDX_BF16_SPV,
             Self::GatherIdxU8 => GATHER_IDX_U8_SPV,
+            Self::GatherIdxU32 => GATHER_IDX_U32_SPV,
             Self::ReduceSlang => REDUCE_SLANG_SPV,
             Self::ReduceF16 => REDUCE_F16_SPV,
             Self::ReduceF64 => REDUCE_F64_SPV,
@@ -1267,6 +1271,7 @@ impl AsRef<str> for Source {
             Self::GatherIdxF64 => "gather_idx_f64",
             Self::GatherIdxBf16 => "gather_idx_bf16",
             Self::GatherIdxU8 => "gather_idx_u8",
+            Self::GatherIdxU32 => "gather_idx_u32",
             Self::ReduceSlang => "reduce",
             Self::ReduceF16 => "reduce_f16",
             Self::ReduceF64 => "reduce_f64",

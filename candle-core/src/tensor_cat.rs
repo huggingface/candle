@@ -86,12 +86,42 @@ impl Tensor {
         }
         let rank = arg0.rank();
         let device = arg0.device();
-        let dtype = arg0.dtype();
+        // Determine the result dtype: promote mixed dtypes to a common type.
+        let result_dtype = {
+            let mut dt = arg0.dtype();
+            for arg in &args[1..] {
+                let a = arg.as_ref();
+                if a.dtype() != dt {
+                    dt = if matches!(dt, crate::DType::F64)
+                        || matches!(a.dtype(), crate::DType::F64)
+                    {
+                        crate::DType::F64
+                    } else if matches!(dt, crate::DType::F32)
+                        || matches!(a.dtype(), crate::DType::F32)
+                    {
+                        crate::DType::F32
+                    } else {
+                        crate::DType::F32
+                    };
+                }
+            }
+            dt
+        };
+        // Convert args to the result dtype if needed.
+        let promoted_args: Vec<Tensor> = if result_dtype != arg0.dtype() {
+            args.iter()
+                .map(|a| a.as_ref().to_dtype(result_dtype).map_err(|e| e))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            args.iter().map(|a| a.as_ref().clone()).collect()
+        };
+        let arg0 = &promoted_args[0];
+        let dtype = result_dtype;
         let first_dims = arg0.shape().dims();
         let mut cat_dims = first_dims.to_vec();
         cat_dims[0] = 0;
         let mut offsets = vec![0usize];
-        for (arg_idx, arg) in args.iter().enumerate() {
+        for (arg_idx, arg) in promoted_args.iter().enumerate() {
             let arg = arg.as_ref();
             if arg.dtype() != dtype {
                 Err(Error::DTypeMismatchBinaryOp {
@@ -143,7 +173,7 @@ impl Tensor {
         let shape = Shape::from(cat_dims);
         let op = crate::op::BackpropOp::new(args, |args| crate::op::Op::Cat(args, 0));
         let mut storage = unsafe { device.alloc_uninit(&shape, dtype)? };
-        for (arg, &offset) in args.iter().zip(offsets.iter()) {
+        for (arg, &offset) in promoted_args.iter().zip(offsets.iter()) {
             let arg = arg.as_ref();
             arg.storage()
                 .copy_strided_src(&mut storage, offset, arg.layout())?;
