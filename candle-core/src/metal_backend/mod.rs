@@ -1295,7 +1295,7 @@ impl BackendStorage for MetalStorage {
             h_k,
             w_stride,
             h_stride,
-            &self.buffer,
+            buffer_o(&self.buffer, inp_l, self.dtype),
             &buffer,
         )
         .map_err(MetalError::from)?;
@@ -1342,7 +1342,7 @@ impl BackendStorage for MetalStorage {
             h_k,
             w_stride,
             h_stride,
-            &self.buffer,
+            buffer_o(&self.buffer, inp_l, self.dtype),
             &buffer,
         )
         .map_err(MetalError::from)?;

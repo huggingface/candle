@@ -101,7 +101,48 @@ fn upsample_nearest2d(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+/// Pooling a view has to read the view, not the start of the buffer it points into.
+fn pool2d_offset_input(dev: &Device) -> Result<()> {
+    // Two batches. The first is all zeros, so reading from the start of the parent
+    // buffer instead of the view gives zeros rather than the expected values.
+    let mut data = vec![0f32; 16];
+    data.extend((1..=16).map(|v| v as f32));
+    let t = Tensor::from_vec(data, (2, 1, 4, 4), dev)?;
+    let second = t.narrow(0, 1, 1)?;
+    assert!(second.is_contiguous());
+    assert_ne!(second.layout().start_offset(), 0);
+
+    let avg = second.avg_pool2d(2)?.squeeze(0)?.squeeze(0)?;
+    assert_eq!(avg.to_vec2::<f32>()?, [[3.5f32, 5.5], [11.5, 13.5]]);
+
+    let max = second.max_pool2d(2)?.squeeze(0)?.squeeze(0)?;
+    assert_eq!(max.to_vec2::<f32>()?, [[6f32, 8.], [14., 16.]]);
+
+    // The same values reached through a strided view: the right half of a wider input.
+    let mut wide = Vec::new();
+    for row in 0..4 {
+        wide.extend(std::iter::repeat_n(0f32, 4));
+        wide.extend((1..=4).map(|c| (row * 4 + c) as f32));
+    }
+    let wide = Tensor::from_vec(wide, (1, 1, 4, 8), dev)?;
+    let right = wide.narrow(3, 4, 4)?;
+    assert!(!right.is_contiguous());
+
+    let avg = right.avg_pool2d(2)?.squeeze(0)?.squeeze(0)?;
+    assert_eq!(avg.to_vec2::<f32>()?, [[3.5f32, 5.5], [11.5, 13.5]]);
+
+    let max = right.max_pool2d(2)?.squeeze(0)?.squeeze(0)?;
+    assert_eq!(max.to_vec2::<f32>()?, [[6f32, 8.], [14., 16.]]);
+    Ok(())
+}
+
 test_device!(avg_pool2d, avg_pool2d_cpu, avg_pool2d_gpu, avg_pool2d_metal);
+test_device!(
+    pool2d_offset_input,
+    pool2d_offset_input_cpu,
+    pool2d_offset_input_gpu,
+    pool2d_offset_input_metal
+);
 test_device!(
     avg_pool2d_pytorch,
     avg_pool2d_pytorch_cpu,

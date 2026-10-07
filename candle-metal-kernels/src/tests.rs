@@ -1861,8 +1861,20 @@ fn run_pool2d<T: Clone>(
     let output = new_buffer(&device, &vec![0.0f32; dst_el]);
     let kernels = Kernels::new();
     call_pool2d(
-        &device, &encoder, &kernels, name, shape, strides, out_w, out_h, w_k, h_k, w_stride,
-        h_stride, &input, &output,
+        &device,
+        &encoder,
+        &kernels,
+        name,
+        shape,
+        strides,
+        out_w,
+        out_h,
+        w_k,
+        h_k,
+        w_stride,
+        h_stride,
+        BufferOffset::zero_offset(&input),
+        &output,
     )
     .unwrap();
     drop(encoder);
