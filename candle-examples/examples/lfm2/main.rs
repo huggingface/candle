@@ -1,6 +1,6 @@
-//! LFM2 (Liquid Foundation Model 2) example.
+//! LFM2 / LFM2.5 (Liquid Foundation Model) example.
 //!
-//! This example demonstrates text generation using the LFM2 model from LiquidAI.
+//! This example demonstrates text generation using the LFM2.5 models from LiquidAI.
 //!
 //! ```bash
 //! cargo run --example lfm2 --release -- --prompt "The capital of France is"
@@ -36,6 +36,7 @@ struct TextGeneration {
     repeat_penalty: f32,
     repeat_last_n: usize,
     cache: Cache,
+    bos_token_id: Option<u32>,
 }
 
 impl TextGeneration {
@@ -51,6 +52,7 @@ impl TextGeneration {
         repeat_last_n: usize,
         device: &Device,
         cache: Cache,
+        bos_token_id: Option<u32>,
     ) -> Self {
         let logits_processor = {
             let temperature = temp.unwrap_or(0.);
@@ -75,6 +77,7 @@ impl TextGeneration {
             repeat_last_n,
             device: device.clone(),
             cache,
+            bos_token_id,
         }
     }
 
@@ -90,6 +93,12 @@ impl TextGeneration {
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
+        // Some LFM2.5 tokenizers do not add the BOS token themselves.
+        if let Some(bos) = self.bos_token_id {
+            if tokens.first() != Some(&bos) {
+                tokens.insert(0, bos);
+            }
+        }
 
         for &t in tokens.iter() {
             if let Some(t) = self.tokenizer.next_token(t)? {
@@ -155,17 +164,50 @@ impl TextGeneration {
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Which {
-    #[value(name = "lfm2.5-1.2b")]
+    #[value(name = "lfm2.5-230m")]
+    Lfm2_5_230M,
+    #[value(name = "lfm2.5-230m-base")]
+    Lfm2_5_230MBase,
+    #[value(name = "lfm2.5-350m")]
+    Lfm2_5_350M,
+    #[value(name = "lfm2.5-350m-base")]
+    Lfm2_5_350MBase,
+    #[value(name = "lfm2.5-1.2b", alias = "lfm2.5-1.2b-instruct")]
     Lfm2_5_1_2B,
+    #[value(name = "lfm2.5-1.2b-base")]
+    Lfm2_5_1_2BBase,
     #[value(name = "lfm2.5-1.2b-thinking")]
     Lfm2_5_1_2BThinking,
+    #[value(name = "lfm2.5-1.2b-jp")]
+    Lfm2_5_1_2BJp,
+    #[value(name = "lfm2.5-1.2b-jp-202606")]
+    Lfm2_5_1_2BJp202606,
+    #[value(name = "lfm2.5-2.6b")]
+    Lfm2_5_2_6B,
+    #[value(name = "lfm2.5-2.6b-base")]
+    Lfm2_5_2_6BBase,
+    #[value(name = "lfm2.5-8b-a1b")]
+    Lfm2_5_8BA1B,
+    #[value(name = "lfm2.5-8b-a1b-base")]
+    Lfm2_5_8BA1BBase,
 }
 
 impl Which {
     fn model_id(&self) -> &'static str {
         match self {
+            Which::Lfm2_5_230M => "LiquidAI/LFM2.5-230M",
+            Which::Lfm2_5_230MBase => "LiquidAI/LFM2.5-230M-Base",
+            Which::Lfm2_5_350M => "LiquidAI/LFM2.5-350M",
+            Which::Lfm2_5_350MBase => "LiquidAI/LFM2.5-350M-Base",
             Which::Lfm2_5_1_2B => "LiquidAI/LFM2.5-1.2B-Instruct",
+            Which::Lfm2_5_1_2BBase => "LiquidAI/LFM2.5-1.2B-Base",
             Which::Lfm2_5_1_2BThinking => "LiquidAI/LFM2.5-1.2B-Thinking",
+            Which::Lfm2_5_1_2BJp => "LiquidAI/LFM2.5-1.2B-JP",
+            Which::Lfm2_5_1_2BJp202606 => "LiquidAI/LFM2.5-1.2B-JP-202606",
+            Which::Lfm2_5_2_6B => "LiquidAI/LFM2.5-2.6B",
+            Which::Lfm2_5_2_6BBase => "LiquidAI/LFM2.5-2.6B-Base",
+            Which::Lfm2_5_8BA1B => "LiquidAI/LFM2.5-8B-A1B",
+            Which::Lfm2_5_8BA1BBase => "LiquidAI/LFM2.5-8B-A1B-Base",
         }
     }
 }
@@ -232,6 +274,10 @@ struct Args {
     /// Comma-separated paths to weight files.
     #[arg(long)]
     weight_files: Option<String>,
+
+    /// The dtype to use: f32, f16 or bf16. Defaults to bf16 on CUDA and Metal, f32 on CPU.
+    #[arg(long)]
+    dtype: Option<String>,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
     #[arg(long, default_value_t = 1.1)]
@@ -310,10 +356,12 @@ fn main() -> Result<()> {
     let config = config.into_config(args.use_flash_attn);
 
     let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
-        DType::BF16
-    } else {
-        DType::F32
+    let dtype = match args.dtype.as_deref() {
+        Some("f32") => DType::F32,
+        Some("f16") => DType::F16,
+        Some("bf16") => DType::BF16,
+        Some(dtype) => anyhow::bail!("unsupported dtype {dtype}"),
+        None => device.bf16_default_to_f32(),
     };
 
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
@@ -348,6 +396,7 @@ fn main() -> Result<()> {
         args.repeat_last_n,
         &device,
         cache,
+        config.bos_token_id,
     );
     pipeline.run(&args.prompt, args.sample_len)?;
     Ok(())
