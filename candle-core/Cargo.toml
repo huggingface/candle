@@ -63,6 +63,10 @@ metal-debug-labels = ["metal", "candle-metal-kernels/debug-labels"]
 name = "bench_main"
 harness = false
 
+[[bench]]
+name = "to_dtype"
+harness = false
+
 [[example]]
 name = "metal_basics"
 required-features = ["metal"]
