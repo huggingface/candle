@@ -11,10 +11,15 @@ use candle::{Device, Result, Tensor};
 
 pub fn device(cpu: bool) -> Result<Device> {
     if cpu {
+        println!("Running the example using the cpu backend");
         Ok(Device::Cpu)
-    } else if std::env::var("CANDLE_BACKEND").is_ok_and(|v| v == "vulkan") {
+    } else if std::env::var("CANDLE_BACKEND")
+        .map(|v| v.is_empty() || v == "vulkan")
+        .unwrap_or(true)
+    {
         #[cfg(feature = "vulkan")]
         {
+            println!("Running the example using the vulkan backend");
             let ordinal = std::env::var("CANDLE_VULKAN_TEST_GPU")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -30,6 +35,7 @@ pub fn device(cpu: bool) -> Result<Device> {
     } else if metal_is_available() {
         Ok(Device::new_metal(0)?)
     } else {
+        println!("Running the example using the cpu backend");
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {
             println!(
