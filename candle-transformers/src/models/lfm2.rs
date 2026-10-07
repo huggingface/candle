@@ -3,12 +3,14 @@
 //! LFM2 is a hybrid architecture that combines attention and short convolution layers.
 //! See [LiquidAI](https://www.liquid.ai/) for more information.
 //!
-//! This implementation supports the LFM2ForCausalLM architecture from HuggingFace transformers.
+//! This implementation supports the `Lfm2ForCausalLM` and `Lfm2MoeForCausalLM`
+//! architectures from HuggingFace transformers, which cover the LFM2 and LFM2.5
+//! text models.
 
 use crate::models::with_tracing::{linear_no_bias as linear, Embedding, Linear, RmsNorm};
 use crate::utils::repeat_kv;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor};
-use candle_nn::{Conv1d, Conv1dConfig, VarBuilder};
+use candle_nn::VarBuilder;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -19,9 +21,18 @@ pub enum LayerType {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+pub struct RopeParameters {
+    pub rope_theta: f32,
+}
+
+/// Raw `config.json` for both `lfm2` and `lfm2_moe` checkpoints. Missing fields
+/// use the same defaults as `Lfm2Config` / `Lfm2MoeConfig` in transformers.
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Lfm2Config {
+    pub model_type: Option<String>,
     pub vocab_size: usize,
     pub hidden_size: usize,
+    pub intermediate_size: Option<usize>,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     #[serde(default = "default_num_key_value_heads")]
@@ -30,22 +41,44 @@ pub struct Lfm2Config {
     pub norm_eps: f64,
     #[serde(default = "default_rope_theta")]
     pub rope_theta: f32,
+    /// Newer configs store the rope base here instead of `rope_theta`.
+    pub rope_parameters: Option<RopeParameters>,
     #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
     #[serde(default = "default_conv_l_cache", alias = "conv_L_cache")]
     pub conv_l_cache: usize,
     #[serde(default)]
     pub conv_bias: bool,
-    pub layer_types: Vec<LayerType>,
-    #[serde(default)]
-    pub tie_embedding: bool,
+    pub layer_types: Option<Vec<LayerType>>,
+    /// Older configs list the attention layers instead of `layer_types`.
+    pub full_attn_idxs: Option<Vec<usize>>,
+    pub tie_embedding: Option<bool>,
+    pub tie_word_embeddings: Option<bool>,
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
-    // FFN dimension configuration
+    // FFN dimension configuration (`lfm2` only)
+    pub block_ff_dim: Option<usize>,
+    #[serde(default = "default_true")]
+    pub block_auto_adjust_ff_dim: bool,
     #[serde(default = "default_ffn_dim_multiplier")]
-    pub block_ffn_dim_multiplier: f32,
+    pub block_ffn_dim_multiplier: Option<f32>,
     #[serde(default = "default_block_multiple_of")]
     pub block_multiple_of: usize,
+    // MoE configuration (`lfm2_moe` only)
+    #[serde(default = "default_num_experts")]
+    pub num_experts: usize,
+    #[serde(default = "default_num_experts_per_tok")]
+    pub num_experts_per_tok: usize,
+    #[serde(default = "default_moe_intermediate_size")]
+    pub moe_intermediate_size: usize,
+    #[serde(default = "default_num_dense_layers")]
+    pub num_dense_layers: usize,
+    #[serde(default = "default_true")]
+    pub norm_topk_prob: bool,
+    #[serde(default = "default_true")]
+    pub use_expert_bias: bool,
+    #[serde(default = "default_routed_scaling_factor")]
+    pub routed_scaling_factor: f64,
 }
 
 fn default_num_key_value_heads() -> usize {
@@ -68,12 +101,36 @@ fn default_conv_l_cache() -> usize {
     3
 }
 
-fn default_ffn_dim_multiplier() -> f32 {
-    1.0
+fn default_ffn_dim_multiplier() -> Option<f32> {
+    Some(1.0)
 }
 
 fn default_block_multiple_of() -> usize {
     256
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_num_experts() -> usize {
+    32
+}
+
+fn default_num_experts_per_tok() -> usize {
+    4
+}
+
+fn default_moe_intermediate_size() -> usize {
+    1792
+}
+
+fn default_num_dense_layers() -> usize {
+    2
+}
+
+fn default_routed_scaling_factor() -> f64 {
+    1.0
 }
 
 impl Lfm2Config {
@@ -81,17 +138,61 @@ impl Lfm2Config {
         self.hidden_size / self.num_attention_heads
     }
 
-    /// Compute the actual intermediate size for the FFN.
-    /// LFM2 uses: hidden_size * 4 * block_ffn_dim_multiplier, rounded to block_multiple_of
+    pub fn is_moe(&self) -> bool {
+        self.model_type.as_deref() == Some("lfm2_moe")
+    }
+
+    /// FFN size of the dense layers, following `Lfm2MLP` in transformers.
     fn compute_intermediate_size(&self) -> usize {
-        let base_size = (self.hidden_size as f32 * 4.0 * self.block_ffn_dim_multiplier) as usize;
-        let multiple = self.block_multiple_of;
-        base_size.div_ceil(multiple) * multiple
+        if self.is_moe() {
+            return self.intermediate_size.unwrap_or(7168);
+        }
+        let mut size = self
+            .block_ff_dim
+            .or(self.intermediate_size)
+            .unwrap_or(12288);
+        if self.block_auto_adjust_ff_dim {
+            size = 2 * size / 3;
+            if let Some(multiplier) = self.block_ffn_dim_multiplier {
+                size = (multiplier * size as f32) as usize;
+                size = size.div_ceil(self.block_multiple_of) * self.block_multiple_of;
+            }
+        }
+        size
+    }
+
+    fn compute_layer_types(&self) -> Vec<LayerType> {
+        if let Some(layer_types) = &self.layer_types {
+            return layer_types.clone();
+        }
+        (0..self.num_hidden_layers)
+            .map(|i| match &self.full_attn_idxs {
+                Some(idxs) if !idxs.contains(&i) => LayerType::Conv,
+                _ => LayerType::FullAttention,
+            })
+            .collect()
     }
 
     pub fn into_config(self, use_flash_attn: bool) -> Config {
-        // Use computed intermediate size (matches actual weights) instead of config field
         let intermediate_size = self.compute_intermediate_size();
+        let layer_types = self.compute_layer_types();
+        let rope_theta = self
+            .rope_parameters
+            .as_ref()
+            .map_or(self.rope_theta, |r| r.rope_theta);
+        let tie_embedding = self
+            .tie_embedding
+            .or(self.tie_word_embeddings)
+            .unwrap_or(true);
+        let moe = self.is_moe().then_some(MoeConfig {
+            num_experts: self.num_experts,
+            num_experts_per_tok: self.num_experts_per_tok,
+            moe_intermediate_size: self.moe_intermediate_size,
+            num_dense_layers: self.num_dense_layers,
+            norm_topk_prob: self.norm_topk_prob,
+            use_expert_bias: self.use_expert_bias,
+            routed_scaling_factor: self.routed_scaling_factor,
+        });
         Config {
             vocab_size: self.vocab_size,
             hidden_size: self.hidden_size,
@@ -100,17 +201,31 @@ impl Lfm2Config {
             num_attention_heads: self.num_attention_heads,
             num_key_value_heads: self.num_key_value_heads,
             norm_eps: self.norm_eps,
-            rope_theta: self.rope_theta,
+            rope_theta,
             max_position_embeddings: self.max_position_embeddings,
             conv_l_cache: self.conv_l_cache,
             conv_bias: self.conv_bias,
-            layer_types: self.layer_types,
-            tie_embedding: self.tie_embedding,
+            layer_types,
+            tie_embedding,
             bos_token_id: self.bos_token_id,
             eos_token_id: self.eos_token_id,
+            moe,
             use_flash_attn,
         }
     }
+}
+
+/// Sparse MoE settings for `lfm2_moe` models (e.g. LFM2.5-8B-A1B).
+#[derive(Debug, Clone)]
+pub struct MoeConfig {
+    pub num_experts: usize,
+    pub num_experts_per_tok: usize,
+    pub moe_intermediate_size: usize,
+    /// The first `num_dense_layers` layers use a dense MLP.
+    pub num_dense_layers: usize,
+    pub norm_topk_prob: bool,
+    pub use_expert_bias: bool,
+    pub routed_scaling_factor: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +245,7 @@ pub struct Config {
     pub tie_embedding: bool,
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
+    pub moe: Option<MoeConfig>,
     pub use_flash_attn: bool,
 }
 
@@ -235,9 +351,7 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let hidden_size = cfg.hidden_size;
-        let intermediate_size = cfg.intermediate_size;
+    fn new(hidden_size: usize, intermediate_size: usize, vb: VarBuilder) -> Result<Self> {
         // LFM2 uses w1 (gate), w3 (up), w2 (down) naming convention
         let gate_proj = linear(hidden_size, intermediate_size, vb.pp("w1"))?;
         let up_proj = linear(hidden_size, intermediate_size, vb.pp("w3"))?;
@@ -249,12 +363,138 @@ impl Mlp {
             span: tracing::span!(tracing::Level::TRACE, "mlp"),
         })
     }
+}
 
+impl Module for Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let gate = candle_nn::ops::silu(&self.gate_proj.forward(x)?)?;
         let up = self.up_proj.forward(x)?;
         self.down_proj.forward(&(gate * up)?)
+    }
+}
+
+/// Sigmoid-routed top-k MoE, shared with `quantized_lfm2`. `expert_bias` only
+/// changes which experts are picked, not their weights.
+pub(crate) fn sparse_moe_forward(
+    xs: &Tensor,
+    gate: &impl Module,
+    experts: &[impl Module],
+    expert_bias: Option<&[f32]>,
+    top_k: usize,
+    norm_topk_prob: bool,
+    routed_scaling_factor: f64,
+) -> Result<Tensor> {
+    let (b_sz, seq_len, hidden_dim) = xs.dims3()?;
+    let xs = xs.reshape(((), hidden_dim))?;
+    let scores = candle_nn::ops::sigmoid(&gate.forward(&xs)?.to_dtype(DType::F32)?)?;
+
+    // Pick the experts on the host and group the tokens by expert.
+    let mut rows = vec![vec![]; experts.len()];
+    let mut weights = vec![vec![]; experts.len()];
+    for (row, s) in scores.to_vec2::<f32>()?.iter().enumerate() {
+        let biased = |i: usize| s[i] + expert_bias.map_or(0.0, |b| b[i]);
+        let mut ids: Vec<usize> = (0..s.len()).collect();
+        ids.sort_by(|&i, &j| biased(j).total_cmp(&biased(i)));
+        let ids = &ids[..top_k];
+        let mut scale = routed_scaling_factor as f32;
+        if norm_topk_prob {
+            scale /= ids.iter().map(|&i| s[i]).sum::<f32>() + 1e-6;
+        }
+        for &i in ids {
+            rows[i].push(row as u32);
+            weights[i].push(s[i] * scale);
+        }
+    }
+
+    let mut ys = xs.zeros_like()?;
+    for (expert, (rows, weights)) in experts.iter().zip(rows.iter().zip(weights.iter())) {
+        if rows.is_empty() {
+            continue;
+        }
+        let rows = Tensor::new(rows.as_slice(), xs.device())?;
+        let weights = Tensor::new(weights.as_slice(), xs.device())?
+            .reshape(((), 1))?
+            .to_dtype(xs.dtype())?;
+        let out = expert.forward(&xs.index_select(&rows, 0)?)?;
+        ys = ys.index_add(&rows, &out.broadcast_mul(&weights)?, 0)?;
+    }
+    ys.reshape((b_sz, seq_len, hidden_dim))
+}
+
+#[derive(Debug, Clone)]
+struct SparseMoe {
+    gate: Linear,
+    experts: Vec<Mlp>,
+    expert_bias: Option<Vec<f32>>,
+    num_experts_per_tok: usize,
+    norm_topk_prob: bool,
+    routed_scaling_factor: f64,
+    span: tracing::Span,
+}
+
+impl SparseMoe {
+    fn new(cfg: &Config, moe: &MoeConfig, vb: VarBuilder) -> Result<Self> {
+        if moe.num_experts_per_tok == 0 || moe.num_experts_per_tok > moe.num_experts {
+            candle::bail!(
+                "num_experts_per_tok must be in 1..={}, got {}",
+                moe.num_experts,
+                moe.num_experts_per_tok
+            )
+        }
+        let gate = linear(cfg.hidden_size, moe.num_experts, vb.pp("gate"))?;
+        let vb_e = vb.pp("experts");
+        let experts = (0..moe.num_experts)
+            .map(|i| Mlp::new(cfg.hidden_size, moe.moe_intermediate_size, vb_e.pp(i)))
+            .collect::<Result<Vec<_>>>()?;
+        let expert_bias = if moe.use_expert_bias {
+            let bias = vb.get_with_hints_dtype(
+                moe.num_experts,
+                "expert_bias",
+                Default::default(),
+                DType::F32,
+            )?;
+            Some(bias.to_vec1::<f32>()?)
+        } else {
+            None
+        };
+        Ok(Self {
+            gate,
+            experts,
+            expert_bias,
+            num_experts_per_tok: moe.num_experts_per_tok,
+            norm_topk_prob: moe.norm_topk_prob,
+            routed_scaling_factor: moe.routed_scaling_factor,
+            span: tracing::span!(tracing::Level::TRACE, "moe"),
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        sparse_moe_forward(
+            xs,
+            &self.gate,
+            &self.experts,
+            self.expert_bias.as_deref(),
+            self.num_experts_per_tok,
+            self.norm_topk_prob,
+            self.routed_scaling_factor,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+enum FeedForward {
+    Dense(Mlp),
+    Moe(SparseMoe),
+}
+
+impl FeedForward {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Dense(mlp) => mlp.forward(xs),
+            Self::Moe(moe) => moe.forward(xs),
+        }
     }
 }
 
@@ -405,6 +645,30 @@ impl Attention {
     }
 }
 
+/// Causal depthwise conv, `xs` is (batch, channels, seq_len) and `weight` is
+/// (channels, kernel_size). Much faster than a grouped `Conv1d`, which candle
+/// runs one channel at a time.
+pub(crate) fn causal_conv1d(xs: &Tensor, weight: &Tensor) -> Result<Tensor> {
+    let (_, _, seq_len) = xs.dims3()?;
+    let kernel_size = weight.dim(1)?;
+    if kernel_size == 0 {
+        candle::bail!("conv kernel size must be at least 1")
+    }
+    // Accumulate in f32 like the conv kernels do.
+    let dtype = xs.dtype();
+    let weight = weight.to_dtype(DType::F32)?;
+    let xs = xs
+        .to_dtype(DType::F32)?
+        .pad_with_zeros(2, kernel_size - 1, 0)?;
+    let tap = |k: usize| {
+        xs.narrow(2, k, seq_len)?
+            .broadcast_mul(&weight.narrow(1, k, 1)?.unsqueeze(0)?)
+    };
+    (1..kernel_size)
+        .try_fold(tap(0)?, |ys, k| ys + tap(k)?)?
+        .to_dtype(dtype)
+}
+
 /// Short convolution layer for efficient sequence processing.
 #[derive(Debug, Clone)]
 struct ShortConv {
@@ -451,7 +715,6 @@ impl ShortConv {
         // Element-wise multiply B and X
         let bx = (b * &x_proj)?.contiguous()?;
 
-        // Prepare conv weight: squeeze to (hidden_size, l_cache) for element-wise, or keep for Conv1d
         let conv_weight = self.conv_weight.squeeze(1)?;
 
         let conv_out = if seq_len == 1 {
@@ -482,18 +745,7 @@ impl ShortConv {
                 .sum_keepdim(2)?
                 .contiguous()?
         } else {
-            // Prefill: use Conv1d
-            let conv = Conv1d::new(
-                self.conv_weight.clone(),
-                None,
-                Conv1dConfig {
-                    padding: self.l_cache.saturating_sub(1),
-                    groups: self.hidden_size,
-                    ..Default::default()
-                },
-            );
-            let mut out = conv.forward(&bx)?;
-            out = out.narrow(2, 0, seq_len)?;
+            let out = causal_conv1d(&bx, &conv_weight)?;
 
             // Update cache with last l_cache tokens
             if cache.use_kv_cache && self.l_cache > 0 {
@@ -533,7 +785,7 @@ enum LayerKind {
 struct DecoderLayer {
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
-    mlp: Mlp,
+    feed_forward: FeedForward,
     kind: LayerKind,
     span: tracing::Span,
 }
@@ -544,8 +796,13 @@ impl DecoderLayer {
         let input_layernorm = RmsNorm::new(cfg.hidden_size, cfg.norm_eps, vb.pp("operator_norm"))?;
         let post_attention_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.norm_eps, vb.pp("ffn_norm"))?;
-        // LFM2 uses feed_forward naming for MLP
-        let mlp = Mlp::new(cfg, vb.pp("feed_forward"))?;
+        let vb_ff = vb.pp("feed_forward");
+        let feed_forward = match &cfg.moe {
+            Some(moe) if layer_idx >= moe.num_dense_layers => {
+                FeedForward::Moe(SparseMoe::new(cfg, moe, vb_ff)?)
+            }
+            _ => FeedForward::Dense(Mlp::new(cfg.hidden_size, cfg.intermediate_size, vb_ff)?),
+        };
 
         let layer_type = cfg
             .layer_types
@@ -562,7 +819,7 @@ impl DecoderLayer {
         Ok(Self {
             input_layernorm,
             post_attention_layernorm,
-            mlp,
+            feed_forward,
             kind,
             span: tracing::span!(tracing::Level::TRACE, "layer"),
         })
@@ -587,7 +844,7 @@ impl DecoderLayer {
         let x = (x + residual)?;
         let residual = &x;
         let x = self.post_attention_layernorm.forward(&x)?;
-        let x = self.mlp.forward(&x)?;
+        let x = self.feed_forward.forward(&x)?;
         x + residual
     }
 }
@@ -655,5 +912,140 @@ impl Model {
 
     pub fn dtype(&self) -> DType {
         self.dtype
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_nn::{Conv1d, Conv1dConfig};
+
+    #[test]
+    fn derived_config() -> Result<()> {
+        use LayerType::{Conv, FullAttention as Attn};
+        let base = r#""vocab_size": 64, "hidden_size": 8, "num_hidden_layers": 2, "num_attention_heads": 2"#;
+        // (config keys, intermediate size, rope theta, layer types, is moe)
+        let cases = [
+            // LFM2.5-230M: FFN size used as is.
+            (
+                r#""model_type": "lfm2", "intermediate_size": 2560, "block_ff_dim": 2560,
+                "block_auto_adjust_ff_dim": false, "layer_types": ["conv", "full_attention"],
+                "rope_parameters": {"rope_theta": 1000000.0}, "tie_embedding": true"#,
+                2560,
+                1e6,
+                [Conv, Attn],
+                false,
+            ),
+            // LFM2.5-350M: 2/3 of `block_ff_dim`, rounded up to 256.
+            (
+                r#""model_type": "lfm2", "intermediate_size": 6656, "block_ff_dim": 6656,
+                "layer_types": ["full_attention", "conv"], "rope_theta": 1000000.0"#,
+                4608,
+                1e6,
+                [Attn, Conv],
+                false,
+            ),
+            // LFM2.5-2.6B: rope base only in `rope_parameters`.
+            (
+                r#""model_type": "lfm2", "intermediate_size": 10752,
+                "block_auto_adjust_ff_dim": false, "layer_types": ["conv", "conv"],
+                "rope_parameters": {"rope_theta": 10000000.0}, "tie_word_embeddings": true"#,
+                10752,
+                1e7,
+                [Conv, Conv],
+                false,
+            ),
+            // LFM2-1.2B (v1): `block_ff_dim` and `full_attn_idxs` only.
+            (
+                r#""model_type": "lfm2", "block_ff_dim": 12288, "full_attn_idxs": [1]"#,
+                8192,
+                1e6,
+                [Conv, Attn],
+                false,
+            ),
+            // LFM2.5-8B-A1B: MoE configs use `intermediate_size` as is.
+            (
+                r#""model_type": "lfm2_moe", "intermediate_size": 7168,
+                "layer_types": ["conv", "full_attention"],
+                "rope_parameters": {"rope_theta": 5000000}, "num_experts": 32,
+                "num_experts_per_tok": 4, "moe_intermediate_size": 1792, "num_dense_layers": 2"#,
+                7168,
+                5e6,
+                [Conv, Attn],
+                true,
+            ),
+        ];
+        for (keys, intermediate_size, rope_theta, layer_types, is_moe) in cases {
+            let cfg: Lfm2Config = serde_json::from_str(&format!("{{{base}, {keys}}}"))
+                .map_err(candle::Error::wrap)?;
+            let cfg = cfg.into_config(false);
+            assert_eq!(cfg.intermediate_size, intermediate_size, "{keys}");
+            assert_eq!(cfg.rope_theta, rope_theta, "{keys}");
+            assert_eq!(cfg.layer_types, layer_types, "{keys}");
+            assert_eq!(cfg.moe.is_some(), is_moe, "{keys}");
+            assert!(cfg.tie_embedding, "{keys}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn causal_conv1d_matches_grouped_conv() -> Result<()> {
+        let (channels, kernel_size) = (4, 3);
+        let xs = Tensor::randn(0f32, 1., (2, channels, 5), &Device::Cpu)?;
+        let weight = Tensor::randn(0f32, 1., (channels, kernel_size), &Device::Cpu)?;
+        let conv = Conv1d::new(
+            weight.reshape((channels, 1, kernel_size))?,
+            None,
+            Conv1dConfig {
+                padding: kernel_size - 1,
+                groups: channels,
+                ..Default::default()
+            },
+        );
+        let expected = conv.forward(&xs)?.narrow(2, 0, 5)?;
+        let diff = (causal_conv1d(&xs, &weight)? - expected)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(diff < 1e-5, "max diff {diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn expert_bias_only_changes_the_selection() -> Result<()> {
+        // One token, three experts: expert `e` scales its input by `e + 1` and
+        // the router scores are sigmoid(2), sigmoid(1), sigmoid(0).
+        let device = Device::Cpu;
+        let xs = Tensor::new(&[[[1f32]]], &device)?;
+        let gate = candle_nn::Linear::new(Tensor::new(&[[2f32], [1.], [0.]], &device)?, None);
+        let experts: Vec<_> = (0..3)
+            .map(|e| candle_nn::func(move |xs: &Tensor| xs.affine((e + 1) as f64, 0.)))
+            .collect();
+        let sigmoid = |x: f32| 1. / (1. + (-x).exp());
+        let (s0, s1, s2) = (sigmoid(2.), sigmoid(1.), sigmoid(0.));
+        // (expert bias, top k, normalize, expected output)
+        let cases = [
+            (None, 1, false, s0),
+            // The bias picks expert 2, its weight is still the unbiased score.
+            (Some([0., 0., 1.]), 1, false, 3. * s2),
+            (None, 2, true, (s0 + 2. * s1) / (s0 + s1 + 1e-6)),
+        ];
+        for (bias, top_k, norm, expected) in cases {
+            let ys = sparse_moe_forward(
+                &xs,
+                &gate,
+                &experts,
+                bias.as_ref().map(|b| &b[..]),
+                top_k,
+                norm,
+                1.0,
+            )?;
+            let ys = ys.flatten_all()?.to_vec1::<f32>()?[0];
+            assert!(
+                (ys - expected).abs() < 1e-5,
+                "{bias:?} {top_k} {norm}: {ys} vs {expected}"
+            );
+        }
+        Ok(())
     }
 }
