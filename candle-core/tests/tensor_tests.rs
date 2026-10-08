@@ -248,6 +248,93 @@ fn asort_big(device: &Device) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "cuda")]
+fn check_large_cuda_asort(device: &Device, nrows: usize, ncols: usize) -> Result<()> {
+    let mut data = Vec::with_capacity(nrows * ncols);
+    for row in 0..nrows {
+        if row % 2 == 0 {
+            data.extend((0..ncols).rev().map(|v| v as f32));
+        } else {
+            data.extend((0..ncols).map(|v| v as f32));
+        }
+    }
+    let tensor = Tensor::from_vec(data.clone(), (nrows, ncols), device)?;
+
+    for asc in [true, false] {
+        let indexes = tensor.arg_sort_last_dim(asc)?.to_vec2::<u32>()?;
+        for (row, indexes) in indexes.iter().enumerate() {
+            let is_input_ascending = row % 2 == 1;
+            let expect_identity = asc == is_input_ascending;
+            for (position, &index) in indexes.iter().enumerate() {
+                let expected = if expect_identity {
+                    position
+                } else {
+                    ncols - position - 1
+                };
+                assert_eq!(index as usize, expected, "row {row}, position {position}");
+            }
+        }
+    }
+
+    assert_eq!(tensor.flatten_all()?.to_vec1::<f32>()?, data);
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn asort_large_cuda() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    // 8192 is the largest power-of-two width whose index buffer fits in the
+    // existing 32-KiB shared-memory fast path; 8193 selects the large path.
+    check_large_cuda_asort(&device, 1, 8192)?;
+    check_large_cuda_asort(&device, 1, 8193)?;
+    check_large_cuda_asort(&device, 1, 32_000)?;
+    check_large_cuda_asort(&device, 1, 128_256)?;
+
+    // Exercise both sides of the large-path row batching boundary.
+    check_large_cuda_asort(&device, 256, 8193)?;
+    check_large_cuda_asort(&device, 257, 8193)?;
+    // This shape exceeds the auxiliary-memory budget as one batch and exercises
+    // the adaptive batch planner plus its one-row tail.
+    check_large_cuda_asort(&device, 33, 128_256)?;
+
+    // Match the all-equal 32K-vector reproduction from #2361.
+    let zeros = Tensor::zeros(32_000, DType::F32, &device)?;
+    for asc in [true, false] {
+        let mut indexes = zeros.arg_sort_last_dim(asc)?.to_vec1::<u32>()?;
+        indexes.sort_unstable();
+        assert_eq!(indexes, (0..32_000).collect::<Vec<_>>());
+    }
+
+    let mut offset_data = vec![f32::INFINITY; 8193];
+    offset_data.extend((0..8193).rev().map(|v| v as f32));
+    let offset_view = Tensor::from_vec(offset_data, (2, 8193), &device)?.narrow(0, 1, 1)?;
+    let indexes = offset_view.arg_sort_last_dim(true)?.to_vec2::<u32>()?;
+    assert_eq!(
+        indexes[0],
+        (0..8193).rev().map(|v| v as u32).collect::<Vec<_>>()
+    );
+
+    let mut mixed_data = (0..8193)
+        .map(|v| ((v * 48_271) % 8193) as f32 - 4096.)
+        .collect::<Vec<_>>();
+    mixed_data[..6].copy_from_slice(&[f32::NEG_INFINITY, f32::INFINITY, 0., -0., -7., -7.]);
+    let mixed = Tensor::from_vec(mixed_data, (1, 8193), &device)?;
+    for asc in [true, false] {
+        let (sorted, indexes) = mixed.sort_last_dim(asc)?;
+        let sorted = sorted.to_vec2::<f32>()?;
+        assert!(sorted[0].windows(2).all(|pair| if asc {
+            pair[0] <= pair[1]
+        } else {
+            pair[0] >= pair[1]
+        }));
+        let mut indexes = indexes.to_vec2::<u32>()?.remove(0);
+        indexes.sort_unstable();
+        assert_eq!(indexes, (0..8193).map(|v| v as u32).collect::<Vec<_>>());
+    }
+    Ok(())
+}
+
 fn unary_op(device: &Device) -> Result<()> {
     let data = &[[-3f32, 1., 4., -0.1, 0.5], [2.7, -1.8, -0.28, 1.8, 2.8]];
     let tensor = Tensor::new(data, device)?;

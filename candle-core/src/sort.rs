@@ -60,10 +60,165 @@ impl ArgSort {
 mod cuda {
     use super::*;
     use crate::cuda_backend::cudarc::driver::{
-        CudaSlice, DeviceRepr, LaunchConfig, ValidAsZeroBits,
+        CudaSlice, DevicePtr, DevicePtrMut, DeviceRepr, LaunchConfig, ValidAsZeroBits,
     };
     use crate::cuda_backend::{kernel_name, kernels, CudaStorageSlice as S, WrapErr};
-    use crate::{CudaDevice, WithDType};
+    use crate::{CudaDevice, DType, WithDType};
+
+    const SHARED_ARGSORT_MAX_ITEMS: usize = 8192;
+    const LARGE_ARGSORT_MAX_BATCH_ROWS: usize = 256;
+    const LARGE_ARGSORT_AUX_BUDGET: usize = 64 * 1024 * 1024;
+
+    fn checked_device_offset(ptr: u64, elements: usize, element_size: usize) -> Result<u64> {
+        let byte_offset = elements
+            .checked_mul(element_size)
+            .ok_or_else(|| crate::Error::msg("CUDA argsort byte offset overflow"))?;
+        ptr.checked_add(byte_offset as u64)
+            .ok_or_else(|| crate::Error::msg("CUDA argsort device pointer overflow"))
+    }
+
+    fn check_runtime_status(status: i32, action: &str) -> Result<()> {
+        if status != 0 {
+            crate::bail!("CUDA argsort {action} failed with runtime error {status}")
+        }
+        Ok(())
+    }
+
+    fn large_f32_workspace_bytes(
+        nrows: usize,
+        ncols: i32,
+        descending: bool,
+        stream: *mut std::ffi::c_void,
+    ) -> Result<usize> {
+        let nrows = i32::try_from(nrows)
+            .map_err(|_| crate::Error::msg("CUDA argsort batch has too many rows"))?;
+        let mut temp_storage_bytes = 0usize;
+        let status = unsafe {
+            candle_kernels::ffi::candle_argsort_f32(
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut temp_storage_bytes,
+                nrows,
+                ncols,
+                i32::from(descending),
+                stream,
+            )
+        };
+        check_runtime_status(status, "workspace query")?;
+        Ok(temp_storage_bytes)
+    }
+
+    fn large_f32_argsort<T, P>(
+        src: &P,
+        dst: &mut CudaSlice<u32>,
+        dev: &CudaDevice,
+        nrows: usize,
+        ncols: usize,
+        descending: bool,
+    ) -> Result<()>
+    where
+        T: DeviceRepr + WithDType,
+        P: DevicePtr<T>,
+    {
+        if T::DTYPE != DType::F32 {
+            return Err(crate::Error::UnsupportedDTypeForOp(
+                T::DTYPE,
+                "CUDA arg_sort_last_dim with more than 8192 elements",
+            )
+            .bt());
+        }
+        let ncols_i32 =
+            i32::try_from(ncols).map_err(|_| crate::Error::msg("CUDA argsort row is too large"))?;
+        let rows_by_item_count = (i32::MAX as usize / ncols).max(1);
+        let mut max_batch_rows = nrows
+            .min(LARGE_ARGSORT_MAX_BATCH_ROWS)
+            .min(rows_by_item_count);
+
+        let stream = dev.cuda_stream();
+        let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
+        let temp_storage_bytes = loop {
+            let max_temp =
+                large_f32_workspace_bytes(max_batch_rows, ncols_i32, descending, stream_ptr)?;
+            let tail_rows = nrows % max_batch_rows;
+            let tail_temp = if tail_rows == 0 {
+                0
+            } else {
+                large_f32_workspace_bytes(tail_rows, ncols_i32, descending, stream_ptr)?
+            };
+            let temp_bytes = max_temp.max(tail_temp);
+            let direct_items = max_batch_rows
+                .checked_mul(ncols)
+                .ok_or_else(|| crate::Error::msg("CUDA argsort item count overflow"))?;
+            let direct_bytes = direct_items
+                .checked_mul(std::mem::size_of::<f32>() + std::mem::size_of::<u32>())
+                .and_then(|bytes| {
+                    bytes.checked_add((max_batch_rows + 1) * std::mem::size_of::<i32>())
+                })
+                .ok_or_else(|| crate::Error::msg("CUDA argsort workspace size overflow"))?;
+            let total_bytes = direct_bytes
+                .checked_add(temp_bytes)
+                .ok_or_else(|| crate::Error::msg("CUDA argsort workspace size overflow"))?;
+            if total_bytes <= LARGE_ARGSORT_AUX_BUDGET || max_batch_rows == 1 {
+                break temp_bytes;
+            }
+            let scaled_rows = ((max_batch_rows as u128 * LARGE_ARGSORT_AUX_BUDGET as u128)
+                / total_bytes as u128) as usize;
+            max_batch_rows = scaled_rows.clamp(1, max_batch_rows - 1);
+        };
+
+        let max_batch_items = max_batch_rows
+            .checked_mul(ncols)
+            .ok_or_else(|| crate::Error::msg("CUDA argsort item count overflow"))?;
+
+        let mut keys_out = unsafe { dev.alloc::<f32>(max_batch_items)? };
+        let mut indices_in = unsafe { dev.alloc::<u32>(max_batch_items)? };
+        let mut offsets = unsafe { dev.alloc::<i32>(max_batch_rows + 1)? };
+        let (src_ptr, _src_guard) = src.device_ptr(&stream);
+        let (dst_ptr, _dst_guard) = dst.device_ptr_mut(&stream);
+        let (keys_out_ptr, _keys_out_guard) = keys_out.device_ptr_mut(&stream);
+        let (indices_in_ptr, _indices_in_guard) = indices_in.device_ptr_mut(&stream);
+        let (offsets_ptr, _offsets_guard) = offsets.device_ptr_mut(&stream);
+
+        let mut temp_storage = unsafe { dev.alloc::<u8>(temp_storage_bytes.max(1))? };
+        let (temp_storage_ptr, _temp_storage_guard) = temp_storage.device_ptr_mut(&stream);
+
+        let mut row_start = 0usize;
+        while row_start < nrows {
+            let batch_rows = (nrows - row_start).min(max_batch_rows);
+            let batch_items = batch_rows * ncols;
+            let item_offset = row_start * ncols;
+            let batch_src_ptr =
+                checked_device_offset(src_ptr, item_offset, std::mem::size_of::<f32>())?;
+            let batch_dst_ptr =
+                checked_device_offset(dst_ptr, item_offset, std::mem::size_of::<u32>())?;
+            let mut launch_temp_storage_bytes = temp_storage_bytes;
+            let status = unsafe {
+                candle_kernels::ffi::candle_argsort_f32(
+                    batch_src_ptr as *const f32,
+                    keys_out_ptr as *mut f32,
+                    indices_in_ptr as *mut u32,
+                    batch_dst_ptr as *mut u32,
+                    offsets_ptr as *mut i32,
+                    temp_storage_ptr as *mut std::ffi::c_void,
+                    &mut launch_temp_storage_bytes,
+                    i32::try_from(batch_rows)
+                        .map_err(|_| crate::Error::msg("CUDA argsort batch has too many rows"))?,
+                    ncols_i32,
+                    i32::from(descending),
+                    stream_ptr,
+                )
+            };
+            check_runtime_status(status, "launch")?;
+            row_start += batch_rows;
+
+            debug_assert!(batch_items <= max_batch_items);
+        }
+        Ok(())
+    }
 
     impl crate::cuda_backend::Map1Any for ArgSort {
         fn f<T: DeviceRepr + WithDType + ValidAsZeroBits, W: Fn(CudaSlice<T>) -> S>(
@@ -80,14 +235,21 @@ mod cuda {
                 Some((o1, o2)) => src.slice(o1..o2),
             };
             let elem_count = layout.shape().elem_count();
-            let dst = unsafe { dev.alloc::<u32>(elem_count)? };
+            let mut dst = unsafe { dev.alloc::<u32>(elem_count)? };
+            let ncols = self.last_dim;
+            if elem_count == 0 {
+                return Ok(S::U32(dst));
+            }
+            let nrows = elem_count / ncols;
+            if ncols > SHARED_ARGSORT_MAX_ITEMS {
+                large_f32_argsort(&slice, &mut dst, dev, nrows, ncols, !self.asc)?;
+                return Ok(S::U32(dst));
+            }
             let func = if self.asc {
                 dev.get_or_load_func(&kernel_name::<T>("asort_asc"), &kernels::SORT)?
             } else {
                 dev.get_or_load_func(&kernel_name::<T>("asort_desc"), &kernels::SORT)?
             };
-            let ncols = self.last_dim;
-            let nrows = elem_count / ncols;
             let ncols_pad = next_power_of_2(ncols);
             // Limit block dim to 1024 threads, which is the maximum on modern CUDA gpus.
             let block_dim = ncols_pad.min(1024);
