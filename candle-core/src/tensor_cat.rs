@@ -96,10 +96,6 @@ impl Tensor {
                         || matches!(a.dtype(), crate::DType::F64)
                     {
                         crate::DType::F64
-                    } else if matches!(dt, crate::DType::F32)
-                        || matches!(a.dtype(), crate::DType::F32)
-                    {
-                        crate::DType::F32
                     } else {
                         crate::DType::F32
                     };
@@ -110,7 +106,7 @@ impl Tensor {
         // Convert args to the result dtype if needed.
         let promoted_args: Vec<Tensor> = if result_dtype != arg0.dtype() {
             args.iter()
-                .map(|a| a.as_ref().to_dtype(result_dtype).map_err(|e| e))
+                .map(|a| a.as_ref().to_dtype(result_dtype))
                 .collect::<Result<Vec<_>>>()?
         } else {
             args.iter().map(|a| a.as_ref().clone()).collect()
@@ -122,7 +118,6 @@ impl Tensor {
         cat_dims[0] = 0;
         let mut offsets = vec![0usize];
         for (arg_idx, arg) in promoted_args.iter().enumerate() {
-            let arg = arg.as_ref();
             if arg.dtype() != dtype {
                 Err(Error::DTypeMismatchBinaryOp {
                     lhs: dtype,
@@ -174,7 +169,6 @@ impl Tensor {
         let op = crate::op::BackpropOp::new(args, |args| crate::op::Op::Cat(args, 0));
         let mut storage = unsafe { device.alloc_uninit(&shape, dtype)? };
         for (arg, &offset) in promoted_args.iter().zip(offsets.iter()) {
-            let arg = arg.as_ref();
             arg.storage()
                 .copy_strided_src(&mut storage, offset, arg.layout())?;
         }
@@ -211,7 +205,7 @@ impl Tensor {
         // Convert args to the result dtype if needed.
         let promoted_args: Vec<Tensor> = if result_dtype != arg0.dtype() {
             args.iter()
-                .map(|a| a.as_ref().to_dtype(result_dtype).map_err(|e| e))
+                .map(|a| a.as_ref().to_dtype(result_dtype))
                 .collect::<Result<Vec<_>>>()?
         } else {
             args.iter().map(|a| a.as_ref().clone()).collect()
@@ -221,7 +215,6 @@ impl Tensor {
         let mut cat_dims = first_dims.to_vec();
         cat_dims[dim] = 0;
         for (arg_idx, arg) in promoted_args.iter().enumerate() {
-            let arg = arg.as_ref();
             if arg.dtype() != dtype {
                 Err(Error::DTypeMismatchBinaryOp {
                     lhs: dtype,
@@ -274,7 +267,6 @@ impl Tensor {
         let mut storage = unsafe { device.alloc_uninit(&shape, dtype)? };
         let mut dst_o = 0;
         for arg in promoted_args.iter() {
-            let arg = arg.as_ref();
             let arg_dims = arg.shape().dims();
             let d1: usize = arg_dims.iter().take(dim).product();
             let d2 = block_size * arg_dims[dim];

@@ -41,7 +41,7 @@ impl std::ops::Deref for PyTensor {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[pyclass(from_py_object, name = "DType")]
 /// A `candle` dtype.
 struct PyDType(DType);

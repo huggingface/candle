@@ -93,16 +93,8 @@ impl Storage {
         if lhs == rhs {
             return lhs;
         }
-        let is_float = |dt: DType| {
-            matches!(
-                dt,
-                DType::F32 | DType::F64 | DType::BF16 | DType::F16 | DType::F8E4M3
-            )
-        };
         if matches!(lhs, DType::F64) || matches!(rhs, DType::F64) {
             DType::F64
-        } else if is_float(lhs) || is_float(rhs) {
-            DType::F32
         } else {
             DType::F32
         }
