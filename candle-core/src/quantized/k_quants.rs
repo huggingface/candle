@@ -2411,6 +2411,12 @@ impl GgmlType for BlockQ8K {
     }
 }
 
+/// Number of lhs rows processed against each weight column quad before moving on to the next
+/// quad in the generic (non-repacked) CPU matmul. With `m > 1` the quantized lhs tile stays in
+/// cache while the rhs quad is streamed through once per tile instead of once per lhs row. This
+/// matches the 16-row src1 blocking of `ggml_compute_forward_mul_mat`.
+const MATMUL_ROW_TILE: usize = 16;
+
 // https://github.com/ggml-org/llama.cpp/blob/aa3ee0eb0b80efca126cedf9bcb4fb5864b46ce3/ggml/src/ggml-cpu/ggml-cpu.c#L1205
 pub fn matmul<T: GgmlType>(
     (m, k, n): (usize, usize, usize),
@@ -2423,11 +2429,19 @@ pub fn matmul<T: GgmlType>(
         T::VecDotType::BLCK_SIZE,
         "Mismatched block sizes"
     );
-    debug_assert_eq!(
+    // Real asserts rather than debug ones: the workers below write `dst` through a raw pointer,
+    // so an undersized `dst` would otherwise be written out of bounds instead of panicking.
+    assert_eq!(
         m * k,
         lhs.len(),
         "unexpected lhs length {} ({m},{k},{n})",
         lhs.len()
+    );
+    assert!(
+        dst.len() >= m * n,
+        "dst too small: {} < {}",
+        dst.len(),
+        m * n
     );
     let k_in_blocks = k.div_ceil(T::BLCK_SIZE);
 
@@ -2470,62 +2484,97 @@ pub fn matmul<T: GgmlType>(
         let quads_total = n_quad / 4;
         let n_tail = n - n_quad; // 0..=3
         let pool = crate::utils::barrier_pool();
-        // Workers 0..n_workers + calling thread as worker n_workers.
         let lhs_b: &[T::VecDotType] = lhs_b;
+        let dst_ptr = dst.as_mut_ptr() as usize;
+        let lhs_row = |row_idx: usize| &lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
 
-        for row_idx in 0..m {
-            let lhs_row = &lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
-            let dst_row = &mut dst[row_idx * n..(row_idx + 1) * n];
-            let (main, tail) = dst_row.split_at_mut(n_quad);
-            let main_ptr = main.as_mut_ptr() as usize;
-
-            let dot_range = |range: std::ops::Range<usize>| {
-                let main_ptr = main_ptr as *mut f32;
-                for quad_idx in range {
-                    let col = quad_idx * 4;
-                    let (d0, d1, d2, d3) = T::vec_dot_4(
-                        k,
-                        &rhs_t[col * k_in_blocks..(col + 1) * k_in_blocks],
-                        &rhs_t[(col + 1) * k_in_blocks..(col + 2) * k_in_blocks],
-                        &rhs_t[(col + 2) * k_in_blocks..(col + 3) * k_in_blocks],
-                        &rhs_t[(col + 3) * k_in_blocks..(col + 4) * k_in_blocks],
-                        lhs_row,
-                    );
-                    unsafe {
-                        let base = main_ptr.add(quad_idx * 4);
-                        *base = d0;
-                        *base.add(1) = d1;
-                        *base.add(2) = d2;
-                        *base.add(3) = d3;
-                    }
-                }
-            };
-            if cfg!(target_arch = "x86_64") && T::DTYPE == GgmlDType::Q6K && m == 1 {
-                // Compact Q6K GEMV has equal-sized dot products; static ranges
-                // avoid the shared cursor overhead on this short decode path.
-                pool.execute_static(quads_total, dot_range);
-            } else {
-                pool.execute_chunked(quads_total, dot_range);
+        // Four dot products of one lhs row against the column quad starting at `col`.
+        // SAFETY (for the raw dst writes below): every (row, column) of dst is written by exactly
+        // one work item, so concurrent workers never touch the same element.
+        let dot_quad = |row_idx: usize, col: usize| {
+            let (d0, d1, d2, d3) = T::vec_dot_4(
+                k,
+                &rhs_t[col * k_in_blocks..(col + 1) * k_in_blocks],
+                &rhs_t[(col + 1) * k_in_blocks..(col + 2) * k_in_blocks],
+                &rhs_t[(col + 2) * k_in_blocks..(col + 3) * k_in_blocks],
+                &rhs_t[(col + 3) * k_in_blocks..(col + 4) * k_in_blocks],
+                lhs_row(row_idx),
+            );
+            unsafe {
+                let base = (dst_ptr as *mut f32).add(row_idx * n + col);
+                *base = d0;
+                *base.add(1) = d1;
+                *base.add(2) = d2;
+                *base.add(3) = d3;
             }
+        };
+        // The 0..=3 columns left over after the quads.
+        let dot_tail = |row_idx: usize| {
+            let dst_row = unsafe {
+                std::slice::from_raw_parts_mut(
+                    (dst_ptr as *mut f32).add(row_idx * n + n_quad),
+                    n_tail,
+                )
+            };
             if n_tail >= 2 {
                 let col = n_quad;
                 let (d0, d1) = T::vec_dot_2(
                     k,
                     &rhs_t[col * k_in_blocks..(col + 1) * k_in_blocks],
                     &rhs_t[(col + 1) * k_in_blocks..(col + 2) * k_in_blocks],
-                    lhs_row,
+                    lhs_row(row_idx),
                 );
-                tail[0] = d0;
-                tail[1] = d1;
+                dst_row[0] = d0;
+                dst_row[1] = d1;
             }
             if n_tail & 1 == 1 {
                 let col = n - 1;
-                tail[n_tail - 1] = T::vec_dot(
+                dst_row[n_tail - 1] = T::vec_dot(
                     k,
                     &rhs_t[col * k_in_blocks..(col + 1) * k_in_blocks],
-                    lhs_row,
+                    lhs_row(row_idx),
                 );
             }
+        };
+
+        if m == 1 {
+            // Decode: a single row, the column quads are split across the pool.
+            let dot_range = |range: std::ops::Range<usize>| {
+                for quad_idx in range {
+                    dot_quad(0, quad_idx * 4)
+                }
+            };
+            if cfg!(target_arch = "x86_64") && T::DTYPE == GgmlDType::Q6K {
+                // Compact Q6K GEMV has equal-sized dot products; static ranges
+                // avoid the shared cursor overhead on this short decode path.
+                pool.execute_static(quads_total, dot_range);
+            } else {
+                pool.execute_chunked(quads_total, dot_range);
+            }
+            dot_tail(0);
+            return Ok(());
+        }
+
+        // Prefill: the work items are (row tile, column quad) pairs, row tile major, so that a
+        // worker walking a range of items keeps one tile of quantized lhs rows hot in L1 and
+        // reads each weight quad once per tile instead of once per row.
+        let row_tiles = m.div_ceil(MATMUL_ROW_TILE);
+        pool.execute_chunked(row_tiles * quads_total, |range| {
+            for item in range {
+                let row_start = (item / quads_total) * MATMUL_ROW_TILE;
+                let row_end = m.min(row_start + MATMUL_ROW_TILE);
+                let col = (item % quads_total) * 4;
+                for row_idx in row_start..row_end {
+                    dot_quad(row_idx, col)
+                }
+            }
+        });
+        if n_tail > 0 {
+            pool.execute_chunked(m, |rows| {
+                for row_idx in rows {
+                    dot_tail(row_idx)
+                }
+            });
         }
         Ok(())
     })
