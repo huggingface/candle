@@ -1,0 +1,25 @@
+[package]
+name = "candle-offload-kernels"
+version = "0.11.0"
+edition = "2021"
+description = "amdgcn kernels for the candle std::offload backend"
+license = "MIT OR Apache-2.0"
+
+# Its own workspace, deliberately: this crate is built by build-offload.sh in
+# separate passes and needs `lto = "fat"` (rustc refuses -Zoffload without it),
+# which would otherwise be forced on all of candle.
+[workspace]
+
+# A cdylib because the offload lowering only happens for a final linked
+# artifact. See the comment above the launchers in src/lib.rs.
+[lib]
+name = "candle_offload_kernels"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+# No dependencies, on purpose: this crate is also compiled for
+# amdgcn-amd-amdhsa as no_std, where nothing else would build.
+[dependencies]
+
+[profile.release]
+lto = "fat"

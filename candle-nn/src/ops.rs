@@ -82,6 +82,20 @@ impl candle::CustomOp1 for Sigmoid {
         Ok((storage, layout.shape().clone()))
     }
 
+    // The offload backend occupies candle's Device::Cuda slot but shares none of
+    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
+    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
+    // means without this arm every transformer dies here even though all of its
+    // primitive ops work on the device. Run the op's own CPU kernel instead.
+    #[cfg(all(feature = "offload", not(feature = "cuda")))]
+    fn cuda_fwd(
+        &self,
+        storage: &candle::CudaStorage,
+        layout: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        candle::offload_backend::custom_via_cpu1(storage, |c| self.cpu_fwd(c, layout))
+    }
+
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
@@ -329,6 +343,23 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         }
     }
 
+    // The offload backend occupies candle's Device::Cuda slot but shares none of
+    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
+    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
+    // means without this arm every transformer dies here even though all of its
+    // primitive ops work on the device. Run the op's own CPU kernel instead.
+    #[cfg(all(feature = "offload", not(feature = "cuda")))]
+    fn cuda_fwd(
+        &self,
+        storage: &candle::CudaStorage,
+        layout: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        if let Some(r) = candle::offload_backend::softmax_last_dim(storage, layout)? {
+            return Ok(r);
+        }
+        candle::offload_backend::custom_via_cpu1(storage, |c| self.cpu_fwd(c, layout))
+    }
+
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
@@ -536,6 +567,25 @@ impl candle::CustomOp2 for RmsNorm {
             (C::F32(s1), C::F32(s2)) => inner::<f32>(s1, l1, s2, l2, eps),
             _ => candle::bail!("unsupported dtype for rmsnorm {:?}", s1.dtype()),
         }
+    }
+
+    // The offload backend occupies candle's Device::Cuda slot but shares none of
+    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
+    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
+    // means without this arm every transformer dies here even though all of its
+    // primitive ops work on the device. Run the op's own CPU kernel instead.
+    #[cfg(all(feature = "offload", not(feature = "cuda")))]
+    fn cuda_fwd(
+        &self,
+        s1: &candle::CudaStorage,
+        l1: &Layout,
+        s2: &candle::CudaStorage,
+        l2: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        if let Some(r) = candle::offload_backend::rms_norm(s1, l1, s2, l2, self.eps)? {
+            return Ok(r);
+        }
+        candle::offload_backend::custom_via_cpu2(s1, s2, |a, b| self.cpu_fwd(a, l1, b, l2))
     }
 
     #[cfg(feature = "cuda")]
@@ -771,6 +821,26 @@ impl candle::CustomOp3 for LayerNorm {
             (C::F32(s1), C::F32(s2), C::F32(s3)) => inner::<f32>(s1, l1, s2, l2, s3, l3, eps),
             _ => candle::bail!("unsupported dtype for rmsnorm {:?}", s1.dtype()),
         }
+    }
+
+    // The offload backend occupies candle's Device::Cuda slot but shares none of
+    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
+    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
+    // means without this arm every transformer dies here even though all of its
+    // primitive ops work on the device. Run the op's own CPU kernel instead.
+    #[cfg(all(feature = "offload", not(feature = "cuda")))]
+    fn cuda_fwd(
+        &self,
+        s1: &candle::CudaStorage,
+        l1: &Layout,
+        s2: &candle::CudaStorage,
+        l2: &Layout,
+        s3: &candle::CudaStorage,
+        l3: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        candle::offload_backend::custom_via_cpu3(s1, s2, s3, |a, b, c| {
+            self.cpu_fwd(a, l1, b, l2, c, l3)
+        })
     }
 
     #[cfg(feature = "cuda")]

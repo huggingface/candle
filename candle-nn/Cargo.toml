@@ -35,6 +35,7 @@ criterion = { workspace = true }
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
+offload = ["candle/offload"]
 cutile = ["cuda", "candle/cutile", "dep:candle-kernels"]
 cudnn = ["candle/cudnn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]

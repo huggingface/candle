@@ -47,6 +47,11 @@ criterion = { workspace = true }
 [features]
 default = []
 cuda = ["cudarc", "dep:candle-kernels"]
+# A GPU backend built on rustc's std::offload instead of a vendor runtime.
+# Occupies the same Device::Cuda slot as the dummy backend it replaces.
+# The kernels are a separately-built cdylib reached over the C ABI, not a
+# cargo dependency -- see candle-offload-kernels/src/lib.rs for why.
+offload = []
 cutile = ["cuda", "dep:cutile"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]

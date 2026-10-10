@@ -102,6 +102,26 @@ impl candle::CustomOp3 for RotaryEmbI {
         }
     }
 
+    // The offload backend occupies candle's Device::Cuda slot but shares none of
+    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
+    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
+    // means without this arm a model dies here even though all of its primitive
+    // ops work on the device. Run the op's own CPU kernel instead.
+    #[cfg(all(feature = "offload", not(feature = "cuda")))]
+    fn cuda_fwd(
+        &self,
+        s1: &candle::CudaStorage,
+        l1: &Layout,
+        s2: &candle::CudaStorage,
+        l2: &Layout,
+        s3: &candle::CudaStorage,
+        l3: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        candle::offload_backend::custom_via_cpu3(s1, s2, s3, |a, b, c| {
+            self.cpu_fwd(a, l1, b, l2, c, l3)
+        })
+    }
+
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
@@ -407,6 +427,29 @@ impl candle::CustomOp3 for RotaryEmb {
         }
     }
 
+    // The offload backend occupies candle's Device::Cuda slot but shares none of
+    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
+    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
+    // means without this arm a model dies here even though all of its primitive
+    // ops work on the device. Run the op's own CPU kernel instead.
+    #[cfg(all(feature = "offload", not(feature = "cuda")))]
+    fn cuda_fwd(
+        &self,
+        s1: &candle::CudaStorage,
+        l1: &Layout,
+        s2: &candle::CudaStorage,
+        l2: &Layout,
+        s3: &candle::CudaStorage,
+        l3: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        if let Some(r) = candle::offload_backend::rope(s1, l1, s2, l2, s3, l3)? {
+            return Ok(r);
+        }
+        candle::offload_backend::custom_via_cpu3(s1, s2, s3, |a, b, c| {
+            self.cpu_fwd(a, l1, b, l2, c, l3)
+        })
+    }
+
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
@@ -679,6 +722,26 @@ impl candle::CustomOp3 for RotaryEmbThd {
                 s3.dtype()
             ),
         }
+    }
+
+    // The offload backend occupies candle's Device::Cuda slot but shares none of
+    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
+    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
+    // means without this arm a model dies here even though all of its primitive
+    // ops work on the device. Run the op's own CPU kernel instead.
+    #[cfg(all(feature = "offload", not(feature = "cuda")))]
+    fn cuda_fwd(
+        &self,
+        s1: &candle::CudaStorage,
+        l1: &Layout,
+        s2: &candle::CudaStorage,
+        l2: &Layout,
+        s3: &candle::CudaStorage,
+        l3: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        candle::offload_backend::custom_via_cpu3(s1, s2, s3, |a, b, c| {
+            self.cpu_fwd(a, l1, b, l2, c, l3)
+        })
     }
 
     #[cfg(feature = "cuda")]

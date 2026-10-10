@@ -67,6 +67,8 @@ mod dummy_metal_backend;
 pub mod error;
 mod indexer;
 pub mod layout;
+#[cfg(all(feature = "offload", not(feature = "cuda")))]
+pub mod offload_backend;
 #[cfg(feature = "metal")]
 pub mod metal_backend;
 #[cfg(feature = "mkl")]
@@ -113,7 +115,10 @@ pub use variable::Var;
 #[cfg(feature = "cuda")]
 pub use cuda_backend as cuda;
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(all(not(feature = "cuda"), feature = "offload"))]
+pub use offload_backend as cuda;
+
+#[cfg(all(not(feature = "cuda"), not(feature = "offload")))]
 pub use dummy_cuda_backend as cuda;
 
 pub use cuda::{CudaDevice, CudaStorage};
