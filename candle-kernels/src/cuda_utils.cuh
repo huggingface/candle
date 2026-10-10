@@ -183,6 +183,33 @@ __device__ __forceinline__ __half absg(__half a) { return __habs(a); }
 __device__ __forceinline__ __half copysigng(__half a, __half b) { return __float2half(copysignf(__half2float(a), __half2float(b))); }
 #endif
 
+
+#if defined(CANDLE_CUDA_BF16_FALLBACK) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+__device__ __forceinline__ __nv_bfloat16 maxg(__nv_bfloat16 a, __nv_bfloat16 b) {
+    const float af = __bfloat162float(a);
+    const float bf = __bfloat162float(b);
+    if (isnan(af)) return a;
+    if (isnan(bf)) return b;
+    return __float2bfloat16(fmaxf(af, bf));
+}
+__device__ __forceinline__ __nv_bfloat16 ming(__nv_bfloat16 a, __nv_bfloat16 b) {
+    const float af = __bfloat162float(a);
+    const float bf = __bfloat162float(b);
+    if (isnan(af)) return a;
+    if (isnan(bf)) return b;
+    return __float2bfloat16(fminf(af, bf));
+}
+__device__ __forceinline__ __nv_bfloat16 tanhg(__nv_bfloat16 a) {
+    return __float2bfloat16(tanhf(__bfloat162float(a)));
+}
+__device__ __forceinline__ __nv_bfloat16 normcdfg(__nv_bfloat16 a) {
+    return __float2bfloat16(normcdff(__bfloat162float(a)));
+}
+__device__ __forceinline__ __nv_bfloat16 expg(__nv_bfloat16 a) {
+    return __float2bfloat16(expf(__bfloat162float(a)));
+}
+#endif
+
 #if __CUDA_ARCH__ >= 800
 __device__ __forceinline__ __nv_bfloat16 powg(__nv_bfloat16 a, __nv_bfloat16 b) { return __float2bfloat16(powf(__bfloat162float(a), __bfloat162float(b))); }
 __device__ __forceinline__ bool isnang(__nv_bfloat16 a) { return __hisnan(a); }
