@@ -16,6 +16,7 @@ prost = "0.14.1"
 
 [build-dependencies]
 prost-build = "0.14.1"
+protoc-bin-vendored = "3.2.0"
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
