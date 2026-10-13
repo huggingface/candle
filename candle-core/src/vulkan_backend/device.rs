@@ -126,10 +126,22 @@ impl VulkanDevice {
     pub fn new(gpu_id: usize) -> Result<Self> {
         let library =
             unsafe { VulkanLibrary::new() }.map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        // Shader `printf` debugging: when VK_LAYER_PRINTF_ENABLE is set,
+        // create the instance with the Khronos validation layer enabled.
+        // The layer intercepts the NonSemantic.DebugPrintf instructions
+        // emitted for slang `printf()` calls and routes the output (e.g. to
+        // stdout via VK_LAYER_PRINTF_TO_STDOUT).
+        let printf_enabled = std::env::var("VK_LAYER_PRINTF_ENABLE").is_ok();
+        let layers: Vec<&str> = if printf_enabled {
+            vec!["VK_LAYER_KHRONOS_validation"]
+        } else {
+            Vec::new()
+        };
         let instance = Instance::new(
             &library,
             &InstanceCreateInfo {
                 application_name: Some("candle"),
+                enabled_layers: &layers,
                 ..Default::default()
             },
         )
@@ -172,6 +184,7 @@ impl VulkanDevice {
         let exts = DeviceExtensions {
             khr_16bit_storage: true,
             khr_shader_float16_int8: true,
+            khr_shader_non_semantic_info: printf_enabled,
             ext_shader_atomic_float: atomic_f32 || atomic_f64,
             ext_shader_atomic_float2: atomic_f16,
             ..Default::default()

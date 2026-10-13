@@ -97,6 +97,8 @@ const TEST_FILL_F8E4M3_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f8e4m3.spv"));
 const TEST_FILL_F8E8M0_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f8e8m0.spv"));
+const TEST_PRINTF_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/test/test_printf.spv"));
 const TO_DTYPE_F16F32_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_f32.spv"));
 const TO_DTYPE_F16BF16_SPV: &[u8] =
@@ -428,6 +430,7 @@ pub enum Source {
     TestFillF6e3m2,
     TestFillF8e4m3,
     TestFillF8e8m0,
+    TestPrintf,
     ToDtypeF16F32,
     ToDtypeF16Bf16,
     ToDtypeF16F64,
@@ -881,6 +884,7 @@ impl Source {
             | KernelName::TestFillF8e4m3
             | KernelName::TestFillF8e8m0
             | KernelName::TestFillF64 => 0,
+            KernelName::TestPrintf => 0,
             KernelName::ToDtypeF16F32
             | KernelName::ToDtypeF16Bf16
             | KernelName::ToDtypeF16F64
@@ -1095,6 +1099,7 @@ impl Source {
             Self::TestFillF6e3m2 => TEST_FILL_F6E3M2_SPV,
             Self::TestFillF8e4m3 => TEST_FILL_F8E4M3_SPV,
             Self::TestFillF8e8m0 => TEST_FILL_F8E8M0_SPV,
+            Self::TestPrintf => TEST_PRINTF_SPV,
             Self::ToDtypeF16F32 => TO_DTYPE_F16F32_SPV,
             Self::ToDtypeF16Bf16 => TO_DTYPE_F16BF16_SPV,
             Self::ToDtypeF16F64 => TO_DTYPE_F16F64_SPV,
@@ -1314,6 +1319,7 @@ impl AsRef<str> for Source {
             Self::TestFillF6e3m2 => "test_fill_f6e3m2",
             Self::TestFillF8e4m3 => "test_fill_f8e4m3",
             Self::TestFillF8e8m0 => "test_fill_f8e8m0",
+            Self::TestPrintf => "test_printf",
             Self::ToDtypeF16F32 => "to_dtype_f16_f32",
             Self::ToDtypeF16Bf16 => "to_dtype_f16_bf16",
             Self::ToDtypeF16F64 => "to_dtype_f16_f64",

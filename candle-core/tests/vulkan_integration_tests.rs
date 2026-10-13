@@ -5339,3 +5339,235 @@ fn test_vulkan_rotary_emb() {
     }
     tracing::debug!("Vulkan rotary_emb OK for F32 + F16");
 }
+
+/// The 18 64-bit words fed to the `test_printf` kernel: the bit patterns
+/// of the lowest and highest representable values, in dtype order
+/// u8, u32, i16, i32, i64, bf16, f16, f32, f64 (lowest in word 2*d,
+/// highest in word 2*d+1).
+fn printf_probe_words() -> Vec<i64> {
+    vec![
+        i64::from(u8::MIN),
+        i64::from(u8::MAX),
+        i64::from(u32::MIN),
+        i64::from(u32::MAX),
+        i64::from(i16::MIN),
+        i64::from(i16::MAX),
+        i64::from(i32::MIN),
+        i64::from(i32::MAX),
+        i64::MIN,
+        i64::MAX,
+        i64::from(half::bf16::MIN.to_bits()),
+        i64::from(half::bf16::MAX.to_bits()),
+        i64::from(half::f16::MIN.to_bits()),
+        i64::from(half::f16::MAX.to_bits()),
+        i64::from(f32::MIN.to_bits()),
+        i64::from(f32::MAX.to_bits()),
+        f64::MIN.to_bits() as i64,
+        f64::MAX.to_bits() as i64,
+    ]
+}
+
+/// Runs the `test_printf` kernel, which copies `in_buf` to `out_buf` while
+/// printing one "Expected ..., actual ..." line per 64-bit word.
+fn run_test_printf(
+    device: &VulkanDevice,
+    in_buf: &vulkano::buffer::Subbuffer<[i64]>,
+    out_buf: &vulkano::buffer::Subbuffer<[i64]>,
+) -> candle_core::Result<()> {
+    let kernels = device.kernels();
+    let in_buf = in_buf.clone();
+    let out_buf = out_buf.clone();
+    device.execute(move |cbb| {
+        candle_vulkan_kernels::call_test_printf(cbb, &kernels, &in_buf, &out_buf)
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// Validates the slang `printf()` debug statements on the Vulkan backend
+/// for every supported data type (u8, u32, i16, i32, i64, bf16, f16, f32,
+/// f64).
+///
+/// The `test_printf` kernel copies 18 64-bit words — the lowest and
+/// highest representable value of each dtype — from an input buffer to an
+/// output buffer, printing one "Expected ..., actual ..." line per value.
+/// The data path is always verified. The printed lines are verified when
+/// the Khronos validation layer is enabled, which is what captures and
+/// routes the shader `printf` output. The layer writes that output to fd 1
+/// (C-level stdout), bypassing Rust's stdout, and its flush timing is not
+/// observable from within the process, so the test re-runs itself in a
+/// child process with a piped stdout and validates the child's captured
+/// output after it exits:
+///
+///   VK_LAYER_PRINTF_ENABLE=1 VK_LAYER_PRINTF_TO_STDOUT=1 \
+///     cargo test --features vulkan --test vulkan_integration_tests \
+///     -- test_vulkan_shader_printf --exact
+#[test]
+fn test_vulkan_shader_printf() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let words = printf_probe_words();
+    let in_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::I64(words.clone()))
+        .unwrap();
+    let out_storage = device
+        .zeros_impl(&candle_core::Shape::from(18), candle_core::DType::I64)
+        .unwrap();
+    let in_buf = match in_storage.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::I64(b) => b.clone(),
+        _ => panic!("expected I64 storage buffer"),
+    };
+    let out_buf = match out_storage.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::I64(b) => b.clone(),
+        _ => panic!("expected I64 storage buffer"),
+    };
+
+    // Child mode: run the kernel once (the parent captures our stdout)
+    // and exit; the exit guarantees every layer printf write has reached
+    // the pipe.
+    if std::env::var("CANDLE_VULKAN_TEST_PRINTF_CHILD").is_ok() {
+        run_test_printf(&device, &in_buf, &out_buf).unwrap();
+        let cpu = out_storage.to_cpu_storage().unwrap();
+        let got = cpu.as_slice::<i64>().unwrap().to_vec();
+        assert_eq!(got, words, "test_printf data path mismatch");
+        return;
+    }
+
+    run_test_printf(&device, &in_buf, &out_buf).unwrap();
+    // Data path: `to_cpu_storage` drains the pending encodes and every
+    // word must round-trip bit-exactly.
+    let cpu = out_storage.to_cpu_storage().unwrap();
+    let got = cpu.as_slice::<i64>().unwrap().to_vec();
+    assert_eq!(got, words, "test_printf data path mismatch");
+    tracing::debug!("Vulkan device {gpu_id} test_printf data path OK");
+
+    // The shader printf output is only produced when the Khronos
+    // validation layer is enabled (VK_LAYER_PRINTF_ENABLE); without it
+    // there is nothing to capture.
+    if std::env::var("VK_LAYER_PRINTF_ENABLE").is_err() {
+        eprintln!("VK_LAYER_PRINTF_ENABLE not set: test_printf data path verified only");
+        return;
+    }
+
+    // Re-run this test in a child process with a piped stdout and wait
+    // for it to exit before reading: the child's exit guarantees that all
+    // the layer's printf output has been written to the pipe.
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("test_vulkan_shader_printf")
+        .arg("--exact")
+        .env("CANDLE_VULKAN_TEST_PRINTF_CHILD", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut captured = String::new();
+    let mut stdout = child.stdout.take().unwrap();
+    std::io::Read::read_to_string(&mut stdout, &mut captured).unwrap();
+    assert!(
+        child.wait().unwrap().success(),
+        "printf child process failed"
+    );
+    assert_printf_lines(&captured);
+    tracing::debug!("Vulkan device {gpu_id} test_printf printf output OK");
+}
+
+/// Returns the actual-value text of the first captured printf line
+/// starting with `prefix` (the text between the prefix and the closing
+/// quote).
+fn actual_from_line(captured: &str, prefix: &str) -> Option<String> {
+    captured
+        .lines()
+        .find(|line| line.starts_with(prefix))
+        .and_then(|line| line[prefix.len()..].strip_suffix('\''))
+        .map(str::to_string)
+}
+
+/// Verifies that the 18 "Expected ..., actual ..." lines were printed with
+/// the correct actual values: 10 integer lines compared as exact strings,
+/// and 8 floating-point lines parsed back and compared exactly (the %f
+/// rendering of these extreme values is exact).
+fn assert_printf_lines(captured: &str) {
+    let int_expectations: [(&str, &str); 10] = [
+        ("Expected u8 lowest value '0', actual value '", "0"),
+        ("Expected u8 highest value '255', actual value '", "255"),
+        ("Expected u32 lowest value '0', actual value '", "0"),
+        (
+            "Expected u32 highest value '4294967295', actual value '",
+            "4294967295",
+        ),
+        (
+            "Expected i16 lowest value '-32768', actual value '",
+            "-32768",
+        ),
+        (
+            "Expected i16 highest value '32767', actual value '",
+            "32767",
+        ),
+        (
+            "Expected i32 lowest value '-2147483648', actual value '",
+            "-2147483648",
+        ),
+        (
+            "Expected i32 highest value '2147483647', actual value '",
+            "2147483647",
+        ),
+        (
+            "Expected i64 lowest value '-9223372036854775808', actual value '",
+            "-9223372036854775808",
+        ),
+        (
+            "Expected i64 highest value '9223372036854775807', actual value '",
+            "9223372036854775807",
+        ),
+    ];
+    for (prefix, expected) in int_expectations {
+        let actual = actual_from_line(captured, prefix)
+            .unwrap_or_else(|| panic!("missing printf line {prefix:?}; captured:\n{captured}"));
+        assert_eq!(actual, expected, "printf mismatch for {prefix:?}");
+    }
+    let float_expectations: [(&str, f64); 8] = [
+        (
+            "Expected bf16 lowest value '-3.3895313892515355e+38', actual value '",
+            half::bf16::MIN.to_f32() as f64,
+        ),
+        (
+            "Expected bf16 highest value '3.3895313892515355e+38', actual value '",
+            half::bf16::MAX.to_f32() as f64,
+        ),
+        (
+            "Expected f16 lowest value '-65504', actual value '",
+            half::f16::MIN.to_f32() as f64,
+        ),
+        (
+            "Expected f16 highest value '65504', actual value '",
+            half::f16::MAX.to_f32() as f64,
+        ),
+        (
+            "Expected f32 lowest value '-3.4028234663852886e+38', actual value '",
+            f32::MIN as f64,
+        ),
+        (
+            "Expected f32 highest value '3.4028234663852886e+38', actual value '",
+            f32::MAX as f64,
+        ),
+        (
+            "Expected f64 lowest value '-1.7976931348623157e+308', actual value '",
+            f64::MIN,
+        ),
+        (
+            "Expected f64 highest value '1.7976931348623157e+308', actual value '",
+            f64::MAX,
+        ),
+    ];
+    for (prefix, expected) in float_expectations {
+        let actual = actual_from_line(captured, prefix)
+            .unwrap_or_else(|| panic!("missing printf line {prefix:?}; captured:\n{captured}"));
+        let parsed: f64 = actual
+            .parse()
+            .unwrap_or_else(|e| panic!("unparseable printf value {actual:?} for {prefix:?}: {e}"));
+        assert_eq!(
+            parsed, expected,
+            "printf mismatch for {prefix:?}: actual {actual:?}"
+        );
+    }
+}

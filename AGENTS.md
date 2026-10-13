@@ -2,36 +2,9 @@
 
 ## Shader-Slang Debug Printing
 
-The Slang compute shaders support `printf()` for debug output. To enable it:
+The Slang compute shaders support `printf()` for debug output.
 
-### 1. Build with the `SPV_KHR_non_semantic_info` capability
-
-Set the `SLANGCFLAGS` environment variable before building:
-
-```sh
-export SLANGCFLAGS="-capability SPV_KHR_non_semantic_info"
-cargo build --release --features vulkan
-```
-
-The `build.rs` in `candle-vulkan-kernels` reads `SLANGCFLAGS` and passes
-each whitespace-separated token as an extra flag to `slangc`.
-
-### 2. Enable the Vulkan validation layer at runtime
-
-The Khronos validation layer intercepts shader `printf` output and routes it
-to stdout. Set these environment variables before running:
-
-```sh
-export CANDLE_VULKAN_VALIDATION=1        # enables VK_LAYER_KHRONOS_validation in candle
-export VK_LAYER_PRINTF_ENABLE=1          # layer: capture shader printf
-export VK_LAYER_PRINTF_TO_STDOUT=1       # layer: route to stdout
-```
-
-`CANDLE_VULKAN_VALIDATION` is checked in
-`candle-core/src/vulkan_backend/device.rs`; when set, the instance is
-created with the `VK_LAYER_KHRONOS_validation` layer enabled.
-
-### 3. Use `printf` in the shader
+### 1. Use `printf` in the shader
 
 ```slang
 if (tid.x == 0u) {
@@ -39,7 +12,44 @@ if (tid.x == 0u) {
 }
 ```
 
-Output appears on stdout interleaved with normal program output.
+`slangc` automatically adds the `SPV_KHR_non_semantic_info` SPIR-V
+capability when a shader uses `printf`, so no special build flags are
+needed. (The `build.rs` in `candle-vulkan-kernels` passes any
+whitespace-separated tokens from the `SLANGCFLAGS` environment variable
+as extra flags to `slangc`, for other purposes.)
+
+### 2. Enable the validation layer at runtime
+
+The Khronos validation layer intercepts the `NonSemantic.DebugPrintf`
+instructions and routes the `printf` output. Set these environment
+variables before running:
+
+```sh
+export VK_LAYER_PRINTF_ENABLE=1          # candle: enables the layer + device extension; layer: capture shader printf
+export VK_LAYER_PRINTF_TO_STDOUT=1       # layer: route to stdout
+```
+
+`VK_LAYER_PRINTF_ENABLE` is checked in
+`candle-core/src/vulkan_backend/device.rs`; when set, the instance is
+created with the `VK_LAYER_KHRONOS_validation` layer enabled and the
+device is created with the `VK_KHR_shader_non_semantic_info` extension
+enabled.
+
+### 3. Verify with the integration test
+
+The `test_printf` test shader prints the lowest and highest representable
+value of every supported data type (u8, u32, i16, i32, i64, bf16, f16,
+f32, f64) as "Expected ..., actual ..." lines, and the integration test
+checks that each line carries the correct value:
+
+```sh
+VK_LAYER_PRINTF_ENABLE=1 VK_LAYER_PRINTF_TO_STDOUT=1 \
+  cargo test --features vulkan --test vulkan_integration_tests \
+  -- test_vulkan_shader_printf --exact
+```
+
+Without `VK_LAYER_PRINTF_ENABLE` the test still runs and validates the
+kernel's data path, but no `printf` output is produced or checked.
 
 ### Notes
 
