@@ -43,7 +43,7 @@ pub trait CustomOp1 {
         _storage: &VulkanStorage,
         _layout: &Layout,
     ) -> Result<(VulkanStorage, Shape)> {
-        Err(crate::Error::Metal(
+        Err(crate::Error::Vulkan(
             format!("no vulkan implementation for {}", self.name()).into(),
         ))
     }
@@ -106,7 +106,7 @@ pub trait CustomOp2 {
         _: &VulkanStorage,
         _: &Layout,
     ) -> Result<(VulkanStorage, Shape)> {
-        Err(crate::Error::Metal(
+        Err(crate::Error::Vulkan(
             format!("no vulkan implementation for {}", self.name()).into(),
         ))
     }
@@ -180,7 +180,7 @@ pub trait CustomOp3 {
         _: &VulkanStorage,
         _: &Layout,
     ) -> Result<(VulkanStorage, Shape)> {
-        Err(crate::Error::Metal(
+        Err(crate::Error::Vulkan(
             format!("no vulkan implementation for {}", self.name()).into(),
         ))
     }
