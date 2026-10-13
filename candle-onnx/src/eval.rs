@@ -456,13 +456,12 @@ fn simple_eval_(
             }
             "Transpose" => {
                 let input = get(&node.input[0])?;
-                let output = match get_attr_opt::<[i64]>(node, "perm")? {
-                    None => input.t()?,
-                    Some(perm) => {
-                        let perm = perm.iter().map(|&v| v as usize).collect::<Vec<_>>();
-                        input.permute(perm)?.contiguous()?
-                    }
+                let perm = match get_attr_opt::<[i64]>(node, "perm")? {
+                    // The default is to reverse all the dimensions.
+                    None => (0..input.rank()).rev().collect::<Vec<_>>(),
+                    Some(perm) => perm.iter().map(|&v| v as usize).collect::<Vec<_>>(),
                 };
+                let output = input.permute(perm)?.contiguous()?;
                 values.insert(node.output[0].clone(), output);
             }
             "Dropout" => {
