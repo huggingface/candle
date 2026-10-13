@@ -49,17 +49,23 @@ fn compile_slang(source_path: &Path, out_path: &Path) {
         Ok(value) if !value.is_empty() => value,
         _ => format!("slangc{}", if cfg!(windows) { ".exe" } else { "" }),
     };
+    let mut args: Vec<String> = vec![
+        source_path.to_string_lossy().into_owned(),
+        "-o".to_string(),
+        out_path.to_string_lossy().into_owned(),
+        "-profile".to_string(),
+        "glsl_460".to_string(),
+        "-target".to_string(),
+        "spirv".to_string(),
+    ];
+    // Extra slangc flags from the SLANGCFLAGS environment variable.
+    if let Ok(extra) = std::env::var("SLANGCFLAGS") {
+        for flag in extra.split_whitespace() {
+            args.push(flag.to_string());
+        }
+    }
     let status = std::process::Command::new(&slangc)
-        .args(&[
-            source_path.to_string_lossy().into_owned().as_str(),
-            "-profile",
-            "glsl_460",
-            "-O3",
-            "-target",
-            "spirv",
-            "-o",
-            out_path.to_string_lossy().into_owned().as_str(),
-        ])
+        .args(&args)
         .stdout(std::process::Stdio::piped())
         .status()
         .unwrap();
