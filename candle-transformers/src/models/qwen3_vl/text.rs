@@ -200,6 +200,13 @@ impl Attention {
 
         self.o_proj.forward(&attn_output)
     }
+
+    fn clear_kv_cache(&self) {
+        self.kv_cache
+            .lock()
+            .expect("kv cache lock poisoned")
+            .reset();
+    }
 }
 
 pub struct DecoderLayer {
@@ -246,6 +253,10 @@ impl DecoderLayer {
             .mlp
             .forward(&xs.apply(&self.post_attention_layernorm)?)?;
         residual + xs
+    }
+
+    fn clear_kv_cache(&self) {
+        self.self_attn.clear_kv_cache();
     }
 }
 
@@ -294,6 +305,13 @@ impl Qwen3VLTextModel {
             dtype: vb.dtype(),
             num_attn_heads: cfg.num_attention_heads,
         })
+    }
+
+    /// Reset every layer's KV cache so the model can start a new sequence.
+    pub fn clear_kv_cache(&self) {
+        for layer in &self.layers {
+            layer.clear_kv_cache();
+        }
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
