@@ -870,19 +870,17 @@ impl DebertaV2Layer {
     }
 }
 
-// TODO: In order to fully test ConvLayer a model needs to be found has a configuration where `conv_kernel_size` exists and is > 0
+// ConvLayer for DeBERTaV2 models that use convolutional layers (e.g. ku-nlp/deberta-v2-large-japanese-char-wwm).
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L373
 pub struct ConvLayer {
-    _conv_act: String,
-    _conv: Conv1d,
-    _layer_norm: LayerNorm,
-    _dropout: StableDropout,
-    _config: Config,
+    conv_act: String,
+    conv: Conv1d,
+    layer_norm: LayerNorm,
+    dropout: StableDropout,
 }
 
 impl ConvLayer {
     pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
-        let config = config.clone();
         let kernel_size = config.conv_kernel_size.unwrap_or(3);
         let groups = config.conv_groups.unwrap_or(1);
         let conv_act: String = config.conv_act.clone().unwrap_or("tanh".to_string());
@@ -910,21 +908,61 @@ impl ConvLayer {
         let dropout = StableDropout::new(config.hidden_dropout_prob);
 
         Ok(Self {
-            _conv_act: conv_act,
-            _conv: conv,
-            _layer_norm: layer_norm,
-            _dropout: dropout,
-            _config: config,
+            conv_act,
+            conv,
+            layer_norm,
+            dropout,
         })
     }
 
     pub fn forward(
         &self,
-        _hidden_states: &Tensor,
-        _residual_states: &Tensor,
-        _input_mask: &Tensor,
+        hidden_states: &Tensor,
+        residual_states: &Tensor,
+        input_mask: &Tensor,
     ) -> Result<Tensor> {
-        todo!("Need a model that contains a conv layer to test against.")
+        // Conv1d expects (batch, channels, seq_len), input is (batch, seq_len, hidden_size)
+        let out = hidden_states.transpose(1, 2)?;
+        let out = self.conv.forward(&out)?;
+        let out = out.transpose(1, 2)?.contiguous()?;
+
+        // Zero out padding positions: multiply by input_mask
+        // input_mask shape: (batch, seq_len), out shape: (batch, seq_len, hidden_size)
+        let mask = if input_mask.rank() < out.rank() {
+            input_mask
+                .unsqueeze(D::Minus1)?
+                .to_dtype(out.dtype())?
+                .broadcast_as(out.shape())?
+        } else {
+            input_mask.to_dtype(out.dtype())?.broadcast_as(out.shape())?
+        };
+        let out = out.broadcast_mul(&mask)?;
+
+        // Apply dropout then activation
+        let out = self.dropout.forward(&out)?;
+        let out = match self.conv_act.as_str() {
+            "tanh" => out.tanh()?,
+            "gelu" => out.gelu_erf()?,
+            "relu" => out.relu()?,
+            act => bail!("unsupported conv activation: {act}"),
+        };
+
+        // Residual connection + LayerNorm
+        let layer_norm_input = (residual_states + &out)?;
+        let output = self.layer_norm.forward(&layer_norm_input)?;
+
+        // Apply input_mask to output
+        let mut mask = input_mask.clone();
+        if input_mask.rank() != layer_norm_input.rank() {
+            if input_mask.rank() == 4 {
+                mask = mask.squeeze(1)?.squeeze(1)?;
+            }
+            mask = mask.unsqueeze(D::Minus1)?;
+        }
+        let mask = mask.to_dtype(output.dtype())?;
+        let output_states = output.broadcast_mul(&mask)?;
+
+        Ok(output_states)
     }
 }
 
