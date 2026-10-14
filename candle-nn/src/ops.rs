@@ -82,11 +82,7 @@ impl candle::CustomOp1 for Sigmoid {
         Ok((storage, layout.shape().clone()))
     }
 
-    // The offload backend occupies candle's Device::Cuda slot but shares none of
-    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
-    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
-    // means without this arm every transformer dies here even though all of its
-    // primitive ops work on the device. Run the op's own CPU kernel instead.
+    // offload backend (Device::Cuda slot, no cudarc): run the CPU kernel.
     #[cfg(all(feature = "offload", not(feature = "cuda")))]
     fn cuda_fwd(
         &self,
@@ -343,11 +339,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         }
     }
 
-    // The offload backend occupies candle's Device::Cuda slot but shares none of
-    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
-    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
-    // means without this arm every transformer dies here even though all of its
-    // primitive ops work on the device. Run the op's own CPU kernel instead.
+    // offload backend (Device::Cuda slot, no cudarc): run the CPU kernel.
     #[cfg(all(feature = "offload", not(feature = "cuda")))]
     fn cuda_fwd(
         &self,
@@ -569,11 +561,7 @@ impl candle::CustomOp2 for RmsNorm {
         }
     }
 
-    // The offload backend occupies candle's Device::Cuda slot but shares none of
-    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
-    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
-    // means without this arm every transformer dies here even though all of its
-    // primitive ops work on the device. Run the op's own CPU kernel instead.
+    // offload backend (Device::Cuda slot, no cudarc): run the CPU kernel.
     #[cfg(all(feature = "offload", not(feature = "cuda")))]
     fn cuda_fwd(
         &self,
@@ -823,11 +811,7 @@ impl candle::CustomOp3 for LayerNorm {
         }
     }
 
-    // The offload backend occupies candle's Device::Cuda slot but shares none of
-    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
-    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
-    // means without this arm every transformer dies here even though all of its
-    // primitive ops work on the device. Run the op's own CPU kernel instead.
+    // offload backend (Device::Cuda slot, no cudarc): run the CPU kernel.
     #[cfg(all(feature = "offload", not(feature = "cuda")))]
     fn cuda_fwd(
         &self,

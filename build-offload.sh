@@ -6,22 +6,12 @@
 #   EXAMPLE=llama2-c FEATURES=candle-datasets ./build-offload.sh
 #   TC=nightly-2026-10-06 ./build-offload.sh   # another toolchain, own target dirs
 #
-# Four passes. The flag placement in each is not interchangeable:
-#
-#  1. HostMetadata goes to the crate that *defines* the kernels. The manifest is
-#     emitted per-crate during that crate's codegen, so pointing it at a
-#     downstream crate produces an empty manifest and the kernels are silently
-#     invisible.
-#  2. Device goes via `--` rather than RUSTFLAGS, so `-Zbuild-std`'s own crates
-#     do not each also emit a device.bin and shadow ours. Both 1 and 2 need
-#     `--crate-type lib`, overriding the cdylib in Cargo.toml.
-#  3. Host goes to the cdylib, which is a *final linked artifact*. rustc runs the
-#     offload lowering during fat LTO, and fat LTO never runs for an rlib, so a
-#     library crate fails with "requires -C lto=fat" -- and passing -Clto=fat to
-#     an rlib silently emits no artifact at all. This is why the kernels are a
-#     cdylib rather than a cargo dependency of candle-core.
-#  4. candle itself is then built with no offload flags whatsoever. It only
-#     needs the cdylib and libomp/libomptarget on the link path and in the rpath.
+# Four passes; flag placement matters:
+#  1. HostMetadata on the crate that defines the kernels (else empty manifest).
+#  2. Device via `--`, not RUSTFLAGS, so build-std crates don't emit their own
+#     device.bin. 1 and 2 use `--crate-type lib`.
+#  3. Host on the cdylib: offload lowering needs fat LTO, which rlibs don't get.
+#  4. candle with no offload flags; just the cdylib + libomp on link path/rpath.
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:$PATH"
 GPU="${GPU:-gfx1201}"
@@ -31,8 +21,7 @@ FEATURES="offload${FEATURES:+,$FEATURES}"
 SUF="${TC#nightly}"   # "" for plain nightly, "-2026-10-06" otherwise
 PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# cargo output goes under ~/.cache: this checkout's path contains spaces and
-# -Zoffload splits its flag values on whitespace.
+# Output under ~/.cache: -Zoffload splits paths on spaces.
 OUT="${OUT:-$HOME/.cache/rust-offload/candle-target$SUF}"
 KOUT="$HOME/.cache/rust-offload/candle-kernels-target$SUF"
 MANIFEST="$HOME/.cache/rust-offload/candle$SUF.manifest"

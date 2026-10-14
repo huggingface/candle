@@ -1,33 +1,11 @@
-//! A candle backend built on Rust's `std::offload`.
+//! A candle backend on Rust's `std::offload`. See OFFLOAD-BACKEND.md.
 //!
-//! # Why this occupies the CUDA slot
-//!
-//! candle's `Device` and `Storage` enums are closed, and every match arm across
-//! candle-core, candle-nn and candle-transformers enumerates `Cpu | Cuda |
-//! Metal`. Adding a fourth variant would touch hundreds of sites. But candle
-//! already compiles a *dummy* CUDA backend when the `cuda` feature is off, so
-//! the `Cuda` variant is a ready-made slot for "some GPU that is not Metal".
-//! This module replaces that dummy, which is why `Device::new_cuda(0)` returns
-//! an offload device here and why the diff to candle proper is a handful of
-//! lines.
-//!
-//! # Why the kernels are in another crate
-//!
-//! `offload!` mangles the kernel symbol from the crate that defines it, so the
-//! macro invocation and the `#[offload_kernel]` have to be compiled together --
-//! and that crate is also compiled for `amdgcn-amd-amdhsa` as `no_std`.
-//! candle-core cannot be, so the kernels live in `candle-offload-kernels` and
-//! this module only calls its launchers.
-//!
-//! # Where the data lives
-//!
-//! `std::offload` has no device allocation: `offload!` infers transfers from
-//! argument types, so a buffer passed as `&[T]` is copied to the device before
-//! the launch and back afterwards, every time. That is fatal for a framework
-//! backend, where `alloc_uninit` must hand back storage that *stays* on the
-//! device across hundreds of ops. So allocation goes directly to libomptarget
-//! (`ffi`), and device addresses reach kernels as `usize` scalars, which
-//! `offload!` passes by value and therefore does not map.
+//! - Occupies the `Cuda` slot (replacing candle's dummy CUDA backend) so no
+//!   `Cpu | Cuda | Metal` match arm has to change.
+//! - Kernels live in `candle-offload-kernels`: they must also build as `no_std`
+//!   for amdgcn, which candle-core can't.
+//! - Buffers are allocated via libomptarget (`ffi`) and passed to kernels as
+//!   `usize`, so `offload!` doesn't copy them on every launch (G1).
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
@@ -42,10 +20,8 @@ pub use ffi::report as stats_report;
 pub use ops::{rms_norm, rope, softmax_last_dim};
 
 
-/// Runtime switches, so the GPU paths can be turned off one at a time without
-/// rebuilding. `CANDLE_OFFLOAD_CPU_ONLY=1` routes every op through the CPU
-/// fallback while still keeping tensors resident on the device -- that isolates
-/// the cost of the transfers from the cost of the kernels.
+/// Runtime switches. `CANDLE_OFFLOAD_CPU_ONLY=1` runs every op on the CPU while
+/// keeping tensors resident, to separate transfer cost from kernel cost.
 pub(crate) struct Config {
     pub cpu_only: bool,
     pub disabled: Vec<String>,
@@ -79,9 +55,7 @@ impl DeviceId {
     }
 }
 
-/// An owned device allocation. Dropping it calls `omp_target_free`, which is
-/// the piece `std::offload` cannot express: its mapped buffers are freed when
-/// the launch returns, so nothing can outlive a single kernel.
+/// An owned device allocation, freed on drop (no std::offload equivalent).
 #[derive(Debug)]
 pub struct DevBuf {
     ptr: usize,
@@ -91,8 +65,7 @@ pub struct DevBuf {
 
 impl DevBuf {
     fn alloc(bytes: usize, ordinal: i32) -> Result<Self> {
-        // omp_target_alloc(0) is allowed to return null, which is not an error
-        // here -- candle makes plenty of zero-element tensors.
+        // null for 0 bytes is fine; candle makes empty tensors
         if bytes == 0 {
             return Ok(Self { ptr: 0, bytes: 0, ordinal });
         }
@@ -152,9 +125,7 @@ impl OffloadStorage {
     }
 }
 
-// Pull the raw bytes out of a CpuStorage regardless of which variant it is.
-// candle has no byte-level accessor, and the backend only ever needs to move
-// these across the bus, not interpret them.
+// Raw bytes of any CpuStorage variant, for transfers.
 macro_rules! cpu_ptr_len {
     ($s:expr, $conv:ident, [$($v:ident),*]) => {
         match $s {
@@ -184,8 +155,7 @@ impl OffloadDevice {
     }
 
     pub fn new_with_stream(_: usize) -> Result<Self> {
-        // G2: there are no streams. `offload!` is synchronous and there is no
-        // way to express a queue, so this is the same device as `new`.
+        // G2: no streams; same device as `new`.
         crate::bail!("offload: std::offload exposes no stream/queue abstraction")
     }
 
@@ -253,9 +223,8 @@ impl OffloadDevice {
 }
 
 impl OffloadDevice {
-    /// Device-to-device copy. Used for `try_clone`, contiguous
-    /// `copy_strided_src` and `copy2d`, so those never touch the host bus --
-    /// and they work for every dtype, including the ones with no kernels.
+    /// Device-to-device copy (try_clone, contiguous copy_strided_src, copy2d);
+    /// works for every dtype.
     pub(crate) fn device_copy(&self, dst: usize, src: usize, bytes: usize) -> Result<()> {
         if bytes == 0 {
             return Ok(());
@@ -279,8 +248,7 @@ impl OffloadDevice {
 }
 
 impl OffloadStorage {
-    /// Pull the whole buffer down, not just the logically-addressed elements:
-    /// the caller still holds a `Layout` with offsets and strides into it.
+    /// Downloads the whole buffer: the caller's `Layout` indexes into it.
     pub(crate) fn cpu(&self) -> Result<CpuStorage> {
         let n = self.elem_count();
         let mut c = unsafe {
@@ -306,8 +274,7 @@ impl OffloadStorage {
         self.device.upload(self.ptr(), p, len)
     }
 
-    /// One-operand CPU fallback: device -> host, run candle's CPU kernel,
-    /// host -> device. Every call is two bus crossings.
+    /// One-operand CPU fallback (two bus crossings).
     fn fb1<F>(&self, op: &'static str, f: F) -> Result<Self>
     where
         F: FnOnce(&CpuStorage) -> Result<CpuStorage>,
@@ -575,8 +542,7 @@ impl BackendStorage for OffloadStorage {
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
-        // Contiguous source is a straight device-to-device copy: no kernel, no
-        // bus traffic, and it works for every dtype.
+        // contiguous: plain device-to-device copy, any dtype
         if src_l.is_contiguous() {
             let n = src_l.shape().elem_count();
             let sz = self.dtype.size_in_bytes();
@@ -660,8 +626,7 @@ impl BackendDevice for OffloadDevice {
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
         let n = shape.elem_count();
         let mut s = self.alloc_elems(n, dtype)?;
-        // `omp_target_alloc` does not zero, and there is only an f32 fill
-        // kernel, so other dtypes are zeroed by uploading a host buffer.
+        // alloc doesn't zero and only f32 has a fill kernel; upload zeros
         if dtype == DType::F32 && gpu_allowed("const_set") {
             unsafe { kernels::candle_offload_fill_f32(s.ptr(), n, 0.0) };
             ffi::note_launch();
@@ -693,8 +658,7 @@ impl BackendDevice for OffloadDevice {
     }
 
     fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, up: f64) -> Result<Self::Storage> {
-        // No device RNG: `core::arch::amdgpu` has no random source and there is
-        // no counter-based generator in core, so this is generated on the host.
+        // no device RNG; generate on the host
         let c = crate::cpu_backend::CpuDevice.rand_uniform(shape, dtype, lo, up)?;
         self.storage_from_cpu_storage(&c)
     }
@@ -714,17 +678,12 @@ impl BackendDevice for OffloadDevice {
     }
 
     fn synchronize(&self) -> Result<()> {
-        // G2: `offload!` is synchronous -- the launch does not return until the
-        // kernel has completed -- so there is nothing to wait for. There is
-        // also no way to express a non-blocking launch, which is why this is
-        // correct rather than merely convenient.
+        // G2: `offload!` is synchronous, so there's nothing to wait for.
         Ok(())
     }
 }
 
-/// candle's `Device::Cuda` variant holds this type when the `offload` feature
-/// is on; these aliases let `lib.rs` swap backends without touching any of the
-/// match arms that name `CudaDevice`/`CudaStorage`.
+/// Aliases so `lib.rs` can swap backends without touching `CudaDevice` arms.
 pub type CudaDevice = OffloadDevice;
 pub type CudaStorage = OffloadStorage;
 
@@ -740,15 +699,10 @@ impl OffloadStorage {
 }
 
 // ---------------------------------------------------------------------------
-// Bridge for candle-nn's CustomOps
+// candle-nn CustomOps (rms_norm, softmax_last_dim, ...) only have `cuda_fwd`
+// under `feature = "cuda"`. These run the CPU kernel and copy back, counted as
+// fallbacks.
 // ---------------------------------------------------------------------------
-//
-// candle-nn implements `cuda_fwd` for `rms_norm`, `softmax_last_dim` and
-// friends only under `#[cfg(feature = "cuda")]`, and the trait's default
-// returns an error. So a model can have every primitive op working on this
-// backend and still fail the moment it calls `rms_norm` -- which is every
-// transformer. These run the op's own CPU kernel and move the result back, and
-// they are counted as fallbacks so the cost shows up in the report.
 
 pub fn custom_via_cpu1<F>(s: &OffloadStorage, f: F) -> Result<(OffloadStorage, Shape)>
 where

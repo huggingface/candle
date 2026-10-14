@@ -102,11 +102,7 @@ impl candle::CustomOp3 for RotaryEmbI {
         }
     }
 
-    // The offload backend occupies candle's Device::Cuda slot but shares none of
-    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
-    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
-    // means without this arm a model dies here even though all of its primitive
-    // ops work on the device. Run the op's own CPU kernel instead.
+    // offload backend (Device::Cuda slot, no cudarc): run the CPU kernel.
     #[cfg(all(feature = "offload", not(feature = "cuda")))]
     fn cuda_fwd(
         &self,
@@ -427,11 +423,7 @@ impl candle::CustomOp3 for RotaryEmb {
         }
     }
 
-    // The offload backend occupies candle's Device::Cuda slot but shares none of
-    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
-    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
-    // means without this arm a model dies here even though all of its primitive
-    // ops work on the device. Run the op's own CPU kernel instead.
+    // offload backend (Device::Cuda slot, no cudarc): run the CPU kernel.
     #[cfg(all(feature = "offload", not(feature = "cuda")))]
     fn cuda_fwd(
         &self,
@@ -724,11 +716,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
         }
     }
 
-    // The offload backend occupies candle's Device::Cuda slot but shares none of
-    // cudarc's machinery, so the kernel above does not apply. candle-nn gates
-    // cuda_fwd on `feature = "cuda"` and the trait default is an error, which
-    // means without this arm a model dies here even though all of its primitive
-    // ops work on the device. Run the op's own CPU kernel instead.
+    // offload backend (Device::Cuda slot, no cudarc): run the CPU kernel.
     #[cfg(all(feature = "offload", not(feature = "cuda")))]
     fn cuda_fwd(
         &self,

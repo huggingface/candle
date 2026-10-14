@@ -374,7 +374,7 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
         tokens.len(),
         tokens.len() as f64 / dt.as_secs_f64(),
     );
-    // Data-transfer and kernel-launch accounting for the std::offload backend.
+    // offload backend transfer/launch stats
     #[cfg(all(feature = "offload", not(feature = "cuda")))]
     print!("{}", candle::offload_backend::stats_report());
     Ok(())

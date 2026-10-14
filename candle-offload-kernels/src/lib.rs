@@ -1,19 +1,8 @@
-//! amdgcn kernels for the candle `std::offload` backend, plus their host-side
-//! launchers.
+//! amdgcn kernels for the candle `std::offload` backend, plus host launchers.
 //!
-//! This crate is compiled twice: once for the host, where the `offload!`
-//! invocations live, and once for `amdgcn-amd-amdhsa` as `no_std`, where the
-//! `#[offload_kernel]` bodies become the device image. Both compilations must
-//! produce the *same crate name*, because the symbol `offload!` looks up is
-//! mangled from it. Hence a library with no dependencies: anything it pulled in
-//! would also have to build for amdgcn.
-//!
-//! Every kernel takes device addresses as `usize` rather than as slices or raw
-//! pointers, and that is load-bearing. `offload!` infers data movement from
-//! argument *types*: a `&[T]` is copied host->device before the launch and back
-//! afterwards, every time, which makes device residency impossible. Scalars are
-//! passed by value, so an address laundered through `usize` escapes the mapping
-//! machinery and the buffer stays where `omp_target_alloc` put it.
+//! Built for host and for amdgcn (`no_std`) under the same crate name (kernel
+//! symbols are mangled from it), so it has no dependencies. Buffers are passed
+//! as `usize` addresses so `offload!` doesn't copy them each launch (G1).
 #![allow(internal_features)]
 #![allow(unused_unsafe)]
 #![feature(gpu_offload, core_intrinsics, f16)]
@@ -25,8 +14,7 @@ use core::offload::offload_kernel;
 #[cfg(target_arch = "amdgpu")]
 use core::arch::amdgpu::{ds_bpermute, workgroup_id_x, workitem_id_x};
 
-// Host-side stubs so the same source compiles for x86. Only the
-// `#[offload_kernel]` signatures matter there; the bodies are never reached.
+// Host stubs; only the kernel signatures matter there.
 #[cfg(not(target_arch = "amdgpu"))]
 fn workitem_id_x() -> u32 {
     0
@@ -36,17 +24,15 @@ fn workgroup_id_x() -> u32 {
     0
 }
 
-// G4: the device link step does not link `core`, so a panicking path becomes an
-// undefined symbol rather than a panic. A `#[panic_handler]` does not fix that --
-// the kernels below still have to avoid `[]` and guard every `/` and `%`.
+// G4: panics become undefined symbols at device link, so kernels avoid `[]`
+// and guard every `/` and `%`.
 #[cfg(target_arch = "amdgpu")]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-/// Threads per workgroup. Fixed, because there is no `blockDim` to read back on
-/// the device side (G8) -- the kernel must hardcode what the launcher used.
+/// Threads per workgroup; hardcoded since kernels can't read it (G8).
 pub const TPB: u32 = 256;
 
 /// Wavefront size on gfx1201, and the number of waves in a workgroup.
@@ -60,7 +46,7 @@ fn gid() -> usize {
 
 #[inline(always)]
 fn expf(x: f32) -> f32 {
-    // `core::intrinsics` has suffixed sqrtf32/fmaf32 but only a *generic* exp.
+    // core has sqrtf32/fmaf32 but only a generic exp
     unsafe { core::intrinsics::exp(x) }
 }
 
@@ -71,8 +57,7 @@ fn sqrtf(x: f32) -> f32 {
 
 #[inline(always)]
 fn tanhf(x: f32) -> f32 {
-    // G12: no_std reaches neither tanh nor erf, so this is built from exp.
-    // Clamped because exp(2x) overflows long before tanh saturates.
+    // G12: no tanh in no_std. Clamped so exp(2x) can't overflow.
     if x > 10.0 {
         1.0
     } else if x < -10.0 {
@@ -87,12 +72,8 @@ fn tanhf(x: f32) -> f32 {
 // GEMM
 // ---------------------------------------------------------------------------
 
-/// Batched GEMM with explicit strides on B, so candle's `x.matmul(&w.t())` --
-/// where the right-hand side is a transposed *view* rather than a fresh buffer --
-/// is handled without materialising the transpose.
-///
-/// A is row-major within a batch, C is row-major contiguous, and B is addressed
-/// as `b[kk * brs + col * bcs]`.
+/// Batched GEMM with strided B (`b[kk * brs + col * bcs]`), so `x.matmul(&w.t())`
+/// needs no materialised transpose. A and C are row-major.
 #[offload_kernel]
 pub fn k_gemm_f32(
     pa: usize,
@@ -108,11 +89,8 @@ pub fn k_gemm_f32(
     b_bs: usize,
 ) {
     let idx = gid();
-    // G4: these guards exist so the device link succeeds, and guarding the
-    // *operands* is not enough -- `m != 0 && n != 0` does not prove `m * n != 0`
-    // to LLVM, because the multiply can wrap. The divisor expression itself has
-    // to be tested, or rustc emits a call to `panic_const_div_by_zero` that the
-    // device link cannot resolve.
+    // G4/G17: guard the divisor expression itself; `m != 0 && n != 0` doesn't
+    // prove `m * n != 0` (wraps), and the div-by-zero panic won't link.
     let mn = m * n;
     if n == 0 || mn == 0 || idx >= nb * mn {
         return;
@@ -133,10 +111,8 @@ pub fn k_gemm_f32(
     unsafe { *(pc as *mut f32).add(batch * mn + row * n + col) = acc };
 }
 
-/// Specialisation for the shape candle's `Linear` actually produces: `brs == 1`,
-/// `bcs == k`, i.e. B is the untransposed weight laid out (n, k) row-major, so
-/// both operands walk contiguously along k. Four output columns per thread, so
-/// each loaded A value is reused 4x.
+/// `Linear`'s shape (`brs == 1`, `bcs == k`): both operands contiguous along k,
+/// 4 output columns per thread.
 #[offload_kernel]
 pub fn k_gemm_f32_bt4(
     pa: usize,
@@ -162,8 +138,7 @@ pub fn k_gemm_f32_bt4(
 
     let a = (pa as *const f32).wrapping_add(batch * a_bs + row * k);
     let b = (pb as *const f32).wrapping_add(batch * b_bs + colb * k);
-    // G4 from the other direction: `[f32; 4]` would index through a
-    // bounds-checked path, so the accumulators are four separate scalars.
+    // separate scalars: `[f32; 4]` indexing would be bounds-checked (G4)
     let (mut c0, mut c1, mut c2, mut c3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
     let mut t = 0usize;
     while t < k {
@@ -186,18 +161,10 @@ pub fn k_gemm_f32_bt4(
     }
 }
 
-/// GEMV: the `m == 1` case, which is every matmul in autoregressive decode.
-///
-/// Worth its own kernel because the general GEMM parallelises over output
-/// elements, and with m == 1 there are only `n` of those -- a 2048x2048 decode
-/// matmul gets 512 threads and leaves the GPU essentially idle. Here one *wave*
-/// owns one output element and its 32 lanes split the k-loop, so the same matmul
-/// gets 32x the parallelism and reads B in a coalesced pattern.
-///
-/// This is only writable because of the `ds_bpermute` butterfly below; the
-/// natural formulation, a workgroup reducing through shared memory, has no Rust
-/// spelling (G6), and the wave reductions that do exist are integer-only.
-/// Requires B laid out (n, k) row-major, i.e. `brs == 1 && bcs == k`.
+/// GEMV (m == 1, every decode matmul). One wave per output, lanes split k, so
+/// 32x the parallelism of the GEMM kernel and coalesced reads of B. Needs the
+/// `ds_bpermute` butterfly since there's no shared memory (G6).
+/// Requires `brs == 1 && bcs == k`.
 #[offload_kernel]
 pub fn k_gemv_f32_bt(
     pa: usize,
@@ -230,14 +197,9 @@ pub fn k_gemv_f32_bt(
 }
 
 // ---------------------------------------------------------------------------
-// Elementwise
+// Elementwise: one kernel per arity, dispatched on a wave-uniform opcode
+// (cheap scalar branch) instead of ~20 separate kernels.
 // ---------------------------------------------------------------------------
-//
-// Binary and unary ops dispatch on an integer opcode inside one kernel rather
-// than compiling one kernel each. The opcode is a scalar, so it lands in a
-// scalar register and the branch is uniform across the wave -- a scalar compare,
-// not divergence. The alternative, ~20 kernels, would mean ~20 `offload!` sites
-// and ~20 entries in the device image.
 
 pub const OP_ADD: usize = 0;
 pub const OP_SUB: usize = 1;
@@ -310,7 +272,7 @@ pub fn k_unary_f32(pa: usize, pc: usize, n: usize, op: usize) {
             U_LOG => core::intrinsics::log(x),
             U_SIN => core::intrinsics::sin(x),
             U_COS => core::intrinsics::cos(x),
-            // No `f32::abs` in no_std, but the sign bit is right there.
+            // no `f32::abs` in no_std; clear the sign bit
             U_ABS => f32::from_bits(x.to_bits() & 0x7fff_ffff),
             U_RECIP => 1.0 / x,
             U_RELU => {
@@ -322,7 +284,7 @@ pub fn k_unary_f32(pa: usize, pc: usize, n: usize, op: usize) {
             }
             U_SILU => x / (1.0 + expf(-x)),
             U_GELU => {
-                // The tanh approximation candle uses on CPU, rebuilt from exp.
+                // candle's CPU tanh approximation
                 let x3 = x * x * x;
                 0.5 * x * (1.0 + tanhf(0.797_884_6 * (x + 0.044_715 * x3)))
             }
@@ -366,21 +328,10 @@ pub fn k_copy_f32(pa: usize, pc: usize, n: usize) {
 }
 
 // ---------------------------------------------------------------------------
-// Transformer ops: RmsNorm, softmax, rotary embedding
+// Transformer ops (RmsNorm, softmax, rope): candle-nn's GPU path for these is
+// cuda-only. Row reductions use one wave per row and an f32 XOR butterfly over
+// `ds_bpermute`, since there's no LDS (G6) and stdarch wave reduces are int-only.
 // ---------------------------------------------------------------------------
-//
-// These exist because candle-nn implements them as `CustomOp`s whose GPU path is
-// gated on `feature = "cuda"`. Without them a transformer round-trips three
-// tensors per layer through the host.
-//
-// RmsNorm and softmax both reduce along the innermost dimension, and that is
-// where the language runs out. The natural shape is one workgroup per row
-// cooperating through shared memory, but LDS has no accessor in Rust (G6).
-// `core::arch::amdgpu` does have wave reductions -- and they are integer-only:
-// `wave_reduce_add` takes u32, `wave_reduce_max`/`_min` take i32, and there is no
-// f32 form at all. So the reduction is a hand-rolled XOR butterfly over
-// `ds_bpermute`, which moves a u32 between lanes, bitcasting the f32 by hand.
-// One wave per row, `WAVES_PER_WG` rows per workgroup.
 
 #[cfg(target_arch = "amdgpu")]
 #[inline(always)]
@@ -388,7 +339,7 @@ fn wave_sum_f32(mut v: f32) -> f32 {
     let lane = workitem_id_x() & (WAVE - 1);
     let mut off = 1u32;
     while off < WAVE {
-        // ds_bpermute addresses source lanes by byte offset, hence * 4.
+        // byte offset
         let other = f32::from_bits(unsafe { ds_bpermute((lane ^ off) * 4, v.to_bits()) });
         v += other;
         off <<= 1;
@@ -420,7 +371,7 @@ fn wave_max_f32(v: f32) -> f32 {
     v
 }
 
-/// The row this thread's wave is responsible for, and its lane within the wave.
+/// (row owned by this thread's wave, lane).
 #[inline(always)]
 fn wave_row_lane() -> (usize, usize) {
     let t = workitem_id_x();
@@ -428,8 +379,8 @@ fn wave_row_lane() -> (usize, usize) {
     (row, (t & (WAVE - 1)) as usize)
 }
 
-/// `dst[i] = src[i] / sqrt(mean(row^2) + eps) * alpha[i]`, written to match
-/// candle-nn's CPU kernel operation for operation so the two agree numerically.
+/// `dst[i] = src[i] / sqrt(mean(row^2) + eps) * alpha[i]`, same op order as
+/// candle-nn's CPU kernel.
 #[offload_kernel]
 pub fn k_rms_norm_f32(px: usize, pa: usize, pd: usize, rows: usize, cols: usize, eps: f32) {
     let (row, lane) = wave_row_lane();
@@ -454,8 +405,7 @@ pub fn k_rms_norm_f32(px: usize, pa: usize, pd: usize, rows: usize, cols: usize,
     }
 }
 
-/// Softmax over the innermost dimension: subtract the row max, exponentiate,
-/// divide by the row sum. Two wave reductions per row.
+/// Softmax over the innermost dimension.
 #[offload_kernel]
 pub fn k_softmax_last_f32(px: usize, pd: usize, rows: usize, cols: usize) {
     let (row, lane) = wave_row_lane();
@@ -493,9 +443,8 @@ pub fn k_softmax_last_f32(px: usize, pd: usize, rows: usize, cols: usize) {
     }
 }
 
-/// Contiguous rotary embedding, the variant candle's llama uses. Source is
-/// (b, h, t, d) and the two halves of each head vector rotate against each
-/// other. `cs_b` is the per-batch stride into cos/sin, 0 when they are shared.
+/// Contiguous rope (candle llama's variant), src (b, h, t, d). `cs_b` = per-batch
+/// cos/sin stride, 0 if shared.
 #[offload_kernel]
 pub fn k_rope_f32(
     ps: usize,
@@ -579,20 +528,10 @@ pub fn k_reduce_last_f32(pa: usize, pc: usize, rows: usize, cols: usize, op: usi
 }
 
 // ---------------------------------------------------------------------------
-// dtype conversion and gather
+// dtype conversion and gather: model load (`to_dtype`) and the embedding
+// lookup (`index_select`), the top transfers before these existed.
+// f16 is a primitive; bf16 isn't (G10), so it's a u16 with manual conversion.
 // ---------------------------------------------------------------------------
-//
-// These two are where the transfer accounting pointed. `to_dtype` is the whole
-// model-load path -- safetensors ship f16/bf16 and candle converts to the
-// requested dtype -- and `index_select` is the embedding lookup, which without a
-// kernel downloads the entire (vocab x hidden) table once per token.
-//
-// The dtype pair is worth noting for the language question. `f16` is a real
-// primitive under `#![feature(f16)]` and `as` casts to and from it lower to
-// hardware instructions. `bf16` has no primitive at all (G10), so it is handled
-// as a `u16` with the conversion written out by hand: widening is just a 16-bit
-// shift, and narrowing is round-to-nearest-even. That works, but nothing in the
-// type system knows those u16s are floats.
 
 pub const CVT_F16_F32: usize = 0;
 pub const CVT_BF16_F32: usize = 1;
@@ -612,7 +551,7 @@ pub fn k_convert(psrc: usize, pdst: usize, n: usize, op: usize) {
                 *(pdst as *mut f32).add(i) = v as f32;
             }
             CVT_BF16_F32 => {
-                // bf16 is the high half of an f32, so widening is a shift.
+                // widen: bf16 is the high half of an f32
                 let v = *(psrc as *const u16).add(i);
                 *(pdst as *mut f32).add(i) = f32::from_bits((v as u32) << 16);
             }
@@ -621,7 +560,7 @@ pub fn k_convert(psrc: usize, pdst: usize, n: usize, op: usize) {
                 *(pdst as *mut f16).add(i) = v as f16;
             }
             _ => {
-                // Round-to-nearest-even, matching half::bf16::from_f32.
+                // round-to-nearest-even, as half::bf16::from_f32
                 let v = *(psrc as *const f32).add(i);
                 let b = v.to_bits();
                 let out = if v != v {
@@ -638,8 +577,7 @@ pub fn k_convert(psrc: usize, pdst: usize, n: usize, op: usize) {
 pub const IDS_U32: usize = 0;
 pub const IDS_I64: usize = 1;
 
-/// `dst[l, i, r] = src[l, ids[i], r]`, the general form of candle's
-/// `index_select` flattened to three dimensions around the selected axis.
+/// `dst[l, i, r] = src[l, ids[i], r]`: `index_select` flattened to 3 dims.
 #[offload_kernel]
 pub fn k_index_select_f32(
     psrc: usize,
@@ -675,27 +613,10 @@ pub fn k_index_select_f32(
 }
 
 // ---------------------------------------------------------------------------
-// Host-side launchers, exported over the C ABI
+// Host launchers, exported over the C ABI. A cdylib because offload lowering
+// runs in fat LTO, which never runs for an rlib ("requires -C lto=fat"), so the
+// `offload!` codegen can't live in any candle rlib.
 // ---------------------------------------------------------------------------
-//
-// This crate is a **cdylib**, and the launchers are `extern "C"`, for a reason
-// that is not stylistic.
-//
-// rustc performs the offload lowering during fat LTO, and fat LTO never runs for
-// an rlib. So the crate whose codegen contains an `offload!` expansion has to be
-// a *final linked artifact*: a binary, a cdylib or a staticlib. Anything else
-// fails with "using the offload feature requires -C lto=fat", and passing
-// `-C lto=fat` to an rlib silently produces no artifact at all.
-//
-// That rules out the obvious layering -- kernels <- candle-core <- candle-nn <-
-// example -- because whichever rlib in that chain ends up holding the launcher
-// codegen cannot satisfy the requirement, and which one that is depends on
-// inlining decisions. (Marking the launchers `#[inline(never)]` only moves the
-// failure from candle-core to this crate.)
-//
-// Building the kernels as a cdylib cuts the graph instead: the offload intrinsic
-// exists only here, and candle-core reaches it through `extern "C"`
-// declarations, so no candle crate needs an offload flag or fat LTO.
 
 #[cfg(not(target_arch = "amdgpu"))]
 #[inline]
@@ -710,8 +631,7 @@ fn row_blocks(rows: usize) -> u32 {
     rows.div_ceil(WAVES_PER_WG as usize).max(1) as u32
 }
 
-/// `brs`/`bcs` are B's row and column strides in elements; `a_bs`/`b_bs` are
-/// per-batch strides, where 0 broadcasts that operand across the batch.
+/// `brs`/`bcs`: B's row/column strides; `a_bs`/`b_bs`: batch strides (0 = broadcast).
 #[cfg(not(target_arch = "amdgpu"))]
 #[no_mangle]
 pub extern "C" fn candle_offload_gemm_f32(
@@ -727,7 +647,7 @@ pub extern "C" fn candle_offload_gemm_f32(
     a_bs: usize,
     b_bs: usize,
 ) {
-    // Decode is all matrix-vector; it needs a different decomposition entirely.
+    // decode (m == 1) goes to the GEMV kernel
     if m == 1 && brs == 1 && bcs == k {
         let g = row_blocks(nb * n);
         core::offload::offload! {
@@ -887,8 +807,7 @@ pub extern "C" fn candle_offload_rope_f32(
     }
 }
 
-/// Number of devices libomptarget can see, so candle-core does not have to link
-/// the offload runtime itself.
+/// Device count, so candle-core needn't link the offload runtime.
 #[cfg(not(target_arch = "amdgpu"))]
 #[no_mangle]
 pub extern "C" fn candle_offload_num_devices() -> i32 {

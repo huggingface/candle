@@ -1,14 +1,6 @@
-//! Declarations for the kernel launchers in `candle-offload-kernels`.
-//!
-//! That crate is a cdylib rather than a cargo dependency because rustc only
-//! performs the offload lowering for a final linked artifact -- fat LTO never
-//! runs for an rlib, and every crate in a chain of rlibs that ends up holding
-//! the `offload!` codegen fails with "requires -C lto=fat". Reaching the
-//! launchers over the C ABI keeps the offload intrinsic out of candle entirely,
-//! so nothing here needs an offload flag.
-//!
-//! The link name is resolved by `build-offload.sh`, which puts the cdylib's
-//! directory on the link path and in the rpath.
+//! Launchers from the `candle-offload-kernels` cdylib, over the C ABI. A cdylib
+//! because offload lowering needs fat LTO on a final artifact, not an rlib; this
+//! keeps offload flags out of candle. build-offload.sh sets link path + rpath.
 
 #[link(name = "candle_offload_kernels")]
 extern "C" {
@@ -74,10 +66,8 @@ extern "C" {
     pub fn candle_offload_num_devices() -> i32;
 }
 
-// Opcodes, kept in sync with candle-offload-kernels by hand. There is no way to
-// share them: the kernel crate cannot be a cargo dependency, so its constants
-// are not importable. A small cost of the cdylib split, and a real one -- these
-// are a silent-miscompute hazard if they ever drift.
+// Opcodes, kept in sync with candle-offload-kernels BY HAND (not importable
+// across the cdylib). Drift = silent wrong results.
 pub const OP_ADD: usize = 0;
 pub const OP_SUB: usize = 1;
 pub const OP_MUL: usize = 2;

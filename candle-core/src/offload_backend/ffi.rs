@@ -1,18 +1,10 @@
-//! libomptarget bindings and transfer/launch accounting.
-//!
-//! `std::offload` exposes exactly four public items and none of them allocate
-//! device memory, so a backend cannot be built on the safe API alone (G1).
-//! Everything here is the runtime capability that is already present underneath
-//! `offload!` but has no Rust surface: allocate, free, copy, enumerate.
+//! libomptarget bindings (alloc, free, copy, enumerate: none exposed by
+//! `std::offload`, G1) and transfer/launch accounting.
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-// The OpenMP device API is split across two libraries, which is easy to get
-// wrong: `omp_target_*` are in libomptarget, but `omp_get_*_device` and
-// `omp_get_num_devices` are in libomp. A single `#[link(name = "omptarget")]`
-// block appears to work only because `-Zoffload` implicitly adds `-lomp` --
-// take the offload flag away, as this crate does, and the omp_get_* symbols go
-// undefined at link time.
+// `omp_target_*` are in libomptarget but `omp_get_*` are in libomp; -Zoffload
+// adds -lomp implicitly, and this crate doesn't use -Zoffload.
 #[link(name = "omptarget")]
 extern "C" {
     pub fn omp_target_alloc(size: usize, device_num: i32) -> *mut c_void;
@@ -35,8 +27,7 @@ extern "C" {
     pub fn omp_get_num_devices() -> i32;
 }
 
-/// Counters for the two things this project is measuring: how much data crosses
-/// the PCIe boundary, and how many kernels are launched to do it.
+/// Bytes over PCIe and kernel launches.
 pub struct Stats {
     pub h2d_bytes: AtomicU64,
     pub d2h_bytes: AtomicU64,
@@ -48,7 +39,7 @@ pub struct Stats {
     pub frees: AtomicU64,
     /// Ops that ran on the GPU.
     pub gpu_ops: AtomicU64,
-    /// Ops that had to round-trip through the CPU backend.
+    /// Ops that round-tripped through the CPU backend.
     pub fallback_ops: AtomicU64,
 }
 
@@ -65,16 +56,12 @@ pub static STATS: Stats = Stats {
     fallback_ops: AtomicU64::new(0),
 };
 
-/// Which ops fell back, and how often. Kept separately from the atomic counters
-/// because it needs a map and is only read at report time.
+/// Fallbacks per op (a map, read at report time).
 pub static FALLBACKS: std::sync::Mutex<
     Option<std::collections::BTreeMap<&'static str, (u64, u64)>>,
 > = std::sync::Mutex::new(None);
 
-/// Total bytes moved across the bus so far, in both directions. Sampling this
-/// before and after a fallback attributes the traffic to the op that caused it,
-/// which is the number that actually matters -- a fallback on a 256 MiB
-/// embedding table costs far more than one on a 4 KiB bias.
+/// Total bytes moved so far; sampled around a fallback to attribute its traffic.
 pub fn bus_bytes() -> u64 {
     STATS.h2d_bytes.load(Ordering::Relaxed) + STATS.d2h_bytes.load(Ordering::Relaxed)
 }
@@ -102,7 +89,7 @@ fn mib(b: u64) -> f64 {
     b as f64 / (1024.0 * 1024.0)
 }
 
-/// Human-readable dump of everything the counters saw. Called by the examples.
+/// Dump the counters. Called by the examples.
 pub fn report() -> String {
     use std::fmt::Write;
     let s = &STATS;

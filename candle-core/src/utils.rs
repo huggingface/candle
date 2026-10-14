@@ -591,8 +591,7 @@ pub fn has_mkl() -> bool {
     cfg!(feature = "mkl")
 }
 
-// The offload backend occupies the Device::Cuda slot, so anything that asks
-// "is there a GPU?" -- including candle_examples::device() -- has to see it.
+// The offload backend is in the Device::Cuda slot, so it counts as a GPU.
 pub fn cuda_is_available() -> bool {
     cfg!(any(feature = "cuda", feature = "offload"))
 }
