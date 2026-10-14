@@ -314,6 +314,24 @@ impl ModelWeights {
         }
     }
 
+    pub fn kv_cache_state(&self) -> Vec<Option<(Tensor, Tensor)>> {
+        self.layers.iter().map(|l| l.kv_cache.clone()).collect()
+    }
+
+    pub fn set_kv_cache_state(&mut self, state: Vec<Option<(Tensor, Tensor)>>) -> Result<()> {
+        if state.len() != self.layers.len() {
+            candle::bail!(
+                "kv cache state has {} layers, model has {} -- refusing a partial restore",
+                state.len(),
+                self.layers.len()
+            );
+        }
+        for (layer, s) in self.layers.iter_mut().zip(state) {
+            layer.kv_cache = s;
+        }
+        Ok(())
+    }
+
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = if seq_len == 1 {
