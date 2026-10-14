@@ -120,6 +120,10 @@ struct Args {
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 128)]
     repeat_last_n: usize,
+
+    /// Prevent repeating any n-gram of this size, 0 disables the constraint.
+    #[arg(long, default_value_t = 0)]
+    no_repeat_ngram_size: usize,
 }
 
 fn main() -> Result<()> {
@@ -253,17 +257,22 @@ fn main() -> Result<()> {
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
         let logits = llama.forward(&input, context_index, &mut cache)?;
-        let logits = logits.squeeze(0)?;
-        let logits = if args.repeat_penalty == 1. {
-            logits
-        } else {
+        let mut logits = logits.squeeze(0)?;
+        if args.repeat_penalty != 1. {
             let start_at = tokens.len().saturating_sub(args.repeat_last_n);
-            candle_transformers::utils::apply_repeat_penalty(
+            logits = candle_transformers::utils::apply_repeat_penalty(
                 &logits,
                 args.repeat_penalty,
                 &tokens[start_at..],
-            )?
-        };
+            )?;
+        }
+        if args.no_repeat_ngram_size > 0 {
+            logits = candle_transformers::utils::apply_no_repeat_ngram(
+                &logits,
+                args.no_repeat_ngram_size,
+                &tokens,
+            )?;
+        }
         index_pos += ctxt.len();
 
         let next_token = logits_processor.sample(&logits)?;

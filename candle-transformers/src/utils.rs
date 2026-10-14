@@ -1,4 +1,4 @@
-//! Shared utilities: repeat_kv, repeat_penalty, causal mask.
+//! Shared utilities: repeat_kv, repeat_penalty, no_repeat_ngram, causal mask.
 
 use candle::{DType, Device, Result, Tensor};
 
@@ -79,6 +79,63 @@ pub fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> R
                 *logit /= penalty
             } else {
                 *logit *= penalty
+            }
+        }
+    }
+    let logits_len = logits.len();
+    Tensor::from_vec(logits, logits_len, device)
+}
+
+/// Bans tokens that would complete a previously-seen n-gram of length `ngram_size`
+/// (equivalent to Hugging Face's `no_repeat_ngram_size`).
+///
+/// Given the already-generated `context`, the last `ngram_size - 1` tokens form the current
+/// prefix. Any token that has previously followed that exact prefix in `context` has its
+/// logit set to `-inf` so it cannot be sampled, preventing the model from repeating an
+/// n-gram it has already produced.
+///
+/// `ngram_size == 0`, or a `context` shorter than `ngram_size`, is a no-op. `ngram_size == 1`
+/// bans every token already present in `context`.
+///
+/// Use it in a decode loop just like [`apply_repeat_penalty`], applying it to the logits
+/// before sampling the next token:
+///
+/// ```rust
+/// use candle::{Device, Tensor};
+/// use candle_transformers::utils::apply_no_repeat_ngram;
+///
+/// # fn main() -> candle::Result<()> {
+/// let device = Device::Cpu;
+/// // Tokens generated so far. The last token (`1`) forms the current 1-token prefix.
+/// let context = [1u32, 2, 1];
+/// let logits = Tensor::new(&[1.0f32, 1.0, 1.0, 1.0], &device)?;
+///
+/// // With `ngram_size = 2`, the bigram `[1, 2]` already occurred, so `2` is banned
+/// // as the next token after `1` (its logit becomes -inf) and will not be sampled.
+/// let logits = apply_no_repeat_ngram(&logits, 2, &context)?;
+/// assert_eq!(logits.to_vec1::<f32>()?, [1.0, 1.0, f32::NEG_INFINITY, 1.0]);
+/// # Ok(())
+/// # }
+/// ```
+pub fn apply_no_repeat_ngram(
+    logits: &Tensor,
+    ngram_size: usize,
+    context: &[u32],
+) -> Result<Tensor> {
+    if ngram_size == 0 || context.len() < ngram_size {
+        return Ok(logits.clone());
+    }
+    let device = logits.device();
+    let mut logits = logits.to_dtype(candle::DType::F32)?.to_vec1::<f32>()?;
+    // The prefix that must not be extended into a repeated n-gram.
+    let prefix = &context[context.len() - (ngram_size - 1)..];
+    // Scan every complete n-gram already in the context; when its first `ngram_size - 1`
+    // tokens match the current prefix, its final token is a banned continuation.
+    for window in context.windows(ngram_size) {
+        if &window[..ngram_size - 1] == prefix {
+            let banned = window[ngram_size - 1];
+            if let Some(logit) = logits.get_mut(banned as usize) {
+                *logit = f32::NEG_INFINITY;
             }
         }
     }
