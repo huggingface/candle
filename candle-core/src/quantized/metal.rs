@@ -115,6 +115,10 @@ impl QMetalStorage {
                 let vec: Vec<crate::quantized::BlockQ8K> = read_to_vec(&buffer, block_len);
                 crate::quantized::BlockQ8K::to_float(&vec, &mut out);
             }
+            GgmlDType::Mxfp4 => {
+                let vec: Vec<crate::quantized::BlockMxfp4> = read_to_vec(&buffer, block_len);
+                crate::quantized::BlockMxfp4::to_float(&vec, &mut out);
+            }
         }
 
         let buffer = self
@@ -261,7 +265,7 @@ impl QMetalStorage {
             device.device(),
             &encoder,
             device.kernels(),
-            self.dtype.into(),
+            candle_metal_kernels::GgmlDType::try_from(self.dtype)?,
             hidden,
             hidden * self.dtype.type_size() / self.dtype.block_size(),
             ids_len,
@@ -326,7 +330,7 @@ impl QMetalStorage {
                 device.device(),
                 &encoder,
                 device.kernels(),
-                self.dtype.into(),
+                candle_metal_kernels::GgmlDType::try_from(self.dtype)?,
                 (1, 1, n, k),
                 storage.buffer(),
                 (layout.start_offset() + batch_id * k) * storage.dtype().size_in_bytes(),
@@ -415,7 +419,7 @@ impl QMetalStorage {
             device.device(),
             &encoder,
             device.kernels(),
-            self.dtype.into(),
+            candle_metal_kernels::GgmlDType::try_from(self.dtype)?,
             src0_l.dims(),
             &src0_stride,
             &self.buffer,
@@ -479,24 +483,27 @@ fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     slice.to_vec()
 }
 
-impl From<GgmlDType> for candle_metal_kernels::GgmlDType {
-    fn from(value: GgmlDType) -> Self {
+impl TryFrom<GgmlDType> for candle_metal_kernels::GgmlDType {
+    type Error = crate::Error;
+
+    fn try_from(value: GgmlDType) -> Result<Self> {
         match value {
-            GgmlDType::Q4_0 => candle_metal_kernels::GgmlDType::Q4_0,
-            GgmlDType::Q4_1 => candle_metal_kernels::GgmlDType::Q4_1,
-            GgmlDType::Q5_0 => candle_metal_kernels::GgmlDType::Q5_0,
-            GgmlDType::Q5_1 => candle_metal_kernels::GgmlDType::Q5_1,
-            GgmlDType::Q8_0 => candle_metal_kernels::GgmlDType::Q8_0,
-            GgmlDType::Q8_1 => candle_metal_kernels::GgmlDType::Q8_1,
-            GgmlDType::Q2K => candle_metal_kernels::GgmlDType::Q2K,
-            GgmlDType::Q3K => candle_metal_kernels::GgmlDType::Q3K,
-            GgmlDType::Q4K => candle_metal_kernels::GgmlDType::Q4K,
-            GgmlDType::Q5K => candle_metal_kernels::GgmlDType::Q5K,
-            GgmlDType::Q6K => candle_metal_kernels::GgmlDType::Q6K,
-            GgmlDType::Q8K => candle_metal_kernels::GgmlDType::Q8K,
-            GgmlDType::F16 => candle_metal_kernels::GgmlDType::F16,
-            GgmlDType::F32 => candle_metal_kernels::GgmlDType::F32,
-            GgmlDType::BF16 => candle_metal_kernels::GgmlDType::BF16,
+            GgmlDType::Q4_0 => Ok(candle_metal_kernels::GgmlDType::Q4_0),
+            GgmlDType::Q4_1 => Ok(candle_metal_kernels::GgmlDType::Q4_1),
+            GgmlDType::Q5_0 => Ok(candle_metal_kernels::GgmlDType::Q5_0),
+            GgmlDType::Q5_1 => Ok(candle_metal_kernels::GgmlDType::Q5_1),
+            GgmlDType::Q8_0 => Ok(candle_metal_kernels::GgmlDType::Q8_0),
+            GgmlDType::Q8_1 => Ok(candle_metal_kernels::GgmlDType::Q8_1),
+            GgmlDType::Q2K => Ok(candle_metal_kernels::GgmlDType::Q2K),
+            GgmlDType::Q3K => Ok(candle_metal_kernels::GgmlDType::Q3K),
+            GgmlDType::Q4K => Ok(candle_metal_kernels::GgmlDType::Q4K),
+            GgmlDType::Q5K => Ok(candle_metal_kernels::GgmlDType::Q5K),
+            GgmlDType::Q6K => Ok(candle_metal_kernels::GgmlDType::Q6K),
+            GgmlDType::Q8K => Ok(candle_metal_kernels::GgmlDType::Q8K),
+            GgmlDType::F16 => Ok(candle_metal_kernels::GgmlDType::F16),
+            GgmlDType::F32 => Ok(candle_metal_kernels::GgmlDType::F32),
+            GgmlDType::BF16 => Ok(candle_metal_kernels::GgmlDType::BF16),
+            GgmlDType::Mxfp4 => crate::bail!("MXFP4 is not supported on Metal"),
         }
     }
 }
