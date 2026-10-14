@@ -80,6 +80,11 @@ impl Tensor {
                         kernel: rhs,
                         ..
                     }
+                    | Op::Conv3D {
+                        arg: lhs,
+                        kernel: rhs,
+                        ..
+                    }
                     | Op::ConvTranspose2D {
                         arg: lhs,
                         kernel: rhs,
@@ -314,6 +319,7 @@ impl Tensor {
                     Op::ConvTranspose1D { .. } => Err(Error::BackwardNotSupported {
                         op: "conv-transpose1d",
                     })?,
+                    Op::Conv3D { .. } => Err(Error::BackwardNotSupported { op: "conv3d" })?,
                     Op::ConvTranspose2D {
                         arg,
                         kernel,

@@ -128,6 +128,15 @@ pub enum Error {
         msg: &'static str,
     },
 
+    #[error("conv3d invalid args {msg}: inp: {inp_shape:?}, k: {k_shape:?}, pad: {padding:?}, stride: {stride:?}")]
+    Conv3dInvalidArgs {
+        inp_shape: Shape,
+        k_shape: Shape,
+        padding: [usize; 3],
+        stride: [usize; 3],
+        msg: &'static str,
+    },
+
     #[error("{op} invalid index {index} with dim size {size}")]
     InvalidIndex {
         op: &'static str,
