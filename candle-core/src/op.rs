@@ -152,6 +152,11 @@ pub enum Op {
         target_w: usize,
         align_corners: bool,
     },
+    UpsampleBilinear2DAntialias {
+        arg: Tensor,
+        target_h: usize,
+        target_w: usize,
+    },
 
     Cat(Vec<Tensor>, usize),
 
