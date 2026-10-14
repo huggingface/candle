@@ -10,16 +10,21 @@ pub struct Sequential {
 
 /// Creates a new empty sequential layer.
 pub fn seq() -> Sequential {
-    Sequential { layers: vec![] }
+    Sequential::new()
 }
 
 impl Sequential {
+    /// Creates a new empty sequential layer.
+    pub fn new() -> Self {
+        Sequential { layers: vec![] }
+    }
+
     /// The number of sub-layers embedded in this layer.
     pub fn len(&self) -> i64 {
         self.layers.len() as i64
     }
 
-    /// Returns true if this layer does not have any sub-layer.
+    /// Returns true if this layer does not have any sub-layers.
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
     }
