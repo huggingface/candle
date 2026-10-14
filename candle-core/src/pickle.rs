@@ -638,7 +638,7 @@ fn rebuild_args(args: Object) -> Result<(Layout, DType, String, usize)> {
         "DoubleStorage" => DType::F64,
         "HalfStorage" => DType::F16,
         "BFloat16Storage" => DType::BF16,
-        "ByteStorage" => DType::U8,
+        "ByteStorage" | "BoolStorage" => DType::U8,
         "LongStorage" => DType::I64,
         other => {
             crate::bail!("unsupported storage type {other}")
