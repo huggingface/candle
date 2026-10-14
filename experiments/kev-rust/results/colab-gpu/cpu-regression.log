@@ -1,0 +1,61 @@
+    Updating crates.io index
+     Locking 19 packages to highest compatible versions
+      Adding block-buffer v0.10.4
+      Adding candle-kernels v0.11.0 (/content/candle/candle-kernels)
+      Adding cpufeatures v0.2.17
+      Adding crypto-common v0.1.7
+      Adding cudaforge v0.1.6
+      Adding cudarc v0.19.10
+      Adding digest v0.10.7
+      Adding env_home v0.1.0
+      Adding fs2 v0.4.3
+      Adding generic-array v0.14.7 (available: v0.14.9)
+      Adding glob v0.3.4
+      Adding libloading v0.9.0
+      Adding sha2 v0.10.9
+      Adding typenum v1.20.1
+      Adding which v7.0.3
+      Adding winapi v0.3.9
+      Adding winapi-i686-pc-windows-gnu v0.4.0
+      Adding winapi-x86_64-pc-windows-gnu v0.4.0
+      Adding winsafe v0.0.19
+   Compiling kev-rust v0.1.0 (/content/candle/experiments/kev-rust)
+    Finished `release` profile [optimized] target(s) in 17.63s
+     Running unittests src/lib.rs (target/release/deps/kev_rust-3b833cd5975a9d81)
+
+running 4 tests
+test delta::tests::depthwise_matches_grouped_convolution ... ok
+test tests::numeric_state_preserves_python_float_and_integer_text ... ok
+test delta::tests::scan_matches_independent_tensor_rule_and_continuation ... ok
+test tests::structured_state_matches_python_rendering ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/release/deps/kev_rust-07c05224eb15b969)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kev_rust
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling kev-rust v0.1.0 (/content/candle/experiments/kev-rust)
+    Finished `release` profile [optimized] target(s) in 2.24s
+Usage: kev-rust [OPTIONS]
+
+Options:
+      --device <DEVICE>              Inference device. CUDA requires a binary built with --features cuda [default: cpu] [possible values: cpu, cuda]
+      --device-index <DEVICE_INDEX>  CUDA GPU ordinal [default: 0]
+      --weights <WEIGHTS>            [default: weights]
+      --input <INPUT>                One System One request per line. Omit to read stdin
+      --rows                         Disable shared-state optimization to measure the full-row baseline
+      --tensor                       Use the allocating tensor scan instead of the fused CPU/CUDA scan
+      --batch                        Explicitly request batching (the default for fused kernels)
+      --unbatched                    Disable question batching for the comparison baseline
+      --repeats <REPEATS>            [default: 1]
+  -h, --help                         Print help
+{"architecture": "x86_64", "gpu_used": false, "cpu_only_cuda_request_rejected": true, "build_seconds": {"cargo test --release": 17.750185592999514, "cargo build --release": 2.273279320999791}, "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)", "dynamic_libraries": "\tlinux-vdso.so.1 (0x00007ffc6e1a6000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007b88a7680000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007b88a7597000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007b88a7384000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007b88a7ea1000)\n", "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  2\nOn-line CPU(s) list:                     0,1\nVendor ID:                               AuthenticAMD\nModel name:                              AMD EPYC 7B12\nCPU family:                              23\nModel:                                   49\nThread(s) per core:                      2\nCore(s) per socket:                      1\nSocket(s):                               1\nStepping:                                0\nBogoMIPS:                                4499.99\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext ssbd ibrs ibpb stibp vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr arat umip rdpid\nHypervisor vendor:                       KVM\nVirtualization type:                     full\nL1d cache:                               32 KiB (1 instance)\nL1i cache:                               32 KiB (1 instance)\nL2 cache:                                512 KiB (1 instance)\nL3 cache:                                16 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0,1\nVulnerability Gather data sampling:      Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Vulnerable\nVulnerability Spec rstack overflow:      Vulnerable\nVulnerability Spec store bypass:         Vulnerable\nVulnerability Spectre v1:                Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers\nVulnerability Spectre v2:                Vulnerable; IBPB: disabled; STIBP: disabled; PBRSB-eIBRS: Not affected; BHI: Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Not affected\n", "sha256": "c8d3ce6927c09ba4ad18dbc7c8a3f98d2d463b7fe87313ebe1c0435e6ab4cd62", "source_sha256": {"Cargo.toml": "74e05258654897f5104d4153f6e19229eaaf3a301abb37750ccc0e6d9884e3d2", "build.rs": "76576a49086b7d7997f4ab337fc56e622cb10bd75f6483598e652a2db1288f62", "src/cuda.rs": "7782d16199799de563537fda8d27181591cb74e1d1a8bc5c735c61405988319a", "src/delta.rs": "8501d7bacdb25333f4da7254cfaf65fd675d570d63a08df28f72a86a4dd926c9", "src/lib.rs": "94e79bb3c44283bec12734117437a389076f3685301d8b13e95c3e23c1dbfd22", "src/main.rs": "ef372411eba7ac9e03f792717295bf8f87a9dc9adb13534b93364a1fef2c502d", "src/qwen3_5.rs": "079b9d324a73623f70d09333e4119753017cf44954401fc74ccf22ea27355b61"}}
