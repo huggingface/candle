@@ -19,6 +19,7 @@ pub mod beit;
 pub mod bert;
 pub mod bigcode;
 pub mod blip;
+pub mod blip2;
 pub mod blip_text;
 pub mod chatglm;
 pub mod chinese_clip;
