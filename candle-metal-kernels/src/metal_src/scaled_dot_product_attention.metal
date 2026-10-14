@@ -2275,6 +2275,10 @@ template <
     loader_v.next();
   }
 
+  // Guard against 0/0 when entire row is fully masked (sum_score == 0)
+  for (short i = 0; i < kRowsPT; ++i) {
+    if (sum_score[i] == 0) sum_score[i] = 1;
+  }
   // Normalize output
   Otile.template row_bin_op<DivOp>(sum_score);
   threadgroup_barrier(mem_flags::mem_none);
