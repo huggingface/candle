@@ -139,23 +139,6 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
     // Output shape: [b_size, c_out, out_h, out_w].
     let dst = vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
 
-    // Convert NCHW input to NHWC layout for tiled im2col.
-    let cont_s0 = p.i_h * p.i_w * p.c_in;
-    let cont_s1 = p.i_w * p.c_in;
-    let cont_s2 = p.c_in;
-    let mut inp_cont = vec![T::zero(); p.b_size * p.c_in * p.i_h * p.i_w];
-    for b_idx in 0..p.b_size {
-        for h_idx in 0..p.i_h {
-            for w_idx in 0..p.i_w {
-                for c_idx in 0..p.c_in {
-                    let src_idx = b_idx * inp_s0 + c_idx * inp_s1 + h_idx * inp_s2 + w_idx * inp_s3;
-                    let dst_idx = b_idx * cont_s0 + h_idx * cont_s1 + w_idx * cont_s2 + c_idx;
-                    inp_cont[dst_idx] = inp[src_idx]
-                }
-            }
-        }
-    }
-
     // shape of k: [c_out, c_in, k_h, k_w]
     // strides of k: [k_s0, k_s1, k_s2, k_s3]
     // For matmul, we need flattened k in shape [c_out, k_h * k_w * c_in]
@@ -182,10 +165,12 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
     const TILE_SIZE: usize = 512;
 
     let total_out_pixels = out_h * out_w;
+    let use_same3_interior_fast_path =
+        p.k_h == 3 && p.k_w == 3 && p.stride == 1 && p.padding == 1 && p.dilation == 1;
 
     // Process batches and tiles in parallel using rayon.
     (0..p.b_size).into_par_iter().try_for_each(|b_idx| {
-        let inp_offset = b_idx * cont_s0;
+        let inp_offset = b_idx * inp_s0;
         let out_batch_offset = b_idx * (p.c_out * out_h * out_w);
 
         let num_tiles = total_out_pixels.div_ceil(TILE_SIZE);
@@ -195,17 +180,34 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
             let tile_end = (tile_start + TILE_SIZE).min(total_out_pixels);
             let tile_size = tile_end - tile_start;
 
-            // Precompute output coordinates.
-            // Used in both im2col extraction and writing output.
-            let out_coords: Vec<_> = (tile_start..tile_end)
-                .map(|idx| (idx / out_w, idx % out_w))
-                .collect();
-
             // Build im2col tile: [k_size, tile_size]
             // This represents the input patches needed for this tile of outputs
             let mut col_tile = vec![T::zero(); k_size * tile_size];
 
-            for (tile_idx, (out_y, out_x)) in out_coords.iter().enumerate() {
+            for (tile_idx, out_idx) in (tile_start..tile_end).enumerate() {
+                let out_y = out_idx / out_w;
+                let out_x = out_idx % out_w;
+                if use_same3_interior_fast_path
+                    && out_y > 0
+                    && out_y + 1 < p.i_h
+                    && out_x > 0
+                    && out_x + 1 < p.i_w
+                {
+                    for c_in in 0..p.c_in {
+                        for kh in 0..3 {
+                            let inp_base = inp_offset
+                                + c_in * inp_s1
+                                + (out_y + kh - 1) * inp_s2
+                                + (out_x - 1) * inp_s3;
+                            for kw in 0..3 {
+                                let patch_offset = c_in + (kh * 3 + kw) * p.c_in;
+                                let col_idx = patch_offset * tile_size + tile_idx;
+                                col_tile[col_idx] = inp[inp_base + kw * inp_s3];
+                            }
+                        }
+                    }
+                    continue;
+                }
                 // Extract the im2col patch for this output position
                 for c_in in 0..p.c_in {
                     let mut patch_offset = c_in;
@@ -224,9 +226,10 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
                             if in_x >= 0 && in_x < p.i_w as isize {
                                 let in_y = in_y as usize;
                                 let in_x = in_x as usize;
-                                let inp_idx = inp_offset + in_y * cont_s1 + in_x * cont_s2 + c_in;
+                                let inp_idx =
+                                    inp_offset + c_in * inp_s1 + in_y * inp_s2 + in_x * inp_s3;
                                 let col_idx = patch_offset * tile_size + tile_idx;
-                                col_tile[col_idx] = inp_cont[inp_idx];
+                                col_tile[col_idx] = inp[inp_idx];
                             }
                             // Move to next position (skip c_in channels)
                             patch_offset += p.c_in;
@@ -247,7 +250,9 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
             let result = matmul.f(&k_flat, &k_layout, &col_tile, &col_layout)?;
 
             // Copy results to output: result is [c_out, tile_size]
-            for (tile_idx, (out_y, out_x)) in out_coords.iter().enumerate() {
+            for (tile_idx, out_idx) in (tile_start..tile_end).enumerate() {
+                let out_y = out_idx / out_w;
+                let out_x = out_idx % out_w;
                 let dst_base = out_batch_offset + out_y * out_w + out_x;
 
                 for c_out_idx in 0..p.c_out {
