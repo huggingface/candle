@@ -320,9 +320,49 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             Ok((storage, Shape::from_dims(dims)))
         }
 
+        // Narrow floats (f16/bf16) must not accumulate the exp denominator in
+        // their own dtype: a sequential in-dtype sum saturates on long axes
+        // (e.g. an f16 sum of 4096 ones stalls at 2048), so the row fails to
+        // normalize to 1. Compute those in f32, matching the Metal kernel which
+        // keeps the softmax denominator in f32.
+        fn softmax_via_f32<T: candle::WithDType + num_traits::Float>(
+            src: &[T],
+            layout: &Layout,
+        ) -> Result<(CpuStorage, Shape)> {
+            let src = match layout.contiguous_offsets() {
+                None => candle::bail!("input has to be contiguous"),
+                Some((o1, o2)) => &src[o1..o2],
+            };
+            let el_count = layout.shape().elem_count();
+            let dims = layout.shape().dims();
+            let dim_m1 = dims[dims.len() - 1];
+            let mut dst = vec![T::zero(); el_count];
+            src.par_chunks(dim_m1)
+                .zip(dst.par_chunks_mut(dim_m1))
+                .for_each(|(src, dst)| {
+                    let to_f32 = |x: &T| num_traits::ToPrimitive::to_f32(x).unwrap();
+                    let mut max = f32::NEG_INFINITY;
+                    for s in src.iter() {
+                        max = max.max(to_f32(s));
+                    }
+                    let mut sum_exp = 0f32;
+                    for (s, d) in src.iter().zip(dst.iter_mut()) {
+                        let e = (to_f32(s) - max).exp();
+                        *d = num_traits::NumCast::from(e).unwrap();
+                        sum_exp += e;
+                    }
+                    let inv = 1f32 / sum_exp;
+                    for d in dst.iter_mut() {
+                        *d = num_traits::NumCast::from(to_f32(d) * inv).unwrap();
+                    }
+                });
+            let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            Ok((storage, Shape::from_dims(dims)))
+        }
+
         match storage {
-            CpuStorage::BF16(slice) => softmax::<half::bf16>(slice, layout),
-            CpuStorage::F16(slice) => softmax::<half::f16>(slice, layout),
+            CpuStorage::BF16(slice) => softmax_via_f32::<half::bf16>(slice, layout),
+            CpuStorage::F16(slice) => softmax_via_f32::<half::f16>(slice, layout),
             CpuStorage::F32(slice) => softmax::<f32>(slice, layout),
             CpuStorage::F64(slice) => softmax::<f64>(slice, layout),
             _ => candle::bail!("unsupported dtype for softmax {:?}", storage),
