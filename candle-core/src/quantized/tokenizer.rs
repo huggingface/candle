@@ -281,16 +281,22 @@ impl TokenizerFromGguf for Tokenizer {
 
         // Mark special tokens so decode(skip_special_tokens = true) behaves as expected
         if let Ok(gguf_file::Value::Array(arr)) = metadata_value(ct, "tokenizer.ggml.token_type") {
-            let mut specials = Vec::new();
-            for (idx, v) in arr.iter().enumerate() {
-                let ty = gguf_value_to_u32(v)?;
-                // Aligns with llama_token_type: treat non-normal/non-byte tokens as special.
-                let is_special = matches!(ty, 2..=5);
-                if is_special {
-                    if let Some(tok) = tokens.get(idx) {
-                        specials.push(AddedToken::from(tok.clone(), true));
+            // Aligns with llama_token_type. User-defined tokens (e.g. `<think>`) stay
+            // visible when decoding, like in llama.cpp.
+            let (specials, user_defined) = arr.iter().zip(&tokens).try_fold(
+                (Vec::new(), Vec::new()),
+                |(mut specials, mut user_defined), (v, tok)| -> Result<_> {
+                    match gguf_value_to_u32(v)? {
+                        2 | 3 | 5 => specials.push(AddedToken::from(tok.clone(), true)),
+                        4 => user_defined
+                            .push(AddedToken::from(tok.clone(), false).normalized(false)),
+                        _ => {}
                     }
-                }
+                    Ok((specials, user_defined))
+                },
+            )?;
+            if !user_defined.is_empty() {
+                tokenizer.add_tokens(user_defined).map_err(Error::wrap)?;
             }
             if !specials.is_empty() {
                 tokenizer
