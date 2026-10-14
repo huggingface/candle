@@ -603,6 +603,11 @@ impl Stack {
             }
             OpCode::Long1 => {
                 let n_bytes = r.read_u8()?;
+                // Values wider than an i64 cannot be represented and shifting by >= 64
+                // bits would panic, so reject them rather than crash on crafted input.
+                if n_bytes > 8 {
+                    crate::bail!("Long1 with {n_bytes} bytes cannot be represented as an i64")
+                }
                 let mut v = 0;
                 // Decode the next n bytes in little endian
                 for i in 0..n_bytes {
@@ -838,4 +843,23 @@ pub fn read_all_with_key<P: AsRef<std::path::Path>>(
 /// * `path` - Path to the pth file.
 pub fn read_all<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<(String, Tensor)>> {
     read_all_with_key(path, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Stack;
+    use std::io::Cursor;
+
+    // A crafted Long1 opcode advertising more bytes than fit in an i64 used to
+    // panic with "attempt to shift left with overflow" (a shift by >= 64 bits),
+    // a deterministic DoS reachable from a malicious pickle/.pth stream. It must
+    // now return an error instead of panicking.
+    #[test]
+    fn long1_oversized_byte_count_errors_instead_of_panicking() {
+        // Long1 (0x8a) | n_bytes = 9 | 9 payload bytes
+        let data = [0x8a_u8, 9, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let mut stack = Stack::empty();
+        let res = stack.read_loop(&mut Cursor::new(&data[..]));
+        assert!(res.is_err());
+    }
 }
