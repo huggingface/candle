@@ -41,6 +41,7 @@ pub mod encodec;
 pub mod eva2;
 pub mod falcon;
 pub mod fastvit;
+pub mod florence2;
 pub mod flux;
 pub mod gemma;
 pub mod gemma2;
