@@ -74,6 +74,10 @@ impl std::fmt::Debug for CudaDevice {
 }
 
 impl CudaDevice {
+    pub fn supports_bf16(&self) -> bool {
+        matches!(self.context.compute_capability().w(), Ok((major, _)) if major >= 8)
+    }
+
     #[allow(clippy::missing_safety_doc)]
     pub unsafe fn alloc<T: cudarc::driver::DeviceRepr>(
         &self,
