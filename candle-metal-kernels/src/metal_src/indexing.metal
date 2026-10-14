@@ -42,6 +42,7 @@ METAL_FUNC void index(
     constant size_t &right_size,
     constant size_t &ids_size,
     constant bool &contiguous,
+    constant size_t &num_dims,
     constant size_t *src_dims,
     constant size_t *src_strides,
     const device TYPENAME *input,
@@ -65,7 +66,7 @@ METAL_FUNC void index(
       // No need to check for zero we're only allowing unsized.
       */
       const size_t src_i = left_rank_i * src_dim_size * right_size + input_i * right_size + right_rank_i;
-      const size_t strided_src_i = contiguous ? src_i : get_strided_index(src_i, src_dim_size, src_dims, src_strides);
+      const size_t strided_src_i = contiguous ? src_i : get_strided_index(src_i, num_dims, src_dims, src_strides);
       output[tid] = input[strided_src_i];
     }
 }
@@ -78,6 +79,7 @@ kernel void NAME( \
     constant size_t &right_size, \
     constant size_t &ids_size, \
     constant bool &contiguous, \
+    constant size_t &num_dims, \
     constant size_t *src_dims, \
     constant size_t *src_strides, \
     const device TYPENAME *input, \
@@ -85,7 +87,7 @@ kernel void NAME( \
     device TYPENAME *output, \
     uint tid [[ thread_position_in_grid ]] \
 ) { \
-    index<TYPENAME, INDEX_TYPENAME>(dst_size, left_size, src_dim_size, right_size, ids_size, contiguous, src_dims, src_strides, input, input_ids, output, tid); \
+    index<TYPENAME, INDEX_TYPENAME>(dst_size, left_size, src_dim_size, right_size, ids_size, contiguous, num_dims, src_dims, src_strides, input, input_ids, output, tid); \
 }
 
 
