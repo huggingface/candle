@@ -7263,6 +7263,57 @@ void kernel_mul_mm_id_impl(
     }
 }
 
+// Per-expert row counts for `kernel_mul_mm_id`, computed once per call instead
+// of rediscovered inside every threadgroup.
+//
+// `kernel_mul_mm_id`'s grid is (token-tiles x row-tiles x experts), and each
+// threadgroup used to scan the whole routing table to find its own expert's
+// rows. The result depends only on the expert, so the row-tile dimension was
+// pure duplication, and the token-tile extent is sized as though an expert
+// owned every token when it owns nei1*nei0/ne02 of them. At top-8-of-256 with
+// 768 tokens that is 49,152 threadgroups each reading 6,144 ids entries --
+// ~302M global reads to recover 6,144 entries' worth of information.
+//
+// With counts available up front, a threadgroup can tell in one read whether
+// its token tile holds any of its expert's rows, and skip the scan entirely
+// rather than discovering it was doomed only after paying for it.
+//
+// Counts only -- deliberately not the ordered row lists. Producing those in
+// the order the scan produces them needs a stable counting sort (per-chunk
+// per-expert offsets), and ordering is load-bearing here: an arbitrary
+// permutation made greedy decoding nondeterministic. Counts are
+// order-independent, so this is safe with a plain atomic histogram.
+kernel void kernel_mm_id_zero_counts(
+        device atomic_uint * counts,
+        constant   int64_t & ne02,
+        uint                 tpig[[thread_position_in_grid]])
+{
+    if ((int64_t)tpig < ne02) {
+        atomic_store_explicit(&counts[tpig], 0u, memory_order_relaxed);
+    }
+}
+
+kernel void kernel_mm_id_expert_counts(
+        device const uchar * ids,
+        device atomic_uint * counts,
+        constant   int64_t & nei0,
+        constant   int64_t & nei1,
+        constant  uint64_t & nbi1,
+        constant   int64_t & ne02,
+        uint                 tpig[[thread_position_in_grid]],
+        uint                 tpg [[threads_per_grid]])
+{
+    const uint n_pairs = (uint)(nei0 * nei1);
+    for (uint p = tpig; p < n_pairs; p += tpg) {
+        const uint ii1 = p / (uint)nei0;
+        const uint ii0 = p % (uint)nei0;
+        const int32_t id = ((device const int32_t *) (ids + ii1*nbi1))[ii0];
+        if (id >= 0 && (int64_t)id < ne02) {
+            atomic_fetch_add_explicit(&counts[id], 1u, memory_order_relaxed);
+        }
+    }
+}
+
 template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread half4x4 &)>
 kernel void kernel_mul_mm_id(
         device const   uchar * src0s,
@@ -7285,9 +7336,11 @@ kernel void kernel_mul_mm_id(
         constant     int64_t & ne0,
         constant     int64_t & ne1,
         constant    uint64_t & nb1,
+        device const    uint * expert_counts,
         threadgroup    uchar * shared_memory [[threadgroup(0)]],
         uint3                  tgpig[[threadgroup_position_in_grid]],
         uint                   tiitg[[thread_index_in_threadgroup]],
+        uint3                  ntg  [[threads_per_threadgroup]],
         uint                   sgitg[[simdgroup_index_in_threadgroup]]) {
 
     const int32_t i02 = tgpig.z;
@@ -7295,20 +7348,114 @@ kernel void kernel_mul_mm_id(
 
     device const uchar * src0 = src0s + i02*nb02;
 
-    // row indices
-    threadgroup ushort2 * rowids = (threadgroup ushort2 *)(shared_memory + 8192);
+    // Skip the scan entirely when this token tile holds none of this expert's
+    // rows. `expert_counts` is computed once per call by
+    // kernel_mm_id_expert_counts, so this costs one global read instead of the
+    // 6,144 the scan needed to reach the same conclusion. The previous
+    // revision could only bail *after* the count pass, which is where the
+    // remaining time was: 49,152 threadgroups x 6,144 reads.
+    if (tgpig.x * 32 >= expert_counts[i02]) {
+        return;
+    }
 
-    // TODO: parallelize this loop
-    int64_t _ne1 = 0;
-    for (ushort ii1 = 0; ii1 < nei1; ii1++) {
-        for (ushort ii0 = 0; ii0 < nei0; ii0++) {
-            int32_t id = ((device int32_t *) (ids + ii1*nbi1))[ii0];
-            if (id == i02) {
-                //if (tiitg == 0) {
-                    rowids[_ne1] = ushort2(ii0, ii1);
-                //}
-                _ne1++;
-            }
+    // Row discovery: which (expert-slot, token) pairs route to THIS expert.
+    //
+    // The original loop carried a `// TODO: parallelize this loop` and ran the
+    // full nei1*nei0 scan on *every* thread -- the `if (tiitg == 0)` guard is
+    // commented out upstream, so all 128 threads redundantly computed and wrote
+    // the same table. That made row discovery cost
+    // (threads) * (nei1*nei0) per threadgroup, and it is dispatched once per
+    // (token-tile, row-tile, expert) triple. For one 768-token chunk of a
+    // 256-expert top-8 model that is ~38 billion iterations, ~97% of it for
+    // experts with no rows at all -- which is why prefill collapsed while decode
+    // (nei1 == 1) was untouched.
+    //
+    // What actually cost time was not the duplication but the *serial length*:
+    // all threads ran the same nei1*nei0 scan concurrently, so wall-clock cost
+    // was one full scan. Splitting the scan is the win.
+    //
+    // **Order is preserved exactly.** An earlier revision of this used a
+    // threadgroup atomic to hand out slots, on the reasoning that every rowids
+    // entry carries its own source and destination -- `kernel_mul_mm_id_impl`
+    // derives src1 from `nb12*id[1] + nb11*(id[0] % ne11)` and dst from
+    // `jid[0]*ne0 + jid[1]*ne0ne1` -- so any permutation should be equivalent.
+    // **That reasoning is wrong**: measured against this same kernel, an
+    // arbitrary order made greedy decoding nondeterministic (three identical
+    // requests, three different completions) where the original is bit-stable.
+    // Something downstream is order-sensitive; rather than rely on a model of
+    // why, this reproduces the original nested loop's ordering exactly.
+    //
+    // Each thread takes a *contiguous* range of the flattened pair index
+    // `p = ii1*nei0 + ii0`, counts its matches, and an exclusive prefix sum over
+    // those counts gives its write base. Contiguous ranges in thread order means
+    // the assembled table is sorted by `p` -- identical to what
+    // `for ii1 { for ii0 { ... } }` produced.
+    // MUST match ROWID_COUNT_BYTES in kernels/quantized.rs, which sizes the
+    // threadgroup allocation. Room for nthreads+1 uints (the per-thread counts
+    // turned into prefix offsets, plus the total in the last slot) at the 128
+    // threads this kernel is always dispatched with, padded to 16.
+#define MM_ID_ROWID_COUNT_BYTES 528
+    threadgroup uint    * tcount = (threadgroup uint *)(shared_memory + 8192);
+    threadgroup ushort2 * rowids = (threadgroup ushort2 *)(shared_memory + 8192 + MM_ID_ROWID_COUNT_BYTES);
+
+    const uint n_pairs  = (uint)(nei1 * nei0);
+    const uint nthreads = ntg.x * ntg.y * ntg.z;
+    const uint per      = (n_pairs + nthreads - 1) / nthreads;
+    const uint p_begin  = min(tiitg * per, n_pairs);
+    const uint p_end    = min(p_begin + per, n_pairs);
+
+    uint mine = 0;
+    for (uint p = p_begin; p < p_end; p++) {
+        const ushort ii1 = (ushort)(p / (uint)nei0);
+        const ushort ii0 = (ushort)(p % (uint)nei0);
+        if (((device int32_t *) (ids + ii1*nbi1))[ii0] == i02) {
+            mine++;
+        }
+    }
+    tcount[tiitg] = mine;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Exclusive prefix sum over `nthreads` counts, serial on one thread: at 128
+    // threads this is negligible beside the scan it schedules, and keeps the
+    // result exactly reproducible.
+    if (tiitg == 0) {
+        uint acc = 0;
+        for (uint t = 0; t < nthreads; t++) {
+            const uint c = tcount[t];
+            tcount[t] = acc;
+            acc += c;
+        }
+        tcount[nthreads] = acc; // total
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const int64_t _ne1 = (int64_t)tcount[nthreads];
+
+    // Bail before the write pass if this threadgroup's token tile lies past
+    // the end of THIS expert's rows.
+    //
+    // The grid's token-tile extent is `nei1/32`, sized as though an expert
+    // owned every token. It owns about `nei1*nei0/ne02` of them -- 24 of 768
+    // at top-8-of-256 -- so with BLOCK_SIZE_N == 32 only tile 0 has any rows
+    // and tiles 1..23 have none. `kernel_mul_mm_id_impl` already returns
+    // immediately for those (its own `r1 * BLOCK_SIZE_N >= ne1` guard), so the
+    // matmul was never the waste; the row scan feeding it was, and it ran in
+    // full first.
+    //
+    // `r1` is `tgpig.x` (see the impl), and the count is exact by this point,
+    // so the two guards agree by construction. Placed after the count pass and
+    // prefix sum -- which are what produce `_ne1` -- and before the write pass,
+    // so a doomed tile pays the count but not the scatter.
+    if (tgpig.x * 32 >= (uint)_ne1) {
+        return;
+    }
+
+    uint pos = tcount[tiitg];
+    for (uint p = p_begin; p < p_end; p++) {
+        const ushort ii1 = (ushort)(p / (uint)nei0);
+        const ushort ii0 = (ushort)(p % (uint)nei0);
+        if (((device int32_t *) (ids + ii1*nbi1))[ii0] == i02) {
+            rowids[pos++] = ushort2(ii0, ii1);
         }
     }
 
@@ -7412,6 +7559,9 @@ typedef decltype(kernel_mul_mm_id<float4x4, 1, dequantize_f32>) mat_mm_id_t;
 
 template [[host_name("kernel_mul_mm_id_f32_f32")]]     kernel mat_mm_id_t kernel_mul_mm_id<float4x4,      1,     dequantize_f32>;
 template [[host_name("kernel_mul_mm_id_f16_f32")]]     kernel mat_mm_id_t kernel_mul_mm_id<half4x4,       1,     dequantize_f16>;
+#if defined(__HAVE_BFLOAT__)
+template [[host_name("kernel_mul_mm_id_bf16_f32")]]    kernel mat_mm_id_t kernel_mul_mm_id<bfloat4x4,     1,     dequantize_bf16>;
+#endif
 template [[host_name("kernel_mul_mm_id_q4_0_f32")]]    kernel mat_mm_id_t kernel_mul_mm_id<block_q4_0,    2,     dequantize_q4_0>;
 template [[host_name("kernel_mul_mm_id_q4_1_f32")]]    kernel mat_mm_id_t kernel_mul_mm_id<block_q4_1,    2,     dequantize_q4_1>;
 template [[host_name("kernel_mul_mm_id_q5_0_f32")]]    kernel mat_mm_id_t kernel_mul_mm_id<block_q5_0,    2,     dequantize_q5_0>;
