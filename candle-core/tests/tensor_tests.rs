@@ -1358,6 +1358,11 @@ fn scatter(device: &Device) -> Result<()> {
         ]
     );
 
+    let init = Tensor::zeros((2, 2), DType::U32, device)?;
+    let src = init.ones_like()?;
+    assert!(init.scatter_set(&init, &src, 0).is_err());
+    assert!(init.scatter_add_set(&init, &src, 0).is_err());
+
     Ok(())
 }
 
