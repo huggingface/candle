@@ -235,7 +235,8 @@ impl Attention {
             .transpose(1, 2)?;
         let value_states = value_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let query_states = self.q_norm.forward(&query_states)?;
         let key_states = self.k_norm.forward(&key_states)?;
 
