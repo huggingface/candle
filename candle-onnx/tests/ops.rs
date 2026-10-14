@@ -200,6 +200,100 @@ fn test_div_operation() -> Result<()> {
     Ok(())
 }
 
+// "Mod"
+#[test]
+fn test_mod_operation() -> Result<()> {
+    fn attr_int(name: &str, i: i64) -> AttributeProto {
+        AttributeProto {
+            name: name.to_string(),
+            r#type: AttributeType::Int.into(),
+            i,
+            ..AttributeProto::default()
+        }
+    }
+
+    fn test_i64(a: impl NdArray, b: impl NdArray, expected: impl NdArray) -> Result<()> {
+        let model = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Mod".to_string(),
+                attribute: vec![],
+                input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                ..NodeProto::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                ..ValueInfoProto::default()
+            }],
+            ..GraphProto::default()
+        }));
+
+        let inputs = HashMap::from_iter([
+            (INPUT_X.to_string(), Tensor::new(a, &Device::Cpu)?),
+            (INPUT_Y.to_string(), Tensor::new(b, &Device::Cpu)?),
+        ]);
+        let eval = simple_eval(&model, inputs)?;
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        let expected = Tensor::new(expected, &Device::Cpu)?;
+        assert_eq!(z.dims(), expected.dims());
+        assert_eq!(
+            z.flatten_all()?.to_vec1::<i64>()?,
+            expected.flatten_all()?.to_vec1::<i64>()?
+        );
+        Ok(())
+    }
+
+    fn test_f32(a: impl NdArray, b: impl NdArray, expected: impl NdArray) -> Result<()> {
+        let model = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Mod".to_string(),
+                attribute: vec![attr_int("fmod", 1)],
+                input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                ..NodeProto::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                ..ValueInfoProto::default()
+            }],
+            ..GraphProto::default()
+        }));
+
+        let inputs = HashMap::from_iter([
+            (INPUT_X.to_string(), Tensor::new(a, &Device::Cpu)?),
+            (INPUT_Y.to_string(), Tensor::new(b, &Device::Cpu)?),
+        ]);
+        let eval = simple_eval(&model, inputs)?;
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        let expected = Tensor::new(expected, &Device::Cpu)?;
+        assert_eq!(z.dims(), expected.dims());
+        assert_eq!(
+            z.flatten_all()?.to_vec1::<f32>()?,
+            expected.flatten_all()?.to_vec1::<f32>()?
+        );
+        Ok(())
+    }
+
+    // fmod=0 follows Python % semantics: the result has the divisor sign.
+    test_i64(&[-5i64, -4, 5, 4], &[3i64, 3, -3, -3], &[1i64, 2, -1, -2])?;
+
+    // Multidirectional broadcasting is required by ONNX Mod.
+    test_i64(
+        &[[5i64, 6, 7], [8, 9, 10]],
+        &[2i64, 4, 5],
+        &[[1i64, 2, 2], [0, 1, 0]],
+    )?;
+
+    // fmod=1 follows C fmod semantics: the result has the dividend sign.
+    test_f32(
+        &[-5.5f32, 5.5, -5.5, 5.5],
+        &[2.0f32, 2.0, -2.0, -2.0],
+        &[-1.5f32, 1.5, -1.5, 1.5],
+    )?;
+
+    Ok(())
+}
+
 // "Exp"
 #[test]
 fn test_exp_operation() -> Result<()> {
