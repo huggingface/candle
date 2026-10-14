@@ -1,3 +1,8 @@
+#[cfg(target_os = "macos")]
+pub const CANDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/candle.metallib"));
+#[cfg(target_os = "ios")]
+pub const CANDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/candle_ios.metallib"));
+
 pub const AFFINE: &str = include_str!("metal_src/affine.metal");
 pub const BINARY: &str = include_str!("metal_src/binary.metal");
 pub const CAST: &str = include_str!("metal_src/cast.metal");
@@ -17,6 +22,7 @@ pub const SDPA: &str = include_str!("metal_src/scaled_dot_product_attention.meta
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
+    Candle,
     Affine,
     Binary,
     Cast,
