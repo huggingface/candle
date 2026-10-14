@@ -1,9 +1,13 @@
+#[path = "qmatmul/report.rs"]
+mod report;
+
 use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
 use candle_core::{
     quantized::{self, GgmlDType, QMatMul},
     Device, Module, Tensor,
 };
-use criterion::{criterion_group, Criterion, Throughput};
+use criterion::{Criterion, Throughput};
+use std::cell::Cell;
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -28,14 +32,19 @@ fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
     let rhs = Tensor::from_slice(&rhs, (k, n), device).unwrap();
 
     let qtensor = quantized::QTensor::quantize(&rhs.t().unwrap(), dtype).unwrap();
+    let weight_bytes = qtensor.storage_size_in_bytes() as u64;
     let matmul = quantized::QMatMul::from_qtensor(qtensor).unwrap();
 
     let flops = b * m * n * k;
 
-    let mut group = c.benchmark_group(device.bench_name(format!("qmatmul_{dtype:?}")));
+    let benchmark_name = device.bench_name(format!("qmatmul_{dtype:?}"));
+    let family_name = device.bench_name("qmatmul");
+    let mut group = c.benchmark_group(&benchmark_name);
     group.sample_size(200);
     group.throughput(Throughput::Bytes(flops as u64));
-    group.bench_function("iter", move |b| {
+    let measured = Cell::new(false);
+    group.bench_function("iter", |b| {
+        measured.set(true);
         b.iter_custom(|iters| {
             let start = Instant::now();
             for _i in 0..iters {
@@ -46,6 +55,19 @@ fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
         })
     });
     group.finish();
+
+    if measured.get() {
+        // A matmul does one multiply and one add per inner-dimension element.
+        report::record(
+            &benchmark_name,
+            &family_name,
+            &format!("{dtype:?}"),
+            &format!("lhs {m}x{k}, rhs {k}x{n}"),
+            2 * flops as u64,
+            weight_bytes,
+            (k * n) as u64,
+        );
+    }
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -70,4 +92,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, criterion_benchmark);
+// The expansion of `criterion_group!`, written out so the report can draw once
+// the whole dtype sweep has reported — the boundary the macro leaves no room for.
+pub fn benches() {
+    let mut criterion = Criterion::default().configure_from_args();
+    criterion_benchmark(&mut criterion);
+    report::print_summary();
+}
