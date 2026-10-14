@@ -45,6 +45,10 @@ impl Linear {
         let span = tracing::span!(tracing::Level::TRACE, "linear");
         Self { inner, span }
     }
+
+    pub fn weight(&self) -> &Tensor {
+        self.inner.weight()
+    }
 }
 
 pub fn linear_b(d1: usize, d2: usize, b: bool, vb: VarBuilder) -> Result<Linear> {
