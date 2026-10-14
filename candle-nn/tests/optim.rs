@@ -158,3 +158,56 @@ fn adamw_linear_regression_varmap() -> Result<()> {
     assert_eq!(to_vec0_round(lin.bias().unwrap(), 4)?, 1.);
     Ok(())
 }
+
+/// Six AdamW steps on `loss = sum(w^2)`, optionally checkpointing the optimizer
+/// state after `before` steps and restoring it into a fresh `AdamW` for the rest,
+/// the way a new process would.
+fn adamw_staged(before: usize, after: usize, restore_moments: bool) -> Result<Vec<f32>> {
+    let dev = Device::Cpu;
+    let w = Var::from_slice(&[1.0f32, 2.0, 3.0], (3,), &dev)?;
+
+    let mut opt = AdamW::new(vec![w.clone()], ParamsAdamW::default())?;
+    for _ in 0..before {
+        let loss = w.as_tensor().sqr()?.sum_all()?;
+        opt.step(&loss.backward()?)?;
+    }
+
+    if after > 0 {
+        let step_t = opt.step_t();
+        let saved: Vec<(Tensor, Tensor)> = opt
+            .moments()
+            .map(|(_, m, v)| (m.as_tensor().clone(), v.as_tensor().clone()))
+            .collect();
+
+        let mut opt = AdamW::new(vec![w.clone()], ParamsAdamW::default())?;
+        opt.set_step_t(step_t);
+        if restore_moments {
+            for ((_, m, v), (saved_m, saved_v)) in opt.moments().zip(saved.iter()) {
+                m.set(saved_m)?;
+                v.set(saved_v)?;
+            }
+        }
+        for _ in 0..after {
+            let loss = w.as_tensor().sqr()?.sum_all()?;
+            opt.step(&loss.backward()?)?;
+        }
+    }
+    Ok(w.as_tensor().to_vec1::<f32>()?)
+}
+
+/// A run checkpointed and resumed through `step_t` / `moments` must land exactly
+/// where an uninterrupted one does.
+#[test]
+fn adamw_resume_matches_uninterrupted_run() -> Result<()> {
+    assert_eq!(adamw_staged(6, 0, true)?, adamw_staged(3, 3, true)?);
+    Ok(())
+}
+
+/// Control for the test above: restoring the step counter but *not* the moments
+/// must change the trajectory. Without this, a resume that silently dropped the
+/// moments would still pass.
+#[test]
+fn adamw_losing_the_moments_is_visible() -> Result<()> {
+    assert_ne!(adamw_staged(6, 0, true)?, adamw_staged(3, 3, false)?);
+    Ok(())
+}
