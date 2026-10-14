@@ -1,0 +1,8 @@
+/.venv/
+/target/
+/dist/
+/weights/
+/research/
+/results/*.jsonl
+/results/**/*.jsonl
+__pycache__/

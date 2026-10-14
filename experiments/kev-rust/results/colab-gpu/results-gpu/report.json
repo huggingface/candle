@@ -1,0 +1,113 @@
+{
+  "hardware": {
+    "gpu": "NVIDIA Tesla T4",
+    "architecture": "x86_64",
+    "gpu_used": true
+  },
+  "dtype": "float32",
+  "tf32": false,
+  "checkpoint": {
+    "base": "Qwen/Qwen3.5-0.8B-Base",
+    "base_revision": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+    "head_dim": 256,
+    "temperature": 2.3510958125672174,
+    "lora": 16,
+    "option_isolation": false,
+    "kev_revision": "bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+    "adapter_scale": 2.0,
+    "dtype": "float32",
+    "kev_path": "/root/.cache/huggingface/hub/models--jaredpalmer--kev-0.8b/snapshots/bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+    "base_path": "/root/.cache/huggingface/hub/models--Qwen--Qwen3.5-0.8B-Base/snapshots/dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+    "merged_tensors": 186,
+    "adapter_sha256": "9b908623acb162118575f4e7a94524f9c139c335be4bfb74d6cfceca01e1885a"
+  },
+  "parity": {
+    "cuda-prefix": {
+      "records": 10,
+      "questions": 22,
+      "max_logit_error": 4.199455642672767e-06,
+      "max_probability_error": 7.436862302645508e-07,
+      "argmax_flips": 0,
+      "token_ids_identical": true,
+      "max_serialized_probability_error": 4.703000000000346e-05,
+      "reference_median_ms": 3267.478542000049,
+      "candidate_median_ms": 92.251341,
+      "speedup": 35.419306717720765,
+      "atol": 0.0001,
+      "logit_atol": 0.001,
+      "passed": true
+    },
+    "cuda-rows": {
+      "records": 10,
+      "questions": 22,
+      "max_logit_error": 5.897824554457198e-06,
+      "max_probability_error": 1.52923729390686e-06,
+      "argmax_flips": 0,
+      "token_ids_identical": true,
+      "max_serialized_probability_error": 4.699999999999149e-05,
+      "reference_median_ms": 3267.478542000049,
+      "candidate_median_ms": 86.9971155,
+      "speedup": 37.558469878234625,
+      "atol": 0.0001,
+      "logit_atol": 0.001,
+      "passed": true
+    },
+    "cuda-unbatched": {
+      "records": 10,
+      "questions": 22,
+      "max_logit_error": 4.499455642681394e-06,
+      "max_probability_error": 6.664697402292141e-07,
+      "argmax_flips": 0,
+      "token_ids_identical": true,
+      "max_serialized_probability_error": 4.727000000001591e-05,
+      "reference_median_ms": 3267.478542000049,
+      "candidate_median_ms": 107.7175685,
+      "speedup": 30.33375694884952,
+      "atol": 0.0001,
+      "logit_atol": 0.001,
+      "passed": true
+    }
+  },
+  "benchmarks": {
+    "cuda": {
+      "warm_median_ms": 89.622226,
+      "samples": 16
+    },
+    "cpu": {
+      "warm_median_ms": 2865.0733099999998,
+      "samples": 16
+    }
+  },
+  "cpu_to_gpu_speedup": 31.968334618245255,
+  "timings_seconds": {
+    "rustup component add rustfmt": 0.12252014499972574,
+    "nvidia-smi": 0.13002320299983694,
+    "nvcc --version": 0.0027205339993088273,
+    "rustc --version": 0.01387782999972842,
+    "uv pip install --python /content/candle/experiments/kev-rust-gpu/.venv/bin/python torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu": 0.014013280999279232,
+    "uv pip install --python /content/candle/experiments/kev-rust-gpu/.venv/bin/python safetensors==0.8.0 huggingface-hub==2.2.0 numpy": 0.45018858599996747,
+    "/content/candle/experiments/kev-rust-gpu/.venv/bin/python scripts/prepare.py": 30.917997457000638,
+    "/content/candle/target/release/kev-rust --device cuda --input fixtures/parity-v2.jsonl": 10.261021276000065,
+    "/content/candle/experiments/kev-rust-gpu/.venv/bin/python scripts/compare.py reference-cpu.jsonl /content/candle/experiments/kev-rust-gpu/results-gpu/cuda-prefix.jsonl --out /content/candle/experiments/kev-rust-gpu/results-gpu/cuda-prefix.json": 0.04763586999979452,
+    "/content/candle/target/release/kev-rust --device cuda --input fixtures/parity-v2.jsonl --rows": 3.50716209500024,
+    "/content/candle/experiments/kev-rust-gpu/.venv/bin/python scripts/compare.py reference-cpu.jsonl /content/candle/experiments/kev-rust-gpu/results-gpu/cuda-rows.jsonl --out /content/candle/experiments/kev-rust-gpu/results-gpu/cuda-rows.json": 0.04433079199952772,
+    "/content/candle/target/release/kev-rust --device cuda --input fixtures/parity-v2.jsonl --unbatched": 3.1886659370002235,
+    "/content/candle/experiments/kev-rust-gpu/.venv/bin/python scripts/compare.py reference-cpu.jsonl /content/candle/experiments/kev-rust-gpu/results-gpu/cuda-unbatched.jsonl --out /content/candle/experiments/kev-rust-gpu/results-gpu/cuda-unbatched.json": 0.04482786500011571,
+    "/content/candle/target/release/kev-rust --device cuda --input fixtures/requests.jsonl --repeats 5": 3.7101311460000943,
+    "/content/candle/target/release/kev-rust --device cpu --input fixtures/requests.jsonl --repeats 5": 58.98825508199934
+  },
+  "binary_sha256": "446515023735c90d1a1337f4bd74e1d4b8d2b9c5eec113717c2e261fd2155800",
+  "reference_sha256": "ffdc3a64a1454c2188b0659b068a1aa5e49061f242caa4d755b6dc668b1e12d2",
+  "source_sha256": {
+    "Cargo.toml": "74e05258654897f5104d4153f6e19229eaaf3a301abb37750ccc0e6d9884e3d2",
+    "build.rs": "2646c383fcb8fe40177b6a0a995f2b358892f246f0f59442ffa5ed46ebdc5aca",
+    "src/cuda.rs": "4b0aada7eb856b5ab71f0f6c2392efe327a30a77005d45bfb79c5b12cc87701e",
+    "src/delta.rs": "8501d7bacdb25333f4da7254cfaf65fd675d570d63a08df28f72a86a4dd926c9",
+    "src/lib.rs": "b1ee93042b98e6be0f8380793a9763b68042d0a0f226e5d2d885d00198d4e1f3",
+    "src/main.rs": "c92157956cd0d44b72c5e2676bc61d45c01871706776617f2ace71f9fb66791b",
+    "src/qwen3_5.rs": "079b9d324a73623f70d09333e4119753017cf44954401fc74ccf22ea27355b61",
+    "cuda/kev.cu": "2a98d0cba0e30ebe8e0d7f698379b0e3ad6c5a66b4e2037009670cb64ff531d0"
+  },
+  "dynamic_libraries": "\tlinux-vdso.so.1 (0x00007ffe30dfe000)\n\tlibcuda.so.1 => /usr/lib64-nvidia/libcuda.so.1 (0x000079aa8ce00000)\n\tlibcurand.so.10 => /usr/local/cuda/lib64/libcurand.so.10 (0x000079aa84600000)\n\tlibcublas.so.13 => /usr/local/cuda/lib64/libcublas.so.13 (0x000079aa81000000)\n\tlibcudart.so.13 => /usr/local/cuda/lib64/libcudart.so.13 (0x000079aa80c00000)\n\tlibstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000079aa80982000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000079aa92aa9000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000079aa8cd17000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000079aa8076f000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000079aa95e3a000)\n\tlibdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x000079aa92aa4000)\n\tlibpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000079aa92a9f000)\n\tlibrt.so.1 => /lib/x86_64-linux-gnu/librt.so.1 (0x000079aa92a9a000)\n\tlibcublasLt.so.13 => /usr/local/cuda/lib64/libcublasLt.so.13 (0x000079aa5a800000)\n",
+  "question_isolation_passed": true
+}

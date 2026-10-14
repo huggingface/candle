@@ -1,0 +1,15 @@
+{
+  "records": 12,
+  "questions": 30,
+  "max_logit_error": 8.821487426757812e-06,
+  "max_probability_error": 1.17726325626899e-06,
+  "argmax_flips": 0,
+  "token_ids_identical": true,
+  "max_serialized_probability_error": 3.9522409439107786e-05,
+  "reference_median_ms": 2741.4132569992944,
+  "candidate_median_ms": 2628.785508,
+  "speedup": 1.0428440238492422,
+  "atol": 0.0001,
+  "logit_atol": 0.001,
+  "passed": true
+}

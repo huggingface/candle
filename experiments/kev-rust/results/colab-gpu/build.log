@@ -1,0 +1,232 @@
+STAGE: unpack source and verify CUDA runtime
++ tar -xzf /content/kev-gpu-source.tar.gz -C /content/candle/experiments/kev-rust-gpu
++ nvidia-smi
++ nvcc --version
++ rustc --version
+STAGE: build CUDA kernels and run CPU/CUDA unit tests
++ cargo fmt
++ cargo test --release --features cuda
+    Updating crates.io index
+     Locking 19 packages to highest compatible versions
+      Adding block-buffer v0.10.4
+      Adding candle-kernels v0.11.0 (/content/candle/candle-kernels)
+      Adding cpufeatures v0.2.17
+      Adding crypto-common v0.1.7
+      Adding cudaforge v0.1.6
+      Adding cudarc v0.19.10
+      Adding digest v0.10.7
+      Adding env_home v0.1.0
+      Adding fs2 v0.4.3
+      Adding generic-array v0.14.7 (available: v0.14.9)
+      Adding glob v0.3.4
+      Adding libloading v0.9.0
+      Adding sha2 v0.10.9
+      Adding typenum v1.20.1
+      Adding which v7.0.3
+      Adding winapi v0.3.9
+      Adding winapi-i686-pc-windows-gnu v0.4.0
+      Adding winapi-x86_64-pc-windows-gnu v0.4.0
+      Adding winsafe v0.0.19
+ Downloading crates ...
+  Downloaded onig v6.5.3
+  Downloaded zerocopy-derive v0.8.62
+  Downloaded zerocopy v0.8.62
+  Downloaded onig_sys v69.9.3
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+   Compiling zerocopy v0.8.62
+   Compiling getrandom v0.3.4
+   Compiling zerocopy-derive v0.8.62
+   Compiling rand_core v0.9.5
+   Compiling bytemuck_derive v1.12.1
+   Compiling bytemuck v1.25.2
+   Compiling serde_derive v1.0.229
+   Compiling serde_core v1.0.229
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.9.0
+   Compiling rand v0.9.5
+   Compiling num-complex v0.4.6
+   Compiling anyhow v1.0.104
+   Compiling rand_distr v0.5.1
+   Compiling dyn-stack v0.13.2
+   Compiling pulp v0.22.3
+   Compiling half v2.7.1
+   Compiling thiserror-impl v2.0.21
+   Compiling darling_core v0.20.11
+   Compiling gemm-common v0.19.0
+   Compiling serde v1.0.229
+   Compiling cc v1.8.0
+   Compiling darling_macro v0.20.11
+   Compiling thiserror v2.0.21
+   Compiling darling v0.20.11
+   Compiling aho-corasick v1.1.5
+   Compiling onig_sys v69.9.3
+   Compiling synstructure v0.14.0
+   Compiling getrandom v0.4.3
+   Compiling serde_json v1.0.154
+   Compiling smallvec v1.16.3
+   Compiling cudaforge v0.1.6
+   Compiling regex-automata v0.4.18
+   Compiling derive_builder_core v0.20.2
+   Compiling derive_builder_macro v0.20.2
+   Compiling candle-kernels v0.11.0 (/content/candle/candle-kernels)
+   Compiling zerofrom-derive v0.1.8
+   Compiling gemm-f32 v0.19.0
+   Compiling monostate-impl v0.1.18
+   Compiling spm_precompiled v0.1.4
+   Compiling gemm-f16 v0.19.0
+   Compiling hashbrown v0.16.1
+   Compiling compact_str v0.9.1
+   Compiling cudarc v0.19.10
+   Compiling tempfile v3.27.0
+   Compiling monostate v0.1.18
+   Compiling zerofrom v0.1.8
+   Compiling onig v6.5.3
+   Compiling derive_builder v0.20.2
+   Compiling ahash v0.8.12
+   Compiling parking_lot_core v0.9.12
+   Compiling fancy-regex v0.17.0
+   Compiling regex v1.13.1
+   Compiling unicode-normalization-alignments v0.1.12
+   Compiling yoke-derive v0.8.4
+   Compiling dary_heap v0.3.9
+   Compiling gemm-c64 v0.19.0
+   Compiling gemm-f64 v0.19.0
+   Compiling gemm-c32 v0.19.0
+   Compiling float8 v0.7.0
+   Compiling log v0.4.34
+   Compiling tokenizers v0.23.2
+   Compiling gemm v0.19.0
+   Compiling yoke v0.8.3
+   Compiling parking_lot v0.12.5
+   Compiling safetensors v0.8.0
+   Compiling clap_derive v4.6.7
+   Compiling kev-rust v0.1.0 (/content/candle/experiments/kev-rust-gpu)
+   Compiling clap v4.6.7
+warning: candle-kernels@0.11.0: Compiling 11 of 11 PTX kernels
+warning: candle-kernels@0.11.0: Using 2 threads for compilation
+warning: candle-kernels@0.11.0: Compiling 15 of 15 kernels
+   Compiling candle-core v0.11.0 (/content/candle/candle-core)
+   Compiling candle-nn v0.11.0 (/content/candle/candle-nn)
+    Finished `release` profile [optimized] target(s) in 12m 23s
+     Running unittests src/lib.rs (/content/candle/target/release/deps/kev_rust-9d6fa7ac104bd873)
+
+running 6 tests
+test cuda::tests::cuda_depthwise_matches_cpu_with_strided_input ... ok
+test delta::tests::depthwise_matches_grouped_convolution ... ok
+test delta::tests::scan_matches_independent_tensor_rule_and_continuation ... ok
+test tests::numeric_state_preserves_python_float_and_integer_text ... ok
+test tests::structured_state_matches_python_rendering ... ok
+test cuda::tests::cuda_scan_matches_cpu_and_preserves_initial_cache ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running unittests src/main.rs (/content/candle/target/release/deps/kev_rust-b04412483693f0b8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kev_rust
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
++ cargo build --release --features cuda
+warning: candle-kernels@0.11.0: Compiling 11 of 11 PTX kernels
+warning: candle-kernels@0.11.0: Using 2 threads for compilation
+warning: candle-kernels@0.11.0: Compiling 15 of 15 kernels
+   Compiling kev-rust v0.1.0 (/content/candle/experiments/kev-rust-gpu)
+    Finished `release` profile [optimized] target(s) in 2.98s
+STAGE: prepare pinned fp32 weights
++ uv venv --python 3.13 .venv
+warning: The `--system` flag has no effect, `uv venv` always ignores virtual environments when finding a Python interpreter; did you mean `--no-managed-python`?
+Using CPython 3.13.15 interpreter at: /usr/bin/python3
+Creating virtual environment at: .venv
+Activate with: source .venv/bin/activate
++ uv pip install --python /content/candle/experiments/kev-rust-gpu/.venv/bin/python torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+Resolved 10 packages in 300ms
+Downloading setuptools (1.2MiB)
+Downloading torch (175.4MiB)
+Downloading sympy (6.0MiB)
+Downloading networkx (2.0MiB)
+ Downloaded setuptools
+ Downloaded networkx
+ Downloaded sympy
+ Downloaded torch
+Prepared 10 packages in 4.04s
+Installed 10 packages in 247ms
+ + filelock==3.32.3
+ + fsspec==2026.7.0
+ + jinja2==3.1.6
+ + markupsafe==3.0.3
+ + mpmath==1.3.0
+ + networkx==3.6.1
+ + setuptools==78.1.0
+ + sympy==1.14.0
+ + torch==2.8.0+cpu
+ + typing-extensions==4.16.0
++ uv pip install --python /content/candle/experiments/kev-rust-gpu/.venv/bin/python safetensors==0.8.0 huggingface-hub==2.2.0
+Resolved 16 packages in 217ms
+Downloading hf-xet (4.0MiB)
+ Downloaded hf-xet
+Prepared 13 packages in 138ms
+Installed 13 packages in 13ms
+ + anyio==4.15.1
+ + click==8.5.0
+ + h11==0.16.0
+ + hf-xet==1.7.0
+ + httpcore2==2.13.1
+ + httpx2==2.13.1
+ + huggingface-hub==2.2.0
+ + idna==3.20
+ + packaging==26.3
+ + pyyaml==6.0.3
+ + safetensors==0.8.0
+ + tqdm==4.70.1
+ + truststore==0.10.5
++ /content/candle/experiments/kev-rust-gpu/.venv/bin/python scripts/prepare.py
+/content/candle/experiments/kev-rust-gpu/.venv/lib/python3.13/site-packages/torch/_subclasses/functional_tensor.py:279: UserWarning: Failed to initialize NumPy: No module named 'numpy' (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:81.)
+  cpu = _conversion_method_template(device=torch.device("cpu"))
+Fetching 9 files:   0%|          | 0/9 [00:00<?, ?it/s]Fetching 9 files: 100%|██████████| 9/9 [00:00<00:00, 1495.95it/s]
+Fetching 3 files:   0%|          | 0/3 [00:00<?, ?it/s]Fetching 3 files: 100%|██████████| 3/3 [00:00<00:00, 1092.46it/s]
+Writing 320 backbone tensors
+Traceback (most recent call last):
+  File "/content/candle/experiments/kev-rust-gpu/scripts/prepare.py", line 69, in <module>
+    main()
+    ~~~~^^
+  File "/content/candle/experiments/kev-rust-gpu/scripts/prepare.py", line 56, in main
+    save_file(weights, args.out / "model.safetensors")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/content/candle/experiments/kev-rust-gpu/.venv/lib/python3.13/site-packages/safetensors/torch.py", line 324, in save_file
+    _flatten_as_ptr(tensors, keep_references_alive), filename, metadata=metadata
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/content/candle/experiments/kev-rust-gpu/.venv/lib/python3.13/site-packages/safetensors/torch.py", line 582, in _flatten_as_ptr
+    arr, tensor_ref = _to_ndarray(v)
+                      ~~~~~~~~~~~^^^
+  File "/content/candle/experiments/kev-rust-gpu/.venv/lib/python3.13/site-packages/safetensors/torch.py", line 483, in _to_ndarray
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'
+Traceback (most recent call last):
+  File "/content/kev_gpu_job.py", line 65, in <module>
+    run([py, 'scripts/prepare.py'])
+    ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/content/kev_gpu_job.py", line 40, in run
+    subprocess.run(list(map(str, cmd)), cwd=cwd, env=ENV, check=True)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/subprocess.py", line 577, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/content/candle/experiments/kev-rust-gpu/.venv/bin/python', 'scripts/prepare.py']' returned non-zero exit status 1.
+Traceback (most recent call last):
+  File "/content/kev_gpu_job.py", line 65, in <module>
+    run([py, 'scripts/prepare.py'])
+    ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/content/kev_gpu_job.py", line 40, in run
+    subprocess.run(list(map(str, cmd)), cwd=cwd, env=ENV, check=True)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/subprocess.py", line 577, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/content/candle/experiments/kev-rust-gpu/.venv/bin/python', 'scripts/prepare.py']' returned non-zero exit status 1.
