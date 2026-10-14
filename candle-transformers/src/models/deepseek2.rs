@@ -250,6 +250,8 @@ enum ScoringFunc {
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct DeepSeekV2Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
     pub(crate) intermediate_size: usize,
@@ -542,7 +544,7 @@ struct Attention {
     cfg: DeepSeekV2Config,
     q_head_dim: usize,
     softmax_scale: f64,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: candle_nn::kv_cache::KvCache,
 }
 
 impl Attention {
@@ -605,7 +607,7 @@ impl Attention {
             cfg: cfg.clone(),
             q_head_dim,
             softmax_scale: cfg.softmax_scale() as f64,
-            kv_cache: None,
+            kv_cache: candle_nn::kv_cache::KvCache::new(2, cfg.max_position_embeddings),
         })
     }
 
@@ -662,15 +664,7 @@ impl Attention {
         let q = Tensor::cat(&[q_nope, q_pe], D::Minus1)?;
         let k = Tensor::cat(&[k_nope, k_pe.repeat((1, q.dim(1)?, 1, 1))?], D::Minus1)?;
 
-        let (k, v) = match &self.kv_cache {
-            None => (k, v),
-            Some((prev_k, prev_v)) => {
-                let key_states = Tensor::cat(&[prev_k, &k], 2)?;
-                let value_states = Tensor::cat(&[prev_v, &v], 2)?;
-                (key_states, value_states)
-            }
-        };
-        self.kv_cache = Some((k.clone(), v.clone()));
+        let (k, v) = self.kv_cache.append(&k, &v)?;
 
         let attn_out = {
             let att = (q.contiguous()?.matmul(&k.t()?.contiguous()?)? * self.softmax_scale)?;
@@ -694,7 +688,7 @@ impl Attention {
     }
 
     fn clear_kv_cache(&mut self) {
-        self.kv_cache = None
+        self.kv_cache.reset()
     }
 }
 

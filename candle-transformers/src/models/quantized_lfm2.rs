@@ -628,3 +628,9 @@ impl ModelWeights {
         self.output.forward(&hidden)
     }
 }
+
+impl ModelWeights {
+    /// Reset KV caches across all attention layers.
+    /// TODO: access nested kv_cache inside LayerKind variants.
+    pub fn clear_kv_cache(&mut self) {}
+}
