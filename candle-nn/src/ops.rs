@@ -739,15 +739,20 @@ impl candle::CustomOp3 for LayerNorm {
             src.par_chunks(dim_m1)
                 .zip(dst.par_chunks_mut(dim_m1))
                 .for_each(|(src, dst)| {
+                    // Accumulate around the first element of the row (shifted data). Plain
+                    // E[x^2] - E[x]^2 cancels catastrophically when the mean is large
+                    // compared to the spread, and can go negative and return NaN.
+                    let shift = src[0].as_();
                     let mut sum = 0f32;
                     let mut sum2 = 0f32;
                     for v in src {
-                        let v = v.as_();
+                        let v = v.as_() - shift;
                         sum += v;
                         sum2 += v * v;
                     }
-                    let mean = sum / dim_m1 as f32;
-                    let var = sum2 / dim_m1 as f32 - mean * mean;
+                    let mean_shifted = sum / dim_m1 as f32;
+                    let mean = shift + mean_shifted;
+                    let var = (sum2 / dim_m1 as f32 - mean_shifted * mean_shifted).max(0.);
                     let inv_std = (var + eps).sqrt().recip();
                     for ((d, s), (alpha, beta)) in
                         dst.iter_mut().zip(src.iter()).zip(alpha.iter().zip(beta))

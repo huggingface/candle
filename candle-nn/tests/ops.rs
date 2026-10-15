@@ -188,6 +188,46 @@ fn layer_norml(device: &Device) -> Result<()> {
 }
 
 #[test]
+fn layer_norm_large_mean() -> Result<()> {
+    // Rows whose mean is large compared to their spread: the fused CPU kernel must
+    // agree with an f64 layer_norm_slow instead of returning NaN.
+    let dev = &Device::Cpu;
+    let hidden = 768;
+    let alpha = Tensor::ones(hidden, candle::DType::F32, dev)?;
+    let beta = Tensor::full(0.25f32, hidden, dev)?;
+    for (base, spread) in [(512.3f32, 0f32), (1000., 0.01), (10000., 1.)] {
+        let data: Vec<f32> = (0..hidden)
+            .map(|i| base + spread * ((i % 7) as f32 - 3.))
+            .collect();
+        let xs = Tensor::from_vec(data, (1, hidden), dev)?;
+        let fused = candle_nn::ops::layer_norm(&xs, &alpha, &beta, 1e-5)?;
+        // f64 reference, which does not suffer from the cancellation.
+        let slow = candle_nn::ops::layer_norm_slow(
+            &xs.to_dtype(candle::DType::F64)?,
+            &alpha.to_dtype(candle::DType::F64)?,
+            &beta.to_dtype(candle::DType::F64)?,
+            1e-5,
+        )?;
+        let fused = fused.flatten_all()?.to_vec1::<f32>()?;
+        let slow = slow.flatten_all()?.to_vec1::<f64>()?;
+        assert!(
+            fused.iter().all(|v| v.is_finite()),
+            "layer_norm returned non-finite values for base {base}, spread {spread}"
+        );
+        let diff = fused
+            .iter()
+            .zip(slow.iter())
+            .map(|(&a, &b)| (a as f64 - b).abs())
+            .fold(0f64, f64::max);
+        assert!(
+            diff < 1e-3,
+            "layer_norm and layer_norm_slow disagree for base {base}, spread {spread}: {diff}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn softmax_numerical_stability() -> Result<()> {
     let dev = &Device::Cpu;
     let xs = Tensor::new(&[1234f32, 0.], dev)?;
