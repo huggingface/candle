@@ -1928,6 +1928,12 @@ test_device!(
     meshgrid_with_empty_axis_metal
 );
 test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal);
+test_device!(
+    copy_is_independent,
+    copy_is_independent_cpu,
+    copy_is_independent_gpu,
+    copy_is_independent_metal
+);
 
 fn tensor_send_sync(device: &Device) -> Result<()> {
     let tensor = Tensor::new(vec![1.0f32, 2.0, 3.0], device)?;
@@ -2216,6 +2222,14 @@ fn tensor_norm() -> Result<()> {
     let t = Tensor::new(&[[3., 4.], [0., 0.]], &Device::Cpu)?;
     let norm = t.norm()?;
     assert_eq!(norm.to_scalar::<f64>()?, 5.);
+    Ok(())
+}
+
+fn copy_is_independent(dev: &Device) -> Result<()> {
+    let t = Tensor::new(&[3f32, 4.], dev)?;
+    let c = t.copy()?;
+    t.zero_set()?;
+    assert_eq!(c.to_vec1::<f32>()?, [3., 4.]);
     Ok(())
 }
 
