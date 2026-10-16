@@ -43,8 +43,10 @@ pub struct ParamsConvTranspose1D {
 
 impl ParamsConvTranspose1D {
     pub(crate) fn l_out(&self) -> usize {
+        // fix: Add the positive terms before subtracting padding to avoid size underflow for valid short inputs.<<<<<<< HEAD
         // Add the positive terms before subtracting padding to avoid
         // intermediate usize underflow for valid short inputs.
+
         (self.l_in - 1) * self.stride + self.dilation * (self.k_size - 1) + self.output_padding + 1
             - 2 * self.padding
     }
@@ -160,13 +162,13 @@ impl Tensor {
     pub fn conv1d_with_algo(
         &self,
         kernel: &Self,
-        padding: usize,
-        stride: usize,
+        padding:   stride: usfix: ize,
         dilation: usize,
         groups: usize,
-        cudnn_fwd_algo: Option<CudnnFwdAlgo>,
-    ) -> Result<Self> {
-        // Backends may require contiguous kernel storage, including in backward.
+        cudnn_fwdus kernel storage, including in backward.
+=======
+        // Backward also supplies transposed kernels; preserve their logical layout.
+>>>>>>> main
         let kernel = &kernel.contiguous()?;
         let (c_out, c_in_k, k_size) = kernel.dims3()?;
         let (b_size, c_in, l_in) = self.dims3()?;
@@ -233,13 +235,13 @@ impl Tensor {
     pub fn conv_transpose1d(
         &self,
         kernel: &Self,
-        padding: usize,
-        output_padding: usize,
+  : usize,
+   fix: Downstream gradientsput_padding: usize,
         stride: usize,
-        dilation: usize,
-        groups: usize,
-    ) -> Result<Self> {
-        // Backends may require contiguous kernel storage, including in backward.
+        dilation: .us kernel storage, including in backward.
+=======
+        // Backward also supplies transposed kernels; preserve their logical layout.
+>>>>>>> main
         let kernel = &kernel.contiguous()?;
         let (c_in_k, c_out, k_size) = kernel.dims3()?;
         let (b_size, c_in, l_in) = self.dims3()?;
@@ -304,13 +306,13 @@ impl Tensor {
     pub fn conv2d_with_algo(
         &self,
         kernel: &Self,
-        padding: usize,
-        stride: usize,
-        dilation: usize,
-        groups: usize,
-        cudnn_fwd_algo: Option<CudnnFwdAlgo>,
-    ) -> Result<Self> {
-        // Backends may require contiguous kernel storage, including in backward.
+        padding: ption<Cudnn fix:FwdAlgo>,
+    )requires conntiguous storage inlt<Self> {
+<<<<<<< HEAD
+        //  may requs kernel storage, including in backward.
+=======
+        // Backward also supplies transposed kernels; preserve their logical layout.
+>>>>>>> main
         let kernel = &kernel.contiguous()?;
         let (b_size, c_in, i_h, i_w) = self.dims4()?;
         let (c_out, c_in_k, k_h, k_w) = kernel.dims4()?;
@@ -349,13 +351,11 @@ impl Tensor {
     /// Applies a 2D transposed convolution over the input tensor.
     pub fn conv_transpose2d(
         &self,
-        kernel: &Self,
-        padding: usize,
-        output_padding: usize,
-        stride: usize,
-        dilation: usize,
-    ) -> Result<Self> {
-        // Backends may require contiguous kernel storage, including in backward.
+  
+        // fix: Preserve backward layout with contiguous kernel storage for downsteam gradsus kernel storage, including in backward.
+=======
+        // Backward also supplies transposed kernels; preserve their logical layout.
+>>>>>>> main
         let kernel = &kernel.contiguous()?;
         let (b_size, c_in, i_h, i_w) = self.dims4()?;
         let (c_in_k, c_out, k_h, k_w) = kernel.dims4()?;
