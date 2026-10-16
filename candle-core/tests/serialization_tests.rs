@@ -1,4 +1,6 @@
-use candle_core::{DType, Result, Tensor};
+use candle_core::npy::NpzTensors;
+use candle_core::{DType, Device, Error, Result, Tensor};
+use std::borrow::Cow;
 
 struct TmpFile(std::path::PathBuf);
 
@@ -67,5 +69,77 @@ fn safetensors() -> Result<()> {
     let t2 = st.get("t").unwrap().load(&candle_core::Device::Cpu);
     let diff = (&t - t2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
     assert_eq!(diff, 0f32);
+    Ok(())
+}
+
+fn write_named_tensor(path: &TmpFile, name: &str) -> Result<()> {
+    let tensor = Tensor::new(&[2u32, 4, 6], &Device::Cpu)?;
+    Tensor::write_npz(&[(name, &tensor)], path)?;
+    Ok(())
+}
+
+fn assert_named_tensor(path: &TmpFile, name: &str) -> Result<()> {
+    let loaded = Tensor::read_npz(path)?;
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].0, name);
+    assert_eq!(loaded[0].1.to_vec1::<u32>()?, vec![2, 4, 6]);
+    let lazy = NpzTensors::new(path)?;
+    assert_eq!(
+        lazy.names().iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+        vec![name]
+    );
+    let tensor = lazy.get(name)?.expect("the named tensor must be indexed");
+    assert_eq!(tensor.to_vec1::<u32>()?, vec![2, 4, 6]);
+    Ok(())
+}
+
+#[test]
+fn zip9_npz_borrowed_utf8_names() -> Result<()> {
+    let file = TmpFile::create("zip9-utf8");
+    write_named_tensor(&file, "données")?;
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&file.0)?)?;
+    let entry = archive.by_index(0)?;
+    assert!(matches!(entry.name()?, Cow::Borrowed("données.npy")));
+    assert_named_tensor(&file, "données")
+}
+
+#[test]
+fn zip9_npz_owned_cp437_names() -> Result<()> {
+    let file = TmpFile::create("zip9-cp437");
+    write_named_tensor(&file, "a")?;
+    let mut bytes = std::fs::read(&file.0)?;
+    let positions: Vec<_> = bytes
+        .windows(5)
+        .enumerate()
+        .filter_map(|(i, x)| (x == b"a.npy").then_some(i))
+        .collect();
+    assert_eq!(positions.len(), 2);
+    for index in positions {
+        bytes[index] = 0x82;
+    }
+    std::fs::write(&file.0, bytes)?;
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&file.0)?)?;
+    let entry = archive.by_index(0)?;
+    assert!(matches!(entry.name()?, Cow::Owned(name) if name == "é.npy"));
+    assert_named_tensor(&file, "é")
+}
+
+#[test]
+fn zip9_invalid_npz_returns_zip_errors() -> Result<()> {
+    let file = TmpFile::create("zip9-invalid-npz");
+    std::fs::write(&file.0, b"not a zip archive")?;
+    assert!(matches!(Tensor::read_npz(&file.0), Err(Error::Zip(_))));
+    assert!(matches!(NpzTensors::new(&file.0), Err(Error::Zip(_))));
+    Ok(())
+}
+
+#[test]
+fn zip9_invalid_pth_returns_zip_error() -> Result<()> {
+    let file = TmpFile::create("zip9-invalid-pth");
+    std::fs::write(&file.0, b"not a zip archive")?;
+    assert!(matches!(
+        candle_core::pickle::read_pth_tensor_info(&file.0, false, None),
+        Err(Error::Zip(_))
+    ));
     Ok(())
 }
