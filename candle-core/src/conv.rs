@@ -43,10 +43,8 @@ pub struct ParamsConvTranspose1D {
 
 impl ParamsConvTranspose1D {
     pub(crate) fn l_out(&self) -> usize {
-        (self.l_in - 1) * self.stride - 2 * self.padding
-            + self.dilation * (self.k_size - 1)
-            + self.output_padding
-            + 1
+        (self.l_in - 1) * self.stride + self.dilation * (self.k_size - 1) + self.output_padding + 1
+            - 2 * self.padding
     }
 
     pub(crate) fn out_dims(&self) -> Vec<usize> {
@@ -166,6 +164,8 @@ impl Tensor {
         groups: usize,
         cudnn_fwd_algo: Option<CudnnFwdAlgo>,
     ) -> Result<Self> {
+        // Backward also supplies transposed kernels; preserve their logical layout.
+        let kernel = &kernel.contiguous()?;
         let (c_out, c_in_k, k_size) = kernel.dims3()?;
         let (b_size, c_in, l_in) = self.dims3()?;
         if c_in != c_in_k * groups {
@@ -237,6 +237,8 @@ impl Tensor {
         dilation: usize,
         groups: usize,
     ) -> Result<Self> {
+        // Backward also supplies transposed kernels; preserve their logical layout.
+        let kernel = &kernel.contiguous()?;
         let (c_in_k, c_out, k_size) = kernel.dims3()?;
         let (b_size, c_in, l_in) = self.dims3()?;
         if c_in != c_in_k {
@@ -306,6 +308,8 @@ impl Tensor {
         groups: usize,
         cudnn_fwd_algo: Option<CudnnFwdAlgo>,
     ) -> Result<Self> {
+        // Backward also supplies transposed kernels; preserve their logical layout.
+        let kernel = &kernel.contiguous()?;
         let (b_size, c_in, i_h, i_w) = self.dims4()?;
         let (c_out, c_in_k, k_h, k_w) = kernel.dims4()?;
         if c_in != c_in_k * groups {
@@ -349,6 +353,8 @@ impl Tensor {
         stride: usize,
         dilation: usize,
     ) -> Result<Self> {
+        // Backward also supplies transposed kernels; preserve their logical layout.
+        let kernel = &kernel.contiguous()?;
         let (b_size, c_in, i_h, i_w) = self.dims4()?;
         let (c_in_k, c_out, k_h, k_w) = kernel.dims4()?;
         if c_in != c_in_k {
