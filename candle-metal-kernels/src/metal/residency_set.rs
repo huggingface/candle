@@ -1,5 +1,8 @@
 use super::{Buffer, Device};
-use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2::{
+    rc::Retained,
+    runtime::{AnyClass, ProtocolObject},
+};
 use objc2_metal::{MTLAllocation, MTLDevice as _, MTLResidencySet, MTLResidencySetDescriptor};
 
 /// Keeps Metal buffers resident in GPU memory, removing the need for `useResource` calls.
@@ -15,6 +18,12 @@ unsafe impl Sync for ResidencySet {}
 
 impl ResidencySet {
     pub fn new(device: &Device) -> Self {
+        // Residency sets arrived in macOS 15. On anything older the class is
+        // absent and objc2's typed lookup panics, so check by name first and
+        // run without a set, as on any device that refuses one.
+        if AnyClass::get(c"MTLResidencySetDescriptor").is_none() {
+            return ResidencySet { raw: None };
+        }
         let descriptor = MTLResidencySetDescriptor::new();
         let raw = device
             .as_ref()
