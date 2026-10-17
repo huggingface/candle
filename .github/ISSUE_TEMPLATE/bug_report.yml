@@ -1,0 +1,78 @@
+name: 🐛 Bug Report
+description: Report a reproducible bug or unexpected behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the sections below to help us reproduce and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear description of what the bug is
+      placeholder: What happened vs what you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps
+      description: Minimal code to reproduce the issue
+      placeholder: |
+        ```
+        // Your minimal reproducible example
+        ```
+      render: rust
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      description: Which compute backend are you using?
+      options:
+        - CPU
+        - CUDA
+        - Metal
+      multiple: true
+    validations:
+      required: true
+
+  - type: input
+    id: candle-version
+    attributes:
+      label: Candle Version
+      description: Output of `cargo tree | grep candle-core`
+      placeholder: "candle-core v0.x.x"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux
+        - macOS (Intel)
+        - macOS (Apple Silicon)
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: error-output
+    attributes:
+      label: Error Output
+      description: Full error message or panic output
+      render: shell
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other context about the problem (hardware specs, feature flags used, etc.)
