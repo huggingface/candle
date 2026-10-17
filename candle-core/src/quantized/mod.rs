@@ -103,6 +103,12 @@ impl Device {
 pub enum QStorage {
     Cpu(Box<dyn QuantizedType>),
     Metal(metal::QMetalStorage),
+    // Boxed: `QVulkanStorage` is by far the largest variant of this enum
+    // (it embeds a `VulkanStorage` and a `VulkanDevice`). Storing it by
+    // value would grow `QStorage` — and every `Storage` / quantized tensor
+    // that embeds it — by the full size of the struct, and triggers
+    // `clippy::large_enum_variant`. The box keeps the enum pointer-sized
+    // at the cost of one allocation per quantized tensor.
     Vulkan(Box<vulkan::QVulkanStorage>),
     Cuda(cuda::QCudaStorage),
 }
