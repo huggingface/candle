@@ -2035,10 +2035,9 @@ fn tril_triu_eye() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn cumsum() -> Result<()> {
+fn cumsum(device: &Device) -> Result<()> {
     let t = &[3f32, 1., 4., 1., 5.];
-    let t = Tensor::new(t, &Device::Cpu)?;
+    let t = Tensor::new(t, device)?;
     assert_eq!(t.cumsum(0)?.to_vec1::<f32>()?, [3., 4., 8., 9., 14.]);
     let t = t.unsqueeze(1)?;
     assert_eq!(
@@ -2050,7 +2049,7 @@ fn cumsum() -> Result<()> {
         [[3.0], [1.0], [4.0], [1.0], [5.0]]
     );
     let t = &[[3f32, 1., 4., 1., 5.], [2., 1., 7., 8., 2.]];
-    let t = Tensor::new(t, &Device::Cpu)?;
+    let t = Tensor::new(t, device)?;
     assert_eq!(
         t.cumsum(1)?.to_vec2::<f32>()?,
         [[3.0, 4.0, 8.0, 9.0, 14.0], [2.0, 3.0, 10.0, 18.0, 20.0]],
@@ -2059,6 +2058,1262 @@ fn cumsum() -> Result<()> {
         t.cumsum(0)?.to_vec2::<f32>()?,
         [[3.0, 1.0, 4.0, 1.0, 5.0], [5.0, 2.0, 11.0, 9.0, 7.0]]
     );
+    let t = Tensor::arange(0f32, 2060f32, device)?.reshape((2, 1030))?;
+    let c = t.cumsum(1)?;
+    assert_eq!(c.i((0, 0))?.to_scalar::<f32>()?, 0.0);
+    assert_eq!(c.i((0, 1029))?.to_scalar::<f32>()?, 529935.0);
+    assert_eq!(c.i((1, 0))?.to_scalar::<f32>()?, 1030.0);
+
+    let t = Tensor::zeros((2, 0, 4), DType::F32, device)?;
+    assert_eq!(t.cumsum(1)?.dims(), &[2, 0, 4]);
+    Ok(())
+}
+
+test_device!(cumsum, cumsum_cpu, cumsum_gpu, cumsum_metal);
+
+fn cumsum_singleton_axis(device: &Device) -> Result<()> {
+    let t = Tensor::arange(0f32, 24., device)?
+        .reshape((4, 3, 2))?
+        .narrow(1, 1, 1)?;
+    let c = t.cumsum(1)?;
+    assert_eq!(c.id(), t.id());
+    assert_eq!(c.dims(), &[4, 1, 2]);
+    assert_eq!(c.stride(), t.stride());
+    assert_eq!(
+        c.flatten_all()?.to_vec1::<f32>()?,
+        [2., 3., 8., 9., 14., 15., 20., 21.]
+    );
+
+    let t = Tensor::new(&[-0f32, f32::INFINITY, f32::NAN], device)?.unsqueeze(1)?;
+    let c = t.cumsum(D::Minus1)?;
+    assert_eq!(c.id(), t.id());
+    let values = c.flatten_all()?.to_vec1::<f32>()?;
+    assert_eq!(values[0].to_bits(), (-0f32).to_bits());
+    assert_eq!(values[1], f32::INFINITY);
+    assert!(values[2].is_nan());
+    assert!(t.cumsum(2).is_err());
+    Ok(())
+}
+
+test_device!(
+    cumsum_singleton_axis,
+    cumsum_singleton_axis_cpu,
+    cumsum_singleton_axis_cuda,
+    cumsum_singleton_axis_metal
+);
+
+#[test]
+fn cumsum_cpu_low_precision_accumulation() -> Result<()> {
+    for (dtype, len) in [
+        (DType::BF16, 1024),
+        (DType::F16, 4096),
+        (DType::F8E4M3, 128),
+    ] {
+        let input = Tensor::ones((2, len), dtype, &Device::Cpu)?.t()?;
+        let actual = input.cumsum(0)?;
+        let expected = Tensor::arange(1f32, (len + 1) as f32, &Device::Cpu)?
+            .to_dtype(dtype)?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        assert_eq!(actual.dtype(), dtype);
+        assert_eq!(actual.dims(), &[len, 2]);
+        for (row, expected) in actual
+            .to_dtype(DType::F32)?
+            .to_vec2::<f32>()?
+            .iter()
+            .zip(expected)
+        {
+            assert_eq!(row, &[expected, expected], "dtype {dtype:?}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn cumsum_cpu_non_contiguous() -> Result<()> {
+    let device = &Device::Cpu;
+    let t = Tensor::arange(0f32, 12f32, device)?.reshape((3, 4))?;
+    let t = t.t()?;
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f32>()?,
+        [
+            [0.0, 4.0, 12.0],
+            [1.0, 6.0, 15.0],
+            [2.0, 8.0, 18.0],
+            [3.0, 10.0, 21.0]
+        ]
+    );
+
+    let t = Tensor::arange(0f32, 20f32, device)?.reshape((4, 5))?;
+    let t = t.narrow(1, 1, 3)?;
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f32>()?,
+        [
+            [1.0, 3.0, 6.0],
+            [6.0, 13.0, 21.0],
+            [11.0, 23.0, 36.0],
+            [16.0, 33.0, 51.0]
+        ]
+    );
+    cumsum_additional_layouts(device)
+}
+
+fn cumsum_additional_layouts(device: &Device) -> Result<()> {
+    let t = Tensor::arange(0f32, 20., device)?.narrow(0, 5, 10)?;
+    assert!(t.is_contiguous());
+    assert_eq!(
+        t.cumsum(0)?.to_vec1::<f32>()?,
+        [5., 11., 18., 26., 35., 45., 56., 68., 81., 95.]
+    );
+
+    let t = Tensor::new(&[1f32, 2., 3.], device)?.broadcast_as((2, 3))?;
+    assert_eq!(t.cumsum(0)?.to_vec2::<f32>()?, [[1., 2., 3.], [2., 4., 6.]]);
+
+    let t = Tensor::arange(0f32, 30., device)?
+        .reshape((1, 2, 3, 5))?
+        .narrow(3, 1, 3)?;
+    let c = t.cumsum(2)?;
+    assert_eq!(c.dims(), &[1, 2, 3, 3]);
+    assert_eq!(
+        c.reshape((2, 3, 3))?.to_vec3::<f32>()?,
+        [
+            [[1., 2., 3.], [7., 9., 11.], [18., 21., 24.]],
+            [[16., 17., 18.], [37., 39., 41.], [63., 66., 69.]]
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn cumsum_cpu_integer_dtype() -> Result<()> {
+    let device = &Device::Cpu;
+    let t = Tensor::new(&[[1u32, 2, 3], [4, 5, 6]], device)?;
+    assert_eq!(t.cumsum(1)?.to_vec2::<u32>()?, [[1u32, 3, 6], [4, 9, 15]]);
+    let t = Tensor::new(&[-3i64, 1, 4, -1], device)?;
+    assert_eq!(t.cumsum(0)?.to_vec1::<i64>()?, [-3, -2, 2, 1]);
+    Ok(())
+}
+
+fn cumsum_integer_wrapping<T>(device: &Device, pattern: &[T]) -> Result<()>
+where
+    T: candle_core::WithDType + num_traits::WrappingAdd + std::fmt::Debug,
+{
+    for rows in [1, 2] {
+        for len in [
+            2, 3, 31, 32, 33, 1024, 1025, 4095, 4096, 4097, 4128, 4129, 8193, 12289, 12290,
+        ] {
+            let mut values = vec![T::zero()];
+            let mut expected = Vec::with_capacity(rows * len);
+            for row in 0..rows {
+                let mut sum = T::zero();
+                for col in 0..len {
+                    let value = if len >= 12289 {
+                        // Sparse tiles make the tile totals themselves overflow:
+                        // e.g. MAX, 1, -1 for i64, exercising the second pass too.
+                        if col % 4096 == 0 {
+                            pattern[(col / 4096 + 3 * row) % pattern.len()]
+                        } else {
+                            T::zero()
+                        }
+                    } else {
+                        pattern[(col + 3 * row) % pattern.len()]
+                    };
+                    values.push(value);
+                    sum = sum.wrapping_add(&value);
+                    expected.push(sum);
+                }
+            }
+            // Preserve exact integer bits, including i64 values beyond 2^53.
+            let input = Tensor::from_vec(values, 1 + rows * len, device)?
+                .narrow(0, 1, rows * len)?
+                .reshape((rows, len))?;
+            for output in [input.cumsum(1)?, input.t()?.contiguous()?.cumsum(0)?.t()?] {
+                assert_eq!(output.dtype(), T::DTYPE);
+                assert_eq!(output.dims(), &[rows, len]);
+                assert_eq!(
+                    output.flatten_all()?.to_vec1::<T>()?,
+                    expected,
+                    "dtype {:?}, rows {rows}, len {len}",
+                    T::DTYPE
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn cumsum_integer_wrapping_cpu() -> Result<()> {
+    let device = &Device::Cpu;
+    cumsum_integer_wrapping(device, &[u8::MAX, 1, u8::MAX, 2, u8::MAX, u8::MAX, 3])?;
+    cumsum_integer_wrapping(device, &[u32::MAX, 1, u32::MAX, 2, u32::MAX, u32::MAX, 3])?;
+    cumsum_integer_wrapping(
+        device,
+        &[i16::MAX, 1, -1, -i16::MAX, i16::MIN, -1, 1, i16::MAX],
+    )?;
+    cumsum_integer_wrapping(
+        device,
+        &[i32::MAX, 1, -1, -i32::MAX, i32::MIN, -1, 1, i32::MAX],
+    )?;
+    cumsum_integer_wrapping(
+        device,
+        &[i64::MAX, 1, -1, -i64::MAX, i64::MIN, -1, 1, i64::MAX],
+    )
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_integer_wrapping_cuda() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    cumsum_integer_wrapping(&device, &[u32::MAX, 1, u32::MAX, 2, u32::MAX, u32::MAX, 3])?;
+    cumsum_integer_wrapping(
+        &device,
+        &[i64::MAX, 1, -1, -i64::MAX, i64::MIN, -1, 1, i64::MAX],
+    )
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_adapts_layouts() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+
+    let t = Tensor::arange(0f32, 12f32, &device)?.reshape((3, 4))?;
+    assert_eq!(
+        t.cumsum(0)?.to_vec2::<f32>()?,
+        [
+            [0.0, 1.0, 2.0, 3.0],
+            [4.0, 6.0, 8.0, 10.0],
+            [12.0, 15.0, 18.0, 21.0]
+        ]
+    );
+
+    let t = t.t()?;
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f32>()?,
+        [
+            [0.0, 4.0, 12.0],
+            [1.0, 6.0, 15.0],
+            [2.0, 8.0, 18.0],
+            [3.0, 10.0, 21.0]
+        ]
+    );
+    assert_eq!(
+        t.cumsum(0)?.to_vec2::<f32>()?,
+        [
+            [0.0, 4.0, 8.0],
+            [1.0, 9.0, 17.0],
+            [3.0, 15.0, 27.0],
+            [6.0, 22.0, 38.0]
+        ]
+    );
+
+    let t = Tensor::arange(0f32, 20f32, &device)?.reshape((4, 5))?;
+    let t = t.narrow(1, 1, 3)?;
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f32>()?,
+        [
+            [1.0, 3.0, 6.0],
+            [6.0, 13.0, 21.0],
+            [11.0, 23.0, 36.0],
+            [16.0, 33.0, 51.0]
+        ]
+    );
+    cumsum_additional_layouts(&device)
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_supported_dtypes() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+
+    let t = Tensor::new(&[[1f64, 2., 3.], [4., 5., 6.]], &device)?;
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f64>()?,
+        [[1.0, 3.0, 6.0], [4.0, 9.0, 15.0]]
+    );
+
+    let t = Tensor::new(&[[1u32, 2, 3], [4, 5, 6]], &device)?;
+    assert_eq!(t.cumsum(1)?.to_vec2::<u32>()?, [[1u32, 3, 6], [4, 9, 15]]);
+
+    let t = Tensor::new(&[[-3i64, 1, 4], [2, -5, 7]], &device)?;
+    assert_eq!(t.cumsum(1)?.to_vec2::<i64>()?, [[-3, -2, 2], [2, -3, 4]]);
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_high_rank_axes() -> Result<()> {
+    fn check<T: candle_core::WithDType + std::fmt::Debug>(
+        values: Vec<T>,
+        shape: &[usize],
+        axis: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<()> {
+        let inner: usize = shape[axis + 1..].iter().product();
+        let mut expected = values.clone();
+        // Independent serial reference in logical row-major order. Integer
+        // inputs and prefixes stay integer, including values beyond 2^53.
+        for i in 0..expected.len() {
+            if (i / inner) % shape[axis] != 0 {
+                let previous = expected[i - inner];
+                expected[i] += previous;
+            }
+        }
+        let expected = Tensor::from_vec(expected, shape, &Device::Cpu)?
+            .to_dtype(dtype)?
+            .to_dtype(T::DTYPE)?
+            .flatten_all()?
+            .to_vec1::<T>()?;
+        let input = Tensor::from_vec(values, shape, device)?.to_dtype(dtype)?;
+        let output = input.cumsum(axis)?;
+        assert_eq!(output.dims(), shape);
+        assert_eq!(output.dtype(), dtype);
+        assert_eq!(
+            output.to_dtype(T::DTYPE)?.flatten_all()?.to_vec1::<T>()?,
+            expected,
+            "dtype {dtype:?}, shape {shape:?}, axis {axis}"
+        );
+        Ok(())
+    }
+
+    let device = Device::new_cuda(0)?;
+    for dims in [&[3, 5, 7][..], &[2, 3, 5, 7][..]] {
+        for axis in 0..dims.len() - 1 {
+            for multi_block in [false, true] {
+                let mut shape = dims.to_vec();
+                if multi_block {
+                    shape[axis] = 4097;
+                }
+                let count = shape.iter().product();
+                let inner: usize = shape[axis + 1..].iter().product();
+                for dtype in [DType::F16, DType::BF16, DType::F32, DType::F64] {
+                    // Dyadic inputs and prefixes are exact in f32, so only the
+                    // final low-precision conversion rounds the reference.
+                    let values = (0..count)
+                        .map(|i| ((i * 13 + 7) % 17) as f64 / 16. - 0.5)
+                        .collect();
+                    check(values, &shape, axis, dtype, &device)?;
+                }
+                let values = (0..count)
+                    .map(|i| {
+                        let first = (i / inner) % shape[axis] == 0;
+                        // Prefixes exceed f32's exact integer range, without
+                        // overflowing u32 even on the long axis.
+                        u32::from(first) * (1 << 24) + (i % 17) as u32
+                    })
+                    .collect();
+                check(values, &shape, axis, DType::U32, &device)?;
+                let values = (0..count)
+                    .map(|i| {
+                        let first = (i / inner) % shape[axis] == 0;
+                        // Include negative values and prefixes beyond f64's
+                        // exact integer range; never convert these to floats.
+                        i64::from(first) * (1 << 54) + (i % 17) as i64 - 8
+                    })
+                    .collect();
+                check(values, &shape, axis, DType::I64, &device)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_unsupported_dtypes() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    let inputs = [
+        Tensor::new(&[1u8, 2, 3], &device)?,
+        Tensor::new(&[1i16, 2, 3], &device)?,
+        Tensor::new(&[1i32, 2, 3], &device)?,
+        Tensor::new(
+            &[
+                F8E4M3::from_f32(1.),
+                F8E4M3::from_f32(2.),
+                F8E4M3::from_f32(3.),
+            ],
+            &device,
+        )?,
+    ];
+    for base in inputs {
+        for input in [
+            base.clone(),
+            base.unsqueeze(0)?.broadcast_as((2, 3))?,
+            base.unsqueeze(1)?.broadcast_as((3, 2))?,
+        ] {
+            for axis in 0..input.rank() {
+                let error = input.cumsum(axis).unwrap_err();
+                assert!(
+                    error.to_string().starts_with(&format!(
+                        "unsupported dtype {:?} for op cumsum",
+                        input.dtype()
+                    )),
+                    "{error}"
+                );
+            }
+        }
+        // No scan is needed for these shapes, regardless of dtype.
+        let empty = base.narrow(0, 0, 0)?;
+        assert_eq!(empty.cumsum(0)?.id(), empty.id());
+        let singleton = base.narrow(0, 1, 1)?.broadcast_as((2, 1))?;
+        assert_eq!(singleton.cumsum(1)?.id(), singleton.id());
+        assert!(singleton.cumsum(2).is_err());
+        // The CUDA-only restriction must not change CPU dtype support.
+        assert_eq!(
+            base.to_device(&Device::Cpu)?
+                .cumsum(0)?
+                .to_dtype(DType::F32)?
+                .to_vec1::<f32>()?,
+            [1., 3., 6.]
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_half_precision_basic() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    for dtype in [DType::F16, DType::BF16] {
+        let input = Tensor::ones((2, 33), dtype, &device)?;
+        let output = input.cumsum(1)?;
+        assert_eq!(output.dtype(), dtype);
+        assert_eq!(
+            output.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+            vec![(1..=33).map(|i| i as f32).collect::<Vec<_>>(); 2]
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_cross_stream_handoff() -> Result<()> {
+    use candle_core::scalar::Scalar;
+    let producer = Device::new_cuda_with_stream(0)?;
+    let consumer = Device::new_cuda_with_stream(0)?;
+    let producer_stream = producer.as_cuda_device()?.cuda_stream();
+    let consumer_stream = consumer.as_cuda_device()?.cuda_stream();
+    let mut backlog = producer_stream
+        .alloc_zeros::<u8>(32 * 1024 * 1024)
+        .map_err(candle_core::Error::wrap)?;
+    for dtype in [
+        DType::F16,
+        DType::BF16,
+        DType::F32,
+        DType::F64,
+        DType::U32,
+        DType::I64,
+    ] {
+        // Enough work to overlap the consumer copy with an untracked producer.
+        // Both paths are required: low-precision multi-block already tracked
+        // writes correctly, while all single-block outputs need tracking too.
+        for (rows, cols) in [(1024, 4096), (1024, 32768), (1, 32768), (3, 4129)] {
+            let input = Tensor::ones((rows, cols), dtype, &producer)?;
+            drop(input.cumsum(1)?);
+            producer.synchronize()?;
+            for iteration in 0..4 {
+                let value = (iteration + 2) as f64 / if dtype.is_int() { 1. } else { 1024. };
+                let scalar = match dtype {
+                    DType::F16 => Scalar::F16(half::f16::from_f64(value)),
+                    DType::BF16 => Scalar::BF16(half::bf16::from_f64(value)),
+                    DType::F32 => Scalar::F32(value as f32),
+                    DType::F64 => Scalar::F64(value),
+                    DType::U32 => Scalar::U32(value as u32),
+                    DType::I64 => Scalar::I64(value as i64),
+                    _ => unreachable!(),
+                };
+                input.const_set(scalar)?;
+                // Only prepare the input, never the output.
+                producer.synchronize()?;
+                // Keep the producer busy using stream-ordered memory operations,
+                // without adding a test kernel or relying on host sleeps.
+                for _ in 0..32 {
+                    producer_stream
+                        .memset_zeros(&mut backlog)
+                        .map_err(candle_core::Error::wrap)?;
+                }
+                let before_scan = producer_stream
+                    .record_event(None)
+                    .map_err(candle_core::Error::wrap)?;
+                let transferred = {
+                    let output = input.cumsum(1)?;
+                    output.to_device(&consumer)?
+                }; // Drop the producer output before the consumer finishes reading it.
+                let copied = consumer_stream
+                    .record_event(None)
+                    .map_err(candle_core::Error::wrap)?;
+                copied.synchronize().map_err(candle_core::Error::wrap)?;
+                assert!(
+                    before_scan.is_complete(),
+                    "copy did not wait for its producer"
+                );
+                // No producer synchronization after cumsum. Consume the copied
+                // result on the second stream, including windows in later tiles.
+                for start in [0, cols / 2, cols - 33] {
+                    let values: Vec<f64> = (start..start + 33)
+                        .map(|col| (col + 1) as f64 * value)
+                        .collect();
+                    let values = Tensor::from_vec(values, 33, &Device::Cpu)?
+                        .to_dtype(dtype)?
+                        .to_dtype(DType::F64)?
+                        .to_vec1::<f64>()?;
+                    let mut sum = 0.;
+                    let expected: Vec<f64> = values
+                        .into_iter()
+                        .map(|v| {
+                            sum += v;
+                            sum
+                        })
+                        .collect();
+                    for row in [0, rows / 2, rows - 1] {
+                        let actual = transferred
+                            .narrow(0, row, 1)?
+                            .narrow(1, start, 33)?
+                            .to_dtype(DType::F64)?
+                            .cumsum(1)?
+                            .flatten_all()?
+                            .to_vec1::<f64>()?;
+                        assert_eq!(
+                            actual, expected,
+                            "dtype {dtype:?}, cols {cols}, iteration {iteration}, row {row}, start {start}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_low_precision_async_lifetimes() -> Result<()> {
+    // Queue work on two independent streams. Temporary layout copies are
+    // dropped immediately and similarly sized allocations encourage reuse.
+    let devices = [
+        Device::new_cuda_with_stream(0)?,
+        Device::new_cuda_with_stream(0)?,
+    ];
+    for dtype in [DType::F16, DType::BF16] {
+        let mut pending = Vec::new();
+        for iteration in 0..64 {
+            let device = &devices[iteration % 2];
+            let len = [4097, 4128, 4129, 8193][iteration % 4];
+            let rows = 1 + iteration % 3;
+            let value = ((iteration % 7) + 1) as f64 / 64.;
+            let output = {
+                let input = Tensor::ones((rows, len + 2), dtype, device)?.affine(value, 0.)?;
+                let sliced = input.narrow(1, 1, len)?;
+                if iteration % 2 == 0 {
+                    sliced.cumsum(1)?
+                } else {
+                    sliced.t()?.contiguous()?.cumsum(0)?.t()?
+                }
+            };
+            // No synchronize/readback until the entire batch is queued.
+            for _ in 0..3 {
+                std::hint::black_box(
+                    Tensor::ones((rows, len + 2), dtype, device)?.affine(-3., 0.)?,
+                );
+            }
+            if iteration % 5 == 0 {
+                drop(output); // Also exercise output/scratch retirement.
+            } else {
+                pending.push((output, rows, len, value));
+            }
+        }
+        for device in &devices {
+            device.synchronize()?;
+        }
+        for (output, rows, len, value) in pending {
+            let expected = Tensor::arange(1f64, (len + 1) as f64, &Device::Cpu)?
+                .affine(value, 0.)?
+                .to_dtype(dtype)?
+                .to_dtype(DType::F32)?
+                .to_vec1::<f32>()?;
+            assert_eq!(
+                output.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+                vec![expected; rows]
+            );
+        }
+    }
+    Ok(())
+}
+
+// These dyadic inputs and their f64 prefixes are exact in f32, so final
+// low-precision rounding can be checked without a floating-point tolerance.
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_low_precision_prefixes_and_layouts() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    let mut lengths = vec![
+        2, 3, 17, 31, 32, 33, 255, 256, 257, 1023, 1024, 1025, 2047, 2048, 2049, 4095, 8191, 8192,
+        8193, 12289,
+    ];
+    lengths.extend(4096..=4129);
+    for dtype in [DType::F16, DType::BF16] {
+        for &len in &lengths {
+            let mut values = vec![0f64];
+            let mut expected = Vec::with_capacity(3 * len);
+            for row in 0..3 {
+                let mut prefix = 0.;
+                for col in 0..len {
+                    let mut bits = (col as u32) ^ (row as u32 + 1).wrapping_mul(0x9e3779b9);
+                    bits ^= bits >> 16;
+                    bits = bits.wrapping_mul(0x7feb352d);
+                    let value = ((bits % 17) as f64 - 8.) / 16.;
+                    values.push(value);
+                    prefix += value;
+                    expected.push(prefix);
+                }
+            }
+            let expected = Tensor::from_vec(expected, (3, len), &Device::Cpu)?
+                .to_dtype(dtype)?
+                .to_dtype(DType::F32)?
+                .to_vec2::<f32>()?;
+            // Offset one also exercises input alignment and odd row strides.
+            let input = Tensor::from_vec(values, 1 + 3 * len, &device)?
+                .to_dtype(dtype)?
+                .narrow(0, 1, 3 * len)?
+                .reshape((3, len))?;
+            let actual = input.cumsum(1)?;
+            assert_eq!(actual.dtype(), dtype);
+            assert_eq!(
+                actual.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+                expected,
+                "dtype {dtype:?}, len {len}"
+            );
+            // A separate GPU reference exercises all three f32 scan stages.
+            let reference = input.to_dtype(DType::F32)?.cumsum(1)?.to_dtype(dtype)?;
+            assert_eq!(
+                actual.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+                reference.to_dtype(DType::F32)?.to_vec2::<f32>()?
+            );
+            if [33, 4096, 4097, 4128, 4129, 8193].contains(&len) {
+                for t in [input.t()?, input.t()?.contiguous()?] {
+                    assert_eq!(
+                        t.cumsum(0)?.t()?.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+                        expected
+                    );
+                }
+                let padded = Tensor::cat(&[&input, &input], 1)?;
+                let sliced = padded.narrow(1, 0, len)?;
+                assert!(!sliced.is_contiguous());
+                assert_eq!(
+                    sliced.cumsum(1)?.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+                    expected
+                );
+                let broadcast = input.unsqueeze(0)?.broadcast_as((2, 3, len))?;
+                assert_eq!(
+                    broadcast
+                        .cumsum(2)?
+                        .to_dtype(DType::F32)?
+                        .to_vec3::<f32>()?,
+                    vec![expected.clone(), expected.clone()]
+                );
+            }
+        }
+        // More than 1024 tile totals: bounded prefixes avoid f16 overflow.
+        let len = 4096 * 1024 + 33;
+        let input = Tensor::ones((1, len), dtype, &device)?.affine(1. / 4096., 0.)?;
+        let actual = input
+            .cumsum(1)?
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        let expected = Tensor::arange(1f32, (len + 1) as f32, &Device::Cpu)?
+            .affine(1. / 4096., 0.)?
+            .to_dtype(dtype)?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        assert_eq!(actual, expected, "long axis, dtype {dtype:?}");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_low_precision_rounding() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    for dtype in [DType::F16, DType::BF16] {
+        let first = if dtype == DType::F16 { 2048f32 } else { 256f32 };
+        let input = Tensor::new(&[first, 1., 1.], &device)?.to_dtype(dtype)?;
+        assert_eq!(
+            input.cumsum(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?,
+            [first, first, first + 2.]
+        );
+        for len in [1024, 4096, 4097, 8193] {
+            let input = Tensor::ones(len, dtype, &device)?;
+            let expected = Tensor::arange(1f32, (len + 1) as f32, &Device::Cpu)?
+                .to_dtype(dtype)?
+                .to_dtype(DType::F32)?
+                .to_vec1::<f32>()?;
+            assert_eq!(
+                input.cumsum(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?,
+                expected
+            );
+        }
+    }
+    // An overflowing output must not contaminate the running f32 state.
+    let input = Tensor::new(&[65504f32, 65504., -65504.], &device)?.to_dtype(DType::F16)?;
+    assert_eq!(
+        input.cumsum(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?,
+        [65504., f32::INFINITY, 65504.]
+    );
+    // Tile-local 131008 exceeds f16's range, but adding the previous tile's
+    // -65504 offset makes the final output finite. Do not round the scratch.
+    let mut values = vec![0f32; 4099];
+    values[0] = -65504.;
+    values[4096..].copy_from_slice(&[65504., 65504., -65504.]);
+    let actual = Tensor::from_vec(values, 4099, &device)?
+        .to_dtype(DType::F16)?
+        .cumsum(0)?
+        .narrow(0, 4096, 3)?
+        .to_dtype(DType::F32)?
+        .to_vec1::<f32>()?;
+    assert_eq!(actual, [0., 65504., 0.]);
+    // Finite double-rounding counterexamples in both formats.
+    for (dtype, magnitude) in [(DType::F16, 2048f32), (DType::BF16, 256f32)] {
+        let mut values = vec![0f32; 4098];
+        values[0] = -magnitude;
+        values[4096..].copy_from_slice(&[magnitude, 1.]);
+        let actual = Tensor::from_vec(values, 4098, &device)?
+            .to_dtype(dtype)?
+            .cumsum(0)?
+            .narrow(0, 4096, 2)?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        assert_eq!(actual, [0., 1.], "dtype {dtype:?}");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_low_precision_special_values() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    for dtype in [DType::F16, DType::BF16] {
+        for len in [3, 33, 4096, 4097, 4128, 4129, 8193] {
+            let mut values = vec![0.125f32; 6 * len];
+            values[len - 1] = f32::NAN;
+            values[2 * len - 2] = f32::INFINITY;
+            values[3 * len - 2] = f32::NEG_INFINITY;
+            values[3 * len] = f32::INFINITY;
+            values[4 * len - 1] = f32::NEG_INFINITY;
+            values[4 * len] = -0.;
+            // Smallest positive subnormal in each format.
+            let tiny = if dtype == DType::F16 {
+                2f32.powi(-24)
+            } else {
+                2f32.powi(-133)
+            };
+            values[5 * len..].fill(tiny);
+            let input = Tensor::from_vec(values, (6, len), &device)?.to_dtype(dtype)?;
+            let actual = input
+                .cumsum(1)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let source = input.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+            for (row, source) in source.iter().enumerate() {
+                let mut prefix = 0f64;
+                let expected: Vec<f64> = source
+                    .iter()
+                    .map(|&x| {
+                        prefix += x as f64;
+                        prefix
+                    })
+                    .collect();
+                let expected = Tensor::from_vec(expected, len, &Device::Cpu)?
+                    .to_dtype(dtype)?
+                    .to_dtype(DType::F32)?
+                    .to_vec1::<f32>()?;
+                for (col, expected) in expected.into_iter().enumerate() {
+                    let actual = actual[row * len + col];
+                    assert!(
+                        if expected.is_nan() {
+                            actual.is_nan()
+                        } else {
+                            actual == expected
+                        },
+                        "dtype {dtype:?}, len {len}, row {row}, col {col}: {actual} != {expected}"
+                    );
+                }
+            }
+        }
+        let empty = Tensor::zeros((2, 0), dtype, &device)?.cumsum(1)?;
+        assert_eq!(empty.dims(), &[2, 0]);
+        let singleton = Tensor::new(&[-0f32], &device)?.to_dtype(dtype)?.cumsum(0)?;
+        assert_eq!(
+            singleton
+                .to_dtype(DType::F32)?
+                .squeeze(0)?
+                .to_scalar::<f32>()?
+                .to_bits(),
+            (-0f32).to_bits()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_multi_block_large_last_dim() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+
+    let t = Tensor::ones((2, 4097), DType::F32, &device)?;
+    let c = t.cumsum(1)?;
+    assert_eq!(c.i((0, 0))?.to_scalar::<f32>()?, 1.0);
+    assert_eq!(c.i((0, 4095))?.to_scalar::<f32>()?, 4096.0);
+    assert_eq!(c.i((0, 4096))?.to_scalar::<f32>()?, 4097.0);
+    assert_eq!(c.i((1, 4096))?.to_scalar::<f32>()?, 4097.0);
+
+    let t = Tensor::ones((2, 4097), DType::F64, &device)?;
+    let c = t.cumsum(1)?;
+    assert_eq!(c.i((0, 4096))?.to_scalar::<f64>()?, 4097.0);
+    assert_eq!(c.i((1, 4096))?.to_scalar::<f64>()?, 4097.0);
+
+    let t = Tensor::arange(0u32, 8194, &device)?.reshape((2, 4097))?;
+    let c = t.cumsum(1)?;
+    assert_eq!(c.i((0, 4096))?.to_scalar::<u32>()?, 8390656);
+    assert_eq!(c.i((1, 4096))?.to_scalar::<u32>()?, 25176065);
+
+    let t = Tensor::ones((2, 4097), DType::I64, &device)?;
+    let c = t.cumsum(1)?;
+    assert_eq!(c.i((0, 4096))?.to_scalar::<i64>()?, 4097);
+    assert_eq!(c.i((1, 4096))?.to_scalar::<i64>()?, 4097);
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_more_than_1024_tiles() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    for len in [
+        4096 * 1024 - 1,
+        4096 * 1024,
+        4096 * 1024 + 1,
+        4096 * 2048 + 17,
+    ] {
+        for dtype in [DType::F32, DType::F64, DType::U32, DType::I64] {
+            let input = Tensor::ones((2, len), dtype, &device)?;
+            let output = input.cumsum(1)?;
+            assert_eq!(output.dtype(), dtype);
+            for row in 0..2 {
+                for col in [0, 4095, 4096, 4096 * 1024 - 2, len - 1] {
+                    let value = output
+                        .i((row, col))?
+                        .to_dtype(DType::F64)?
+                        .to_scalar::<f64>()?;
+                    assert_eq!(
+                        value,
+                        (col + 1) as f64,
+                        "dtype {dtype:?}, length {len}, row {row}, col {col}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "requires at least 5 GiB of free CUDA memory"]
+fn cumsum_cuda_flattened_tile_boundary() -> Result<()> {
+    let device = Device::new_cuda_with_stream(0)?;
+    let boundary = 4096 * 65535;
+    for dtype in [
+        DType::F16,
+        DType::BF16,
+        DType::F32,
+        DType::F64,
+        DType::U32,
+        DType::I64,
+    ] {
+        for len in [
+            boundary,
+            boundary + 1,
+            boundary + 32,
+            boundary + 33,
+            boundary + 4096,
+            boundary + 4097,
+        ] {
+            let input = Tensor::ones((1, len), dtype, &device)?;
+            // Keep low-precision results finite, with exact power-of-two inputs.
+            let value = if dtype.is_int() { 1. } else { 1. / 8192. };
+            let input = if dtype.is_int() {
+                input
+            } else {
+                input.affine(value, 0.)?
+            };
+            let output = input.cumsum(1)?;
+            assert_eq!(output.dims(), &[1, len]);
+            assert_eq!(output.dtype(), dtype);
+            for col in [0, 4095, 4096, boundary - 1, len - 1] {
+                // Materialize only the scalar view. F64 needs an identity
+                // affine operation to avoid downloading its full backing storage.
+                let sample = output.i((0, col))?;
+                let sample = if dtype == DType::F64 {
+                    sample.affine(1., 0.)?
+                } else {
+                    sample
+                };
+                let actual = sample.to_dtype(DType::F64)?.to_scalar::<f64>()?;
+                let expected = if dtype.is_int() {
+                    (col + 1) as f64
+                } else {
+                    Tensor::new((col + 1) as f64 * value, &Device::Cpu)?
+                        .to_dtype(dtype)?
+                        .to_dtype(DType::F64)?
+                        .to_scalar::<f64>()?
+                };
+                assert_eq!(actual, expected, "dtype {dtype:?}, len {len}, col {col}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_two_tile_dispatch_layouts() -> Result<()> {
+    use candle_core::cuda_backend::cudarc::driver::sys::CUdevice_attribute;
+    let device = Device::new_cuda(0)?;
+    let sms = device
+        .as_cuda_device()?
+        .cuda_stream()
+        .context()
+        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+        .map_err(candle_core::Error::wrap)? as usize;
+    for rows in [2, 3, (sms / 2).max(2), (sms / 2 + 1).max(2)] {
+        for len in [4097, 4128, 4129, 8192] {
+            for dtype in [
+                DType::F16,
+                DType::BF16,
+                DType::F32,
+                DType::F64,
+                DType::U32,
+                DType::I64,
+            ] {
+                let mut values = vec![0f64];
+                let mut expected = Vec::with_capacity(rows * len);
+                for row in 0..rows {
+                    let mut prefix = 0.;
+                    for col in 0..len {
+                        let value = ((row * 7 + col * 13) % 17) as f64
+                            - if dtype == DType::U32 { 0. } else { 8. };
+                        let value = value / if dtype.is_int() { 1. } else { 8. };
+                        values.extend([17., value]);
+                        prefix += value;
+                        expected.push(prefix);
+                    }
+                }
+                let input = Tensor::from_vec(values, 1 + rows * len * 2, &device)?
+                    .to_dtype(dtype)?
+                    .narrow(0, 1, rows * len * 2)?
+                    .reshape((rows, len, 2))?
+                    .narrow(2, 1, 1)?
+                    .squeeze(2)?;
+                let expected = Tensor::from_vec(expected, rows * len, &Device::Cpu)?
+                    .to_dtype(dtype)?
+                    .to_dtype(DType::F64)?
+                    .to_vec1::<f64>()?;
+                for output in [input.cumsum(1)?, input.t()?.contiguous()?.cumsum(0)?.t()?] {
+                    assert_eq!(output.dtype(), dtype);
+                    assert_eq!(output.dims(), &[rows, len]);
+                    assert_eq!(
+                        output
+                            .flatten_all()?
+                            .to_dtype(DType::F64)?
+                            .to_vec1::<f64>()?,
+                        expected,
+                        "dtype {dtype:?}, rows {rows}, len {len}, SMs {sms}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_single_row_layouts() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    for dtype in [
+        DType::F16,
+        DType::BF16,
+        DType::F32,
+        DType::F64,
+        DType::U32,
+        DType::I64,
+    ] {
+        for len in [4097, 4127, 4128, 4129, 8192, 8193, 12289] {
+            let mut values = vec![0f64];
+            let mut expected = Vec::with_capacity(len);
+            let mut sum = 0.;
+            for col in 0..len {
+                let value = if dtype == DType::U32 {
+                    (col % 9) as f64
+                } else {
+                    ((col % 9) as f64 - 4.) / if dtype.is_int() { 1. } else { 8. }
+                };
+                values.extend([17., value]);
+                sum += value;
+                expected.push(sum);
+            }
+            // A strided row with a nonzero storage offset exercises the
+            // layout copy before dispatching to the single-row tile entries.
+            let input = Tensor::from_vec(values, 1 + 2 * len, &device)?
+                .to_dtype(dtype)?
+                .narrow(0, 1, 2 * len)?
+                .reshape((len, 2))?
+                .narrow(1, 1, 1)?
+                .t()?;
+            let expected = Tensor::from_vec(expected, len, &Device::Cpu)?
+                .to_dtype(dtype)?
+                .to_dtype(DType::F64)?
+                .to_vec1::<f64>()?;
+            for output in [
+                input.cumsum(1)?,
+                input.contiguous()?.cumsum(1)?,
+                input.t()?.unsqueeze(2)?.cumsum(0)?,
+            ] {
+                assert_eq!(output.dtype(), dtype);
+                assert_eq!(
+                    output
+                        .flatten_all()?
+                        .to_dtype(DType::F64)?
+                        .to_vec1::<f64>()?,
+                    expected,
+                    "dtype {dtype:?}, len {len}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_tile_tails() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    for tail in 0..=33 {
+        let len = 4096 + tail;
+        for dtype in [DType::F32, DType::F64, DType::U32, DType::I64] {
+            let mut values = vec![0f64];
+            let mut expected = Vec::with_capacity(3 * len);
+            for row in 0..3 {
+                let mut prefix = 0.;
+                for col in 0..len {
+                    let mut bits = (col as u32) ^ (row as u32 + 1).wrapping_mul(0x9e3779b9);
+                    bits ^= bits >> 16;
+                    bits = bits.wrapping_mul(0x7feb352d);
+                    bits ^= bits >> 15;
+                    let value = (bits % 17) as f64 - if dtype == DType::U32 { 0. } else { 8. };
+                    values.push(value);
+                    prefix += value;
+                    expected.push(prefix);
+                }
+            }
+            // A contiguous view with a nonzero storage offset also misaligns
+            // subsequent rows when the row length is not a vector multiple.
+            let input = Tensor::from_vec(values, 1 + 3 * len, &device)?
+                .to_dtype(dtype)?
+                .narrow(0, 1, 3 * len)?
+                .reshape((3, len))?;
+            let output = input.cumsum(1)?;
+            assert_eq!(output.dtype(), dtype);
+            assert_eq!(
+                output
+                    .flatten_all()?
+                    .to_dtype(DType::F64)?
+                    .to_vec1::<f64>()?,
+                expected,
+                "dtype {dtype:?}, tail {tail}"
+            );
+            if tail == 32 {
+                let output = input.t()?.contiguous()?.cumsum(0)?.t()?;
+                assert_eq!(
+                    output
+                        .flatten_all()?
+                        .to_dtype(DType::F64)?
+                        .to_vec1::<f64>()?,
+                    expected
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_tile_integer_values() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    for len in [4097, 4128, 4129, 8193] {
+        let mut unsigned = vec![0u32];
+        let mut wide = vec![0i64];
+        let mut unsigned_expected = Vec::new();
+        let mut wide_expected = Vec::new();
+        for row in 0..2 {
+            let (mut unsigned_sum, mut wide_sum) = (0u32, 0i64);
+            for col in 0..len {
+                let u = u32::MAX - ((col + row) % 17) as u32;
+                let i = (1i64 << 40) + (col % 13) as i64 - row as i64;
+                unsigned.push(u);
+                wide.push(i);
+                unsigned_sum = unsigned_sum.wrapping_add(u);
+                wide_sum += i;
+                unsigned_expected.push(unsigned_sum);
+                wide_expected.push(wide_sum);
+            }
+        }
+        let input = Tensor::from_vec(unsigned, 1 + 2 * len, &device)?
+            .narrow(0, 1, 2 * len)?
+            .reshape((2, len))?;
+        assert_eq!(
+            input.cumsum(1)?.flatten_all()?.to_vec1::<u32>()?,
+            unsigned_expected
+        );
+        let input = Tensor::from_vec(wide, 1 + 2 * len, &device)?
+            .narrow(0, 1, 2 * len)?
+            .reshape((2, len))?;
+        assert_eq!(
+            input.cumsum(1)?.flatten_all()?.to_vec1::<i64>()?,
+            wide_expected
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_tile_nonfinite_values() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    for len in [4097, 4113, 4128, 4129] {
+        for dtype in [DType::F32, DType::F64] {
+            let mut input = Vec::new();
+            let mut expected = Vec::new();
+            for row in 0..6 {
+                let mut prefix = 0f64;
+                for col in 0..len {
+                    let value = match (row, col) {
+                        (0, 4096) => f64::NAN,
+                        (1, 4096) | (4, 0) | (5, 4096) => f64::INFINITY,
+                        (2, 4096) | (4, 4096) | (5, 4112) => f64::NEG_INFINITY,
+                        (3, _) => -0.,
+                        _ => 0.125,
+                    };
+                    input.push(value);
+                    prefix += value;
+                    expected.push(prefix);
+                }
+            }
+            let actual = Tensor::from_vec(input, (6, len), &device)?
+                .to_dtype(dtype)?
+                .cumsum(1)?
+                .flatten_all()?
+                .to_dtype(DType::F64)?
+                .to_vec1::<f64>()?;
+            for (index, (actual, expected)) in actual.into_iter().zip(expected).enumerate() {
+                assert!(
+                    actual == expected || (actual.is_nan() && expected.is_nan()),
+                    "dtype {dtype:?}, length {len}, index {index}: {actual} != {expected}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn cumsum_scan_boundaries(device: &Device) -> Result<()> {
+    for len in [31, 32, 33, 1023, 1024, 1025, 4096, 4097, 8193, 131073] {
+        let mut input = Vec::with_capacity(2 * len);
+        let mut expected = Vec::with_capacity(2 * len);
+        for row in 0..2 {
+            let mut prefix = 0f32;
+            for col in 0..len {
+                let value = if row == 0 {
+                    f32::from(col % 7 == 0 || col % 4096 == 0)
+                } else {
+                    (col % 11) as f32 - 5.
+                };
+                input.push(value);
+                prefix += value;
+                expected.push(prefix);
+            }
+        }
+        let t = Tensor::from_vec(input, (2, len), device)?;
+        assert_eq!(
+            t.cumsum(1)?.flatten_all()?.to_vec1::<f32>()?,
+            expected,
+            "row length {len}"
+        );
+    }
+
+    let input: Vec<f32> = (0..32769).map(|i| (i % 17 + 1) as f32).collect();
+    let total: f64 = input.iter().map(|&p| f64::from(p)).sum();
+    let probabilities: Vec<f32> = input
+        .iter()
+        .map(|&p| (f64::from(p) / total) as f32)
+        .collect();
+    let output = Tensor::new(probabilities.as_slice(), device)?
+        .cumsum(0)?
+        .to_vec1::<f32>()?;
+    let mut expected = 0f64;
+    let mut previous = 0f32;
+    for (actual, probability) in output.into_iter().zip(probabilities) {
+        expected += f64::from(probability);
+        assert!(actual >= previous);
+        assert!((f64::from(actual) - expected).abs() < 1e-4);
+        previous = actual;
+    }
+    Ok(())
+}
+
+#[test]
+fn cumsum_scan_boundaries_cpu() -> Result<()> {
+    cumsum_scan_boundaries(&Device::Cpu)
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_scan_boundaries_cuda() -> Result<()> {
+    cumsum_scan_boundaries(&Device::new_cuda(0)?)
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "requires at least 17 GiB of free CUDA memory"]
+fn cumsum_cuda_large_tensor_indexing() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    let (rows, cols) = (65537, 32768);
+    for dtype in [DType::F32, DType::F16, DType::BF16] {
+        let input = Tensor::ones((rows, cols), dtype, &device)?;
+        let output = input.cumsum(1)?;
+        // A different dtype materializes just the scalar view. Reading an
+        // f32 view directly would download the entire multi-GiB storage.
+        for row in [0, rows - 1] {
+            for col in [0, 4095, 4096, cols - 1] {
+                let expected = Tensor::new((col + 1) as f32, &Device::Cpu)?
+                    .to_dtype(dtype)?
+                    .to_dtype(DType::F64)?
+                    .to_scalar::<f64>()?;
+                assert_eq!(
+                    output
+                        .i((row, col))?
+                        .to_dtype(DType::F64)?
+                        .to_scalar::<f64>()?,
+                    expected,
+                    "dtype {dtype:?}, row {row}, col {col}"
+                );
+            }
+        }
+    }
     Ok(())
 }
 
