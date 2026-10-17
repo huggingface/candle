@@ -2838,12 +2838,39 @@ impl Tensor {
     /// Returns the cumulative sum of elements of the input tensor summed over the specified
     /// dimension.
     ///
+    /// On CPU and CUDA, f16 and bf16 inputs accumulate in f32; the output keeps the input dtype.
+    /// CPU f8e4m3 inputs also accumulate in f32.
+    /// Integer overflow on CPU and CUDA wraps in the input dtype.
+    ///
+    /// CUDA scans support f16, bf16, f32, f64, u32, and i64. Other CUDA dtypes
+    /// return an error unless the tensor is empty or the selected axis has length one.
+    ///
     /// This operation is most efficient when dim is the last dimension of the tensor.
     pub fn cumsum<D: Dim>(&self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "cumsum")?;
         let rank = self.rank();
-        if rank == 0 {
+        if rank == 0 || self.shape().elem_count() == 0 || self.dims()[dim] == 1 {
             return Ok(self.clone());
+        }
+        if crate::cumsum::Cumsum::is_supported(self, dim) {
+            return self.apply_op1(crate::cumsum::Cumsum::new(dim));
+        }
+        #[cfg(feature = "cuda")]
+        if matches!(&*self.storage(), Storage::Cuda(_)) {
+            // Unsupported CUDA dtypes cannot use the matmul fallback either.
+            // Reject them before allocating its quadratic triangular matrix.
+            if !crate::cumsum::Cumsum::is_cuda_dtype_supported(self.dtype()) {
+                return Err(Error::UnsupportedDTypeForOp(self.dtype(), "cumsum").bt());
+            }
+            let last = rank - 1;
+            if dim == last {
+                return self
+                    .contiguous()?
+                    .apply_op1(crate::cumsum::Cumsum::new(dim));
+            }
+            let t = self.transpose(dim, last)?.contiguous()?;
+            let t = t.apply_op1(crate::cumsum::Cumsum::new(last))?;
+            return t.transpose(dim, last);
         }
         let n_axis = self.dim(dim)?;
         let triu = Tensor::triu2(n_axis, self.dtype(), self.device())?;
