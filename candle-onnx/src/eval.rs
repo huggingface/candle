@@ -1147,11 +1147,20 @@ fn simple_eval_(
             }
             //  https://github.com/onnx/onnx/blob/main/docs/Operators.md#flatten
             "Flatten" => {
-                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(1) as usize;
                 let input = get(&node.input[0])?;
-                let first_part: usize = input.shape().dims().iter().take(axis).product();
-                let end_index = input.shape().dims().iter().product::<usize>();
-                let new_shape = (first_part, end_index / first_part);
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(1);
+                // axis is in [-r, r], a negative value counts from the back.
+                let rank = input.rank() as i64;
+                let axis = match axis {
+                    a if (0..=rank).contains(&a) => a as usize,
+                    a if (-rank..0).contains(&a) => (a + rank) as usize,
+                    a => bail!("Flatten: axis {a} out of range for rank {rank}"),
+                };
+                let (outer, inner) = input.dims().split_at(axis);
+                let new_shape = (
+                    outer.iter().product::<usize>(),
+                    inner.iter().product::<usize>(),
+                );
                 let output = input.reshape(new_shape)?;
                 values.insert(node.output[0].clone(), output);
             }
@@ -1405,23 +1414,32 @@ fn simple_eval_(
 
                 values.insert(node.output[0].clone(), output);
             }
-            // https://onnx.ai/onnx/operators/onnx__ReduceMean.html#reducemean-13
-            // TODO: This version is only compatible with ReduceMean V13 and below.
+            // https://onnx.ai/onnx/operators/onnx__ReduceMean.html
             "ReduceMean" => {
                 let input = get(&node.input[0])?;
-                let axes = get_attr_opt::<[i64]>(node, "axes")?;
+                let axes = match get_opt(1) {
+                    // Since opset 18 the axes are an optional second input.
+                    Some(axes) => Some(axes?.to_vec1::<i64>()?),
+                    None => get_attr_opt::<[i64]>(node, "axes")?.map(|axes| axes.to_vec()),
+                };
                 let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1);
+                let noop_with_empty_axes = get_attr_opt::<i64>(node, "noop_with_empty_axes")?
+                    .copied()
+                    .unwrap_or(0);
 
                 let n_dims = input.dims().len();
 
-                let axes: Vec<usize> = if let Some(axes) = axes {
-                    axes.iter()
+                let axes: Vec<usize> = match axes {
+                    Some(axes) if !axes.is_empty() => axes
+                        .iter()
                         .map(|e| (if e < &0 { (n_dims as i64) + *e } else { *e }) as usize)
-                        .collect()
-                } else {
-                    (0..n_dims).collect()
+                        .collect(),
+                    _ if noop_with_empty_axes == 1 => vec![],
+                    _ => (0..n_dims).collect(),
                 };
-                let output = if keepdims == 1 {
+                let output = if axes.is_empty() {
+                    input.clone()
+                } else if keepdims == 1 {
                     input.mean_keepdim(axes)?
                 } else {
                     input.mean(axes)?
@@ -1522,10 +1540,13 @@ fn simple_eval_(
                 let axis = input_tensor.normalize_axis(axis)?;
 
                 // Determine split sizes
-                let splits = if node.input.len() > 1 {
-                    // If the split tensor is provided, use it to determine sizes
-                    let split_tensor = get(&node.input[1])?.to_vec1::<i64>()?;
+                let splits = if let Some(split_tensor) = get_opt(1) {
+                    // Since opset 13 the sizes come from the optional second input.
+                    let split_tensor = split_tensor?.to_vec1::<i64>()?;
                     split_tensor.iter().map(|&x| x as usize).collect::<Vec<_>>()
+                } else if let Some(split) = get_attr_opt::<[i64]>(node, "split")? {
+                    // Before opset 13 they were given by the `split` attribute.
+                    split.iter().map(|&x| x as usize).collect::<Vec<_>>()
                 } else {
                     let num_outputs = if let Some(&num_outputs_attrib) =
                         get_attr_opt::<i64>(node, "num_outputs")?
@@ -1537,15 +1558,12 @@ fn simple_eval_(
 
                     let input_dim = input_tensor.dim(axis)?;
 
-                    let mut split_sizes =
-                        vec![input_dim / num_outputs as usize; num_outputs as usize];
-                    let remainder = input_dim % num_outputs as usize;
-                    if remainder > 0 {
-                        // If there's a remainder, add it to the last split size
-                        split_sizes[num_outputs as usize - 1] += remainder;
-                    }
-
-                    split_sizes
+                    // Every chunk has ceil(input_dim / num_outputs) elements, only the last one
+                    // can be smaller when the dimension does not split evenly.
+                    let chunk = input_dim.div_ceil(num_outputs);
+                    (0..num_outputs)
+                        .map(|i| chunk.min(input_dim.saturating_sub(i * chunk)))
+                        .collect::<Vec<_>>()
                 };
 
                 // Perform the split operation
