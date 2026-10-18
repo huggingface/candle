@@ -236,6 +236,9 @@ impl QStorage {
             (QStorage::Cuda(storage), Storage::Cuda(src)) => {
                 storage.quantize_imatrix(src, imatrix_weights, n_per_row)?
             }
+            (QStorage::Vulkan(storage), Storage::Vulkan(src)) => {
+                storage.quantize_imatrix(src, imatrix_weights, n_per_row)?
+            }
             _ => crate::bail!("Invalid quantize storage locations do not match"),
         }
         Ok(())
@@ -248,6 +251,7 @@ impl QStorage {
             }
             (QStorage::Metal(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
             (QStorage::Cuda(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
+            (QStorage::Vulkan(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
             _ => crate::bail!("Invalid quantize source storage locations: not on cpu"),
         }
         Ok(())
@@ -267,6 +271,9 @@ impl QStorage {
                 storage.quantize_imatrix_onto(src, imatrix_weights, n_per_row)?
             }
             (QStorage::Cuda(storage), Storage::Cpu(src)) => {
+                storage.quantize_imatrix_onto(src, imatrix_weights, n_per_row)?
+            }
+            (QStorage::Vulkan(storage), Storage::Cpu(src)) => {
                 storage.quantize_imatrix_onto(src, imatrix_weights, n_per_row)?
             }
             _ => crate::bail!("Invalid quantize storage locations do not match"),

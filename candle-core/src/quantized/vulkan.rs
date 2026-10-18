@@ -5,7 +5,7 @@
 //! Slang kernel that reads the raw bytes and writes f32 values; the
 //! matmul (`fwd`) dequantizes the weights to f32 in VRAM and runs the f32
 //! GEMM; the embedding (`embedding`) dequantizes and gathers the requested
-use crate::quantized::{GgmlDType, GgmlType};
+use crate::quantized::{GgmlDType, GgmlType, QStorage};
 use crate::{
     backend::{BackendDevice, BackendStorage},
     CpuStorage, DType, Layout, Result, Shape, VulkanDevice, VulkanStorage,
@@ -114,6 +114,85 @@ impl QVulkanStorage {
         let elem_count = f32_data.len();
         let mut cpu_q = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
         cpu_q.quantize(&crate::Storage::Cpu(CpuStorage::F32(f32_data)))?;
+        let bytes = cpu_q.data()?.into_owned();
+        let bytes = self
+            .device
+            .storage_from_cpu_storage(&CpuStorage::U8(bytes))?;
+        self.set_bytes(bytes);
+        Ok(())
+    }
+
+    /// Quantizes the f32 values in `src` (on the Vulkan device) into this
+    /// storage using imatrix weights.
+    ///
+    /// Quantization only happens on the CPU for now: the f32 source is read
+    /// back, quantized with the CPU path, and the quantized bytes are
+    /// uploaded.
+    pub fn quantize_imatrix(
+        &mut self,
+        src: &VulkanStorage,
+        imatrix_weights: &[f32],
+        n_per_row: usize,
+    ) -> Result<()> {
+        let f32_data = match src.to_cpu_storage()? {
+            CpuStorage::F32(b) => b,
+            _ => crate::bail!("vulkan quantize_imatrix: expected an f32 source"),
+        };
+        let elem_count = f32_data.len();
+        let mut cpu_q = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
+        cpu_q.quantize_imatrix(
+            &crate::Storage::Cpu(CpuStorage::F32(f32_data)),
+            imatrix_weights,
+            n_per_row,
+        )?;
+        let bytes = cpu_q.data()?.into_owned();
+        let bytes = self
+            .device
+            .storage_from_cpu_storage(&CpuStorage::U8(bytes))?;
+        self.set_bytes(bytes);
+        Ok(())
+    }
+
+    /// Quantizes the f32 values in `src` (on the CPU) into this storage
+    /// using imatrix weights.
+    ///
+    /// Quantization only happens on the CPU for now.
+    pub fn quantize_imatrix_onto(
+        &mut self,
+        src: &CpuStorage,
+        imatrix_weights: &[f32],
+        n_per_row: usize,
+    ) -> Result<()> {
+        let elem_count = src.as_slice::<f32>()?.len();
+        let mut cpu_q = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
+
+        if let QStorage::Cpu(storage) = &mut cpu_q {
+            storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
+        } else {
+            unreachable!()
+        }
+
+        let bytes = cpu_q.data()?.into_owned();
+        let bytes = self
+            .device
+            .storage_from_cpu_storage(&CpuStorage::U8(bytes))?;
+        self.set_bytes(bytes);
+        Ok(())
+    }
+
+    /// Quantizes the f32 values in `src` (on the CPU) into this storage.
+    ///
+    /// Quantization only happens on the CPU for now.
+    pub fn quantize_onto(&mut self, src: &CpuStorage) -> Result<()> {
+        let elem_count = src.as_slice::<f32>()?.len();
+        let mut cpu_q = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
+
+        if let QStorage::Cpu(storage) = &mut cpu_q {
+            storage.from_float(src.as_slice::<f32>()?);
+        } else {
+            unreachable!()
+        }
+
         let bytes = cpu_q.data()?.into_owned();
         let bytes = self
             .device
