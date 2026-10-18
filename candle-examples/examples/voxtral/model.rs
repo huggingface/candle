@@ -1,7 +1,7 @@
 use super::download;
 use anyhow::{Context, Error, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle::{utils, DType, Device, Tensor};
+use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::voxtral;
 use candle_transformers::models::voxtral::{
@@ -34,19 +34,7 @@ impl VoxtralModel {
     /// Returns an error if the model cannot be loaded.
     pub fn new(model_id: &str, use_cpu: bool) -> Result<Self> {
         // Determine device
-        let device = if use_cpu {
-            Device::Cpu
-        } else if std::env::var("CANDLE_BACKEND").as_deref() == Ok("vulkan") {
-            let ordinal = std::env::var("CANDLE_VULKAN_TEST_GPU")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0);
-            Device::new_vulkan(ordinal).context("Failed to create Vulkan device")?
-        } else if utils::cuda_is_available() {
-            Device::new_cuda(0).context("Failed to create CUDA device")?
-        } else {
-            Device::Cpu
-        };
+        let device = candle_examples::device(use_cpu)?;
 
         let (model_files, tokenizer_file) = download::model_files(model_id)?;
 
