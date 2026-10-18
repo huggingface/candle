@@ -100,6 +100,28 @@ impl QVulkanStorage {
         self.bytes = bytes;
     }
 
+    /// Quantizes the f32 values in `src` (on the Vulkan device) into this
+    /// storage.
+    ///
+    /// Quantization only happens on the CPU for now: the f32 source is read
+    /// back, quantized with the CPU path, and the quantized bytes are
+    /// uploaded.
+    pub fn quantize(&mut self, src: &VulkanStorage) -> Result<()> {
+        let f32_data = match src.to_cpu_storage()? {
+            CpuStorage::F32(b) => b,
+            _ => crate::bail!("vulkan quantize: expected an f32 source"),
+        };
+        let elem_count = f32_data.len();
+        let mut cpu_q = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
+        cpu_q.quantize(&crate::Storage::Cpu(CpuStorage::F32(f32_data)))?;
+        let bytes = cpu_q.data()?.into_owned();
+        let bytes = self
+            .device
+            .storage_from_cpu_storage(&CpuStorage::U8(bytes))?;
+        self.set_bytes(bytes);
+        Ok(())
+    }
+
     /// Dequantizes `elem_count` elements to an f32 `VulkanStorage`.
     pub fn dequantize(&self, elem_count: usize) -> Result<VulkanStorage> {
         let block = self.dtype.block_size();
