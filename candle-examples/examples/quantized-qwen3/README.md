@@ -1,6 +1,6 @@
 # candle-quantized-qwen3
 
-[Qwen3]((https://qwenlm.github.io/blog/qwen3/)) is an upgraded version of Qwen2.5, released by Alibaba Cloud.
+[Qwen3](https://qwenlm.github.io/blog/qwen3/) is an upgraded version of Qwen2.5, released by Alibaba Cloud.
 
 ## Running the example
 
