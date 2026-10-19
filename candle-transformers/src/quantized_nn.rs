@@ -121,6 +121,15 @@ impl RmsNorm {
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        candle_nn::ops::rms_norm(x, &self.weight, self.eps as f32)
+        // Cast weight to match input dtype for Metal GPU compatibility.
+        // Quantized models dequantize norm weights to F32 but the hidden
+        // state may be a different dtype. The Metal rms-norm kernel
+        // requires both tensors to have the same dtype.
+        if self.weight.dtype() != x.dtype() {
+            let w = self.weight.to_dtype(x.dtype())?;
+            candle_nn::ops::rms_norm(x, &w, self.eps as f32)
+        } else {
+            candle_nn::ops::rms_norm(x, &self.weight, self.eps as f32)
+        }
     }
 }
