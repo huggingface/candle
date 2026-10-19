@@ -198,12 +198,33 @@ struct ReduceIndex {
     return_index: bool,
 }
 
+/// The index of the first minimum (or maximum) of a non-empty slice, computed with SIMD.
+/// NaN values are skipped. Returns `None` for the dtypes that `argminmax` does not support.
+fn simd_arg_reduce<T: WithDType>(src: &[T], use_min: bool) -> Option<usize> {
+    use argminmax::ArgMinMax;
+    fn arg(src: impl ArgMinMax, use_min: bool) -> Option<usize> {
+        Some(if use_min { src.argmin() } else { src.argmax() })
+    }
+    match T::cpu_storage_ref(src) {
+        CpuStorageRef::U8(s) => arg(s, use_min),
+        CpuStorageRef::U32(s) => arg(s, use_min),
+        CpuStorageRef::I16(s) => arg(s, use_min),
+        CpuStorageRef::I32(s) => arg(s, use_min),
+        CpuStorageRef::I64(s) => arg(s, use_min),
+        CpuStorageRef::BF16(s) => arg(s, use_min),
+        CpuStorageRef::F16(s) => arg(s, use_min),
+        CpuStorageRef::F32(s) => arg(s, use_min),
+        CpuStorageRef::F64(s) => arg(s, use_min),
+        _ => None,
+    }
+}
+
 impl ReduceIndex {
     // The value gets replaced if f(s[current_acc], s[i]) returns true.
     #[inline(always)]
     fn fold_impl<T, U, F, G>(&self, src: &[T], src_l: &Layout, f: F, g: G) -> Result<Vec<U>>
     where
-        T: Clone + Copy + PartialEq,
+        T: WithDType,
         U: Clone + Copy,
         F: Fn(T, T) -> bool,
         G: Fn(T, usize) -> U,
@@ -229,9 +250,19 @@ impl ReduceIndex {
             Some((o1, o2)) => {
                 let src = &src[o1..o2];
                 if reduce_dim_stride == 1 {
+                    // On rows shorter than this argminmax can be slower than the loop below,
+                    // except for f16 and bf16 (which the loop compares slowly).
+                    let simd =
+                        reduce_dim_size >= 128 || matches!(T::DTYPE, DType::F16 | DType::BF16);
                     for (start_src_i, dst_v) in dst_to_set.iter_mut().enumerate() {
                         let start_src_i = start_src_i * reduce_dim_size;
                         let src = &src[start_src_i..start_src_i + reduce_dim_size];
+                        if let Some(acc) =
+                            simd.then(|| simd_arg_reduce(src, self.use_min)).flatten()
+                        {
+                            *dst_v = g(src[acc], acc);
+                            continue;
+                        }
                         let mut acc = 0;
                         let mut val = src[0];
                         if is_nan(val) {
