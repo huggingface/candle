@@ -506,17 +506,21 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad)?;
                     }
-                    Op::Reduce(arg, ReduceOp::Max, reduced_dims) => {
+                    Op::Reduce(arg, ReduceOp::Max, reduced_dims)
+                    | Op::Reduce(arg, ReduceOp::Min, reduced_dims) => {
                         let node = broadcast_back(arg, node, reduced_dims)?;
                         let grad = broadcast_back(arg, &grad, reduced_dims)?;
-                        let grad = node.eq(arg)?.to_dtype(grad.dtype())?.mul(&grad)?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&grad.broadcast_as(sum_grad.dims())?)?;
-                    }
-                    Op::Reduce(arg, ReduceOp::Min, reduced_dims) => {
-                        let node = broadcast_back(arg, node, reduced_dims)?;
-                        let grad = broadcast_back(arg, &grad, reduced_dims)?;
-                        let grad = node.eq(arg)?.to_dtype(grad.dtype())?.mul(&grad)?;
+                        let mask = node.eq(arg)?.to_dtype(grad.dtype())?;
+                        let sum_dims: Vec<_> = arg
+                            .dims()
+                            .iter()
+                            .zip(reduced_dims)
+                            .enumerate()
+                            .filter_map(|(i, (a, b))| (a != b).then_some(i))
+                            .collect();
+                        // Split the gradient evenly between tied extrema.
+                        let count = mask.sum_keepdim(sum_dims.as_slice())?.maximum(1.)?;
+                        let grad = mask.mul(&grad)?.broadcast_div(&count)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad.broadcast_as(sum_grad.dims())?)?;
                     }
