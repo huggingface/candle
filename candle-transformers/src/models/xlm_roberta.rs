@@ -332,16 +332,24 @@ impl XLMRobertaEncoder {
         Ok(Self { layers })
     }
 
-    fn forward(
+    /// Polls `should_cancel` before every layer. `XLMRobertaModel::forward`
+    /// passes a callback that never fires, so the uncancellable path costs one
+    /// predictable branch per layer and nothing else.
+    #[allow(clippy::too_many_arguments)]
+    fn forward_with_cancel(
         &self,
         hidden_states: &Tensor,
         attention_mask: &Tensor,
         encoder_hidden_states: Option<&Tensor>,
         encoder_attention_mask: Option<&Tensor>,
         past_key_value: Option<(&Tensor, &Tensor)>,
+        should_cancel: &(dyn Fn() -> bool + Sync),
     ) -> Result<Tensor> {
         let mut hidden_states = hidden_states.clone();
         for layer_module in self.layers.iter() {
+            if should_cancel() {
+                candle::bail!("xlm-roberta: forward pass cancelled by caller")
+            }
             let layer_outputs = layer_module.forward(
                 &hidden_states,
                 attention_mask,
@@ -379,15 +387,47 @@ impl XLMRobertaModel {
         encoder_hidden_states: Option<&Tensor>,
         encoder_attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
+        self.forward_with_cancel(
+            input_ids,
+            attention_mask,
+            token_type_ids,
+            past_key_value,
+            encoder_hidden_states,
+            encoder_attention_mask,
+            &|| false,
+        )
+    }
+
+    /// Same as [`Self::forward`], but `should_cancel` is polled before every
+    /// encoder layer. When it returns `true` the pass stops early with an
+    /// error instead of running the remaining layers.
+    ///
+    /// This matters for interactive callers that abandon a result mid-flight —
+    /// a cancelled request otherwise keeps a core busy for the whole depth of
+    /// the model. The check sits between layers because that is the only point
+    /// where the pass can be interrupted; a matmul already in flight still runs
+    /// to completion.
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_with_cancel(
+        &self,
+        input_ids: &Tensor,
+        attention_mask: &Tensor,
+        token_type_ids: &Tensor,
+        past_key_value: Option<(&Tensor, &Tensor)>,
+        encoder_hidden_states: Option<&Tensor>,
+        encoder_attention_mask: Option<&Tensor>,
+        should_cancel: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Tensor> {
         let hidden_states = self.embeddings.forward(input_ids, token_type_ids)?;
         let attention_mask = prepare_4d_attention_mask(attention_mask, DType::F32, None)?
             .to_device(hidden_states.device())?;
-        let hidden_states = self.encoder.forward(
+        let hidden_states = self.encoder.forward_with_cancel(
             &hidden_states,
             &attention_mask,
             encoder_hidden_states,
             encoder_attention_mask,
             past_key_value,
+            should_cancel,
         )?;
         Ok(hidden_states)
     }
