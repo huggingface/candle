@@ -40,6 +40,7 @@ pub enum CudaError {
 
     #[error("{cuda} when loading {module_name}")]
     Load {
+        #[source]
         cuda: cudarc::driver::DriverError,
         module_name: String,
     },

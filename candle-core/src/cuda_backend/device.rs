@@ -254,6 +254,42 @@ pub struct CudaFunc {
     stream: Arc<cudarc::driver::CudaStream>,
 }
 
+fn kernel_load_context(
+    fn_name: &str,
+    module_name: &str,
+    cuda: &cudarc::driver::DriverError,
+) -> String {
+    if cuda.0 == cudarc::driver::sys::CUresult::CUDA_ERROR_NOT_FOUND {
+        format!(
+            "cuda: kernel `{fn_name}` not found in module `{module_name}` \
+             (this kernel may not be compiled for the target architecture)"
+        )
+    } else {
+        format!("cuda: failed to load kernel `{fn_name}` from module `{module_name}`")
+    }
+}
+
+fn kernel_load_error(
+    cuda: cudarc::driver::DriverError,
+    fn_name: &str,
+    mdl: &kernels::Module,
+) -> crate::Error {
+    let module_name = format!("{:?}", kernels::ALL_IDS[mdl.index()]).to_ascii_lowercase();
+    let context = kernel_load_context(fn_name, &module_name, &cuda);
+    let error: crate::Error = CudaError::Load { cuda, module_name }.into();
+    error.context(context)
+}
+
+fn load_kernel_function(
+    module: &Arc<cudarc::driver::CudaModule>,
+    fn_name: &str,
+    mdl: &kernels::Module,
+) -> Result<CudaFunction> {
+    module
+        .load_function(fn_name)
+        .map_err(|cuda| kernel_load_error(cuda, fn_name, mdl))
+}
+
 impl std::ops::Deref for CudaFunc {
     type Target = CudaFunction;
 
@@ -338,8 +374,8 @@ impl CudaDevice {
 
     pub fn get_or_load_func(&self, fn_name: &str, mdl: &kernels::Module) -> Result<CudaFunc> {
         let ms = self.modules.read().unwrap();
-        if let Some(mdl) = ms.mdls[mdl.index()].as_ref() {
-            let func = mdl.load_function(fn_name).w()?;
+        if let Some(cuda_module) = ms.mdls[mdl.index()].as_ref() {
+            let func = load_kernel_function(cuda_module, fn_name, mdl)?;
             return Ok(CudaFunc {
                 func,
                 stream: self.stream.clone(),
@@ -349,7 +385,7 @@ impl CudaDevice {
         let mut ms = self.modules.write().unwrap();
         let cuda_module = self.context.load_module(mdl.ptx().into()).w()?;
         ms.mdls[mdl.index()] = Some(cuda_module.clone());
-        let func = cuda_module.load_function(fn_name).w()?;
+        let func = load_kernel_function(&cuda_module, fn_name, mdl)?;
         Ok(CudaFunc {
             func,
             stream: self.stream.clone(),
@@ -811,5 +847,52 @@ impl BackendDevice for CudaDevice {
     fn synchronize(&self) -> Result<()> {
         self.stream.synchronize().map_err(crate::Error::wrap)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source_chain_contains_driver_error(
+        error: &crate::Error,
+        expected: &cudarc::driver::DriverError,
+    ) -> bool {
+        let mut source = std::error::Error::source(error);
+        while let Some(error) = source {
+            if error.downcast_ref::<cudarc::driver::DriverError>() == Some(expected) {
+                return true;
+            }
+            source = error.source();
+        }
+        false
+    }
+
+    #[test]
+    fn kernel_not_found_error_has_context_and_preserves_source() {
+        let driver_error =
+            cudarc::driver::DriverError(cudarc::driver::sys::CUresult::CUDA_ERROR_NOT_FOUND);
+        let error = kernel_load_error(driver_error, "missing_kernel", &kernels::AFFINE);
+
+        assert_eq!(
+            error.to_string().lines().next(),
+            Some(
+                "cuda: kernel `missing_kernel` not found in module `affine` \
+                 (this kernel may not be compiled for the target architecture)"
+            )
+        );
+        assert!(source_chain_contains_driver_error(&error, &driver_error));
+    }
+
+    #[test]
+    fn other_kernel_load_errors_do_not_include_architecture_hint() {
+        let driver_error =
+            cudarc::driver::DriverError(cudarc::driver::sys::CUresult::CUDA_ERROR_INVALID_CONTEXT);
+        let error = kernel_load_error(driver_error, "missing_kernel", &kernels::AFFINE);
+
+        assert_eq!(
+            error.to_string().lines().next(),
+            Some("cuda: failed to load kernel `missing_kernel` from module `affine`")
+        );
     }
 }
