@@ -2167,6 +2167,26 @@ fn test_flip_3d_channels() -> Result<()> {
 }
 
 #[test]
+fn test_flip_non_contiguous() -> Result<()> {
+    // Transposed view of [[0, 1, 2], [3, 4, 5]]:
+    // [[0, 3],
+    //  [1, 4],
+    //  [2, 5]]
+    let t = Tensor::arange(0.0, 6.0, &Device::Cpu)?
+        .reshape((2, 3))?
+        .t()?;
+    assert!(!t.is_contiguous());
+    let flipped = t.flip(&[0])?;
+    // Expected:
+    // [[2, 5],
+    //  [1, 4],
+    //  [0, 3]]
+    let expected = Tensor::from_vec(vec![2.0, 5.0, 1.0, 4.0, 0.0, 3.0], (3, 2), &Device::Cpu)?;
+    candle_core::test_utils::assert_tensor_eq(&flipped, &expected)?;
+    Ok(())
+}
+
+#[test]
 fn tensor_from_data_validates_concrete_shape() -> Result<()> {
     let values = [1f32, 2., 3., 4.];
 
