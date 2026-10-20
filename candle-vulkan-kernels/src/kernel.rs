@@ -1068,131 +1068,291 @@ impl Kernels {
 /// elementwise WGSL module is shared by all its entry points, so each of
 /// them sees in/rhs/out at bindings 0/1/2 and needs the 3-binding layout;
 /// the other kernels use their input (+rhs) and output at bindings 0..N-1.
+/// Number of storage-buffer bindings in the kernel's descriptor set. The
+/// elementwise WGSL module is shared by all its entry points, so each of
+/// them sees in/rhs/out at bindings 0/1/2 and needs the 3-binding layout;
+/// the other kernels use their input (+rhs) and output at bindings 0..N-1.
+/// Kernels whose parameters travel through the push constant block declare
+/// one binding fewer than their pre-push-constant shaders.
 fn descriptor_bindings(name: KernelName) -> u32 {
-    match name {
-        KernelName::AffineF32
-        | KernelName::AffineBf16
-        | KernelName::AffineF8e4m3 => 3,
-        KernelName::GemmF32 | KernelName::GemmF16 | KernelName::GemmF64 => 4,
-        KernelName::IndexAddF32U32        | KernelName::IndexAddF32I64        | KernelName::IndexAddF32U8        | KernelName::IndexAddF16U32        | KernelName::IndexAddF16I64        | KernelName::IndexAddF16U8        | KernelName::IndexAddF64U32        | KernelName::IndexAddF64I64        | KernelName::IndexAddF64U8 => 4,
-        KernelName::DequantF32 | KernelName::DequantF16 | KernelName::DequantBf16 | KernelName::DequantQ40 | KernelName::DequantQ41 | KernelName::DequantQ50 | KernelName::DequantQ51 | KernelName::DequantQ80 | KernelName::DequantQ81 | KernelName::DequantQ2K | KernelName::DequantQ3K | KernelName::DequantQ4K | KernelName::DequantQ5K | KernelName::DequantQ6K | KernelName::DequantQ8K => 3,
-        KernelName::RmsNorm => 4,
-        KernelName::LayerNorm => 5,
-        KernelName::Sigmoid => 3,
-        KernelName::Softmax => 3,
-        KernelName::Rope => 5,
-        KernelName::RotaryEmbInt => 5,
-        KernelName::ConstSetF32
-        | KernelName::ConstSetF16
-        | KernelName::ConstSetBf16
-        | KernelName::UnaryLogF32
+        match name {
+        // affine: input/output (params are push constants).
+        KernelName::AffineBf16
+        | KernelName::AffineF16
+        | KernelName::AffineF32
+        | KernelName::AffineF64
+        | KernelName::AffineF8e4m3 => 2,
+        // unary: input/output (params are push constants).
+        KernelName::UnaryAbsBf16
+        | KernelName::UnaryAbsF16
         | KernelName::UnaryAbsF32
-        | KernelName::UnaryRecipF32
-        | KernelName::UnarySqrF32
-        | KernelName::UnaryGeluF32
-        | KernelName::UnaryGeluErfF32
-        | KernelName::UnaryErfF32
-        | KernelName::UnaryReluF32
-        | KernelName::UnaryTanhF32
-        | KernelName::UnaryFloorF32
+        | KernelName::UnaryAbsF64
+        | KernelName::UnaryAbsF8e4m3
+        | KernelName::UnaryCeilBf16
+        | KernelName::UnaryCeilF16
         | KernelName::UnaryCeilF32
-        | KernelName::UnaryRoundF32
-        | KernelName::UnarySignF32
-        | KernelName::UnaryPowF32
-        | KernelName::UnaryEluF32
-        | KernelName::UnaryPowBf16
-        | KernelName::UnaryEluBf16
-        | KernelName::UnaryPowF8e4m3
-        | KernelName::UnaryEluF8e4m3
-        | KernelName::UnaryExpF32
-        | KernelName::UnarySiluF32
-        | KernelName::UnarySqrtF32
-        | KernelName::UnarySinF32
+        | KernelName::UnaryCeilF64
+        | KernelName::UnaryCeilF8e4m3
+        | KernelName::UnaryCosBf16
+        | KernelName::UnaryCosF16
         | KernelName::UnaryCosF32
-        | KernelName::UnaryNegF32
-        | KernelName::UnaryLogBf16
-        | KernelName::UnaryAbsBf16
-        | KernelName::UnaryRecipBf16
-        | KernelName::UnarySqrBf16
+        | KernelName::UnaryCosF64
+        | KernelName::UnaryCosF8e4m3
+        | KernelName::UnaryEluBf16
+        | KernelName::UnaryEluF16
+        | KernelName::UnaryEluF32
+        | KernelName::UnaryEluF64
+        | KernelName::UnaryEluF8e4m3
+        | KernelName::UnaryErfBf16
+        | KernelName::UnaryErfF16
+        | KernelName::UnaryErfF32
+        | KernelName::UnaryErfF64
+        | KernelName::UnaryErfF8e4m3
+        | KernelName::UnaryExpBf16
+        | KernelName::UnaryExpF16
+        | KernelName::UnaryExpF32
+        | KernelName::UnaryExpF64
+        | KernelName::UnaryExpF8e4m3
+        | KernelName::UnaryFloorBf16
+        | KernelName::UnaryFloorF16
+        | KernelName::UnaryFloorF32
+        | KernelName::UnaryFloorF64
+        | KernelName::UnaryFloorF8e4m3
         | KernelName::UnaryGeluBf16
         | KernelName::UnaryGeluErfBf16
-        | KernelName::UnaryErfBf16
-        | KernelName::UnaryReluBf16
-        | KernelName::UnaryTanhBf16
-        | KernelName::UnaryFloorBf16
-        | KernelName::UnaryCeilBf16
-        | KernelName::UnaryRoundBf16
-        | KernelName::UnarySignBf16
-        | KernelName::UnaryExpBf16
-        | KernelName::UnarySiluBf16
-        | KernelName::UnarySqrtBf16
-        | KernelName::UnarySinBf16
-        | KernelName::UnaryCosBf16
-        | KernelName::UnaryNegBf16
-        | KernelName::UnaryLogF8e4m3
-        | KernelName::UnaryAbsF8e4m3
-        | KernelName::UnaryRecipF8e4m3
-        | KernelName::UnarySqrF8e4m3
-        | KernelName::UnaryGeluF8e4m3
-        | KernelName::UnaryGeluErfF8e4m3
-        | KernelName::UnaryErfF8e4m3
-        | KernelName::UnaryReluF8e4m3
-        | KernelName::UnaryTanhF8e4m3
-        | KernelName::UnaryFloorF8e4m3
-        | KernelName::UnaryCeilF8e4m3
-        | KernelName::UnaryRoundF8e4m3
-        | KernelName::UnarySignF8e4m3
-        | KernelName::UnaryExpF8e4m3
-        | KernelName::UnarySiluF8e4m3
-        | KernelName::UnarySqrtF8e4m3
-        | KernelName::UnarySinF8e4m3
-        | KernelName::UnaryCosF8e4m3
-        | KernelName::UnaryNegF8e4m3
-        | KernelName::AffineF16
-        | KernelName::AffineF64
-        | KernelName::UnaryLogF16
-        | KernelName::UnaryAbsF16
-        | KernelName::UnaryRecipF16
-        | KernelName::UnarySqrF16
-        | KernelName::UnaryGeluF16
         | KernelName::UnaryGeluErfF16
-        | KernelName::UnaryErfF16
-        | KernelName::UnaryReluF16
-        | KernelName::UnaryTanhF16
-        | KernelName::UnaryFloorF16
-        | KernelName::UnaryCeilF16
-        | KernelName::UnaryRoundF16
-        | KernelName::UnarySignF16
-        | KernelName::UnaryPowF16
-        | KernelName::UnaryEluF16
-        | KernelName::UnaryExpF16
-        | KernelName::UnarySiluF16
-        | KernelName::UnarySqrtF16
-        | KernelName::UnarySinF16
-        | KernelName::UnaryCosF16
-        | KernelName::UnaryNegF16
-        | KernelName::UnaryLogF64
-        | KernelName::UnaryAbsF64
-        | KernelName::UnaryRecipF64
-        | KernelName::UnarySqrF64
-        | KernelName::UnaryGeluF64
+        | KernelName::UnaryGeluErfF32
         | KernelName::UnaryGeluErfF64
-        | KernelName::UnaryErfF64
-        | KernelName::UnaryReluF64
-        | KernelName::UnaryTanhF64
-        | KernelName::UnaryFloorF64
-        | KernelName::UnaryCeilF64
-        | KernelName::UnaryRoundF64
-        | KernelName::UnarySignF64
+        | KernelName::UnaryGeluErfF8e4m3
+        | KernelName::UnaryGeluF16
+        | KernelName::UnaryGeluF32
+        | KernelName::UnaryGeluF64
+        | KernelName::UnaryGeluF8e4m3
+        | KernelName::UnaryLogBf16
+        | KernelName::UnaryLogF16
+        | KernelName::UnaryLogF32
+        | KernelName::UnaryLogF64
+        | KernelName::UnaryLogF8e4m3
+        | KernelName::UnaryNegBf16
+        | KernelName::UnaryNegF16
+        | KernelName::UnaryNegF32
+        | KernelName::UnaryNegF64
+        | KernelName::UnaryNegF8e4m3
+        | KernelName::UnaryPowBf16
+        | KernelName::UnaryPowF16
+        | KernelName::UnaryPowF32
         | KernelName::UnaryPowF64
-        | KernelName::UnaryEluF64
-        | KernelName::UnaryExpF64
+        | KernelName::UnaryPowF8e4m3
+        | KernelName::UnaryRecipBf16
+        | KernelName::UnaryRecipF16
+        | KernelName::UnaryRecipF32
+        | KernelName::UnaryRecipF64
+        | KernelName::UnaryRecipF8e4m3
+        | KernelName::UnaryReluBf16
+        | KernelName::UnaryReluF16
+        | KernelName::UnaryReluF32
+        | KernelName::UnaryReluF64
+        | KernelName::UnaryReluF8e4m3
+        | KernelName::UnaryRoundBf16
+        | KernelName::UnaryRoundF16
+        | KernelName::UnaryRoundF32
+        | KernelName::UnaryRoundF64
+        | KernelName::UnaryRoundF8e4m3
+        | KernelName::UnarySignBf16
+        | KernelName::UnarySignF16
+        | KernelName::UnarySignF32
+        | KernelName::UnarySignF64
+        | KernelName::UnarySignF8e4m3
+        | KernelName::UnarySiluBf16
+        | KernelName::UnarySiluF16
+        | KernelName::UnarySiluF32
         | KernelName::UnarySiluF64
-        | KernelName::UnarySqrtF64
+        | KernelName::UnarySiluF8e4m3
+        | KernelName::UnarySinBf16
+        | KernelName::UnarySinF16
+        | KernelName::UnarySinF32
         | KernelName::UnarySinF64
-        | KernelName::UnaryCosF64
-        | KernelName::UnaryNegF64 => 3,
-        KernelName::BinaryMaximumF32
+        | KernelName::UnarySinF8e4m3
+        | KernelName::UnarySqrBf16
+        | KernelName::UnarySqrF16
+        | KernelName::UnarySqrF32
+        | KernelName::UnarySqrF64
+        | KernelName::UnarySqrF8e4m3
+        | KernelName::UnarySqrtBf16
+        | KernelName::UnarySqrtF16
+        | KernelName::UnarySqrtF32
+        | KernelName::UnarySqrtF64
+        | KernelName::UnarySqrtF8e4m3
+        | KernelName::UnaryTanhBf16
+        | KernelName::UnaryTanhF16
+        | KernelName::UnaryTanhF32
+        | KernelName::UnaryTanhF64
+        | KernelName::UnaryTanhF8e4m3 => 2,
+        // to_dtype: input/output (params are push constants).
+        KernelName::ToDtypeBf16F16
+        | KernelName::ToDtypeBf16F32
+        | KernelName::ToDtypeBf16F64
+        | KernelName::ToDtypeBf16F8e4m3
+        | KernelName::ToDtypeBf16I16
+        | KernelName::ToDtypeBf16I32
+        | KernelName::ToDtypeBf16I64
+        | KernelName::ToDtypeBf16U32
+        | KernelName::ToDtypeBf16U8
+        | KernelName::ToDtypeF16Bf16
+        | KernelName::ToDtypeF16F32
+        | KernelName::ToDtypeF16F64
+        | KernelName::ToDtypeF16F8e4m3
+        | KernelName::ToDtypeF16I16
+        | KernelName::ToDtypeF16I32
+        | KernelName::ToDtypeF16I64
+        | KernelName::ToDtypeF16U32
+        | KernelName::ToDtypeF16U8
+        | KernelName::ToDtypeF32Bf16
+        | KernelName::ToDtypeF32F16
+        | KernelName::ToDtypeF32F64
+        | KernelName::ToDtypeF32F8e4m3
+        | KernelName::ToDtypeF32I16
+        | KernelName::ToDtypeF32I32
+        | KernelName::ToDtypeF32I64
+        | KernelName::ToDtypeF32U32
+        | KernelName::ToDtypeF32U8
+        | KernelName::ToDtypeF64Bf16
+        | KernelName::ToDtypeF64F16
+        | KernelName::ToDtypeF64F32
+        | KernelName::ToDtypeF64F8e4m3
+        | KernelName::ToDtypeF64I16
+        | KernelName::ToDtypeF64I32
+        | KernelName::ToDtypeF64I64
+        | KernelName::ToDtypeF64U32
+        | KernelName::ToDtypeF64U8
+        | KernelName::ToDtypeF8e4m3Bf16
+        | KernelName::ToDtypeF8e4m3F16
+        | KernelName::ToDtypeF8e4m3F32
+        | KernelName::ToDtypeF8e4m3F64
+        | KernelName::ToDtypeF8e4m3I16
+        | KernelName::ToDtypeF8e4m3I32
+        | KernelName::ToDtypeF8e4m3I64
+        | KernelName::ToDtypeF8e4m3U32
+        | KernelName::ToDtypeF8e4m3U8
+        | KernelName::ToDtypeI16Bf16
+        | KernelName::ToDtypeI16F16
+        | KernelName::ToDtypeI16F32
+        | KernelName::ToDtypeI16F64
+        | KernelName::ToDtypeI16F8e4m3
+        | KernelName::ToDtypeI16I32
+        | KernelName::ToDtypeI16I64
+        | KernelName::ToDtypeI16U32
+        | KernelName::ToDtypeI16U8
+        | KernelName::ToDtypeI32Bf16
+        | KernelName::ToDtypeI32F16
+        | KernelName::ToDtypeI32F32
+        | KernelName::ToDtypeI32F64
+        | KernelName::ToDtypeI32F8e4m3
+        | KernelName::ToDtypeI32I16
+        | KernelName::ToDtypeI32I64
+        | KernelName::ToDtypeI32U32
+        | KernelName::ToDtypeI32U8
+        | KernelName::ToDtypeI64Bf16
+        | KernelName::ToDtypeI64F16
+        | KernelName::ToDtypeI64F32
+        | KernelName::ToDtypeI64F64
+        | KernelName::ToDtypeI64F8e4m3
+        | KernelName::ToDtypeI64I16
+        | KernelName::ToDtypeI64I32
+        | KernelName::ToDtypeI64U32
+        | KernelName::ToDtypeI64U8
+        | KernelName::ToDtypeU32Bf16
+        | KernelName::ToDtypeU32F16
+        | KernelName::ToDtypeU32F32
+        | KernelName::ToDtypeU32F64
+        | KernelName::ToDtypeU32F8e4m3
+        | KernelName::ToDtypeU32I16
+        | KernelName::ToDtypeU32I32
+        | KernelName::ToDtypeU32I64
+        | KernelName::ToDtypeU32U8
+        | KernelName::ToDtypeU8Bf16
+        | KernelName::ToDtypeU8F16
+        | KernelName::ToDtypeU8F32
+        | KernelName::ToDtypeU8F64
+        | KernelName::ToDtypeU8F8e4m3
+        | KernelName::ToDtypeU8I16
+        | KernelName::ToDtypeU8I32
+        | KernelName::ToDtypeU8I64
+        | KernelName::ToDtypeU8U32 => 2,
+        // upsample: src/out (params are push constants).
+        KernelName::UpsampleBilinear2dF16
+        | KernelName::UpsampleBilinear2dF32
+        | KernelName::UpsampleBilinear2dF64
+        | KernelName::UpsampleNearest1dF16
+        | KernelName::UpsampleNearest1dF32
+        | KernelName::UpsampleNearest1dF64
+        | KernelName::UpsampleNearest2dF16
+        | KernelName::UpsampleNearest2dF32
+        | KernelName::UpsampleNearest2dF64 => 2,
+        // const_set: output (params are push constants).
+        KernelName::ConstSetBf16
+        | KernelName::ConstSetF16
+        | KernelName::ConstSetF32 => 1,
+        // row-norm kernels: src/alpha(/beta)/dst (params are push constants).
+        KernelName::RmsNorm => 3,
+        KernelName::LayerNorm => 4,
+        // 1 storage buffer(s).
+        KernelName::TestFillF16
+        | KernelName::TestFillU8
+        | KernelName::TestFillI16
+        | KernelName::TestFillBf16Native
+        | KernelName::TestFillBf16Emulated
+        | KernelName::TestFillU32
+        | KernelName::TestFillI32
+        | KernelName::TestFillF32
+        | KernelName::TestFillI64
+        | KernelName::TestFillF4
+        | KernelName::TestFillF6e2m3
+        | KernelName::TestFillF6e3m2
+        | KernelName::TestFillF8e4m3
+        | KernelName::TestFillF8e8m0
+        | KernelName::TestFillF64 => 1,
+        // 2 storage buffer(s).
+        KernelName::TestPrintf => 2,
+        // 3 storage buffer(s).
+        KernelName::DequantF32
+        | KernelName::DequantF16
+        | KernelName::DequantBf16
+        | KernelName::DequantQ40
+        | KernelName::DequantQ41
+        | KernelName::DequantQ50
+        | KernelName::DequantQ51
+        | KernelName::DequantQ80
+        | KernelName::DequantQ81
+        | KernelName::DequantQ2K
+        | KernelName::DequantQ3K
+        | KernelName::DequantQ4K
+        | KernelName::DequantQ5K
+        | KernelName::DequantQ6K
+        | KernelName::DequantQ8K
+        | KernelName::Sigmoid
+        | KernelName::Softmax
+        | KernelName::Copy2dF32
+        | KernelName::Copy2dF16
+        | KernelName::Copy2dF64
+        | KernelName::Copy2dBf16
+        | KernelName::Copy2dU8
+        | KernelName::Copy2dU32
+        | KernelName::Copy2dI64 => 3,
+        // 4 storage buffer(s).
+        KernelName::GemmF32
+        | KernelName::GemmF16
+        | KernelName::GemmF64
+        | KernelName::IndexAddF32U32
+        | KernelName::IndexAddF32I64
+        | KernelName::IndexAddF32U8
+        | KernelName::IndexAddF16U32
+        | KernelName::IndexAddF16I64
+        | KernelName::IndexAddF16U8
+        | KernelName::IndexAddF64U32
+        | KernelName::IndexAddF64I64
+        | KernelName::IndexAddF64U8
+        | KernelName::BinaryMaximumF32
         | KernelName::BinaryMinimumF32
         | KernelName::BinaryAddF32
         | KernelName::BinarySubF32
@@ -1312,23 +1472,9 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::CmpLeI64
         | KernelName::CmpGtI64
         | KernelName::CmpGeI64
-        => 4,
-        KernelName::WhereF32
-        | KernelName::WhereBf16
-        | KernelName::WhereF8e4m3
-        | KernelName::WhereF16
-        | KernelName::WhereF64 => 5,
-        KernelName::Copy2dF32
-        | KernelName::Copy2dF16
-        | KernelName::Copy2dF64
-        | KernelName::Copy2dBf16
-        | KernelName::Copy2dU8
-        | KernelName::Copy2dU32
-        | KernelName::Copy2dI64
-        => 3,
-        KernelName::GatherIdxF32 => 4,
-        KernelName::GatherRowsF32 => 4,
-        KernelName::IndexSelectF32
+        | KernelName::GatherIdxF32
+        | KernelName::GatherRowsF32
+        | KernelName::IndexSelectF32
         | KernelName::GatherIdxF16
         | KernelName::GatherRowsF16
         | KernelName::IndexSelectF16
@@ -1339,8 +1485,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::GatherIdxI64
         | KernelName::GatherRowsF64
         | KernelName::IndexSelectF64
-        => 4,
-        KernelName::ReduceMinF32
+        | KernelName::ReduceMinF32
         | KernelName::ReduceArgMinF32
         | KernelName::ReduceArgMaxF32
         | KernelName::ReduceSumF32
@@ -1362,20 +1507,10 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::ReduceArgMaxBf16
         | KernelName::AvgPool2dF32
         | KernelName::MaxPool2dF32
-        | KernelName::UpsampleNearest1dF32
-        | KernelName::UpsampleNearest2dF32
-        | KernelName::UpsampleBilinear2dF32
         | KernelName::AvgPool2dF16
         | KernelName::MaxPool2dF16
-        | KernelName::UpsampleNearest1dF16
-        | KernelName::UpsampleNearest2dF16
-        | KernelName::UpsampleBilinear2dF16
         | KernelName::AvgPool2dF64
         | KernelName::MaxPool2dF64
-        | KernelName::UpsampleNearest1dF64
-        | KernelName::UpsampleNearest2dF64
-        | KernelName::UpsampleBilinear2dF64
-        => 4,
         | KernelName::Conv1dF32
         | KernelName::Conv2dF32
         | KernelName::ConvTranspose1dF32
@@ -1389,118 +1524,17 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::ConvTranspose1dF64
         | KernelName::ConvTranspose2dF64
         | KernelName::ConvTranspose2dBf16
-        => 4,
-        KernelName::ScatterF32
+        | KernelName::ScatterF32
         | KernelName::ScatterF16
-        | KernelName::ScatterF64
-        => 4,
-        KernelName::TestFillF16 => 1,
-        KernelName::TestFillU8
-        | KernelName::TestFillI16
-        | KernelName::TestFillBf16Native
-        | KernelName::TestFillBf16Emulated
-        | KernelName::TestFillU32
-        | KernelName::TestFillI32
-        | KernelName::TestFillF32
-        | KernelName::TestFillI64
-        | KernelName::TestFillF4
-        | KernelName::TestFillF6e2m3
-        | KernelName::TestFillF6e3m2
-        | KernelName::TestFillF8e4m3
-        | KernelName::TestFillF8e8m0
-        | KernelName::TestFillF64 => 1,
-        KernelName::TestPrintf => 2,
-        KernelName::ToDtypeF16F32
-        | KernelName::ToDtypeF16Bf16
-        | KernelName::ToDtypeF16F64
-        | KernelName::ToDtypeBf16F16
-        | KernelName::ToDtypeBf16F32
-        | KernelName::ToDtypeBf16F64
-        | KernelName::ToDtypeF32F16
-        | KernelName::ToDtypeF32Bf16
-        | KernelName::ToDtypeF32F64
-        | KernelName::ToDtypeF64F16
-        | KernelName::ToDtypeF64Bf16
-        | KernelName::ToDtypeF64F32 
-            | KernelName::ToDtypeU8U32
-            | KernelName::ToDtypeU8I16
-            | KernelName::ToDtypeU8I32
-            | KernelName::ToDtypeU8I64
-            | KernelName::ToDtypeU8Bf16
-            | KernelName::ToDtypeU8F16
-            | KernelName::ToDtypeU8F32
-            | KernelName::ToDtypeU8F64
-            | KernelName::ToDtypeU8F8e4m3
-            | KernelName::ToDtypeU32U8
-            | KernelName::ToDtypeU32I16
-            | KernelName::ToDtypeU32I32
-            | KernelName::ToDtypeU32I64
-            | KernelName::ToDtypeU32Bf16
-            | KernelName::ToDtypeU32F16
-            | KernelName::ToDtypeU32F32
-            | KernelName::ToDtypeU32F64
-            | KernelName::ToDtypeU32F8e4m3
-            | KernelName::ToDtypeI16U8
-            | KernelName::ToDtypeI16U32
-            | KernelName::ToDtypeI16I32
-            | KernelName::ToDtypeI16I64
-            | KernelName::ToDtypeI16Bf16
-            | KernelName::ToDtypeI16F16
-            | KernelName::ToDtypeI16F32
-            | KernelName::ToDtypeI16F64
-            | KernelName::ToDtypeI16F8e4m3
-            | KernelName::ToDtypeI32U8
-            | KernelName::ToDtypeI32U32
-            | KernelName::ToDtypeI32I16
-            | KernelName::ToDtypeI32I64
-            | KernelName::ToDtypeI32Bf16
-            | KernelName::ToDtypeI32F16
-            | KernelName::ToDtypeI32F32
-            | KernelName::ToDtypeI32F64
-            | KernelName::ToDtypeI32F8e4m3
-            | KernelName::ToDtypeI64U8
-            | KernelName::ToDtypeI64U32
-            | KernelName::ToDtypeI64I16
-            | KernelName::ToDtypeI64I32
-            | KernelName::ToDtypeI64Bf16
-            | KernelName::ToDtypeI64F16
-            | KernelName::ToDtypeI64F32
-            | KernelName::ToDtypeI64F64
-            | KernelName::ToDtypeI64F8e4m3
-            | KernelName::ToDtypeF8e4m3U8
-            | KernelName::ToDtypeF8e4m3U32
-            | KernelName::ToDtypeF8e4m3I16
-            | KernelName::ToDtypeF8e4m3I32
-            | KernelName::ToDtypeF8e4m3I64
-            | KernelName::ToDtypeF8e4m3Bf16
-            | KernelName::ToDtypeF8e4m3F16
-            | KernelName::ToDtypeF8e4m3F32
-            | KernelName::ToDtypeF8e4m3F64
-            | KernelName::ToDtypeBf16U8
-            | KernelName::ToDtypeBf16U32
-            | KernelName::ToDtypeBf16I16
-            | KernelName::ToDtypeBf16I32
-            | KernelName::ToDtypeBf16I64
-            | KernelName::ToDtypeBf16F8e4m3
-            | KernelName::ToDtypeF16U8
-            | KernelName::ToDtypeF16U32
-            | KernelName::ToDtypeF16I16
-            | KernelName::ToDtypeF16I32
-            | KernelName::ToDtypeF16I64
-            | KernelName::ToDtypeF16F8e4m3
-            | KernelName::ToDtypeF32U8
-            | KernelName::ToDtypeF32U32
-            | KernelName::ToDtypeF32I16
-            | KernelName::ToDtypeF32I32
-            | KernelName::ToDtypeF32I64
-            | KernelName::ToDtypeF32F8e4m3
-            | KernelName::ToDtypeF64U8
-            | KernelName::ToDtypeF64U32
-            | KernelName::ToDtypeF64I16
-            | KernelName::ToDtypeF64I32
-            | KernelName::ToDtypeF64I64
-            | KernelName::ToDtypeF64F8e4m3
-            => 3,
+        | KernelName::ScatterF64 => 4,
+        // 5 storage buffer(s).
+        KernelName::Rope
+        | KernelName::RotaryEmbInt
+        | KernelName::WhereF32
+        | KernelName::WhereBf16
+        | KernelName::WhereF8e4m3
+        | KernelName::WhereF16
+        | KernelName::WhereF64 => 5,
     }
 }
 

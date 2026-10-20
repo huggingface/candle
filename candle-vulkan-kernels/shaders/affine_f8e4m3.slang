@@ -1,7 +1,13 @@
 // affine (dst = src*mul + add) for f8e4m3 (emulated): decode to float, compute, encode back.
 StructuredBuffer<uint8_t> g_In;
 RWStructuredBuffer<uint8_t> g_Out;
-StructuredBuffer<float> g_Params; // [0]=total, [1]=mul, [2]=add
+struct Params
+{
+    uint64_t total;
+    double mul;
+    double add;
+};
+layout(push_constant) Params g_Params;
 
 // 2^e as float (microfloat exp2i), e in the f32-representable range.
 float f8e4m3_f2i(int e)
@@ -105,37 +111,15 @@ uint8_t f8e4m3_encode(float v)
     return (uint8_t)(neg ? (bits | 0x80u) : bits);
 }
 
-uint rhs_offset(uint i)
-{
-    uint rhs_ndim = uint(g_Params[2]);
-    if (rhs_ndim == 0u) { return 0u; }
-    uint lhs_ndim = uint(g_Params[1]);
-    uint idx[4];
-    uint rem = i;
-    for (uint d = 0u; d < lhs_ndim; d += 1u)
-    {
-        uint dim = uint(g_Params[3u + (lhs_ndim - 1u - d)]);
-        idx[lhs_ndim - 1u - d] = rem % dim;
-        rem = rem / dim;
-    }
-    uint off = 0u;
-    for (uint j = 0u; j < rhs_ndim; j += 1u)
-    {
-        uint r = uint(g_Params[7u + j]);
-        uint lidx = idx[lhs_ndim - rhs_ndim + j];
-        off = off * r + (r != 1u ? lidx : 0u);
-    }
-    return off;
-}
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main_affine(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
-    if (i < uint(g_Params[0]))
+    if (i < uint(g_Params.total))
     {
         float x = f8e4m3_decode(g_In[i]);
-        g_Out[i] = f8e4m3_encode(x * g_Params[1] + g_Params[2]);
+        g_Out[i] = f8e4m3_encode(float(double(x) * g_Params.mul + g_Params.add));
     }
 }

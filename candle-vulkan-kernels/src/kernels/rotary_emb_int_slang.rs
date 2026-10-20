@@ -27,7 +27,7 @@ pub fn call_rotary_emb_int_slang<T>(
     dst: &Subbuffer<[T]>,
     cos: &Subbuffer<[T]>,
     sin: &Subbuffer<[T]>,
-    params: &Subbuffer<[f32]>,
+    params: &Subbuffer<[u64]>,
     el_count: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;

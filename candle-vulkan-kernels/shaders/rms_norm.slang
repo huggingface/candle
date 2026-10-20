@@ -4,29 +4,34 @@
 StructuredBuffer<float> g_Src;
 StructuredBuffer<float> g_Alpha;
 RWStructuredBuffer<float> g_Dst;
-StructuredBuffer<float> g_Params; // [0]=n_rows, [1]=n, [2]=eps
+struct Params
+{
+    uint64_t n_rows;
+    uint64_t n;
+    double eps;
+};
+layout(push_constant) Params g_Params;
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
-    uint n_rows = uint(g_Params[0]);
-    if (i >= n_rows)
+    if (i >= uint(g_Params.n_rows))
     {
         return;
     }
-    uint n = uint(g_Params[1]);
-    float eps = g_Params[2];
-    uint base = i * n;
+    uint64_t n = g_Params.n;
+    uint64_t base = uint64_t(i) * n;
     float sum2 = 0.0f;
-    for (uint j = 0u; j < n; j += 1u)
+    for (uint64_t j = 0; j < n; j += 1)
     {
         float v = g_Src[base + j];
         sum2 += v * v;
     }
-    float inv_m = 1.0f / sqrt(sum2 / float(n) + eps);
-    for (uint j = 0u; j < n; j += 1u)
+    double inv_m = 1.0 / sqrt(double(sum2) / double(n) + g_Params.eps);
+    float inv_m_f = float(inv_m);
+    for (uint64_t j = 0; j < n; j += 1)
     {
-        g_Dst[base + j] = g_Src[base + j] * inv_m * g_Alpha[j];
+        g_Dst[base + j] = g_Src[base + j] * inv_m_f * g_Alpha[j];
     }
 }

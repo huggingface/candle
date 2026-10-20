@@ -1,4 +1,4 @@
-// to_dtype: F8E4M3 -> F16. g_Out[i] = <expr> for i < g_Params[0].
+// to_dtype: F8E4M3 -> F16. g_Out[i] = <expr> for i < g_Count.
 // Shared dtype cast helpers (bf16 + f8e4m3 emulation), matching the microfloat/half crates.
 float bf16_decode(uint16_t b)
 {
@@ -108,11 +108,11 @@ uint8_t f8e4m3_encode(float v)
 
 StructuredBuffer<uint8_t> g_In;
 RWStructuredBuffer<half> g_Out;
-StructuredBuffer<float> g_Params; // [0] = element count
+layout(push_constant) uint64_t g_Count;
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = half(f8e4m3_decode(g_In[idx])); }
+    if (idx < uint(g_Count)) { g_Out[idx] = half(f8e4m3_decode(g_In[idx])); }
 }

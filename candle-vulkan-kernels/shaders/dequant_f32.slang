@@ -2,14 +2,14 @@
 
 StructuredBuffer<uint8_t> g_Src;
 RWStructuredBuffer<float> g_Dst;
-StructuredBuffer<float> g_Params; // [0]=num_blocks
+StructuredBuffer<uint64_t> g_Params; // [0]=num_blocks
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint b = dispatchThreadID.x;
-    if (b >= uint(g_Params[0]))
+    if (b >= g_Params[0])
     {
         return;
     }

@@ -27,7 +27,7 @@ pub fn call_rope_slang(
     cos: &Subbuffer<[f32]>,
     sin: &Subbuffer<[f32]>,
     dst: &Subbuffer<[f32]>,
-    params: &Subbuffer<[f32]>,
+    params: &Subbuffer<[u64]>,
     n_threads: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;

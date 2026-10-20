@@ -1,7 +1,12 @@
 // Unary f16 ops. Each entry point maps `g_In[i] -> g_Out[i]` for `i < g_Params[0]`.
 StructuredBuffer<half> g_In;
 RWStructuredBuffer<half> g_Out;
-StructuredBuffer<float> g_Params; // [0] = element count, [1] = powf exponent (main_pow only)
+struct Params
+{
+    uint64_t count;
+    double extra;
+};
+layout(push_constant) Params g_Params;
 
 // Abramowitz-Stegun 7.1.26 approximation (|err| < 1.5e-7),
 // matching libm::erff (what candle's CPU path uses) to f16 precision.
@@ -19,7 +24,7 @@ float erf_approx(float x)
 void main_log(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = log(g_In[idx]); }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = log(g_In[idx]); }
 }
 
 [shader("compute")]
@@ -27,7 +32,7 @@ void main_log(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_abs(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = abs(g_In[idx]); }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = abs(g_In[idx]); }
 }
 
 [shader("compute")]
@@ -35,7 +40,7 @@ void main_abs(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_recip(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = 1.0 / g_In[idx]; }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = half(1.0 / g_In[idx]); }
 }
 
 [shader("compute")]
@@ -43,7 +48,7 @@ void main_recip(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_sqr(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = g_In[idx] * g_In[idx]; }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = g_In[idx] * g_In[idx]; }
 }
 
 [shader("compute")]
@@ -51,11 +56,11 @@ void main_sqr(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_gelu(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         // tanh approximation, matching candle's Gelu::f32.
         half x = g_In[idx];
-        g_Out[idx] = 0.5 * x * (1.0 + tanh(0.79788456080286535587989211986876373 * x * (1.0 + 0.044715 * x * x)));
+        g_Out[idx] = half(0.5 * x * (1.0 + tanh(0.79788456080286535587989211986876373 * x * (1.0 + 0.044715 * x * x))));
     }
 }
 
@@ -64,11 +69,11 @@ void main_gelu(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_gelu_erf(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         // (erf(x / sqrt(2)) + 1) * 0.5 * x, matching candle's GeluErf::f32.
         half x = g_In[idx];
-        g_Out[idx] = (erf_approx(x * 0.7071067811865476) + 1.0) * 0.5 * x;
+        g_Out[idx] = half((erf_approx(x * 0.7071067811865476) + 1.0) * 0.5 * x);
     }
 }
 
@@ -77,7 +82,7 @@ void main_gelu_erf(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_erf(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = erf_approx(g_In[idx]); }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = half(erf_approx(g_In[idx])); }
 }
 
 [shader("compute")]
@@ -85,7 +90,7 @@ void main_erf(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_relu(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = max(g_In[idx], 0.0); }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = half(max(g_In[idx], 0.0)); }
 }
 
 [shader("compute")]
@@ -93,7 +98,7 @@ void main_relu(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_tanh(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = tanh(g_In[idx]); }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = tanh(g_In[idx]); }
 }
 
 [shader("compute")]
@@ -101,7 +106,7 @@ void main_tanh(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_floor(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = floor(g_In[idx]); }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = floor(g_In[idx]); }
 }
 
 [shader("compute")]
@@ -109,7 +114,7 @@ void main_floor(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_ceil(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = ceil(g_In[idx]); }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = ceil(g_In[idx]); }
 }
 
 [shader("compute")]
@@ -117,12 +122,12 @@ void main_ceil(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_round(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         // candle's Round is round-half-away-from-zero (Slang's round()
         // rounds half to even).
         half x = g_In[idx];
-        g_Out[idx] = x > 0.0 ? floor(x + 0.5) : ceil(x - 0.5);
+        g_Out[idx] = half(x > 0.0 ? floor(x + 0.5) : ceil(x - 0.5));
     }
 }
 
@@ -131,10 +136,10 @@ void main_round(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_sign(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         half x = g_In[idx];
-        g_Out[idx] = (x > 0.0 ? 1.0 : 0.0) - (x < 0.0 ? 1.0 : 0.0);
+        g_Out[idx] = half((x > 0.0 ? 1.0 : 0.0) - (x < 0.0 ? 1.0 : 0.0));
     }
 }
 [shader("compute")]
@@ -142,9 +147,9 @@ void main_sign(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_pow(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
-    if (i < uint(g_Params[0]))
+    if (i < uint(g_Params.count))
     {
-        g_Out[i] = pow(g_In[i], g_Params[1]);
+        g_Out[i] = half(pow(g_In[i], float(g_Params.extra)));
     }
 }
 [shader("compute")]
@@ -152,11 +157,11 @@ void main_pow(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_elu(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
-    if (i < uint(g_Params[0]))
+    if (i < uint(g_Params.count))
     {
         float x = g_In[i];
-        float alpha = g_Params[1];
-        g_Out[i] = x >= 0.0 ? x : alpha * (exp(x) - 1.0);
+        float alpha = (float)g_Params.extra;
+        g_Out[i] = half(x >= 0.0 ? x : alpha * (exp(x) - 1.0));
     }
 }
 [shader("compute")]
@@ -164,17 +169,17 @@ void main_elu(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_exp(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = exp(g_In[idx]); }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = exp(g_In[idx]); }
 }
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main_silu(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         half x = g_In[idx];
-        g_Out[idx] = x / (1.0 + exp(-x));
+        g_Out[idx] = half(x / (1.0 + exp(-x)));
     }
 }
 [shader("compute")]
@@ -182,26 +187,26 @@ void main_silu(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_sqrt(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = sqrt(g_In[idx]); }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = sqrt(g_In[idx]); }
 }
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main_sin(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = sin(g_In[idx]); }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = sin(g_In[idx]); }
 }
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main_cos(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = cos(g_In[idx]); }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = cos(g_In[idx]); }
 }
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main_neg(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = -g_In[idx]; }
+    if (idx < uint(g_Params.count)) { g_Out[idx] = -g_In[idx]; }
 }

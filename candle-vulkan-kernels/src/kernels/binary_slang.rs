@@ -20,7 +20,7 @@ pub fn call_binary_slang<T>(
     input: &Subbuffer<[T]>,
     rhs: &Subbuffer<[T]>,
     output: &Subbuffer<[T]>,
-    params: &Subbuffer<[f32]>,
+    params: &Subbuffer<[u64]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;

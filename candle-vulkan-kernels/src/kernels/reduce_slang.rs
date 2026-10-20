@@ -25,7 +25,7 @@ pub fn call_reduce_slang<T>(
     input: &Subbuffer<[T]>,
     out_f: Option<&Subbuffer<[T]>>,
     out_i: Option<&Subbuffer<[u32]>>,
-    params: &Subbuffer<[f32]>,
+    params: &Subbuffer<[u64]>,
     rows: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;

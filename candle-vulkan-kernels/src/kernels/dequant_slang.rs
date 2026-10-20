@@ -29,7 +29,7 @@ pub fn call_dequantize_slang(
     name: KernelName,
     src: &Subbuffer<[u8]>,
     dst: &Subbuffer<[f32]>,
-    params: &Subbuffer<[f32]>,
+    params: &Subbuffer<[u64]>,
     num_blocks: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;

@@ -5,23 +5,23 @@
 RWStructuredBuffer<float> g_Dst;
 StructuredBuffer<float> g_Src;
 StructuredBuffer<uint> g_Ids;
-StructuredBuffer<float> g_Params; // [0]=total, [1]=post_dim, [2]=nsrc, [3]=max_idx
+StructuredBuffer<uint64_t> g_Params; // [0]=total, [1]=post_dim, [2]=nsrc, [3]=max_idx
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
-    uint total = uint(g_Params[0]);
-    uint post = max(uint(g_Params[1]), 1u);
-    uint nsrc = max(uint(g_Params[2]), 1u);
-    uint maxidx = uint(g_Params[3]);
+    uint64_t total = g_Params[0];
+    uint64_t post = max(g_Params[1], 1u);
+    uint64_t nsrc = max(g_Params[2], 1u);
+    uint64_t maxidx = g_Params[3];
     if (i >= total) { return; }
-    uint src_idx = (i / post) % nsrc;
-    uint pre_i = i / (nsrc * post);
-    uint r = i % post;
+    uint64_t src_idx = (i / post) % nsrc;
+    uint64_t pre_i = i / (nsrc * post);
+    uint64_t r = i % post;
     uint id = g_Ids[src_idx];
     if (id == 0xFFFFFFFFu || id >= maxidx) { return; }
-    uint uidx = id;
-    uint dst = (pre_i * maxidx + uidx) * post + r;
+    uint64_t uidx = id;
+    uint64_t dst = (pre_i * maxidx + uidx) * post + r;
     InterlockedAdd(g_Dst[dst], g_Src[i]);
 }

@@ -7,15 +7,15 @@
 StructuredBuffer<double> g_In;
 RWStructuredBuffer<double> g_OutF;
 RWStructuredBuffer<uint> g_OutI;
-StructuredBuffer<float> g_Params; // [0]=rows, [1]=cols
+StructuredBuffer<uint64_t> g_Params; // [0]=rows, [1]=cols
 
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main_reduce_min(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint row = dispatchThreadID.x;
-    uint rows = uint(g_Params[0]);
-    uint cols = uint(g_Params[1]);
+    uint64_t rows = g_Params[0];
+    uint64_t cols = g_Params[1];
     if (row >= rows || cols == 0u)
     {
         return;
@@ -37,8 +37,8 @@ void main_reduce_min(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_reduce_argmin(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint row = dispatchThreadID.x;
-    uint rows = uint(g_Params[0]);
-    uint cols = uint(g_Params[1]);
+    uint64_t rows = g_Params[0];
+    uint64_t cols = g_Params[1];
     if (row >= rows || cols == 0u)
     {
         return;
@@ -62,8 +62,8 @@ void main_reduce_argmin(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_reduce_argmax(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint row = dispatchThreadID.x;
-    uint rows = uint(g_Params[0]);
-    uint cols = uint(g_Params[1]);
+    uint64_t rows = g_Params[0];
+    uint64_t cols = g_Params[1];
     if (row >= rows || cols == 0u)
     {
         return;
@@ -86,8 +86,8 @@ void main_reduce_argmax(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_reduce_sum(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint row = dispatchThreadID.x;
-    uint rows = uint(g_Params[0]);
-    uint cols = uint(g_Params[1]);
+    uint64_t rows = g_Params[0];
+    uint64_t cols = g_Params[1];
     if (row >= rows || cols == 0u)
     {
         return;
@@ -104,8 +104,8 @@ void main_reduce_sum(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_reduce_max(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint row = dispatchThreadID.x;
-    uint rows = uint(g_Params[0]);
-    uint cols = uint(g_Params[1]);
+    uint64_t rows = g_Params[0];
+    uint64_t cols = g_Params[1];
     if (row >= rows || cols == 0u)
     {
         return;

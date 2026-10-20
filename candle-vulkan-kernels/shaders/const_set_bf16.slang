@@ -1,8 +1,13 @@
 // Fills a bf16 (emulated u16) storage buffer with a constant value.
 //
-// Params buffer layout: [0] = fill value, [1] = element count.
+// Push constants: g_Params.count = element count, g_Params.value = fill value.
 RWStructuredBuffer<uint16_t> g_Out;
-StructuredBuffer<float> g_Params;
+struct Params
+{
+    uint64_t count;
+    float value;
+};
+layout(push_constant) Params g_Params;
 // bf16 helpers (half crate f32_to_bf16, round-to-nearest-even).
 uint16_t bf16_encode(float v)
 {
@@ -17,8 +22,8 @@ uint16_t bf16_encode(float v)
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[1]))
+    if (idx < uint(g_Params.count))
     {
-        g_Out[idx] = bf16_encode(g_Params[0]);
+        g_Out[idx] = bf16_encode(g_Params.value);
     }
 }

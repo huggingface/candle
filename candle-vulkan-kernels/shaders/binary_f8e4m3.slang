@@ -15,7 +15,7 @@
 StructuredBuffer<uint8_t> g_In;
 StructuredBuffer<uint8_t> g_Rhs;
 RWStructuredBuffer<uint8_t> g_Out;
-StructuredBuffer<float> g_Params;
+StructuredBuffer<uint64_t> g_Params;
 
 // 2^e as float (microfloat exp2i), e in the f32-representable range.
 float f8e4m3_f2i(int e)
@@ -119,24 +119,24 @@ uint8_t f8e4m3_encode(float v)
     return (uint8_t)(neg ? (bits | 0x80u) : bits);
 }
 
-uint rhs_offset(uint i)
+uint64_t rhs_offset(uint i)
 {
-    uint rhs_ndim = uint(g_Params[2]);
+    uint64_t rhs_ndim = g_Params[2];
     if (rhs_ndim == 0u) { return 0u; }
-    uint lhs_ndim = uint(g_Params[1]);
-    uint idx[8];
-    uint rem = i;
+    uint64_t lhs_ndim = g_Params[1];
+    uint64_t idx[8];
+    uint64_t rem = i;
     for (uint d = 0u; d < lhs_ndim; d += 1u)
     {
-        uint dim = uint(g_Params[3u + (lhs_ndim - 1u - d)]);
+        uint64_t dim = g_Params[3u + (lhs_ndim - 1u - d)];
         idx[lhs_ndim - 1u - d] = rem % dim;
         rem = rem / dim;
     }
-    uint off = 0u;
+    uint64_t off = 0u;
     for (uint j = 0u; j < rhs_ndim; j += 1u)
     {
-        uint r = uint(g_Params[11u + j]);
-        uint lidx = idx[lhs_ndim - rhs_ndim + j];
+        uint64_t r = g_Params[11u + j];
+        uint64_t lidx = idx[lhs_ndim - rhs_ndim + j];
         off = off * r + (r != 1u ? lidx : 0u);
     }
     return off;
@@ -147,7 +147,7 @@ uint rhs_offset(uint i)
 void main_maximum(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < g_Params[0])
     {
         float a = f8e4m3_decode(g_In[idx]);
         float b = f8e4m3_decode(g_Rhs[rhs_offset(idx)]);
@@ -160,7 +160,7 @@ void main_maximum(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_minimum(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < g_Params[0])
     {
         float a = f8e4m3_decode(g_In[idx]);
         float b = f8e4m3_decode(g_Rhs[rhs_offset(idx)]);
@@ -173,7 +173,7 @@ void main_minimum(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_add(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < g_Params[0])
     {
         g_Out[idx] = f8e4m3_encode(f8e4m3_decode(g_In[idx]) + f8e4m3_decode(g_Rhs[rhs_offset(idx)]));
     }
@@ -184,7 +184,7 @@ void main_add(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_sub(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < g_Params[0])
     {
         g_Out[idx] = f8e4m3_encode(f8e4m3_decode(g_In[idx]) - f8e4m3_decode(g_Rhs[rhs_offset(idx)]));
     }
@@ -195,7 +195,7 @@ void main_sub(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_mul(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < g_Params[0])
     {
         g_Out[idx] = f8e4m3_encode(f8e4m3_decode(g_In[idx]) * f8e4m3_decode(g_Rhs[rhs_offset(idx)]));
     }
@@ -206,7 +206,7 @@ void main_mul(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_div(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < g_Params[0])
     {
         g_Out[idx] = f8e4m3_encode(f8e4m3_decode(g_In[idx]) / f8e4m3_decode(g_Rhs[rhs_offset(idx)]));
     }

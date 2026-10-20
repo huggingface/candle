@@ -1,7 +1,7 @@
 // to_dtype: BF16 (emulated u16) -> F16 (half).
 StructuredBuffer<uint16_t> g_In;
 RWStructuredBuffer<half> g_Out;
-StructuredBuffer<float> g_Params; // [0] = element count
+layout(push_constant) uint64_t g_Count;
 // bf16 helpers (half crate bf16_to_f32 / f32_to_bf16, round-to-nearest-even).
 float bf16_decode(uint16_t b)
 {
@@ -23,5 +23,5 @@ uint16_t bf16_encode(float v)
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0])) { g_Out[idx] = half(bf16_decode(g_In[idx])); }
+    if (idx < uint(g_Count)) { g_Out[idx] = half(bf16_decode(g_In[idx])); }
 }

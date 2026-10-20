@@ -1,7 +1,13 @@
 // affine (dst = src*mul + add) for bf16 (emulated): decode to float, compute, encode back.
 StructuredBuffer<uint16_t> g_In;
 RWStructuredBuffer<uint16_t> g_Out;
-StructuredBuffer<float> g_Params; // [0]=total, [1]=mul, [2]=add
+struct Params
+{
+    uint64_t total;
+    double mul;
+    double add;
+};
+layout(push_constant) Params g_Params;
 
 // bf16 -> float (half crate bf16_to_f32).
 float bf16_decode(uint16_t b)
@@ -26,9 +32,9 @@ uint16_t bf16_encode(float v)
 void main_affine(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
-    if (i < uint(g_Params[0]))
+    if (i < uint(g_Params.total))
     {
         float x = bf16_decode(g_In[i]);
-        g_Out[i] = bf16_encode(x * g_Params[1] + g_Params[2]);
+        g_Out[i] = bf16_encode(float(double(x) * g_Params.mul + g_Params.add));
     }
 }

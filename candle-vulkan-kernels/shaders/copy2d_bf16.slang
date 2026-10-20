@@ -4,22 +4,22 @@
 // Also used for copy_strided_src with a UniformBlocks source (dst_s = d2).
 StructuredBuffer<uint16_t> g_Src;
 RWStructuredBuffer<uint16_t> g_Dst;
-StructuredBuffer<float> g_Params; // [0]=d1, [1]=d2, [2]=src_stride, [3]=dst_stride, [4]=src_offset, [5]=dst_offset
+StructuredBuffer<uint64_t> g_Params; // [0]=d1, [1]=d2, [2]=src_stride, [3]=dst_stride, [4]=src_offset, [5]=dst_offset
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
-    uint d1 = uint(g_Params[0]);
-    uint d2 = uint(g_Params[1]);
+    uint64_t d1 = g_Params[0];
+    uint64_t d2 = g_Params[1];
     if (d2 == 0u || i >= d1 * d2)
     {
         return;
     }
-    uint row = i / d2;
-    uint col = i % d2;
-    uint si = uint(g_Params[4]) + row * uint(g_Params[2]) + col;
-    uint di = uint(g_Params[5]) + row * uint(g_Params[3]) + col;
+    uint64_t row = i / d2;
+    uint64_t col = i % d2;
+    uint64_t si = g_Params[4] + row * g_Params[2] + col;
+    uint64_t di = g_Params[5] + row * g_Params[3] + col;
     g_Dst[di] = g_Src[si];
 }

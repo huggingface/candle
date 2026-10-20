@@ -21,7 +21,7 @@ pub fn call_where_slang<T>(
     on_true: &Subbuffer<[T]>,
     on_false: &Subbuffer<[T]>,
     output: &Subbuffer<[T]>,
-    params: &Subbuffer<[f32]>,
+    params: &Subbuffer<[u64]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;

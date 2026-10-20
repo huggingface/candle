@@ -229,10 +229,10 @@ impl QVulkanStorage {
                     | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                 ..Default::default()
             },
-            vec![num_blocks as f32],
+            vec![num_blocks as u64],
         )
         .map_err(|e| crate::Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params: Subbuffer<[u64]> = params_buf;
         let kernels = self.device.kernels();
         self.device.execute(move |cbb| {
             candle_vulkan_kernels::call_dequantize_slang(

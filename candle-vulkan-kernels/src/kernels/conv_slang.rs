@@ -24,7 +24,7 @@ pub fn call_conv_slang<T>(
     input: &Subbuffer<[T]>,
     weights: &Subbuffer<[T]>,
     output: &Subbuffer<[T]>,
-    params: &Subbuffer<[f32]>,
+    params: &Subbuffer<[u64]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;

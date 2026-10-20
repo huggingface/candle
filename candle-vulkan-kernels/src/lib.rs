@@ -1,6 +1,7 @@
 pub mod err;
 pub mod kernel;
 pub mod kernels;
+pub mod push_constants;
 pub mod source;
 
 pub use err::VulkanKernelError;
@@ -30,5 +31,9 @@ pub use kernels::{
     call_upsample_slang,
     call_conv_slang,
     call_scatter_slang,
+};
+pub use push_constants::{
+    AffineParams, ConstSetParams, NormParams, ToDtypeParams, UnaryParams,
+    UpsampleParams,
 };
 pub use source::Source;

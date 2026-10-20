@@ -8,28 +8,28 @@ StructuredBuffer<float> g_Src;
 StructuredBuffer<float> g_Cos;
 StructuredBuffer<float> g_Sin;
 RWStructuredBuffer<float> g_Dst;
-StructuredBuffer<float> g_Params; // [0]=b*h, [1]=t, [2]=d
+StructuredBuffer<uint64_t> g_Params; // [0]=b*h, [1]=t, [2]=d
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    uint bh = uint(g_Params[0]);
-    uint t = uint(g_Params[1]);
-    uint d = uint(g_Params[2]);
-    uint half = d / 2u;
-    uint per_bh = t * half;
+    uint64_t bh = g_Params[0];
+    uint64_t t = g_Params[1];
+    uint64_t d = g_Params[2];
+    uint64_t half = d / 2u;
+    uint64_t per_bh = t * half;
     if (idx >= bh * per_bh || half == 0u)
     {
         return;
     }
-    uint bh_i = idx / per_bh;
-    uint rem = idx % per_bh;
-    uint i_t = rem / half;
-    uint i_d = rem % half;
-    uint i1 = bh_i * t * d + i_t * d + i_d;
-    uint i2 = i1 + half;
-    uint i_cs = i_t * half + i_d;
+    uint64_t bh_i = idx / per_bh;
+    uint64_t rem = idx % per_bh;
+    uint64_t i_t = rem / half;
+    uint64_t i_d = rem % half;
+    uint64_t i1 = bh_i * t * d + i_t * d + i_d;
+    uint64_t i2 = i1 + half;
+    uint64_t i_cs = i_t * half + i_d;
     float s1 = g_Src[i1];
     float s2 = g_Src[i2];
     float c = g_Cos[i_cs];

@@ -8,26 +8,26 @@ StructuredBuffer<uint8_t> g_Pred;
 StructuredBuffer<double> g_True;
 StructuredBuffer<double> g_False;
 RWStructuredBuffer<double> g_Out;
-StructuredBuffer<float> g_Params;
+StructuredBuffer<uint64_t> g_Params;
 
 // Offset into the operand whose dims start at params[base], for flat
 // index `i` decomposed over the pred (full logical) dims.
-uint operand_offset(uint i, uint base)
+uint64_t operand_offset(uint i, uint base)
 {
-    uint nd = uint(g_Params[1]);
-    uint idx[4];
-    uint rem = i;
+    uint64_t nd = g_Params[1];
+    uint64_t idx[4];
+    uint64_t rem = i;
     for (uint d = 0u; d < nd; d += 1u)
     {
-        uint dim = uint(g_Params[2u + (nd - 1u - d)]);
+        uint64_t dim = g_Params[2u + (nd - 1u - d)];
         idx[nd - 1u - d] = rem % dim;
         rem = rem / dim;
     }
-    uint off = 0u;
+    uint64_t off = 0u;
     for (uint j = 0u; j < nd; j += 1u)
     {
-        uint r = uint(g_Params[base + j]);
-        uint lidx = idx[j];
+        uint64_t r = g_Params[base + j];
+        uint64_t lidx = idx[j];
         off = off * r + (r != 1u ? lidx : 0u);
     }
     return off;
@@ -38,7 +38,7 @@ uint operand_offset(uint i, uint base)
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < g_Params[0])
     {
         if (g_Pred[idx] != 0u)
         {

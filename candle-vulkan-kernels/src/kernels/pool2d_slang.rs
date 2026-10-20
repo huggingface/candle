@@ -23,7 +23,7 @@ pub fn call_pool2d_slang<T>(
     name: KernelName,
     src: &Subbuffer<[T]>,
     dst: &Subbuffer<[T]>,
-    params: &Subbuffer<[f32]>,
+    params: &Subbuffer<[u64]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;

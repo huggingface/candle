@@ -23,7 +23,7 @@ pub fn call_sigmoid_slang(
     name: KernelName,
     src: &Subbuffer<[f32]>,
     dst: &Subbuffer<[f32]>,
-    params: &Subbuffer<[f32]>,
+    params: &Subbuffer<[u64]>,
     count: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;

@@ -973,19 +973,19 @@ impl VulkanStorage {
                 ..Default::default()
             },
             vec![
-                planes as f32,
-                h as f32,
-                w as f32,
-                k_h as f32,
-                k_w as f32,
-                s_h as f32,
-                s_w as f32,
-                h_out as f32,
-                w_out as f32,
+                planes as u64,
+                h as u64,
+                w as u64,
+                k_h as u64,
+                k_w as u64,
+                s_h as u64,
+                s_w as u64,
+                h_out as u64,
+                w_out as u64,
             ],
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params: Subbuffer<[u64]> = params_buf;
         match self.dtype {
             DType::F32 => {
                 let src_buf: Subbuffer<[f32]> = match &self.buffer {
@@ -1242,15 +1242,15 @@ impl VulkanStorage {
                 ..Default::default()
             },
             vec![
-                dst_dim_len as f32,
-                dst_right_len as f32,
-                ids_dim_len as f32,
-                ids_right_len as f32,
-                ids_left_len as f32,
+                dst_dim_len as u64,
+                dst_right_len as u64,
+                ids_dim_len as u64,
+                ids_right_len as u64,
+                ids_left_len as u64,
             ],
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params_sub: Subbuffer<[f32]> = params_buf;
+        let params_sub: Subbuffer<[u64]> = params_buf;
         match self.dtype {
             DType::F32 => {
                 let src_sub = src_sub.clone();
@@ -1367,24 +1367,9 @@ impl VulkanStorage {
         name: candle_vulkan_kernels::KernelName,
         len: usize,
     ) -> Result<()> {
-        let params_vec = vec![len as f32, 0.0f32];
-        let params_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            params_vec,
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
         let kernels = self.device.kernels();
-        let (input, output, params, len) = (input.clone(), output.clone(), params.clone(), len);
+        let params = candle_vulkan_kernels::ToDtypeParams { count: len as u64 };
+        let (input, output) = (input.clone(), output.clone());
         self.device.execute(move |cbb| {
             candle_vulkan_kernels::call_to_dtype_slang::<S, D>(
                 cbb, &kernels, source, name, &input, &output, &params, len,
@@ -1713,23 +1698,13 @@ impl BackendStorage for VulkanStorage {
             return Ok(out);
         }
         let kernels = self.device.kernels();
-        let mul = mul as f32;
-        let add = add as f32;
-        let params_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![len as f32, mul, add],
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        // `mul`/`add` are pushed at full f64 precision; the affine shaders
+        // compute in double.
+        let params = candle_vulkan_kernels::AffineParams {
+            total: len as u64,
+            mul,
+            add,
+        };
 
         match dtype {
             DType::F32 => {
@@ -1753,7 +1728,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_affine_slang::<f32>(
                         cbb,
@@ -1789,7 +1763,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_affine_slang::<half::bf16>(
                         cbb,
@@ -1825,7 +1798,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_affine_slang::<microfloat::f8e4m3>(
                         cbb,
@@ -1863,7 +1835,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_affine_slang::<half::f16>(
                         cbb,
@@ -1901,7 +1872,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_affine_slang::<f64>(
                         cbb,
@@ -1958,21 +1928,10 @@ impl BackendStorage for VulkanStorage {
             return Ok(out);
         }
         let kernels = self.device.kernels();
-        let params_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![len as f32, exponent as f32],
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params = candle_vulkan_kernels::UnaryParams {
+            count: len as u64,
+            extra: exponent,
+        };
 
         match dtype {
             DType::F32 => {
@@ -1996,7 +1955,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<f32>(
                         cbb,
@@ -2032,7 +1990,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<half::bf16>(
                         cbb,
@@ -2068,7 +2025,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<microfloat::f8e4m3>(
                         cbb,
@@ -2106,7 +2062,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<half::f16>(
                         cbb,
@@ -2144,7 +2099,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<f64>(
                         cbb,
@@ -2197,21 +2151,10 @@ impl BackendStorage for VulkanStorage {
             return Ok(out);
         }
         let kernels = self.device.kernels();
-        let params_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![len as f32, alpha as f32],
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params = candle_vulkan_kernels::UnaryParams {
+            count: len as u64,
+            extra: alpha,
+        };
 
         match dtype {
             DType::F32 => {
@@ -2235,7 +2178,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<f32>(
                         cbb,
@@ -2271,7 +2213,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<half::bf16>(
                         cbb,
@@ -2307,7 +2248,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<microfloat::f8e4m3>(
                         cbb,
@@ -2345,7 +2285,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<half::f16>(
                         cbb,
@@ -2383,7 +2322,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<f64>(
                         cbb,
@@ -2567,10 +2505,10 @@ impl BackendStorage for VulkanStorage {
                             | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                         ..Default::default()
                     },
-                    vec![rows as f32, cols as f32],
+                    vec![rows as u64, cols as u64],
                 )
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                let params: Subbuffer<[f32]> = params_buf;
+                let params: Subbuffer<[u64]> = params_buf;
                 let input = input.clone();
                 let of = out_f.clone();
                 let oi = out_i.clone();
@@ -2636,10 +2574,10 @@ impl BackendStorage for VulkanStorage {
                             | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                         ..Default::default()
                     },
-                    vec![rows as f32, cols as f32],
+                    vec![rows as u64, cols as u64],
                 )
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                let params: Subbuffer<[f32]> = params_buf;
+                let params: Subbuffer<[u64]> = params_buf;
                 let input = input.clone();
                 let of = out_f.clone();
                 let oi = out_i.clone();
@@ -2705,10 +2643,10 @@ impl BackendStorage for VulkanStorage {
                             | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                         ..Default::default()
                     },
-                    vec![rows as f32, cols as f32],
+                    vec![rows as u64, cols as u64],
                 )
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                let params: Subbuffer<[f32]> = params_buf;
+                let params: Subbuffer<[u64]> = params_buf;
                 let input = input.clone();
                 let of = out_f.clone();
                 let oi = out_i.clone();
@@ -2774,10 +2712,10 @@ impl BackendStorage for VulkanStorage {
                             | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                         ..Default::default()
                     },
-                    vec![rows as f32, cols as f32],
+                    vec![rows as u64, cols as u64],
                 )
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                let params: Subbuffer<[f32]> = params_buf;
+                let params: Subbuffer<[u64]> = params_buf;
                 let input = input.clone();
                 let of = out_f.clone();
                 let oi = out_i.clone();
@@ -2882,15 +2820,15 @@ impl BackendStorage for VulkanStorage {
             .zip(rhs_l.stride().iter())
             .map(|(d, s)| if *s == 0 { 1 } else { *d })
             .collect();
-        let mut params = [0.0f32; 11];
-        params[0] = len as f32;
-        params[1] = lhs_dims.len() as f32;
-        params[2] = rhs_dims.len() as f32;
+        let mut params = [0u64; 11];
+        params[0] = len as u64;
+        params[1] = lhs_dims.len() as u64;
+        params[2] = rhs_dims.len() as u64;
         for (slot, d) in params[3..7].iter_mut().zip(lhs_dims.iter()) {
-            *slot = *d as f32;
+            *slot = *d as u64;
         }
         for (slot, d) in params[7..11].iter_mut().zip(rhs_dims.iter()) {
-            *slot = *d as f32;
+            *slot = *d as u64;
         }
         let params_buf = Buffer::from_iter(
             self.device.mem_alloc(),
@@ -2906,7 +2844,7 @@ impl BackendStorage for VulkanStorage {
             params.to_vec(),
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params: Subbuffer<[u64]> = params_buf;
 
         match dtype {
             DType::F32 => {
@@ -5910,22 +5848,10 @@ impl BackendStorage for VulkanStorage {
         }
         let kernels = self.device.kernels();
         // Slang kernels (params: [0] = element count).
-        let params_vec = vec![len as f32, 0.0f32];
-        let params_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            params_vec,
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params = candle_vulkan_kernels::UnaryParams {
+            count: len as u64,
+            extra: 0.0,
+        };
 
         match dtype {
             DType::F32 => {
@@ -5975,7 +5901,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<f32>(
                         cbb,
@@ -6037,7 +5962,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<half::bf16>(
                         cbb,
@@ -6099,7 +6023,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<microfloat::f8e4m3>(
                         cbb,
@@ -6163,7 +6086,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<half::f16>(
                         cbb,
@@ -6227,7 +6149,6 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                let (input, out_buf, params) = (input, out_buf, params.clone());
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_unary_slang::<f64>(
                         cbb,
@@ -6367,19 +6288,19 @@ impl BackendStorage for VulkanStorage {
             .zip(lhs_l.stride().iter())
             .map(|(d, s)| if *s == 0 { 1 } else { *d })
             .collect();
-        let mut params = [0.0f32; 32];
-        params[0] = len as f32;
-        params[1] = lhs_dims.len() as f32;
-        params[2] = rhs_dims.len() as f32;
+        let mut params = [0u64; 32];
+        params[0] = len as u64;
+        params[1] = lhs_dims.len() as u64;
+        params[2] = rhs_dims.len() as u64;
         for (slot, d) in params[3..11].iter_mut().zip(lhs_dims.iter()) {
-            *slot = *d as f32;
+            *slot = *d as u64;
         }
         for (slot, d) in params[11..19].iter_mut().zip(rhs_dims.iter()) {
-            *slot = *d as f32;
+            *slot = *d as u64;
         }
-        params[19] = lhs_data_dims.len() as f32;
+        params[19] = lhs_data_dims.len() as u64;
         for (slot, d) in params[20..28].iter_mut().zip(lhs_data_dims.iter()) {
-            *slot = *d as f32;
+            *slot = *d as u64;
         }
         let params_buf = Buffer::from_iter(
             self.device.mem_alloc(),
@@ -6395,7 +6316,7 @@ impl BackendStorage for VulkanStorage {
             params.to_vec(),
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params: Subbuffer<[u64]> = params_buf;
 
         match dtype {
             DType::F32 => {
@@ -7157,17 +7078,17 @@ impl BackendStorage for VulkanStorage {
         let p_dims = eff(l);
         let t_dims = eff(t_l);
         let f_dims = eff(f_l);
-        let mut params = [0.0f32; 14];
-        params[0] = len as f32;
-        params[1] = ndim as f32;
+        let mut params = [0u64; 14];
+        params[0] = len as u64;
+        params[1] = ndim as u64;
         for (slot, d) in params[2..6].iter_mut().zip(p_dims.iter()) {
-            *slot = *d as f32;
+            *slot = *d as u64;
         }
         for (slot, d) in params[6..10].iter_mut().zip(t_dims.iter()) {
-            *slot = *d as f32;
+            *slot = *d as u64;
         }
         for (slot, d) in params[10..14].iter_mut().zip(f_dims.iter()) {
-            *slot = *d as f32;
+            *slot = *d as u64;
         }
         let params_buf = Buffer::from_iter(
             self.device.mem_alloc(),
@@ -7183,7 +7104,7 @@ impl BackendStorage for VulkanStorage {
             params.to_vec(),
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params: Subbuffer<[u64]> = params_buf;
         let pred = pred.clone();
 
         match dtype {
@@ -7527,19 +7448,19 @@ impl BackendStorage for VulkanStorage {
                 ..Default::default()
             },
             vec![
-                params.b_size as f32,
-                params.c_in as f32,
-                params.c_out as f32,
-                params.k_size as f32,
-                params.l_in as f32,
-                l_out as f32,
-                params.padding as f32,
-                params.stride as f32,
-                params.dilation as f32,
+                params.b_size as u64,
+                params.c_in as u64,
+                params.c_out as u64,
+                params.k_size as u64,
+                params.l_in as u64,
+                l_out as u64,
+                params.padding as u64,
+                params.stride as u64,
+                params.dilation as u64,
             ],
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params_sub: Subbuffer<[f32]> = params_buf;
+        let params_sub: Subbuffer<[u64]> = params_buf;
         match self.dtype {
             DType::F32 => {
                 let in_buf: Subbuffer<[f32]> = match &self_ref.buffer {
@@ -7745,19 +7666,19 @@ impl BackendStorage for VulkanStorage {
                 ..Default::default()
             },
             vec![
-                params.b_size as f32,
-                params.c_in as f32,
-                params.c_out as f32,
-                params.k_size as f32,
-                params.l_in as f32,
-                l_out as f32,
-                params.padding as f32,
-                params.stride as f32,
-                params.dilation as f32,
+                params.b_size as u64,
+                params.c_in as u64,
+                params.c_out as u64,
+                params.k_size as u64,
+                params.l_in as u64,
+                l_out as u64,
+                params.padding as u64,
+                params.stride as u64,
+                params.dilation as u64,
             ],
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params_sub: Subbuffer<[f32]> = params_buf;
+        let params_sub: Subbuffer<[u64]> = params_buf;
         match self.dtype {
             DType::F32 => {
                 let in_buf: Subbuffer<[f32]> = match &self.buffer {
@@ -7997,22 +7918,22 @@ impl BackendStorage for VulkanStorage {
                 ..Default::default()
             },
             vec![
-                params.b_size as f32,
-                params.c_in as f32,
-                params.c_out as f32,
-                params.k_h as f32,
-                params.k_w as f32,
-                params.i_h as f32,
-                params.i_w as f32,
-                o_h as f32,
-                o_w as f32,
-                params.padding as f32,
-                params.stride as f32,
-                params.dilation as f32,
+                params.b_size as u64,
+                params.c_in as u64,
+                params.c_out as u64,
+                params.k_h as u64,
+                params.k_w as u64,
+                params.i_h as u64,
+                params.i_w as u64,
+                o_h as u64,
+                o_w as u64,
+                params.padding as u64,
+                params.stride as u64,
+                params.dilation as u64,
             ],
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params_sub: Subbuffer<[f32]> = params_buf;
+        let params_sub: Subbuffer<[u64]> = params_buf;
         match self.dtype {
             DType::F32 => {
                 let in_buf: Subbuffer<[f32]> = match &self_ref.buffer {
@@ -8221,22 +8142,22 @@ impl BackendStorage for VulkanStorage {
                 ..Default::default()
             },
             vec![
-                params.b_size as f32,
-                params.c_in as f32,
-                params.c_out as f32,
-                params.k_h as f32,
-                params.k_w as f32,
-                params.i_h as f32,
-                params.i_w as f32,
-                o_h as f32,
-                o_w as f32,
-                params.padding as f32,
-                params.stride as f32,
-                params.dilation as f32,
+                params.b_size as u64,
+                params.c_in as u64,
+                params.c_out as u64,
+                params.k_h as u64,
+                params.k_w as u64,
+                params.i_h as u64,
+                params.i_w as u64,
+                o_h as u64,
+                o_w as u64,
+                params.padding as u64,
+                params.stride as u64,
+                params.dilation as u64,
             ],
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params_sub: Subbuffer<[f32]> = params_buf;
+        let params_sub: Subbuffer<[u64]> = params_buf;
         match self.dtype {
             DType::F32 => {
                 let in_buf: Subbuffer<[f32]> = match &self.buffer {
@@ -8499,21 +8420,16 @@ impl BackendStorage for VulkanStorage {
             return Ok(out);
         }
         let kernels = self.device.kernels();
-        let params_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![planes as f32, src_sz as f32, dst_sz as f32],
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params = candle_vulkan_kernels::UpsampleParams {
+            planes: planes as u64,
+            d0: src_sz as u64,
+            d1: dst_sz as u64,
+            d2: 0,
+            d3: 0,
+            scale_h: 0.0,
+            scale_w: 0.0,
+            align: 0,
+        };
         match self.dtype {
             DType::F32 => {
                 let src_buf: Subbuffer<[f32]> = match &self.buffer {
@@ -8672,27 +8588,16 @@ impl BackendStorage for VulkanStorage {
             return Ok(out);
         }
         let kernels = self.device.kernels();
-        let params_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![
-                planes as f32,
-                src_h as f32,
-                src_w as f32,
-                dst_h as f32,
-                dst_w as f32,
-            ],
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params = candle_vulkan_kernels::UpsampleParams {
+            planes: planes as u64,
+            d0: src_h as u64,
+            d1: src_w as u64,
+            d2: dst_h as u64,
+            d3: dst_w as u64,
+            scale_h: 0.0,
+            scale_w: 0.0,
+            align: 0,
+        };
         match self.dtype {
             DType::F32 => {
                 let src_buf: Subbuffer<[f32]> = match &self.buffer {
@@ -8879,30 +8784,16 @@ impl BackendStorage for VulkanStorage {
             return Ok(out);
         }
         let kernels = self.device.kernels();
-        let params_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![
-                planes as f32,
-                src_h as f32,
-                src_w as f32,
-                target_h as f32,
-                target_w as f32,
-                scale_h as f32,
-                scale_w as f32,
-                (align_corners as u32) as f32,
-            ],
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params = candle_vulkan_kernels::UpsampleParams {
+            planes: planes as u64,
+            d0: src_h as u64,
+            d1: src_w as u64,
+            d2: target_h as u64,
+            d3: target_w as u64,
+            scale_h,
+            scale_w,
+            align: align_corners as u64,
+        };
         match self.dtype {
             DType::F32 => {
                 let src_buf: Subbuffer<[f32]> = match &self.buffer {
@@ -9116,10 +9007,10 @@ impl BackendStorage for VulkanStorage {
                     | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                 ..Default::default()
             },
-            vec![ids_len as f32, inner as f32, dim_len as f32, 0.0f32],
+            vec![ids_len as u64, inner as u64, dim_len as u64, 0],
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params: Subbuffer<[u64]> = params_buf;
         match self.dtype {
             DType::F32 => {
                 let emb_buf: Subbuffer<[f32]> = match &self.buffer {
@@ -9514,15 +9405,10 @@ impl BackendStorage for VulkanStorage {
                     | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                 ..Default::default()
             },
-            vec![
-                (n_ids * dim_len) as f32,
-                dim_len as f32,
-                dim_len as f32,
-                0.0f32,
-            ],
+            vec![(n_ids * dim_len) as u64, dim_len as u64, dim_len as u64, 0],
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params: Subbuffer<[u64]> = params_buf;
         let src_buf = src_buf.clone();
         let ids_buf = ids_buf.clone();
         let out_buf = out_buf.clone();
@@ -9617,7 +9503,7 @@ impl BackendStorage for VulkanStorage {
             let post = l.dims()[dim + 1..].iter().product::<usize>();
             let nsrc = src_l.dims()[dim];
             let max_idx = l.dims()[dim];
-            let params_vec = vec![src_len as f32, post as f32, nsrc as f32, max_idx as f32];
+            let params_vec = vec![src_len as u64, post as u64, nsrc as u64, max_idx as u64];
             let params_buf = Buffer::from_iter(
                 self.device.mem_alloc(),
                 &BufferCreateInfo {
@@ -9632,7 +9518,7 @@ impl BackendStorage for VulkanStorage {
                 params_vec,
             )
             .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-            let params_sub: Subbuffer<[f32]> = params_buf;
+            let params_sub: Subbuffer<[u64]> = params_buf;
             let kernels = self.device.kernels();
             macro_rules! dispatch_index_add {
                 ($dst_variant:ident, $dst_ty:ty, $ids_variant:ident, $ids_ty:ty, $kern:ident) => {
@@ -9935,15 +9821,15 @@ impl BackendStorage for VulkanStorage {
                 ..Default::default()
             },
             vec![
-                bsz as f32,
-                m as f32,
-                n as f32,
-                k as f32,
-                (rhs_transposed as u32) as f32,
+                bsz as u64,
+                m as u64,
+                n as u64,
+                k as u64,
+                rhs_transposed as u64,
             ],
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params: Subbuffer<[u64]> = params_buf;
         match self.dtype {
             DType::F32 => {
                 let input: Subbuffer<[f32]> = match &self.buffer {
@@ -10316,16 +10202,16 @@ impl BackendStorage for VulkanStorage {
                         ..Default::default()
                     },
                     vec![
-                        count as f32,
-                        block_len as f32,
-                        src_stride as f32,
-                        block_len as f32,
-                        start_offset as f32,
-                        dst_offset as f32,
+                        count as u64,
+                        block_len as u64,
+                        src_stride as u64,
+                        block_len as u64,
+                        start_offset as u64,
+                        dst_offset as u64,
                     ],
                 )
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                let params: Subbuffer<[f32]> = params_buf;
+                let params: Subbuffer<[u64]> = params_buf;
                 match self.dtype {
                     DType::F32 => {
                         let src_buf = match &self.buffer {
@@ -10559,10 +10445,10 @@ impl BackendStorage for VulkanStorage {
                             | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                         ..Default::default()
                     },
-                    vec![total as f32, block_len as f32, dst_offset as f32],
+                    vec![total as u64, block_len as u64, dst_offset as u64],
                 )
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                let params: Subbuffer<[f32]> = params_buf;
+                let params: Subbuffer<[u64]> = params_buf;
                 match self.dtype {
                     DType::F32 => {
                         let src_buf = match &self.buffer {
@@ -10812,16 +10698,16 @@ impl BackendStorage for VulkanStorage {
                 ..Default::default()
             },
             vec![
-                d1 as f32,
-                d2 as f32,
-                src_stride1 as f32,
-                dst_stride1 as f32,
-                src_offset as f32,
-                dst_offset as f32,
+                d1 as u64,
+                d2 as u64,
+                src_stride1 as u64,
+                dst_stride1 as u64,
+                src_offset as u64,
+                dst_offset as u64,
             ],
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[f32]> = params_buf;
+        let params: Subbuffer<[u64]> = params_buf;
         match self.dtype {
             DType::F32 => {
                 let src_buf = match &self.buffer {
@@ -11109,44 +10995,32 @@ impl BackendStorage for VulkanStorage {
         if len == 0 {
             return Ok(());
         }
-        // Params: [0] = value, [1] = count.
-        let params = vec![value, len as f32];
-        let param_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            params,
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let param_sub: Subbuffer<[f32]> = param_buf;
+        // Params pushed via the push constant block: count + value.
+        let params = candle_vulkan_kernels::ConstSetParams {
+            count: len as u64,
+            value,
+        };
         let kernels = self.device.kernels();
         let range = start as u64..(start + len) as u64;
         match &self.buffer {
             VulkanStorageBuffer::F32(buffer) => {
                 let sub = buffer.clone().slice(range);
                 self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_const_set_f32(cbb, &kernels, &sub, &param_sub, len)
+                    candle_vulkan_kernels::call_const_set_f32(cbb, &kernels, &sub, &params, len)
                         .map_err(|e| e.to_string())
                 })?;
             }
             VulkanStorageBuffer::F16(buffer) => {
                 let sub = buffer.clone().slice(range);
                 self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_const_set_f16(cbb, &kernels, &sub, &param_sub, len)
+                    candle_vulkan_kernels::call_const_set_f16(cbb, &kernels, &sub, &params, len)
                         .map_err(|e| e.to_string())
                 })?;
             }
             VulkanStorageBuffer::BF16(buffer) => {
                 let sub = buffer.clone().slice(range);
                 self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_const_set_bf16(cbb, &kernels, &sub, &param_sub, len)
+                    candle_vulkan_kernels::call_const_set_bf16(cbb, &kernels, &sub, &params, len)
                         .map_err(|e| e.to_string())
                 })?;
             }
@@ -11201,7 +11075,7 @@ impl VulkanStorage {
         Ok((buf, Some(f32)))
     }
 
-    fn alloc_params(&self, params: Vec<f32>) -> Result<Subbuffer<[f32]>> {
+    fn alloc_params(&self, params: Vec<u64>) -> Result<Subbuffer<[u64]>> {
         let params_buf = Buffer::from_iter(
             self.device.mem_alloc(),
             &BufferCreateInfo {
@@ -11259,9 +11133,13 @@ impl VulkanStorage {
                 ))
             }
         };
-        let params = self.alloc_params(vec![n_rows as f32, n as f32, eps as f32])?;
+        let params = candle_vulkan_kernels::NormParams {
+            n_rows: n_rows as u64,
+            n: n as u64,
+            eps,
+        };
         let kernels = self.device.kernels();
-        let (input, alpha_buf, out_buf, params) = (input, alpha_buf, out_buf, params.clone());
+        let (input, alpha_buf, out_buf) = (input, alpha_buf, out_buf);
         self.device.execute(move |cbb| {
             candle_vulkan_kernels::call_rms_norm_slang(
                 cbb,
@@ -11327,7 +11205,13 @@ impl VulkanStorage {
         } else {
             0.0f32
         };
-        let params = self.alloc_params(vec![b as f32, h as f32, t as f32, d as f32, unbatched])?;
+        let params = self.alloc_params(vec![
+            b as u64,
+            h as u64,
+            t as u64,
+            d as u64,
+            unbatched as u64,
+        ])?;
         let kernels = self.device.kernels();
         let (input, cos_buf, sin_buf, out_buf, params) =
             (input, cos_buf, sin_buf, out_buf, params.clone());
@@ -11399,10 +11283,13 @@ impl VulkanStorage {
                 ))
             }
         };
-        let params = self.alloc_params(vec![n_rows as f32, n as f32, eps as f32])?;
+        let params = candle_vulkan_kernels::NormParams {
+            n_rows: n_rows as u64,
+            n: n as u64,
+            eps,
+        };
         let kernels = self.device.kernels();
-        let (input, alpha_buf, beta_buf, out_buf, params) =
-            (input, alpha_buf, beta_buf, out_buf, params.clone());
+        let (input, alpha_buf, beta_buf, out_buf) = (input, alpha_buf, beta_buf, out_buf);
         self.device.execute(move |cbb| {
             candle_vulkan_kernels::call_layer_norm_slang(
                 cbb,
@@ -11464,7 +11351,7 @@ impl VulkanStorage {
             VulkanStorageBuffer::F32(b) => b.clone(),
             _ => return Err(Error::Vulkan("unexpected state".to_string().into())),
         };
-        let params = self.alloc_params(vec![len as f32, 0.0f32])?;
+        let params = self.alloc_params(vec![len as u64, 0])?;
         let kernels = self.device.kernels();
         let (input, out_buf, params) = (input, out_buf, params.clone());
         self.device.execute(move |cbb| {
@@ -11518,7 +11405,7 @@ impl VulkanStorage {
                 ))
             }
         };
-        let params = self.alloc_params(vec![n_rows as f32, n as f32])?;
+        let params = self.alloc_params(vec![n_rows as u64, n as u64])?;
         let kernels = self.device.kernels();
         let (input, out_buf, params) = (input, out_buf, params.clone());
         self.device.execute(move |cbb| {
@@ -11589,7 +11476,7 @@ impl VulkanStorage {
             }
         };
         let n_threads = b * h * t * half;
-        let params = self.alloc_params(vec![(b * h) as f32, t as f32, d as f32])?;
+        let params = self.alloc_params(vec![(b * h) as u64, t as u64, d as u64])?;
         let kernels = self.device.kernels();
         let (input, cos_buf, sin_buf, out_buf, params) =
             (input, cos_buf, sin_buf, out_buf, params.clone());

@@ -18,7 +18,7 @@
 StructuredBuffer<float> g_Lhs;
 StructuredBuffer<float> g_Rhs;
 RWStructuredBuffer<float> g_Out;
-StructuredBuffer<float> g_Params;
+StructuredBuffer<uint64_t> g_Params;
 static groupshared float a_tile[16 * 16];
 static groupshared float b_tile[16 * 16];
 [shader("compute")]
@@ -28,10 +28,10 @@ void main_gemm(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_
     uint batch = groupID.z;
     uint row = groupID.x * 16u + localID.y;
     uint col = groupID.y * 16u + localID.x;
-    uint m = uint(g_Params[1]);
-    uint n = uint(g_Params[2]);
-    uint k = uint(g_Params[3]);
-    uint rt = uint(g_Params[4]);
+    uint64_t m = g_Params[1];
+    uint64_t n = g_Params[2];
+    uint64_t k = g_Params[3];
+    uint64_t rt = g_Params[4];
     bool in_range = row < m && col < n;
     float acc = 0.0;
     for (uint k0 = 0u; k0 < k; k0 += 16u)

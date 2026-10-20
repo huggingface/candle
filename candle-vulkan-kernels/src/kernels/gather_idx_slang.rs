@@ -25,7 +25,7 @@ pub fn call_gather_idx_slang<T>(
     src: &Subbuffer<[T]>,
     dst: &Subbuffer<[T]>,
     idx: &Subbuffer<[u32]>,
-    params: &Subbuffer<[f32]>,
+    params: &Subbuffer<[u64]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;

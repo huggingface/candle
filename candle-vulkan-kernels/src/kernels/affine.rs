@@ -1,4 +1,5 @@
 //! Slang `dst[i] = src[i] * mul + add` dispatch over dtype storage buffers.
+//! Parameters travel through the pipeline's push constant block.
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
@@ -6,13 +7,14 @@ use vulkano::pipeline::PipelineBindPoint;
 
 use crate::err::VulkanKernelError;
 use crate::kernel::{KernelName, Kernels};
+use crate::push_constants::AffineParams;
 use crate::source::Source;
 
 const WORKGROUP_SIZE: usize = 256;
 
 /// Records an affine dispatch onto `cbb`. `input` and `output` share the
-/// element type `T` (the dtype's GPU storage type). `params` must hold
-/// `[total, mul, add]`.
+/// element type `T` (the dtype's GPU storage type). `params` (`total`,
+/// `mul`, `add`) is pushed through the pipeline's push constant block.
 pub fn call_affine_slang<T>(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
@@ -20,7 +22,7 @@ pub fn call_affine_slang<T>(
     name: KernelName,
     input: &Subbuffer<[T]>,
     output: &Subbuffer<[T]>,
-    params: &Subbuffer<[f32]>,
+    params: &AffineParams,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;
@@ -36,16 +38,9 @@ pub fn call_affine_slang<T>(
         range: Some(output.size()),
         ..Default::default()
     };
-    let params_info = DescriptorBufferInfo {
-        buffer: Some(params.buffer()),
-        offset: params.offset(),
-        range: Some(params.size()),
-        ..Default::default()
-    };
     let writes = vec![
         WriteDescriptorSet::buffer(0, &input_info),
         WriteDescriptorSet::buffer(1, &output_info),
-        WriteDescriptorSet::buffer(2, &params_info),
     ];
     let set = DescriptorSet::new(
         kernels.dss_alloc(),
@@ -57,6 +52,8 @@ pub fn call_affine_slang<T>(
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)
+        .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
+    cbb.push_constants(entry.layout.clone(), 0, *params)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     let workgroups = ((total + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE) as u32;
     unsafe { cbb.dispatch([workgroups, 1, 1]) }

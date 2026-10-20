@@ -2,7 +2,12 @@
 // decoding to float, applying the op in float, and encoding back to bf16.
 StructuredBuffer<uint16_t> g_In;
 RWStructuredBuffer<uint16_t> g_Out;
-StructuredBuffer<float> g_Params; // [0] = element count
+struct Params
+{
+    uint64_t count;
+    double extra;
+};
+layout(push_constant) Params g_Params;
 
 // bf16 -> float (half crate bf16_to_f32).
 float bf16_decode(uint16_t b)
@@ -40,7 +45,7 @@ float erf_approx(float x)
 void main_log(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(log(x));
@@ -52,7 +57,7 @@ void main_log(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_abs(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(abs(x));
@@ -64,7 +69,7 @@ void main_abs(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_recip(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(1.0 / x);
@@ -76,7 +81,7 @@ void main_recip(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_sqr(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(x * x);
@@ -88,7 +93,7 @@ void main_sqr(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_gelu(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(0.5 * x * (1.0 + tanh(0.79788456080286535587989211986876373 * x * (1.0 + 0.044715 * x * x))));
@@ -100,7 +105,7 @@ void main_gelu(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_gelu_erf(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode((erf_approx(x * 0.7071067811865476) + 1.0) * 0.5 * x);
@@ -112,7 +117,7 @@ void main_gelu_erf(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_erf(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(erf_approx(x));
@@ -124,7 +129,7 @@ void main_erf(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_relu(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(max(x, 0.0));
@@ -136,7 +141,7 @@ void main_relu(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_tanh(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(tanh(x));
@@ -148,7 +153,7 @@ void main_tanh(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_floor(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(floor(x));
@@ -160,7 +165,7 @@ void main_floor(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_ceil(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(ceil(x));
@@ -172,7 +177,7 @@ void main_ceil(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_round(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(x > 0.0 ? floor(x + 0.5) : ceil(x - 0.5));
@@ -184,7 +189,7 @@ void main_round(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_sign(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode((x > 0.0 ? 1.0 : 0.0) - (x < 0.0 ? 1.0 : 0.0));
@@ -196,7 +201,7 @@ void main_sign(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_exp(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(exp(x));
@@ -208,7 +213,7 @@ void main_exp(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_silu(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(x / (1.0 + exp(-x)));
@@ -220,7 +225,7 @@ void main_silu(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_sqrt(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(sqrt(x));
@@ -232,7 +237,7 @@ void main_sqrt(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_sin(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(sin(x));
@@ -244,7 +249,7 @@ void main_sin(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_cos(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(cos(x));
@@ -256,7 +261,7 @@ void main_cos(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_neg(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Params[0]))
+    if (idx < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[idx]);
         g_Out[idx] = bf16_encode(-x);
@@ -268,10 +273,10 @@ void main_neg(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_pow(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
-    if (i < uint(g_Params[0]))
+    if (i < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[i]);
-        g_Out[i] = bf16_encode(pow(x, g_Params[1]));
+        g_Out[i] = bf16_encode(pow(x, float(g_Params.extra)));
     }
 }
 [shader("compute")]
@@ -279,10 +284,10 @@ void main_pow(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_elu(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
-    if (i < uint(g_Params[0]))
+    if (i < uint(g_Params.count))
     {
         float x = bf16_decode(g_In[i]);
-        float alpha = g_Params[1];
+        float alpha = (float)g_Params.extra;
         g_Out[i] = bf16_encode(x >= 0.0 ? x : alpha * (exp(x) - 1.0));
     }
 }

@@ -18,19 +18,19 @@
 StructuredBuffer<half> g_In;
 StructuredBuffer<half> g_W;
 RWStructuredBuffer<half> g_Out;
-StructuredBuffer<float> g_Params;
+StructuredBuffer<uint64_t> g_Params;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main_conv1d(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint o = dispatchThreadID.x;
-    uint b = uint(g_Params[0]);
-    uint c_in = uint(g_Params[1]);
-    uint c_out = uint(g_Params[2]);
-    uint k_size = uint(g_Params[3]);
-    uint l_in = uint(g_Params[4]);
-    uint l_out = uint(g_Params[5]);
+    uint64_t b = g_Params[0];
+    uint64_t c_in = g_Params[1];
+    uint64_t c_out = g_Params[2];
+    uint64_t k_size = g_Params[3];
+    uint64_t l_in = g_Params[4];
+    uint64_t l_out = g_Params[5];
     int padding = int(g_Params[6]);
     int stride = int(g_Params[7]);
     int dilation = int(g_Params[8]);
@@ -38,12 +38,12 @@ void main_conv1d(uint3 dispatchThreadID : SV_DispatchThreadID)
     {
         return;
     }
-    uint plane = o / l_out;
-    uint lo = o - plane * l_out;
-    uint batch = plane / c_out;
-    uint co = plane - batch * c_out;
-    uint in_base = batch * c_in * l_in;
-    uint w_base = co * c_in * k_size;
+    uint64_t plane = o / l_out;
+    uint64_t lo = o - plane * l_out;
+    uint64_t batch = plane / c_out;
+    uint64_t co = plane - batch * c_out;
+    uint64_t in_base = batch * c_in * l_in;
+    uint64_t w_base = co * c_in * k_size;
     float acc = 0.0;
     for (uint ci = 0u; ci < c_in; ci++)
     {
@@ -64,15 +64,15 @@ void main_conv1d(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_conv2d(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint o = dispatchThreadID.x;
-    uint b = uint(g_Params[0]);
-    uint c_in = uint(g_Params[1]);
-    uint c_out = uint(g_Params[2]);
-    uint k_h = uint(g_Params[3]);
-    uint k_w = uint(g_Params[4]);
-    uint i_h = uint(g_Params[5]);
-    uint i_w = uint(g_Params[6]);
-    uint o_h = uint(g_Params[7]);
-    uint o_w = uint(g_Params[8]);
+    uint64_t b = g_Params[0];
+    uint64_t c_in = g_Params[1];
+    uint64_t c_out = g_Params[2];
+    uint64_t k_h = g_Params[3];
+    uint64_t k_w = g_Params[4];
+    uint64_t i_h = g_Params[5];
+    uint64_t i_w = g_Params[6];
+    uint64_t o_h = g_Params[7];
+    uint64_t o_w = g_Params[8];
     int padding = int(g_Params[9]);
     int stride = int(g_Params[10]);
     int dilation = int(g_Params[11]);
@@ -80,20 +80,20 @@ void main_conv2d(uint3 dispatchThreadID : SV_DispatchThreadID)
     {
         return;
     }
-    uint hw = o_h * o_w;
-    uint plane = o / hw;
-    uint r = o - plane * hw;
-    uint oh = r / o_w;
-    uint ow = r - oh * o_w;
-    uint batch = plane / c_out;
-    uint co = plane - batch * c_out;
-    uint in_base = batch * c_in * i_h * i_w;
-    uint w_base = co * c_in * k_h * k_w;
+    uint64_t hw = o_h * o_w;
+    uint64_t plane = o / hw;
+    uint64_t r = o - plane * hw;
+    uint64_t oh = r / o_w;
+    uint64_t ow = r - oh * o_w;
+    uint64_t batch = plane / c_out;
+    uint64_t co = plane - batch * c_out;
+    uint64_t in_base = batch * c_in * i_h * i_w;
+    uint64_t w_base = co * c_in * k_h * k_w;
     float acc = 0.0;
     for (uint ci = 0u; ci < c_in; ci++)
     {
-        uint ci_base = ci * i_h * i_w;
-        uint ci_w_base = ci * k_h * k_w;
+        uint64_t ci_base = ci * i_h * i_w;
+        uint64_t ci_w_base = ci * k_h * k_w;
         for (uint kh = 0u; kh < k_h; kh++)
         {
             int ph = int(oh) * stride - padding + int(kh) * dilation;
@@ -122,12 +122,12 @@ void main_conv2d(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_conv_transpose1d(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint o = dispatchThreadID.x;
-    uint b = uint(g_Params[0]);
-    uint c_in = uint(g_Params[1]);
-    uint c_out = uint(g_Params[2]);
-    uint k_size = uint(g_Params[3]);
-    uint l_in = uint(g_Params[4]);
-    uint l_out = uint(g_Params[5]);
+    uint64_t b = g_Params[0];
+    uint64_t c_in = g_Params[1];
+    uint64_t c_out = g_Params[2];
+    uint64_t k_size = g_Params[3];
+    uint64_t l_in = g_Params[4];
+    uint64_t l_out = g_Params[5];
     int padding = int(g_Params[6]);
     int stride = int(g_Params[7]);
     int dilation = int(g_Params[8]);
@@ -135,12 +135,12 @@ void main_conv_transpose1d(uint3 dispatchThreadID : SV_DispatchThreadID)
     {
         return;
     }
-    uint plane = o / l_out;
-    uint po = o - plane * l_out;
-    uint batch = plane / c_out;
-    uint co = plane - batch * c_out;
-    uint in_base = batch * c_in * l_in;
-    uint w_base = co * k_size;
+    uint64_t plane = o / l_out;
+    uint64_t po = o - plane * l_out;
+    uint64_t batch = plane / c_out;
+    uint64_t co = plane - batch * c_out;
+    uint64_t in_base = batch * c_in * l_in;
+    uint64_t w_base = co * k_size;
     float acc = 0.0;
     for (uint ci = 0u; ci < c_in; ci++)
     {
@@ -167,15 +167,15 @@ void main_conv_transpose1d(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_conv_transpose2d(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint o = dispatchThreadID.x;
-    uint b = uint(g_Params[0]);
-    uint c_in = uint(g_Params[1]);
-    uint c_out = uint(g_Params[2]);
-    uint k_h = uint(g_Params[3]);
-    uint k_w = uint(g_Params[4]);
-    uint i_h = uint(g_Params[5]);
-    uint i_w = uint(g_Params[6]);
-    uint o_h = uint(g_Params[7]);
-    uint o_w = uint(g_Params[8]);
+    uint64_t b = g_Params[0];
+    uint64_t c_in = g_Params[1];
+    uint64_t c_out = g_Params[2];
+    uint64_t k_h = g_Params[3];
+    uint64_t k_w = g_Params[4];
+    uint64_t i_h = g_Params[5];
+    uint64_t i_w = g_Params[6];
+    uint64_t o_h = g_Params[7];
+    uint64_t o_w = g_Params[8];
     int padding = int(g_Params[9]);
     int stride = int(g_Params[10]);
     int dilation = int(g_Params[11]);
@@ -183,19 +183,19 @@ void main_conv_transpose2d(uint3 dispatchThreadID : SV_DispatchThreadID)
     {
         return;
     }
-    uint hw = o_h * o_w;
-    uint plane = o / hw;
-    uint r = o - plane * hw;
-    uint oh = r / o_w;
-    uint ow = r - oh * o_w;
-    uint batch = plane / c_out;
-    uint co = plane - batch * c_out;
-    uint in_base = batch * c_in * i_h * i_w;
+    uint64_t hw = o_h * o_w;
+    uint64_t plane = o / hw;
+    uint64_t r = o - plane * hw;
+    uint64_t oh = r / o_w;
+    uint64_t ow = r - oh * o_w;
+    uint64_t batch = plane / c_out;
+    uint64_t co = plane - batch * c_out;
+    uint64_t in_base = batch * c_in * i_h * i_w;
     float acc = 0.0;
     for (uint ci = 0u; ci < c_in; ci++)
     {
-        uint ci_base = ci * i_h * i_w;
-        uint ci_w_base = ci * c_out * k_h * k_w;
+        uint64_t ci_base = ci * i_h * i_w;
+        uint64_t ci_w_base = ci * c_out * k_h * k_w;
         for (uint kh = 0u; kh < k_h; kh++)
         {
             int num_h = int(oh) + padding - int(kh) * dilation;

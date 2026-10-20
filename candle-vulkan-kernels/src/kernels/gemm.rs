@@ -26,7 +26,7 @@ pub fn call_gemm_slang<T>(
     lhs: &Subbuffer<[T]>,
     rhs: &Subbuffer<[T]>,
     output: &Subbuffer<[T]>,
-    params: &Subbuffer<[f32]>,
+    params: &Subbuffer<[u64]>,
     batch: usize,
     m: usize,
     n: usize,

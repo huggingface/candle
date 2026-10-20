@@ -32,7 +32,7 @@ pub fn call_index_add_slang<D, I>(
     dst: &Subbuffer<[D]>,
     src: &Subbuffer<[D]>,
     ids: &Subbuffer<[I]>,
-    params: &Subbuffer<[f32]>,
+    params: &Subbuffer<[u64]>,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;

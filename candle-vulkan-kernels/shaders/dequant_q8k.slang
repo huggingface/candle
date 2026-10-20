@@ -2,7 +2,7 @@
 
 StructuredBuffer<uint8_t> g_Src;
 RWStructuredBuffer<float> g_Dst;
-StructuredBuffer<float> g_Params; // [0]=num_blocks
+StructuredBuffer<uint64_t> g_Params; // [0]=num_blocks
 
 
 // Reinterpret an IEEE-754 half (16 bits) as a float.
@@ -44,7 +44,7 @@ float f16_bits_to_f32(uint16_t h)
 // Reinterpret a byte as a signed int8.
 int sbyte(uint u)
 {
-    return (u & 0x80u) ? (int(u) - 256) : int(u);
+    return (u & 0x80u) != 0u ? (int(u) - 256) : int(u);
 }
 // Q4K/Q5K scale-min decoder (from candle quantized/utils.rs::get_scale_min_k4).
 // `off` is the block base offset in g_Src; `soff` is the scale-array offset.
@@ -69,7 +69,7 @@ uint2 get_scale_min_k4(uint j, uint off, uint soff)
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint b = dispatchThreadID.x;
-    if (b >= uint(g_Params[0]))
+    if (b >= g_Params[0])
     {
         return;
     }

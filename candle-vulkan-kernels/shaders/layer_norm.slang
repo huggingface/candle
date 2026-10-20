@@ -7,34 +7,40 @@ StructuredBuffer<float> g_Src;
 StructuredBuffer<float> g_Alpha;
 StructuredBuffer<float> g_Beta;
 RWStructuredBuffer<float> g_Dst;
-StructuredBuffer<float> g_Params; // [0]=n_rows, [1]=n, [2]=eps
+struct Params
+{
+    uint64_t n_rows;
+    uint64_t n;
+    double eps;
+};
+layout(push_constant) Params g_Params;
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
-    uint n_rows = uint(g_Params[0]);
-    if (i >= n_rows)
+    if (i >= uint(g_Params.n_rows))
     {
         return;
     }
-    uint n = uint(g_Params[1]);
-    float eps = g_Params[2];
-    uint base = i * n;
+    uint64_t n = g_Params.n;
+    uint64_t base = uint64_t(i) * n;
     float sum = 0.0f;
     float sum2 = 0.0f;
-    for (uint j = 0u; j < n; j += 1u)
+    for (uint64_t j = 0; j < n; j += 1)
     {
         float v = g_Src[base + j];
         sum += v;
         sum2 += v * v;
     }
-    float mean = sum / float(n);
-    float var = sum2 / float(n) - mean * mean;
-    float inv_std = 1.0f / sqrt(var + eps);
-    for (uint j = 0u; j < n; j += 1u)
+    double mean = double(sum) / double(n);
+    double var = double(sum2) / double(n) - mean * mean;
+    double inv_std = 1.0 / sqrt(var + g_Params.eps);
+    float mean_f = float(mean);
+    float inv_std_f = float(inv_std);
+    for (uint64_t j = 0; j < n; j += 1)
     {
         float x = g_Src[base + j];
-        g_Dst[base + j] = (x - mean) * inv_std * g_Alpha[j] + g_Beta[j];
+        g_Dst[base + j] = (x - mean_f) * inv_std_f * g_Alpha[j] + g_Beta[j];
     }
 }
