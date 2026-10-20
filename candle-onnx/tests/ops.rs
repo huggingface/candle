@@ -1535,6 +1535,94 @@ fn test_shape_operation() -> Result<()> {
     Ok(())
 }
 
+// Build a single-node Shape graph, optionally with `start` and `end` attributes.
+fn shape_graph(start: Option<i64>, end: Option<i64>) -> ModelProto {
+    let attribute = [("start", start), ("end", end)]
+        .into_iter()
+        .filter_map(|(name, i)| {
+            i.map(|i| AttributeProto {
+                name: name.to_string(),
+                ref_attr_name: name.to_string(),
+                i,
+                doc_string: name.to_string(),
+                r#type: 2,
+                f: 0.0,
+                s: vec![],
+                t: None,
+                g: None,
+                sparse_tensor: None,
+                tp: None,
+                floats: vec![],
+                ints: vec![],
+                strings: vec![],
+                tensors: vec![],
+                graphs: vec![],
+                sparse_tensors: vec![],
+                type_protos: vec![],
+            })
+        })
+        .collect();
+
+    create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Shape".to_string(),
+            domain: "".to_string(),
+            attribute,
+            input: vec![INPUT_X.to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            name: "".to_string(),
+            doc_string: "".to_string(),
+        }],
+        name: "".to_string(),
+        initializer: vec![],
+        input: vec![ValueInfoProto {
+            name: INPUT_X.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        value_info: vec![],
+        doc_string: "".to_string(),
+        sparse_initializer: vec![],
+        quantization_annotation: vec![],
+    }))
+}
+
+fn run_shape(start: Option<i64>, end: Option<i64>, x: Tensor) -> Result<Vec<i64>> {
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), x);
+    let eval = candle_onnx::simple_eval(&shape_graph(start, end), inputs)?;
+    eval.get(OUTPUT_Z)
+        .expect("Output 'z' not found")
+        .to_vec1::<i64>()
+}
+
+// "Shape" with `start` and `end`: `end` is exclusive, negative values count from the back and
+// out-of-range values are clamped to [0, rank]. These are the cases from ONNX's own `shape` tests.
+// https://onnx.ai/onnx/operators/onnx__Shape.html
+#[test]
+fn test_shape_operation_start_end() -> Result<()> {
+    let x = Tensor::zeros((3, 4, 5), DType::F32, &Device::Cpu)?;
+    assert_eq!(run_shape(None, None, x.clone())?, vec![3, 4, 5]);
+    assert_eq!(run_shape(Some(1), None, x.clone())?, vec![4, 5]);
+    assert_eq!(run_shape(None, Some(1), x.clone())?, vec![3]);
+    assert_eq!(run_shape(Some(1), Some(2), x.clone())?, vec![4]);
+    assert_eq!(run_shape(Some(-1), None, x.clone())?, vec![5]);
+    assert_eq!(run_shape(None, Some(-1), x.clone())?, vec![3, 4]);
+    assert_eq!(run_shape(Some(-10), None, x.clone())?, vec![3, 4, 5]);
+    assert_eq!(run_shape(None, Some(10), x.clone())?, vec![3, 4, 5]);
+    assert_eq!(run_shape(Some(2), Some(1), x)?, Vec::<i64>::new());
+
+    // The shape of a scalar is an empty 1-D tensor.
+    let x = Tensor::new(1f32, &Device::Cpu)?;
+    assert_eq!(run_shape(None, None, x)?, Vec::<i64>::new());
+    Ok(())
+}
+
 // "Conv"
 // #[test]
 
