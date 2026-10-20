@@ -2036,6 +2036,42 @@ fn tril_triu_eye() -> Result<()> {
 }
 
 #[test]
+fn arg_reduce_skips_nan() -> Result<()> {
+    let device = &Device::Cpu;
+    // Rows of 6 take the scalar loop, rows of 143 argminmax (with the extremes in the elements
+    // after its last full SIMD vector).
+    for len in [6, 143] {
+        let mut row = vec![1f32; len];
+        row[0] = f32::NAN;
+        row[1] = f32::NAN;
+        row[len - 4] = 5.;
+        row[len - 3] = 5.;
+        row[len - 2] = -5.;
+        row[len - 1] = -5.;
+        for dtype in [DType::F32, DType::F64, DType::F16, DType::BF16] {
+            let row = Tensor::new(row.as_slice(), device)?.to_dtype(dtype)?;
+            // Reducing (len, 2) over dim 0 takes the strided loop, its transpose the
+            // non-contiguous one.
+            let cols = Tensor::stack(&[&row, &row], 1)?;
+            for (t, dim) in [(row.unsqueeze(0)?, 1), (cols.clone(), 0), (cols.t()?, 1)] {
+                let n = t.elem_count() / len;
+                let to_u32 = |t: Tensor| t.to_vec1::<u32>();
+                let to_f32 = |t: Tensor| t.to_dtype(DType::F32)?.to_vec1::<f32>();
+                // The first index wins on ties.
+                assert_eq!(to_u32(t.argmax(dim)?)?, vec![len as u32 - 4; n]);
+                assert_eq!(to_u32(t.argmin(dim)?)?, vec![len as u32 - 2; n]);
+                assert_eq!(to_f32(t.max(dim)?)?, vec![5.; n]);
+                assert_eq!(to_f32(t.min(dim)?)?, vec![-5.; n]);
+            }
+            let nans = Tensor::new(vec![f32::NAN; len], device)?.to_dtype(dtype)?;
+            assert_eq!(nans.argmin(0)?.to_vec0::<u32>()?, 0);
+            assert_eq!(nans.argmax(0)?.to_vec0::<u32>()?, 0);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn cumsum() -> Result<()> {
     let t = &[3f32, 1., 4., 1., 5.];
     let t = Tensor::new(t, &Device::Cpu)?;
