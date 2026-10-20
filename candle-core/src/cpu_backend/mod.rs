@@ -203,13 +203,23 @@ impl ReduceIndex {
     #[inline(always)]
     fn fold_impl<T, U, F, G>(&self, src: &[T], src_l: &Layout, f: F, g: G) -> Result<Vec<U>>
     where
-        T: Clone + Copy,
+        T: Clone + Copy + PartialEq,
         U: Clone + Copy,
         F: Fn(T, T) -> bool,
         G: Fn(T, usize) -> U,
     {
         let reduce_dim_size = src_l.dims()[self.reduce_dim_index];
         let reduce_dim_stride = src_l.stride()[self.reduce_dim_index];
+        // Skip NaN values: a row that starts with NaN starts from its first non-NaN value
+        // instead, which the comparisons in the loops never replace by a NaN. A row of only NaN
+        // values gives index 0.
+        #[allow(clippy::eq_op)]
+        let is_nan = |v: T| v != v;
+        let first_non_nan = |src: &[T], stride: usize| {
+            (0..reduce_dim_size)
+                .position(|i| !is_nan(src[i * stride]))
+                .unwrap_or(0)
+        };
         let dst_len = src_l.shape().elem_count() / reduce_dim_size;
         let mut dst: Vec<U> = Vec::with_capacity(dst_len);
         let dst_to_set = dst.spare_capacity_mut();
@@ -224,6 +234,10 @@ impl ReduceIndex {
                         let src = &src[start_src_i..start_src_i + reduce_dim_size];
                         let mut acc = 0;
                         let mut val = src[0];
+                        if is_nan(val) {
+                            acc = first_non_nan(src, 1);
+                            val = src[acc];
+                        }
                         for (src_i, &s) in src.iter().enumerate() {
                             if f(val, s) {
                                 acc = src_i;
@@ -243,6 +257,10 @@ impl ReduceIndex {
                         let src = &src[start_src_i..];
                         let mut acc = 0;
                         let mut val = src[0];
+                        if is_nan(val) {
+                            acc = first_non_nan(src, reduce_dim_stride);
+                            val = src[acc * reduce_dim_stride];
+                        }
                         for src_i in 0..reduce_dim_size {
                             let s = src[src_i * reduce_dim_stride];
                             if f(val, s) {
@@ -260,6 +278,10 @@ impl ReduceIndex {
                     let src = &src[src_index..];
                     let mut acc = 0;
                     let mut val = src[0];
+                    if is_nan(val) {
+                        acc = first_non_nan(src, reduce_dim_stride);
+                        val = src[acc * reduce_dim_stride];
+                    }
                     for src_i in 0..reduce_dim_size {
                         let s = src[src_i * reduce_dim_stride];
                         if f(val, s) {
