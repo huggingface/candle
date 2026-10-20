@@ -2952,7 +2952,7 @@ impl Tensor {
     /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn flip(&self, dims: &[usize]) -> Result<Tensor> {
-        let mut result = self.clone();
+        let mut result = self.contiguous()?;
         for &dim in dims.iter() {
             let size = result.dim(dim)?;
             let indices: Vec<i64> = (0..size).rev().map(|x| x as i64).collect();
