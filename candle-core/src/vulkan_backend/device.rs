@@ -65,6 +65,10 @@ struct DeviceInner {
     /// buffer of the batch and the allocator may recycle the memory.
     keepalive_f32: std::sync::Mutex<Vec<Subbuffer<[f32]>>>,
     keepalive_u32: std::sync::Mutex<Vec<Subbuffer<[u32]>>>,
+    /// Reusable host-visible readback buffer for `copy_to_host`, grown on
+    /// demand (never shrinks): a fresh allocation per readback would page
+    /// in a new host mapping every time.
+    readback: std::sync::Mutex<Option<Arc<Buffer>>>,
     /// Per-width atomic float add support (SPV_EXT_shader_atomic_float_add),
     /// as enabled at device creation: F32/F64 via VK_EXT_shader_atomic_float,
     /// F16 via VK_EXT_shader_atomic_float2.
@@ -235,6 +239,7 @@ impl VulkanDevice {
                 fence_next: AtomicUsize::new(0),
                 keepalive_f32: std::sync::Mutex::new(Vec::new()),
                 keepalive_u32: std::sync::Mutex::new(Vec::new()),
+                readback: std::sync::Mutex::new(None),
                 pending: std::sync::Mutex::new(Vec::new()),
                 atomic_f32,
                 atomic_f64,
@@ -266,6 +271,12 @@ impl VulkanDevice {
 
     pub(crate) fn cbb_alloc(&self) -> &Arc<StandardCommandBufferAllocator> {
         &self.inner.cbb_alloc
+    }
+
+    /// The shared readback state (see the `readback` field on
+    /// `DeviceInner`).
+    pub(crate) fn readback(&self) -> &std::sync::Mutex<Option<Arc<Buffer>>> {
+        &self.inner.readback
     }
 
     pub(crate) fn queue(&self) -> &Arc<Queue> {

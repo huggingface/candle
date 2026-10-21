@@ -4,7 +4,7 @@ use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer,
 };
 
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
+use vulkano::memory::allocator::{AllocationCreateInfo, DeviceLayout, MemoryTypeFilter};
 use vulkano::sync::GpuFuture;
 
 pub use crate::vulkan_backend::device::{VBuf, VulkanDevice};
@@ -479,22 +479,43 @@ impl VulkanStorage {
         T: BufferContents + Default + Clone,
     {
         let len = vram.len();
-        let destination_buffer = Buffer::new_slice::<T>(
-            device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_DST,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            len,
-        )
-        .map_err(|error| {
-            Error::Vulkan(format!("Unable to create host readback buffer: {error:?}").into())
-        })?;
+        let bytes = len * std::mem::size_of::<T>() as u64;
+        // Reuse the device's host-visible readback buffer, growing it when
+        // needed: a fresh allocation per readback would page in a new host
+        // mapping every time.
+        let buffer = {
+            let mut readback = device
+                .readback()
+                .lock()
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            if readback.as_ref().is_some_and(|b| b.size() >= bytes) {
+                readback.clone().unwrap()
+            } else {
+                let buffer = Buffer::new(
+                    device.mem_alloc(),
+                    &BufferCreateInfo {
+                        usage: BufferUsage::TRANSFER_DST,
+                        ..Default::default()
+                    },
+                    &AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                            | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                        ..Default::default()
+                    },
+                    // Buffer::new takes the size from the layout.
+                    DeviceLayout::from_size_alignment(bytes, 1).unwrap(),
+                )
+                .map_err(|error| {
+                    Error::Vulkan(
+                        format!("Unable to create host readback buffer: {error:?}").into(),
+                    )
+                })?;
+                *readback = Some(buffer.clone());
+                buffer
+            }
+        };
+        let destination_buffer: Subbuffer<[T]> =
+            Subbuffer::from(buffer).slice(0..bytes).cast_aligned::<T>();
         let mut builder = AutoCommandBufferBuilder::primary(
             device.cbb_alloc().clone(),
             device.queue().queue_family_index(),
