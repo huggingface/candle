@@ -1,7 +1,7 @@
 //! Tensor ops.
 //!
 
-use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
+use candle::{CpuStorage, DType, Device, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -942,6 +942,246 @@ pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Resul
         )
     }
     xs.apply_op3_no_bwd(alpha, beta, &LayerNorm { eps })
+}
+
+/// GELU (tanh approximation, `gelu_pytorch_tanh`) evaluated in f32 for the
+/// half types with one rounding, forward and backward. `Tensor::gelu` runs
+/// its bf16 kernel in bf16 arithmetic and its backward as composed bf16 ops,
+/// each rounding at every intermediate.
+struct GeluTanh;
+
+fn gelu_tanh_f64(x: f64) -> f64 {
+    let k = std::f64::consts::FRAC_2_SQRT_PI * std::f64::consts::FRAC_1_SQRT_2;
+    0.5 * x * (1.0 + (k * (x + 0.044715 * x * x * x)).tanh())
+}
+
+fn gelu_tanh_grad_f64(x: f64) -> f64 {
+    let k = std::f64::consts::FRAC_2_SQRT_PI * std::f64::consts::FRAC_1_SQRT_2;
+    let x_sq = x * x;
+    let t = (k * (x + 0.044715 * x_sq * x)).tanh();
+    0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * k * (1.0 + 3.0 * 0.044715 * x_sq)
+}
+
+fn map_contiguous<T, F>(src: &[T], layout: &Layout, f: F) -> Result<(CpuStorage, Shape)>
+where
+    T: candle::WithDType + num_traits::AsPrimitive<f64>,
+    F: Fn(f64) -> f64 + Sync,
+{
+    let src = match layout.contiguous_offsets() {
+        None => candle::bail!("input has to be contiguous"),
+        Some((o1, o2)) => &src[o1..o2],
+    };
+    let dst: Vec<T> = src
+        .par_iter()
+        .map(|x| <T as candle::WithDType>::from_f64(f(x.as_())))
+        .collect();
+    Ok((
+        candle::WithDType::to_cpu_storage_owned(dst),
+        layout.shape().clone(),
+    ))
+}
+
+#[cfg(feature = "cuda")]
+fn gelu_cuda_launch<T: candle::cuda_backend::cudarc::driver::DeviceRepr + candle::WithDType>(
+    dev: &candle::CudaDevice,
+    name: &str,
+    x: &candle::cuda_backend::cudarc::driver::CudaSlice<T>,
+    xl: &Layout,
+    dy: Option<(&candle::cuda_backend::cudarc::driver::CudaSlice<T>, &Layout)>,
+) -> Result<candle::cuda_backend::cudarc::driver::CudaSlice<T>> {
+    use candle::cuda_backend::cudarc::driver::{LaunchConfig, PushKernelArg};
+    use candle::cuda_backend::{kernel_name, kernels, WrapErr};
+    let x = match xl.contiguous_offsets() {
+        None => candle::bail!("input has to be contiguous"),
+        Some((o1, o2)) => x.slice(o1..o2),
+    };
+    let el = xl.shape().elem_count();
+    let dy = match dy {
+        None => None,
+        Some((dy, l)) => match l.contiguous_offsets() {
+            None => candle::bail!("dy has to be contiguous"),
+            Some((o1, o2)) => {
+                if o2 - o1 != el {
+                    candle::bail!("gelu-bwd shape mismatch {:?} {:?}", xl.shape(), l.shape())
+                }
+                Some(dy.slice(o1..o2))
+            }
+        },
+    };
+    let cfg = LaunchConfig::for_num_elems(el as u32);
+    let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::UNARY)?;
+    // SAFETY: Set later by running the kernel.
+    let dst = unsafe { dev.alloc::<T>(el)? };
+    let mut builder = func.builder();
+    candle::builder_arg!(builder, el);
+    builder.arg(&x);
+    if let Some(dy) = &dy {
+        builder.arg(dy);
+    }
+    builder.arg(&dst);
+    // SAFETY: ffi.
+    unsafe { builder.launch(cfg) }.w()?;
+    Ok(dst)
+}
+
+impl candle::CustomOp1 for GeluTanh {
+    fn name(&self) -> &'static str {
+        "gelu-tanh"
+    }
+
+    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        match storage {
+            CpuStorage::BF16(s) => map_contiguous::<half::bf16, _>(s, layout, gelu_tanh_f64),
+            CpuStorage::F16(s) => map_contiguous::<half::f16, _>(s, layout, gelu_tanh_f64),
+            CpuStorage::F32(s) => map_contiguous::<f32, _>(s, layout, gelu_tanh_f64),
+            CpuStorage::F64(s) => map_contiguous::<f64, _>(s, layout, gelu_tanh_f64),
+            _ => candle::bail!("unsupported dtype for gelu-tanh {:?}", storage),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        storage: &candle::CudaStorage,
+        layout: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        use candle::cuda_backend::cudarc::driver::{CudaSlice, DeviceRepr};
+        use candle::cuda_backend::Map1;
+        use candle::{CudaDevice, WithDType};
+        struct S;
+        impl Map1 for S {
+            fn f<T: DeviceRepr + WithDType>(
+                &self,
+                src: &CudaSlice<T>,
+                dev: &CudaDevice,
+                layout: &Layout,
+            ) -> Result<CudaSlice<T>> {
+                gelu_cuda_launch(dev, "gelu_tanh_fwd", src, layout, None)
+            }
+        }
+        use candle::backend::BackendStorage;
+        let dev = storage.device();
+        let slice = S.map(&storage.slice, dev, layout)?;
+        let dst = candle::cuda_backend::CudaStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, layout.shape().clone()))
+    }
+
+    fn bwd(&self, arg: &Tensor, _res: &Tensor, grad_res: &Tensor) -> Result<Option<Tensor>> {
+        Ok(Some(
+            arg.apply_op2_no_bwd(&grad_res.contiguous()?, &GeluTanhBwd)?,
+        ))
+    }
+}
+
+struct GeluTanhBwd;
+
+impl candle::CustomOp2 for GeluTanhBwd {
+    fn name(&self) -> &'static str {
+        "gelu-tanh-bwd"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &CpuStorage,
+        l1: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        fn inner<T: candle::WithDType + num_traits::AsPrimitive<f64>>(
+            x: &[T],
+            l1: &Layout,
+            dy: &[T],
+            l2: &Layout,
+        ) -> Result<(CpuStorage, Shape)> {
+            let x = match l1.contiguous_offsets() {
+                None => candle::bail!("input has to be contiguous"),
+                Some((o1, o2)) => &x[o1..o2],
+            };
+            let dy = match l2.contiguous_offsets() {
+                None => candle::bail!("dy has to be contiguous"),
+                Some((o1, o2)) => &dy[o1..o2],
+            };
+            if x.len() != dy.len() {
+                candle::bail!("gelu-bwd shape mismatch {:?} {:?}", l1.shape(), l2.shape())
+            }
+            let dst: Vec<T> = x
+                .par_iter()
+                .zip(dy.par_iter())
+                .map(|(x, dy)| {
+                    <T as candle::WithDType>::from_f64(dy.as_() * gelu_tanh_grad_f64(x.as_()))
+                })
+                .collect();
+            Ok((
+                candle::WithDType::to_cpu_storage_owned(dst),
+                l1.shape().clone(),
+            ))
+        }
+        match (s1, s2) {
+            (CpuStorage::BF16(a), CpuStorage::BF16(b)) => inner::<half::bf16>(a, l1, b, l2),
+            (CpuStorage::F16(a), CpuStorage::F16(b)) => inner::<half::f16>(a, l1, b, l2),
+            (CpuStorage::F32(a), CpuStorage::F32(b)) => inner::<f32>(a, l1, b, l2),
+            (CpuStorage::F64(a), CpuStorage::F64(b)) => inner::<f64>(a, l1, b, l2),
+            _ => candle::bail!("unsupported dtypes for gelu-bwd {:?} {:?}", s1, s2),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        s1: &candle::CudaStorage,
+        l1: &Layout,
+        s2: &candle::CudaStorage,
+        l2: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        use candle::cuda_backend::cudarc::driver::{CudaSlice, DeviceRepr};
+        use candle::cuda_backend::Map2;
+        use candle::{CudaDevice, WithDType};
+        struct S;
+        impl Map2 for S {
+            fn f<T: DeviceRepr + WithDType>(
+                &self,
+                x: &CudaSlice<T>,
+                l1: &Layout,
+                dy: &CudaSlice<T>,
+                l2: &Layout,
+                dev: &CudaDevice,
+            ) -> Result<CudaSlice<T>> {
+                gelu_cuda_launch(dev, "gelu_tanh_bwd", x, l1, Some((dy, l2)))
+            }
+        }
+        use candle::backend::BackendStorage;
+        let dev = s1.device();
+        let slice = S.map(&s1.slice, l1, &s2.slice, l2, dev)?;
+        let dst = candle::cuda_backend::CudaStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, l1.shape().clone()))
+    }
+}
+
+/// GELU with the tanh approximation (`gelu_pytorch_tanh`), f32 arithmetic
+/// for the half types, with a backward pass. Contiguous input.
+pub fn gelu_tanh(xs: &Tensor) -> Result<Tensor> {
+    match xs.device() {
+        Device::Cpu | Device::Cuda(_) => xs.contiguous()?.apply_op1(GeluTanh),
+        _ => {
+            // Composed on backends without the kernel: f32 for the half types,
+            // and autograd differentiates the composition itself.
+            let internal = match xs.dtype() {
+                DType::F16 | DType::BF16 => DType::F32,
+                dt => dt,
+            };
+            let x = xs.to_dtype(internal)?;
+            let k = std::f64::consts::FRAC_2_SQRT_PI * std::f64::consts::FRAC_1_SQRT_2;
+            let u = ((((&x * &x)?.mul(&x)? * 0.044715)? + &x)? * k)?;
+            let y = ((u.tanh()? + 1.0)? * 0.5)?.mul(&x)?;
+            y.to_dtype(xs.dtype())
+        }
+    }
 }
 
 // https://pytorch.org/docs/stable/generated/torch.nn.PixelShuffle.html
