@@ -1,10 +1,10 @@
 //! Logit Processing and Sampling
 //!
-//! Functionality for modeling sampling strategies and logits processing in text generation
-//! with support for temperature-based sampling, top-k filtering, nucleus sampling (top-p),
-//! and combinations thereof.
+//! Functionality for modeling sampling strategies and logits processing in text
+//! generation with support for temperature-based sampling, top-k filtering,
+//! nucleus sampling (top-p), and combinations thereof.
 use candle::{DType, Error, Result, Tensor};
-use rand::{distr::Distribution, SeedableRng};
+use rand::{distr::Distribution, Rng, SeedableRng};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Sampling {
@@ -17,15 +17,41 @@ pub enum Sampling {
     GumbelSoftmax { temperature: f64 },
 }
 
+/// Builds the (unnormalized) cumulative distribution of `prs` into `cdf`.
+///
+/// The normalization constant cancels in a uniform-draw-over-the-CDF sample,
+/// so it is not applied (unlike `rand::distr::weighted::WeightedIndex`, which
+/// divides every entry by the total as an f64). `cdf[i]` holds
+/// `prs[0] + ... + prs[i]`, and the returned value is `cdf[n - 1]` (the
+/// total). `cdf` must have the same length as `prs` and is reused across
+/// tokens by the caller, so no per-token allocation is needed.
+fn build_cdf(prs: &[f32], cdf: &mut [f32]) -> f32 {
+    debug_assert_eq!(prs.len(), cdf.len());
+    let mut sum = 0.0f32;
+    for (i, &p) in prs.iter().enumerate() {
+        sum += p;
+        cdf[i] = sum;
+    }
+    sum
+}
+
 pub struct LogitsProcessor {
     rng: rand::rngs::StdRng,
     sampling: Sampling,
+    // Reused CDF buffer for multinomial sampling: grown to the vocabulary
+    // size on first use and kept across tokens, so no per-token allocation
+    // is needed for the (unnormalized) cumulative distribution.
+    cdf: Vec<f32>,
 }
 
 impl LogitsProcessor {
     pub fn from_sampling(seed: u64, sampling: Sampling) -> Self {
         let rng = rand::rngs::StdRng::seed_from_u64(seed);
-        Self { rng, sampling }
+        Self {
+            rng,
+            sampling,
+            cdf: Vec::new(),
+        }
     }
 
     pub fn new(seed: u64, temperature: Option<f64>, top_p: Option<f64>) -> Self {
@@ -53,14 +79,41 @@ impl LogitsProcessor {
     }
 
     fn sample_multinomial(&mut self, prs: &Vec<f32>) -> Result<u32> {
-        let distr = rand::distr::weighted::WeightedIndex::new(prs).map_err(Error::wrap)?;
-        let next_token = distr.sample(&mut self.rng) as u32;
-        Ok(next_token)
+        let n = prs.len();
+        if n == 0 {
+            return Err(Error::Msg(
+                "sample_multinomial: empty distribution".to_string(),
+            ));
+        }
+        // Build the unnormalized CDF (no per-entry division, no per-token
+        // allocation) and binary-search the uniform draw against it — the
+        // same distribution as WeightedIndex::sample, minus the
+        // normalization pass and the 1 MiB allocation per token.
+        self.cdf.resize(n, 0.0);
+        let total = build_cdf(prs, &mut self.cdf);
+        if !total.is_finite() || total <= 0.0 {
+            // Degenerate weights (NaN/negative/non-finite total): keep the
+            // historical error behavior of WeightedIndex::new.
+            let distr = rand::distr::weighted::WeightedIndex::new(prs).map_err(Error::wrap)?;
+            return Ok(distr.sample(&mut self.rng) as u32);
+        }
+        let u: f64 = self.rng.random::<f64>() * total as f64;
+        let mut lo = 0usize;
+        let mut hi = n;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.cdf[mid] as f64 > u {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        Ok(lo as u32)
     }
 
     /// top-p sampling (or "nucleus sampling") samples from the smallest set of tokens that exceed
-    /// probability top_p. This way we never sample tokens that have very low probabilities and are
-    /// less likely to go "off the rails".
+    /// probability top_p. This way we never sample tokens that are very low probabilities and are
+    /// less likely to get "off the rails".
     fn sample_topp(&mut self, prs: &mut Vec<f32>, top_p: f32) -> Result<u32> {
         let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
 
