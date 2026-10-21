@@ -5018,7 +5018,7 @@ fn test_vulkan_quantized_matmul() {
     ];
     // (k, n) shapes: (256, 64) is a single quantized block per column;
     // k=1024 spans four blocks per column (multi-block indexing); n=1000 is
-    // not a multiple of the 16-wide tile. m=1 exercises the fused
+    // not a multiple of the 32-wide tile. m=1 exercises the fused
     // dequant+GEMM path (decode) for Q4_0 and Q4_K; m=4 exercises the
     // materialize-then-GEMM path.
     for &(k, n) in &[
