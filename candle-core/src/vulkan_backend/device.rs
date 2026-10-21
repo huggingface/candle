@@ -40,6 +40,16 @@ pub struct VulkanDevice {
     inner: Arc<DeviceInner>,
 }
 
+/// A count of live `VulkanStorage` instances holding one `Arc<Buffer>`:
+/// shallow `Clone`s of the storage increment, `Drop`s decrement. The
+/// count reaches zero when the last storage instance is gone, even while
+/// pending encode closures still hold captured subbuffers of the same
+/// buffer. The entry only exists while at least one holder is alive, so
+/// the registry itself never needs to keep the buffer's Arc alive.
+struct BufferInstance {
+    count: std::sync::atomic::AtomicUsize,
+}
+
 /// Shared state of a `VulkanDevice`.
 struct DeviceInner {
     device: Arc<Device>,
@@ -65,6 +75,21 @@ struct DeviceInner {
     /// buffer of the batch and the allocator may recycle the memory.
     keepalive_f32: std::sync::Mutex<Vec<Subbuffer<[f32]>>>,
     keepalive_u32: std::sync::Mutex<Vec<Subbuffer<[u32]>>>,
+    /// F32 buffers that can be handed out immediately, keyed by byte
+    /// length: the GPU has been idle on them since the last
+    /// `synchronize`. `Drop for VulkanStorage` returns eligible buffers
+    /// here and `VulkanStorage::new` takes from here.
+    pool_f32_free: std::sync::Mutex<std::collections::HashMap<usize, Vec<Subbuffer<[f32]>>>>,
+    /// F32 buffers returned while a batch was pending; `synchronize`
+    /// promotes them to `pool_f32_free` after the batch's fence signals
+    /// (the GPU is done with them then, like the keepalive lists).
+    pool_f32_pending: std::sync::Mutex<Vec<(usize, Subbuffer<[f32]>)>>,
+    /// Live `VulkanStorage` instance counts per buffer (see
+    /// `BufferInstance`), keyed by the buffer's address: an entry only
+    /// exists while at least one live holder pins the allocation, so the
+    /// address cannot be reused for another buffer while registered.
+    buffer_instances:
+        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<BufferInstance>>>,
     /// Reusable host-visible readback buffer for `copy_to_host`, grown on
     /// demand (never shrinks): a fresh allocation per readback would page
     /// in a new host mapping every time.
@@ -99,6 +124,14 @@ struct InFlight {
 /// Number of in-flight submissions allowed before `execute` waits for the
 /// GPU to catch up.
 const FENCE_RING_SIZE: usize = 128;
+
+/// Minimum size in bytes for an f32 buffer to enter the pool: smaller
+/// allocations are cheap and the pool bookkeeping is not worth it.
+pub(crate) const POOL_F32_MIN_BYTES: usize = 4096;
+/// Maximum number of pooled buffers per size.
+const POOL_F32_MAX_PER_SIZE: usize = 2;
+/// Maximum total bytes held by the free pool.
+const POOL_F32_MAX_BYTES: usize = 256 * 1024 * 1024;
 
 impl std::fmt::Debug for VulkanDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -239,6 +272,9 @@ impl VulkanDevice {
                 fence_next: AtomicUsize::new(0),
                 keepalive_f32: std::sync::Mutex::new(Vec::new()),
                 keepalive_u32: std::sync::Mutex::new(Vec::new()),
+                pool_f32_free: std::sync::Mutex::new(std::collections::HashMap::new()),
+                pool_f32_pending: std::sync::Mutex::new(Vec::new()),
+                buffer_instances: std::sync::Mutex::new(std::collections::HashMap::new()),
                 readback: std::sync::Mutex::new(None),
                 pending: std::sync::Mutex::new(Vec::new()),
                 atomic_f32,
@@ -277,6 +313,90 @@ impl VulkanDevice {
     /// `DeviceInner`).
     pub(crate) fn readback(&self) -> &std::sync::Mutex<Option<Arc<Buffer>>> {
         &self.inner.readback
+    }
+
+    /// Takes a pooled f32 buffer of exactly `bytes` bytes, if one is
+    /// available (see the `pool_f32_free` field on `DeviceInner`).
+    pub(crate) fn pool_take_f32(&self, bytes: usize) -> Option<Subbuffer<[f32]>> {
+        let mut free = self.inner.pool_f32_free.lock().ok()?;
+        free.get_mut(&bytes).and_then(|v| v.pop())
+    }
+
+    /// Returns an f32 buffer of `bytes` bytes to the pool. While a batch
+    /// is pending the buffer is held in `pool_f32_pending` until that
+    /// batch's fence signals (the GPU may still be using it); otherwise it
+    /// goes straight to the free pool. Buffers that would exceed the
+    /// per-size or total caps are dropped.
+    pub(crate) fn pool_return_f32(&self, bytes: usize, buf: Subbuffer<[f32]>) {
+        let pending_batch = match self.inner.pending.lock().ok() {
+            Some(p) => !p.is_empty(),
+            None => true,
+        };
+        if pending_batch {
+            let mut pending = match self.inner.pool_f32_pending.lock().ok() {
+                Some(p) => p,
+                None => return,
+            };
+            pending.push((bytes, buf));
+            return;
+        }
+        let mut free = match self.inner.pool_f32_free.lock().ok() {
+            Some(f) => f,
+            None => return,
+        };
+        Self::pool_insert(&mut free, bytes, buf);
+    }
+
+    /// Inserts one buffer into the free pool, honoring the caps.
+    fn pool_insert(
+        free: &mut std::collections::HashMap<usize, Vec<Subbuffer<[f32]>>>,
+        bytes: usize,
+        buf: Subbuffer<[f32]>,
+    ) {
+        let total: usize = free.iter().map(|(k, v)| k.saturating_mul(v.len())).sum();
+        let entry = free.entry(bytes).or_default();
+        if entry.len() < POOL_F32_MAX_PER_SIZE && total + bytes <= POOL_F32_MAX_BYTES {
+            entry.push(buf);
+        }
+    }
+
+    /// Registers a new `VulkanStorage` instance holding `buffer`
+    /// (see `BufferInstance`).
+    pub(crate) fn buffer_instance_add(&self, buffer: &std::sync::Arc<Buffer>) {
+        let mut map = match self.inner.buffer_instances.lock() {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let entry = map
+            .entry(std::sync::Arc::as_ptr(buffer) as usize)
+            .or_insert_with(|| {
+                std::sync::Arc::new(BufferInstance {
+                    count: std::sync::atomic::AtomicUsize::new(0),
+                })
+            });
+        entry
+            .count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Unregisters a `VulkanStorage` instance holding `buffer`; true
+    /// when this was the last instance of the buffer.
+    pub(crate) fn buffer_instance_sub(&self, buffer: &std::sync::Arc<Buffer>) -> bool {
+        let mut map = match self.inner.buffer_instances.lock() {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        let Some(entry) = map.get(&(std::sync::Arc::as_ptr(buffer) as usize)).cloned() else {
+            return false;
+        };
+        let prev = entry
+            .count
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        if prev == 1 {
+            map.remove(&(std::sync::Arc::as_ptr(buffer) as usize));
+            return true;
+        }
+        false
     }
 
     pub(crate) fn queue(&self) -> &Arc<Queue> {
@@ -532,6 +652,26 @@ impl VulkanDevice {
                 .lock()
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?
                 .clear();
+            // The batch is done on the GPU: promote the pooled buffers
+            // that were returned during it.
+            let drained = {
+                let mut pending = self
+                    .inner
+                    .pool_f32_pending
+                    .lock()
+                    .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                std::mem::take(&mut *pending)
+            };
+            if !drained.is_empty() {
+                let mut free = self
+                    .inner
+                    .pool_f32_free
+                    .lock()
+                    .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                for (bytes, buf) in drained {
+                    Self::pool_insert(&mut free, bytes, buf);
+                }
+            }
             if std::env::var("CANDLE_VULKAN_PROFILE").is_ok() {
                 tracing::debug!(
                     "vulkan profile: {} encodes, encode+build {:?}, submit+wait {:?}",
