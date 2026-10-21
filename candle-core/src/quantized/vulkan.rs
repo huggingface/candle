@@ -242,7 +242,8 @@ impl QVulkanStorage {
             )
             .map_err(|e| e.to_string())
         })?;
-        self.device.synchronize()?;
+        // No pipeline sync: consumers either enqueue further work on the
+        // same queue (ordered after this kernel) or read back, which syncs.
         Ok(out)
     }
 
