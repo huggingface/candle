@@ -146,6 +146,47 @@ fn layer_norm_bwd(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn norm_bwd_f64(device: &Device) -> Result<()> {
+    // The CUDA f64 forward kernels accumulate their statistics in f64, so the
+    // fused forward and the composed backward agree to f64 precision. The CPU
+    // fused norms have no f64 arm, so this is a CUDA check.
+    if device.is_cpu() {
+        return Ok(());
+    }
+    let x = Var::randn(0f64, 1.5, (2, 5, 1024), device)?;
+    let alpha = Var::randn(1f64, 0.3, 1024, device)?;
+    let beta = Var::randn(0f64, 0.3, 1024, device)?;
+    let w = Tensor::randn(0f64, 1.0, (2, 5, 1024), device)?;
+    let eps = 1e-5;
+    let tol = 1e-10;
+
+    let y = candle_nn::ops::rms_norm(x.as_tensor(), alpha.as_tensor(), eps)?;
+    let g = (&y * &w)?.sum_all()?.backward()?;
+    let y_ref = candle_nn::ops::rms_norm_slow(x.as_tensor(), alpha.as_tensor(), eps)?;
+    let g_ref = (&y_ref * &w)?.sum_all()?.backward()?;
+    check("rms_norm f64 fwd", &y, &y_ref, tol as f32)?;
+    check(
+        "rms_norm f64 dx",
+        g.get(&x).unwrap(),
+        g_ref.get(&x).unwrap(),
+        tol as f32,
+    )?;
+
+    let y = candle_nn::ops::layer_norm(x.as_tensor(), alpha.as_tensor(), beta.as_tensor(), eps)?;
+    let g = (&y * &w)?.sum_all()?.backward()?;
+    let y_ref =
+        candle_nn::ops::layer_norm_slow(x.as_tensor(), alpha.as_tensor(), beta.as_tensor(), eps)?;
+    let g_ref = (&y_ref * &w)?.sum_all()?.backward()?;
+    check("layer_norm f64 fwd", &y, &y_ref, tol as f32)?;
+    check(
+        "layer_norm f64 dx",
+        g.get(&x).unwrap(),
+        g_ref.get(&x).unwrap(),
+        tol as f32,
+    )?;
+    Ok(())
+}
+
 test_device!(
     softmax_bwd,
     softmax_bwd_cpu,
@@ -181,4 +222,10 @@ test_device!(
     softmax_bwd_f64_cpu,
     softmax_bwd_f64_gpu,
     softmax_bwd_f64_metal
+);
+test_device!(
+    norm_bwd_f64,
+    norm_bwd_f64_cpu,
+    norm_bwd_f64_gpu,
+    norm_bwd_f64_metal
 );
