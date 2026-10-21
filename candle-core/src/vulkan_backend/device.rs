@@ -31,23 +31,31 @@ use candle_vulkan_kernels::Kernels;
 use crate::{DType, Error, Result};
 
 /// A device that can be used to run computations with the Vulkan backend.
+///
+/// All state lives in one `DeviceInner` behind an `Arc`, so cloning the
+/// device (one clone per tensor operation) is a single reference-count
+/// bump instead of a dozen Arc/atomic copies.
+#[derive(Clone)]
 pub struct VulkanDevice {
-    instance: Arc<Instance>,
+    inner: Arc<DeviceInner>,
+}
+
+/// Shared state of a `VulkanDevice`.
+struct DeviceInner {
     device: Arc<Device>,
     queue: Arc<Queue>,
     mem_alloc: Arc<StandardMemoryAllocator>,
     cbb_alloc: Arc<StandardCommandBufferAllocator>,
-    dss_alloc: Arc<StandardDescriptorSetAllocator>,
     kernels: Arc<Kernels>,
     seed: AtomicU64,
     /// Fence ring bounding in-flight submissions (see `execute`); shared
     /// by all `VulkanDevice` clones since they submit to the same queue.
-    fence_ring: Arc<std::sync::Mutex<Vec<InFlight>>>,
-    fence_next: Arc<AtomicUsize>,
+    fence_ring: std::sync::Mutex<Vec<InFlight>>,
+    fence_next: AtomicUsize,
     /// Encodes recorded by `execute`, deferred until `synchronize` records
     /// them all onto a single command buffer and submits it. Shared by all
     /// `VulkanDevice` clones since they submit to the same queue.
-    pending: Arc<std::sync::Mutex<Vec<Encode>>>,
+    pending: std::sync::Mutex<Vec<Encode>>,
     /// Buffers allocated since the last `synchronize()`. The closures
     /// recorded by `execute` own temporary buffers (e.g. dequant scratch)
     /// and are consumed when the batch is recorded, so without this list
@@ -55,15 +63,15 @@ pub struct VulkanDevice {
     /// buffer that uses them. `synchronize` clears the list after the
     /// batch's fence signals, at which point the GPU is done with every
     /// buffer of the batch and the allocator may recycle the memory.
-    keepalive_f32: Arc<std::sync::Mutex<Vec<Subbuffer<[f32]>>>>,
-    keepalive_u32: Arc<std::sync::Mutex<Vec<Subbuffer<[u32]>>>>,
+    keepalive_f32: std::sync::Mutex<Vec<Subbuffer<[f32]>>>,
+    keepalive_u32: std::sync::Mutex<Vec<Subbuffer<[u32]>>>,
     /// Per-width atomic float add support (SPV_EXT_shader_atomic_float_add),
     /// as enabled at device creation: F32/F64 via VK_EXT_shader_atomic_float,
     /// F16 via VK_EXT_shader_atomic_float2.
     atomic_f32: bool,
     atomic_f64: bool,
     atomic_f16: bool,
-    _gpu_id: usize,
+    gpu_id: usize,
 }
 
 /// A deferred kernel record: `execute` appends these, `synchronize` plays
@@ -88,36 +96,10 @@ struct InFlight {
 /// GPU to catch up.
 const FENCE_RING_SIZE: usize = 128;
 
-impl Clone for VulkanDevice {
-    fn clone(&self) -> Self {
-        Self {
-            instance: self.instance.clone(),
-            device: self.device.clone(),
-            queue: self.queue.clone(),
-            mem_alloc: self.mem_alloc.clone(),
-            cbb_alloc: self.cbb_alloc.clone(),
-            dss_alloc: self.dss_alloc.clone(),
-            kernels: self.kernels.clone(),
-            seed: std::sync::atomic::AtomicU64::new(
-                self.seed.load(std::sync::atomic::Ordering::Relaxed),
-            ),
-            fence_ring: self.fence_ring.clone(),
-            keepalive_f32: self.keepalive_f32.clone(),
-            keepalive_u32: self.keepalive_u32.clone(),
-            fence_next: self.fence_next.clone(),
-            pending: self.pending.clone(),
-            atomic_f32: self.atomic_f32,
-            atomic_f64: self.atomic_f64,
-            atomic_f16: self.atomic_f16,
-            _gpu_id: self._gpu_id,
-        }
-    }
-}
-
 impl std::fmt::Debug for VulkanDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VulkanDevice")
-            .field("gpu_id", &self._gpu_id)
+            .field("gpu_id", &self.inner.gpu_id)
             .finish()
     }
 }
@@ -242,23 +224,23 @@ impl VulkanDevice {
         }
         tracing::debug!("Initializing vulkan device '{gpu_id}'");
         Ok(Self {
-            instance,
-            device,
-            queue,
-            mem_alloc,
-            cbb_alloc,
-            dss_alloc,
-            kernels,
-            seed: AtomicU64::new(0),
-            fence_ring: Arc::new(std::sync::Mutex::new(fence_ring)),
-            fence_next: Arc::new(AtomicUsize::new(0)),
-            keepalive_f32: Arc::new(std::sync::Mutex::new(Vec::new())),
-            keepalive_u32: Arc::new(std::sync::Mutex::new(Vec::new())),
-            pending: Arc::new(std::sync::Mutex::new(Vec::new())),
-            atomic_f32,
-            atomic_f64,
-            atomic_f16,
-            _gpu_id: gpu_id,
+            inner: Arc::new(DeviceInner {
+                device,
+                queue,
+                mem_alloc,
+                cbb_alloc,
+                kernels,
+                seed: AtomicU64::new(0),
+                fence_ring: std::sync::Mutex::new(fence_ring),
+                fence_next: AtomicUsize::new(0),
+                keepalive_f32: std::sync::Mutex::new(Vec::new()),
+                keepalive_u32: std::sync::Mutex::new(Vec::new()),
+                pending: std::sync::Mutex::new(Vec::new()),
+                atomic_f32,
+                atomic_f64,
+                atomic_f16,
+                gpu_id,
+            }),
         })
     }
 
@@ -267,27 +249,27 @@ impl VulkanDevice {
     /// VK_EXT_shader_atomic_float2), as enabled at device creation.
     pub fn supports_atomic_fadd(&self, dtype: DType) -> bool {
         match dtype {
-            DType::F32 => self.atomic_f32,
-            DType::F64 => self.atomic_f64,
-            DType::F16 => self.atomic_f16,
+            DType::F32 => self.inner.atomic_f32,
+            DType::F64 => self.inner.atomic_f64,
+            DType::F16 => self.inner.atomic_f16,
             _ => false,
         }
     }
 
     pub(crate) fn device(&self) -> &Arc<Device> {
-        &self.device
+        &self.inner.device
     }
 
     pub(crate) fn mem_alloc(&self) -> &Arc<StandardMemoryAllocator> {
-        &self.mem_alloc
+        &self.inner.mem_alloc
     }
 
     pub(crate) fn cbb_alloc(&self) -> &Arc<StandardCommandBufferAllocator> {
-        &self.cbb_alloc
+        &self.inner.cbb_alloc
     }
 
     pub(crate) fn queue(&self) -> &Arc<Queue> {
-        &self.queue
+        &self.inner.queue
     }
 
     /// Allocation for the compute buffers: device-local (VRAM).
@@ -312,7 +294,8 @@ impl VulkanDevice {
     }
 
     pub fn supports_bf16(&self) -> bool {
-        self.device
+        self.inner
+            .device
             .physical_device()
             .extension_properties()
             .iter()
@@ -322,7 +305,7 @@ impl VulkanDevice {
     /// The underlying Vulkan physical device (for querying properties
     /// and extensions).
     pub fn physical_device(&self) -> &vulkano::device::physical::PhysicalDevice {
-        self.device.physical_device()
+        self.inner.device.physical_device()
     }
 
     /// Uploads `data` into a device f32 storage buffer in VRAM. A
@@ -330,7 +313,7 @@ impl VulkanDevice {
     /// and runs at the next `synchronize`.
     pub fn upload_f32(&self, data: &[f32]) -> Result<Subbuffer<[f32]>> {
         let buffer = Buffer::new_slice(
-            &self.mem_alloc,
+            &self.inner.mem_alloc,
             &BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER
                     | BufferUsage::TRANSFER_SRC
@@ -344,7 +327,7 @@ impl VulkanDevice {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let staging = Buffer::from_iter(
-            &self.mem_alloc,
+            &self.inner.mem_alloc,
             &BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_SRC,
                 ..Default::default()
@@ -366,7 +349,7 @@ impl VulkanDevice {
     /// (the fill is deferred onto the pending batch).
     pub fn new_f32_buffer(&self, len: usize) -> Result<Subbuffer<[f32]>> {
         let buffer = Buffer::new_slice(
-            &self.mem_alloc,
+            &self.inner.mem_alloc,
             &BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER
                     | BufferUsage::TRANSFER_SRC
@@ -383,7 +366,8 @@ impl VulkanDevice {
             cbb.fill_buffer(dst, 0).map_err(|e| e.to_string())?;
             Ok(())
         })?;
-        self.keepalive_f32
+        self.inner
+            .keepalive_f32
             .lock()
             .map_err(|e| Error::Vulkan(e.to_string().into()))?
             .push(buffer.clone());
@@ -394,7 +378,7 @@ impl VulkanDevice {
     /// onto the pending batch).
     pub fn new_u32_buffer(&self, len: usize) -> Result<Subbuffer<[u32]>> {
         let buffer = Buffer::new_slice(
-            &self.mem_alloc,
+            &self.inner.mem_alloc,
             &BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER
                     | BufferUsage::TRANSFER_SRC
@@ -411,7 +395,8 @@ impl VulkanDevice {
             cbb.fill_buffer(dst, 0).map_err(|e| e.to_string())?;
             Ok(())
         })?;
-        self.keepalive_u32
+        self.inner
+            .keepalive_u32
             .lock()
             .map_err(|e| Error::Vulkan(e.to_string().into()))?
             .push(buffer.clone());
@@ -433,7 +418,8 @@ impl VulkanDevice {
             + Send
             + 'static,
     {
-        self.pending
+        self.inner
+            .pending
             .lock()
             .map_err(|e| Error::Vulkan(e.to_string().into()))?
             .push(Box::new(encode));
@@ -446,6 +432,7 @@ impl VulkanDevice {
     /// allocators recycle dropped resources), and waits for completion.
     pub fn synchronize(&self) -> Result<()> {
         let mut pending = self
+            .inner
             .pending
             .lock()
             .map_err(|e| Error::Vulkan(e.to_string().into()))?;
@@ -468,8 +455,8 @@ impl VulkanDevice {
             let n_encodes = encodes.len();
             let t0 = std::time::Instant::now();
             let mut cbb = AutoCommandBufferBuilder::primary(
-                self.cbb_alloc.clone(),
-                self.queue.queue_family_index(),
+                self.inner.cbb_alloc.clone(),
+                self.inner.queue.queue_family_index(),
                 CommandBufferUsage::OneTimeSubmit,
             )
             .map_err(|e| Error::Vulkan(e.to_string().into()))?;
@@ -481,12 +468,14 @@ impl VulkanDevice {
                 .build()
                 .map_err(|e| Error::Vulkan(format!("command buffer build: {e}").into()))?;
             let idx = self
+                .inner
                 .fence_next
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                 % FENCE_RING_SIZE;
             let cbb_submit = cbb.clone();
             let fence = {
                 let mut ring = self
+                    .inner
                     .fence_ring
                     .lock()
                     .map_err(|e| Error::Vulkan(e.to_string().into()))?;
@@ -502,7 +491,8 @@ impl VulkanDevice {
                 slot.cbb = Some(cbb);
                 slot.fence.clone()
             };
-            self.queue
+            self.inner
+                .queue
                 .with(|mut q| unsafe {
                     q.submit(
                         &[SubmitInfo {
@@ -521,11 +511,13 @@ impl VulkanDevice {
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
             // The batch is done on the GPU: release the keep-alive refs so
             // the allocator can recycle the memory for the next batch.
-            self.keepalive_f32
+            self.inner
+                .keepalive_f32
                 .lock()
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?
                 .clear();
-            self.keepalive_u32
+            self.inner
+                .keepalive_u32
                 .lock()
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?
                 .clear();
@@ -546,7 +538,7 @@ impl VulkanDevice {
     /// host-visible staging buffer, then returns the data.
     pub fn upload_u8(&self, data: &[u8]) -> Result<Subbuffer<[u8]>> {
         let buffer = Buffer::new_slice(
-            &self.mem_alloc,
+            &self.inner.mem_alloc,
             &BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER
                     | BufferUsage::TRANSFER_SRC
@@ -560,7 +552,7 @@ impl VulkanDevice {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let staging = Buffer::from_iter(
-            &self.mem_alloc,
+            &self.inner.mem_alloc,
             &BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_SRC,
                 ..Default::default()
@@ -580,7 +572,7 @@ impl VulkanDevice {
     /// Downloads a device u8 storage buffer to the host.
     pub fn upload_u32(&self, data: &[u32]) -> Result<Subbuffer<[u32]>> {
         let buffer = Buffer::new_slice(
-            &self.mem_alloc,
+            &self.inner.mem_alloc,
             &BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER
                     | BufferUsage::TRANSFER_SRC
@@ -594,7 +586,7 @@ impl VulkanDevice {
         )
         .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let staging = Buffer::from_iter(
-            &self.mem_alloc,
+            &self.inner.mem_alloc,
             &BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_SRC,
                 ..Default::default()
@@ -614,15 +606,15 @@ impl VulkanDevice {
 
     /// Copies a device u32 buffer (VRAM) back to the host.
     pub fn seed_atomic(&self) -> &AtomicU64 {
-        &self.seed
+        &self.inner.seed
     }
 
     pub fn gpu_id(&self) -> usize {
-        self._gpu_id
+        self.inner.gpu_id
     }
 
     pub fn kernels(&self) -> Arc<Kernels> {
-        self.kernels.clone()
+        self.inner.kernels.clone()
     }
 }
 
