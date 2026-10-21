@@ -5016,50 +5016,63 @@ fn test_vulkan_quantized_matmul() {
         candle_core::quantized::GgmlDType::Q6K,
         candle_core::quantized::GgmlDType::Q8K,
     ];
-    let k = 256usize;
-    let n = 64usize;
-    let m = 4usize;
-    for dtype in dtypes {
-        let w_vals: Vec<f32> = (0..n * k).map(|i| (i as f32) * 0.11 - 2.0).collect();
-        let w_cpu = candle_core::Tensor::new(w_vals.as_slice(), &cpu_dev)
-            .unwrap()
-            .reshape((n, k))
-            .unwrap();
-        let x_vals: Vec<f32> = (0..m * k).map(|i| (i as f32) * 0.17 - 1.0).collect();
-        let x_cpu = candle_core::Tensor::new(x_vals.as_slice(), &cpu_dev)
-            .unwrap()
-            .reshape((m, k))
-            .unwrap();
-        let w_q_cpu = candle_core::quantized::QTensor::quantize(&w_cpu, dtype).unwrap();
-        let w_deq_cpu = w_q_cpu.dequantize(&cpu_dev).unwrap();
-        let ref_t = x_cpu.matmul(&w_deq_cpu.t().unwrap()).unwrap();
-        let ref_vals: Vec<f32> = ref_t.flatten_all().unwrap().to_vec1::<f32>().unwrap();
-        let bytes = w_q_cpu.data().unwrap();
-        let w_q_storage =
-            candle_core::quantized::QStorage::from_data(bytes, &vk_dev, dtype).unwrap();
-        let w_q_vk = candle_core::quantized::QTensor::new(w_q_storage, (n, k)).unwrap();
-        let qm = candle_core::quantized::QMatMul::from_qtensor(w_q_vk).unwrap();
-        let x_vk = candle_core::Tensor::new(x_vals.as_slice(), &vk_dev)
-            .unwrap()
-            .reshape((m, k))
-            .unwrap();
-        let out = qm.forward(&x_vk).unwrap();
-        let out_vals: Vec<f32> = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
-        assert_eq!(
-            out_vals.len(),
-            ref_vals.len(),
-            "{dtype:?} matmul length mismatch"
-        );
-        let max_err = out_vals
-            .iter()
-            .zip(ref_vals.iter())
-            .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
-            .fold(0.0f32, f32::max);
-        assert!(
-            max_err <= 1e-3,
-            "{dtype:?}: Vulkan quantized matmul max_err {max_err} exceeds 1e-3"
-        );
-        tracing::debug!("Vulkan device {gpu_id} quantized matmul {dtype:?} OK (max_err={max_err})");
+    // (k, n) shapes: (256, 64) is a single quantized block per column;
+    // k=1024 spans four blocks per column (multi-block indexing); n=1000 is
+    // not a multiple of the 16-wide tile. m=1 exercises the fused
+    // dequant+GEMM path (decode) for Q4_0 and Q4_K; m=4 exercises the
+    // materialize-then-GEMM path.
+    for &(k, n) in &[
+        (256usize, 64usize),
+        (1024usize, 64usize),
+        (1024usize, 1024usize),
+        (1024usize, 1000usize),
+    ] {
+        for m in [1usize, 4] {
+            for dtype in dtypes {
+                let w_vals: Vec<f32> = (0..n * k).map(|i| (i as f32) * 0.11 - 2.0).collect();
+                let w_cpu = candle_core::Tensor::new(w_vals.as_slice(), &cpu_dev)
+                    .unwrap()
+                    .reshape((n, k))
+                    .unwrap();
+                let x_vals: Vec<f32> = (0..m * k).map(|i| (i as f32) * 0.17 - 1.0).collect();
+                let x_cpu = candle_core::Tensor::new(x_vals.as_slice(), &cpu_dev)
+                    .unwrap()
+                    .reshape((m, k))
+                    .unwrap();
+                let w_q_cpu = candle_core::quantized::QTensor::quantize(&w_cpu, dtype).unwrap();
+                let w_deq_cpu = w_q_cpu.dequantize(&cpu_dev).unwrap();
+                let ref_t = x_cpu.matmul(&w_deq_cpu.t().unwrap()).unwrap();
+                let ref_vals: Vec<f32> = ref_t.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+                let bytes = w_q_cpu.data().unwrap();
+                let w_q_storage =
+                    candle_core::quantized::QStorage::from_data(bytes, &vk_dev, dtype).unwrap();
+                let w_q_vk = candle_core::quantized::QTensor::new(w_q_storage, (n, k)).unwrap();
+                let qm = candle_core::quantized::QMatMul::from_qtensor(w_q_vk).unwrap();
+                let x_vk = candle_core::Tensor::new(x_vals.as_slice(), &vk_dev)
+                    .unwrap()
+                    .reshape((m, k))
+                    .unwrap();
+                let out = qm.forward(&x_vk).unwrap();
+                let out_vals: Vec<f32> = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+                assert_eq!(
+                    out_vals.len(),
+                    ref_vals.len(),
+                    "{dtype:?} matmul length mismatch"
+                );
+                let max_err = out_vals
+                    .iter()
+                    .zip(ref_vals.iter())
+                    .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+                    .fold(0.0f32, f32::max);
+                assert!(
+                    max_err <= 1e-3,
+                    "{dtype:?} m={m} k={k} n={n}: Vulkan quantized matmul max_err {max_err} exceeds 1e-3"
+                );
+                tracing::debug!(
+                    "Vulkan device {gpu_id} quantized matmul {dtype:?} m={m} k={k} n={n} OK (max_err={max_err})"
+                );
+            }
+        }
     }
 }
 
