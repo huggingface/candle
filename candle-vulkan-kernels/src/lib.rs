@@ -31,6 +31,7 @@ pub use kernels::{
     call_upsample_slang,
     call_conv_slang,
     call_scatter_slang,
+    call_zero_fill,
 };
 pub use push_constants::{
     AffineParams, ConstSetParams, NormParams, ToDtypeParams, UnaryParams,

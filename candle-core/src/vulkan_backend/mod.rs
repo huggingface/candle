@@ -80,11 +80,14 @@ impl BackendDevice for VulkanDevice {
     }
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
-        VulkanStorage::new(self, shape.elem_count(), dtype)
+        let storage = VulkanStorage::new(self, shape.elem_count(), dtype)?;
+        // Storage is allocated uninitialized; zero it on the GPU.
+        storage.zero_fill()?;
+        Ok(storage)
     }
 
     unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
-        self.zeros_impl(shape, dtype)
+        VulkanStorage::new(self, shape.elem_count(), dtype)
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, data: &[T]) -> Result<Self::Storage> {
@@ -361,6 +364,11 @@ pub struct VulkanStorage {
 }
 
 impl VulkanStorage {
+    /// Creates a new storage of `size` elements of `dtype`.
+    ///
+    /// The device buffer is allocated **uninitialized**: no zero-fill, no
+    /// host upload, no fence. The caller must initialize the contents
+    /// (kernel write, copy, or `zero_fill`) before any read.
     pub fn new(device: &VulkanDevice, size: usize, dtype: DType) -> Result<Self> {
         let slice = match dtype {
             DType::U8 => VulkanStorageBuffer::U8(Self::create_vram_buffer::<u8>(device, size)?),
@@ -399,34 +407,51 @@ impl VulkanStorage {
         })
     }
 
-    pub fn buffer(&self) -> &VulkanStorageBuffer {
-        &self.buffer
-    }
-
-    fn create_vram_buffer<T>(device: &VulkanDevice, size: usize) -> Result<Subbuffer<[T]>>
-    where
-        T: BufferContents + Default + Clone,
-    {
-        let data = vec![T::default(); size];
-        // Create the staging buffer on the host with the data that needs to be copied to VRAM.
-        let source_buffer = Buffer::from_iter(
-            device.mem_alloc(),
+    /// Zero-fills this storage on the GPU (every byte set to 0).
+    ///
+    /// The fill is batched like every other device command: it is visible to
+    /// subsequent queue work — and to host readback, which drains the queue
+    /// first — once the next `synchronize` runs.
+    pub fn zero_fill(&self) -> Result<()> {
+        let byte_len = self.buffer().as_u8().len() as usize;
+        if byte_len == 0 {
+            return Ok(());
+        }
+        let params_buf = Buffer::from_iter(
+            self.device.mem_alloc(),
             &BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_SRC,
+                usage: BufferUsage::STORAGE_BUFFER,
                 ..Default::default()
             },
             &AllocationCreateInfo {
                 memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                 ..Default::default()
             },
-            data,
+            vec![byte_len as u64],
         )
-        .map_err(|error| {
-            Error::Vulkan(format!("Unable to create source buffer: {error:?}").into())
-        })?;
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let params: Subbuffer<[u64]> = params_buf;
+        let dst = self.buffer().as_u8();
+        let kernels = self.device.kernels();
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_zero_fill(cbb, &kernels, &dst, &params, byte_len)
+                .map_err(|e| e.to_string())
+        })
+    }
 
-        // Create the VRAM buffer.
+    pub fn buffer(&self) -> &VulkanStorageBuffer {
+        &self.buffer
+    }
+
+    /// Creates an **uninitialized** device-local buffer holding `size`
+    /// elements of `T`. No host-side fill, no staging upload, no fence: the
+    /// contents are undefined until a later operation (kernel write, copy,
+    /// or an explicit `zero_fill`) initializes them.
+    fn create_vram_buffer<T>(device: &VulkanDevice, size: usize) -> Result<Subbuffer<[T]>>
+    where
+        T: BufferContents,
+    {
         let vram_buffer = Buffer::new_slice::<T>(
             device.mem_alloc(),
             &BufferCreateInfo {
@@ -444,47 +469,6 @@ impl VulkanStorage {
         )
         .map_err(|error| {
             Error::Vulkan(format!("Unable to create vram buffer: {error:?}").into())
-        })?;
-
-        // Build the copy command
-        let mut builder = AutoCommandBufferBuilder::primary(
-            device.cbb_alloc().clone(),
-            device.queue().queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )
-        .map_err(|error| {
-            Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
-        })?;
-        builder
-            .copy_buffer(CopyBufferInfo::new(
-                source_buffer.clone(),
-                vram_buffer.clone(),
-            ))
-            .map_err(|error| {
-                Error::Vulkan(format!("Unable to set copy_buffer command: {error:?}").into())
-            })?;
-        let command_buffer = builder.build().map_err(|error| {
-            Error::Vulkan(format!("Unable to create command buffer: {error:?}").into())
-        })?;
-
-        // Execute and flush the command buffer
-        let future = vulkano::sync::now(device.device().clone())
-            .then_execute(device.queue().clone(), command_buffer)
-            .map_err(|error| {
-                Error::Vulkan(format!("Unable to execute command buffer: {error:?}").into())
-            })?
-            .then_signal_fence_and_flush()
-            .map_err(|error| {
-                Error::Vulkan(
-                    format!("Unable to signal fence and flush command buffer: {error:?}").into(),
-                )
-            })?;
-
-        // Block the CPU thread until the GPU finishes copying the data
-        future.wait(None).map_err(|error| {
-            Error::Vulkan(
-                format!("Failure occurred waiting for data to be uploaded: {error:?}").into(),
-            )
         })?;
         Ok(vram_buffer)
     }
@@ -558,6 +542,9 @@ impl VulkanStorage {
     /// 65,536-element storage ends up holding every possible f16 value.
     /// The storage must be F16.
     pub fn fill_f16(&self) -> Result<()> {
+        // Drain deferred encodes first: this helper submits directly to the
+        // queue and must not land ahead of pending batched work.
+        self.device.synchronize()?;
         let buffer = match &self.buffer {
             VulkanStorageBuffer::F16(buffer) => buffer,
             _ => {
@@ -613,6 +600,9 @@ impl VulkanStorage {
         )
             -> std::result::Result<(), candle_vulkan_kernels::VulkanKernelError>,
     ) -> Result<()> {
+        // Drain deferred encodes first: this helper submits directly to the
+        // queue and must not land ahead of pending batched work.
+        self.device.synchronize()?;
         let device = self.device.clone();
         let mut builder = AutoCommandBufferBuilder::primary(
             device.cbb_alloc().clone(),

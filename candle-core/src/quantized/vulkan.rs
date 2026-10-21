@@ -58,6 +58,8 @@ impl QVulkanStorage {
         let block = dtype.block_size();
         let byte_len = elem_count / block * dtype.type_size();
         let bytes = VulkanStorage::new(device, byte_len, DType::U8)?;
+        // Storage is allocated uninitialized; zero it on the GPU.
+        bytes.zero_fill()?;
         Ok(Self {
             bytes,
             device: device.clone(),

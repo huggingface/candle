@@ -29,6 +29,7 @@ pub enum KernelName {
     GemmF32,
     GemmF16,
     GemmF64,
+    ZeroFill,
     ConstSetF32,
     ConstSetF16,
     ConstSetBf16,
@@ -482,6 +483,7 @@ impl AsRef<str> for KernelName {
             Self::GemmF32 => "main",
             Self::GemmF16 => "main",
             Self::GemmF64 => "main",
+            Self::ZeroFill => "main",
             Self::ConstSetF32 => "main",
             Self::ConstSetF16 => "main",
             Self::ConstSetBf16 => "main",
@@ -1289,6 +1291,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::UpsampleNearest2dF16
         | KernelName::UpsampleNearest2dF32
         | KernelName::UpsampleNearest2dF64 => 2,
+        // zero_fill: dst + params.
+        KernelName::ZeroFill => 2,
         // const_set: output (params are push constants).
         KernelName::ConstSetBf16
         | KernelName::ConstSetF16

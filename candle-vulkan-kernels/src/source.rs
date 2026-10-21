@@ -6,6 +6,7 @@ const AFFINE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine.spv")
 const GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm.spv"));
 const GEMM_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm_f16.spv"));
 const GEMM_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm_f64.spv"));
+const ZERO_FILL_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zero_fill.spv"));
 const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
 const CONST_SET_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f16.spv"));
 const CONST_SET_BF16_SPV: &[u8] =
@@ -346,6 +347,7 @@ pub enum Source {
     Gemm,
     GemmF16,
     GemmF64,
+    ZeroFill,
     ConstSet,
     ConstSetF16,
     ConstSetBf16,
@@ -789,6 +791,7 @@ impl Source {
             Self::Gemm => GEMM_SPV,
             Self::GemmF16 => GEMM_F16_SPV,
             Self::GemmF64 => GEMM_F64_SPV,
+            Self::ZeroFill => ZERO_FILL_SPV,
             Self::ConstSet => CONST_SET_SPV,
             Self::ConstSetF16 => CONST_SET_F16_SPV,
             Self::ConstSetBf16 => CONST_SET_BF16_SPV,
@@ -1008,6 +1011,7 @@ impl AsRef<str> for Source {
             Self::Gemm => "gemm",
             Self::GemmF16 => "gemm_f16",
             Self::GemmF64 => "gemm_f64",
+            Self::ZeroFill => "zero_fill",
             Self::ConstSet => "const_set",
             Self::ConstSetF16 => "const_set_f16",
             Self::ConstSetBf16 => "const_set_bf16",

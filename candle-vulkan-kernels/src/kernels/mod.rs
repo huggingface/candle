@@ -39,8 +39,9 @@ pub mod layer_norm_slang;
 pub mod sigmoid_slang;
 pub mod softmax_slang;
 pub mod rope_slang;
-
+pub mod zero_fill;
 pub use affine::call_affine_slang;
+
 pub use const_set::{call_const_set_bf16, call_const_set_f16, call_const_set_f32};
 pub use gemm::call_gemm_slang;
 pub use test_fill_bf16::{call_test_fill_bf16_emulated, call_test_fill_bf16_native};
@@ -78,3 +79,4 @@ pub use layer_norm_slang::call_layer_norm_slang;
 pub use sigmoid_slang::call_sigmoid_slang;
 pub use softmax_slang::call_softmax_slang;
 pub use rope_slang::call_rope_slang;
+pub use zero_fill::call_zero_fill;
