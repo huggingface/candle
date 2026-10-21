@@ -190,6 +190,21 @@ pub enum QuantizedMmTile {
 }
 
 impl QuantizedMmTile {
+    /// Use the 64-token tile only when it pads no more tokens than the 32-token tile.
+    ///
+    /// `tokens` is the rows of src1 per batch entry. The rule is `tokens % 64 == 0` or
+    /// `tokens % 64 > 32`, so up to 32 tokens it is always the 32-token tile. On an M4 Pro over
+    /// the Qwen3-4B Q4_K_M projection shapes, a 64-token tile whose last tile was more padding
+    /// than the 32-token tile's ran 1.03 to 1.5 times as long (at 2 to 32, 96, 136, 160, 200,
+    /// 224 and 288 tokens); where it padded no more it ran 0.89 to 1.0 of the time.
+    pub fn for_tokens(tokens: usize) -> Self {
+        if tokens.div_ceil(64) * 64 <= tokens.div_ceil(32) * 32 {
+            Self::Tokens64
+        } else {
+            Self::Tokens32
+        }
+    }
+
     fn tokens(self) -> usize {
         match self {
             Self::Tokens32 => 32,
@@ -207,7 +222,8 @@ impl QuantizedMmTile {
 /// - src0 is usually weight
 /// - src1 is usually xs
 ///
-/// The multiply runs at the 64-token tile; [`call_quantized_matmul_mm_t_with_tile`] picks one.
+/// The tile is [`QuantizedMmTile::for_tokens`] of src1's rows per batch entry;
+/// [`call_quantized_matmul_mm_t_with_tile`] takes one from the caller.
 #[allow(clippy::too_many_arguments)]
 pub fn call_quantized_matmul_mm_t(
     device: &Device,
@@ -240,7 +256,7 @@ pub fn call_quantized_matmul_mm_t(
         dst_shape,
         dst_offset,
         dst,
-        QuantizedMmTile::Tokens64,
+        QuantizedMmTile::for_tokens(src1_shape[src1_shape.len() - 2]),
     )
 }
 

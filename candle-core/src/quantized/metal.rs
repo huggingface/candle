@@ -348,12 +348,18 @@ impl QMetalStorage {
         layout: &crate::Layout,
     ) -> Result<(MetalStorage, Shape)> {
         // One token runs the matrix-vector kernel (`fwd_mv`); more than one runs the
-        // matrix-matrix kernel at its 64-token tile.
+        // matrix-matrix kernel, at the tile `QuantizedMmTile::for_tokens` picks.
+        let dims = layout.shape().dims();
+        let tokens = if dims.len() >= 2 {
+            dims[dims.len() - 2]
+        } else {
+            1
+        };
         self.fwd_with_tile(
             self_shape,
             storage,
             layout,
-            candle_metal_kernels::QuantizedMmTile::Tokens64,
+            candle_metal_kernels::QuantizedMmTile::for_tokens(tokens),
         )
     }
 
@@ -549,6 +555,25 @@ mod tests {
         }
     }
 
+    /// The 64-token tile only where it pads no more tokens than the 32-token tile: never up to
+    /// 32 tokens, always at a multiple of 64, and otherwise only when `tokens % 64 > 32`.
+    #[test]
+    fn mm_tile_for_tokens_follows_padding() {
+        for (tokens, tile) in [
+            (2, QuantizedMmTile::Tokens32),
+            (32, QuantizedMmTile::Tokens32),
+            (33, QuantizedMmTile::Tokens64),
+            (64, QuantizedMmTile::Tokens64),
+            (96, QuantizedMmTile::Tokens32),
+            (100, QuantizedMmTile::Tokens64),
+            (128, QuantizedMmTile::Tokens64),
+            (136, QuantizedMmTile::Tokens32),
+            (2048, QuantizedMmTile::Tokens64),
+        ] {
+            assert_eq!(QuantizedMmTile::for_tokens(tokens), tile, "{tokens} tokens");
+        }
+    }
+
     /// The 64-token tile accumulates every output element in the same order as the 32-token
     /// tile, so for every type the matrix-matrix kernel serves the two results are equal bit for
     /// bit: odd token counts (a partial last tile at either size), a count between the two tiles,
@@ -574,6 +599,7 @@ mod tests {
         // (batch, tokens, weight rows, k)
         let shapes = [
             (1, 7, 64, 256),
+            (1, 32, 64, 256),
             (1, 33, 200, 512),
             (1, 130, 96, 256),
             (2, 65, 128, 768),
