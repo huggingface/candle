@@ -945,27 +945,35 @@ pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Resul
 }
 
 /// GELU (tanh approximation, `gelu_pytorch_tanh`) evaluated in f32 for the
-/// half types with one rounding, forward and backward. `Tensor::gelu` runs
+/// half types and f32 (f64 for f64) with one rounding, forward and backward,
+/// on CPU and CUDA alike. `Tensor::gelu` runs
 /// its bf16 kernel in bf16 arithmetic and its backward as composed bf16 ops,
 /// each rounding at every intermediate.
 struct GeluTanh;
 
-fn gelu_tanh_f64(x: f64) -> f64 {
-    let k = std::f64::consts::FRAC_2_SQRT_PI * std::f64::consts::FRAC_1_SQRT_2;
-    0.5 * x * (1.0 + (k * (x + 0.044715 * x * x * x)).tanh())
+fn acc<A: num_traits::Float>(v: f64) -> A {
+    A::from(v).unwrap()
 }
 
-fn gelu_tanh_grad_f64(x: f64) -> f64 {
-    let k = std::f64::consts::FRAC_2_SQRT_PI * std::f64::consts::FRAC_1_SQRT_2;
+/// The CPU evaluators are generic over the accumulator so that the half types
+/// and f32 run in f32, exactly as the CUDA kernels do, and f64 runs in f64.
+fn gelu_tanh_acc<A: num_traits::Float>(x: A) -> A {
+    let k: A = acc(std::f64::consts::FRAC_2_SQRT_PI * std::f64::consts::FRAC_1_SQRT_2);
+    acc::<A>(0.5) * x * (A::one() + (k * (x + acc::<A>(0.044715) * x * x * x)).tanh())
+}
+
+fn gelu_tanh_grad_acc<A: num_traits::Float>(x: A) -> A {
+    let k: A = acc(std::f64::consts::FRAC_2_SQRT_PI * std::f64::consts::FRAC_1_SQRT_2);
     let x_sq = x * x;
-    let t = (k * (x + 0.044715 * x_sq * x)).tanh();
-    0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * k * (1.0 + 3.0 * 0.044715 * x_sq)
+    let t = (k * (x + acc::<A>(0.044715) * x_sq * x)).tanh();
+    acc::<A>(0.5) * (A::one() + t)
+        + acc::<A>(0.5) * x * (A::one() - t * t) * k * (A::one() + acc::<A>(3.0 * 0.044715) * x_sq)
 }
 
-fn map_contiguous<T, F>(src: &[T], layout: &Layout, f: F) -> Result<(CpuStorage, Shape)>
+fn map_contiguous<T, A>(src: &[T], layout: &Layout) -> Result<(CpuStorage, Shape)>
 where
-    T: candle::WithDType + num_traits::AsPrimitive<f64>,
-    F: Fn(f64) -> f64 + Sync,
+    T: candle::WithDType + num_traits::AsPrimitive<A>,
+    A: num_traits::Float + num_traits::AsPrimitive<f64>,
 {
     let src = match layout.contiguous_offsets() {
         None => candle::bail!("input has to be contiguous"),
@@ -973,7 +981,10 @@ where
     };
     let dst: Vec<T> = src
         .par_iter()
-        .map(|x| <T as candle::WithDType>::from_f64(f(x.as_())))
+        .map(|x| {
+            let y: A = gelu_tanh_acc(x.as_());
+            <T as candle::WithDType>::from_f64(y.as_())
+        })
         .collect();
     Ok((
         candle::WithDType::to_cpu_storage_owned(dst),
@@ -1031,10 +1042,10 @@ impl candle::CustomOp1 for GeluTanh {
 
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
         match storage {
-            CpuStorage::BF16(s) => map_contiguous::<half::bf16, _>(s, layout, gelu_tanh_f64),
-            CpuStorage::F16(s) => map_contiguous::<half::f16, _>(s, layout, gelu_tanh_f64),
-            CpuStorage::F32(s) => map_contiguous::<f32, _>(s, layout, gelu_tanh_f64),
-            CpuStorage::F64(s) => map_contiguous::<f64, _>(s, layout, gelu_tanh_f64),
+            CpuStorage::BF16(s) => map_contiguous::<half::bf16, f32>(s, layout),
+            CpuStorage::F16(s) => map_contiguous::<half::f16, f32>(s, layout),
+            CpuStorage::F32(s) => map_contiguous::<f32, f32>(s, layout),
+            CpuStorage::F64(s) => map_contiguous::<f64, f64>(s, layout),
             _ => candle::bail!("unsupported dtype for gelu-tanh {:?}", storage),
         }
     }
@@ -1090,12 +1101,11 @@ impl candle::CustomOp2 for GeluTanhBwd {
         s2: &CpuStorage,
         l2: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        fn inner<T: candle::WithDType + num_traits::AsPrimitive<f64>>(
-            x: &[T],
-            l1: &Layout,
-            dy: &[T],
-            l2: &Layout,
-        ) -> Result<(CpuStorage, Shape)> {
+        fn inner<T, A>(x: &[T], l1: &Layout, dy: &[T], l2: &Layout) -> Result<(CpuStorage, Shape)>
+        where
+            T: candle::WithDType + num_traits::AsPrimitive<A>,
+            A: num_traits::Float + num_traits::AsPrimitive<f64>,
+        {
             let x = match l1.contiguous_offsets() {
                 None => candle::bail!("input has to be contiguous"),
                 Some((o1, o2)) => &x[o1..o2],
@@ -1111,7 +1121,8 @@ impl candle::CustomOp2 for GeluTanhBwd {
                 .par_iter()
                 .zip(dy.par_iter())
                 .map(|(x, dy)| {
-                    <T as candle::WithDType>::from_f64(dy.as_() * gelu_tanh_grad_f64(x.as_()))
+                    let dx: A = dy.as_() * gelu_tanh_grad_acc(x.as_());
+                    <T as candle::WithDType>::from_f64(dx.as_())
                 })
                 .collect();
             Ok((
@@ -1120,10 +1131,10 @@ impl candle::CustomOp2 for GeluTanhBwd {
             ))
         }
         match (s1, s2) {
-            (CpuStorage::BF16(a), CpuStorage::BF16(b)) => inner::<half::bf16>(a, l1, b, l2),
-            (CpuStorage::F16(a), CpuStorage::F16(b)) => inner::<half::f16>(a, l1, b, l2),
-            (CpuStorage::F32(a), CpuStorage::F32(b)) => inner::<f32>(a, l1, b, l2),
-            (CpuStorage::F64(a), CpuStorage::F64(b)) => inner::<f64>(a, l1, b, l2),
+            (CpuStorage::BF16(a), CpuStorage::BF16(b)) => inner::<half::bf16, f32>(a, l1, b, l2),
+            (CpuStorage::F16(a), CpuStorage::F16(b)) => inner::<half::f16, f32>(a, l1, b, l2),
+            (CpuStorage::F32(a), CpuStorage::F32(b)) => inner::<f32, f32>(a, l1, b, l2),
+            (CpuStorage::F64(a), CpuStorage::F64(b)) => inner::<f64, f64>(a, l1, b, l2),
             _ => candle::bail!("unsupported dtypes for gelu-bwd {:?} {:?}", s1, s2),
         }
     }
