@@ -426,7 +426,9 @@ impl QMetalStorage {
                 .map(|x| x * DType::F32.size_in_bytes())
                 .collect::<Vec<_>>(),
             storage.buffer(),
-            src1_l.start_offset() * storage.dtype().size_in_bytes(),
+            // `src1_l` only re-expresses the shape as rank 4 and always starts at 0: the input's
+            // own offset is the one to read from, as in `fwd_mv`.
+            layout.start_offset() * storage.dtype().size_in_bytes(),
             dst_shape.dims(),
             0,
             &dst,
