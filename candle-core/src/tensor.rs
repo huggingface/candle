@@ -116,10 +116,7 @@ macro_rules! binary_op_scalar {
         pub fn $fn_name<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
             let rhs = match rhs.to_tensor_scalar()? {
                 crate::scalar::TensorScalar::Tensor(rhs) => rhs,
-                crate::scalar::TensorScalar::Scalar(rhs) => rhs
-                    .to_dtype(self.dtype())?
-                    .to_device(self.device())?
-                    .broadcast_as(self.shape())?,
+                crate::scalar::TensorScalar::Scalar(rhs) => self.broadcast_scalar_like(&rhs)?,
             };
             let shape = self.same_shape_binary_op(&rhs, stringify!($fn_name))?;
             if self.elem_count() == 0 {
@@ -678,6 +675,8 @@ impl Tensor {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            #[cfg(feature = "sycl")]
+            Storage::Sycl(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1122,6 +1121,37 @@ impl Tensor {
         self.reduce_impl(dim, false, ReduceOp::ArgMin)
     }
 
+    /// A scalar operand (a 0-dim CPU tensor) as `self`'s dtype and device, broadcast to its
+    /// shape. Off the CPU the value is filled on the device rather than copied over: an
+    /// upload per scalar op is a host round trip, and a blocking one on some backends.
+    fn broadcast_scalar_like(&self, scalar: &Tensor) -> Result<Tensor> {
+        use crate::scalar::Scalar;
+        let scalar = scalar.to_dtype(self.dtype())?;
+        let value = match self.dtype() {
+            _ if self.device().is_cpu() => None,
+            DType::U8 => Some(Scalar::U8(scalar.to_scalar()?)),
+            DType::U32 => Some(Scalar::U32(scalar.to_scalar()?)),
+            DType::I16 => Some(Scalar::I16(scalar.to_scalar()?)),
+            DType::I32 => Some(Scalar::I32(scalar.to_scalar()?)),
+            DType::I64 => Some(Scalar::I64(scalar.to_scalar()?)),
+            DType::BF16 => Some(Scalar::BF16(scalar.to_scalar()?)),
+            DType::F16 => Some(Scalar::F16(scalar.to_scalar()?)),
+            DType::F32 => Some(Scalar::F32(scalar.to_scalar()?)),
+            DType::F64 => Some(Scalar::F64(scalar.to_scalar()?)),
+            _ => None,
+        };
+        let scalar = match value {
+            Some(value) => {
+                let shape = Shape::from(());
+                let mut storage = unsafe { self.device().alloc_uninit(&shape, self.dtype())? };
+                storage.const_set(value, &Layout::contiguous(shape.clone()))?;
+                from_storage(storage, shape, BackpropOp::none(), false)
+            }
+            None => scalar.to_device(self.device())?,
+        };
+        scalar.broadcast_as(self.shape())
+    }
+
     /// Element-wise comparison between two tensors, e.g. equality, greater than, ... The actual
     /// comparison operation is specified by the `op` argument.
     ///
@@ -1129,10 +1159,7 @@ impl Tensor {
     pub fn cmp<T: TensorOrScalar>(&self, rhs: T, op: CmpOp) -> Result<Self> {
         let rhs = match rhs.to_tensor_scalar()? {
             crate::scalar::TensorScalar::Tensor(rhs) => rhs,
-            crate::scalar::TensorScalar::Scalar(rhs) => rhs
-                .to_dtype(self.dtype())?
-                .to_device(self.device())?
-                .broadcast_as(self.shape())?,
+            crate::scalar::TensorScalar::Scalar(rhs) => self.broadcast_scalar_like(&rhs)?,
         };
         let shape = self.same_shape_binary_op(&rhs, "cmp")?;
         let storage = self
@@ -1976,6 +2003,8 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            #[cfg(feature = "sycl")]
+            Storage::Sycl(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -2007,6 +2036,8 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            #[cfg(feature = "sycl")]
+            Storage::Sycl(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -2048,6 +2079,8 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            #[cfg(feature = "sycl")]
+            Storage::Sycl(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -2404,8 +2437,14 @@ impl Tensor {
                 (Storage::Cpu(storage), Device::Metal(metal)) => {
                     Storage::Metal(metal.storage_from_cpu_storage(storage)?)
                 }
+                #[cfg(feature = "sycl")]
+                (Storage::Cpu(storage), Device::Sycl(sycl)) => {
+                    Storage::Sycl(sycl.storage_from_cpu_storage(storage)?)
+                }
                 (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
+                #[cfg(feature = "sycl")]
+                (Storage::Sycl(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Cuda(storage), Device::Cuda(cuda)) => {
                     // can't clone storage if it's the same device because of the underlying device ptr
                     let dst_storage = storage.transfer_to_device(cuda)?;
