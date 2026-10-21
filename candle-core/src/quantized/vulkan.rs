@@ -322,21 +322,46 @@ impl QVulkanStorage {
         } else {
             0
         };
-        let fused = if m_total == 1 {
-            match self.dtype {
-                GgmlDType::Q4_0 if k.is_multiple_of(32) => {
-                    Some((Source::FusedQ40Gemm, KernelName::FusedQ40GemmF32))
-                }
-                GgmlDType::Q4K if k.is_multiple_of(256) => {
-                    Some((Source::FusedQ4kGemm, KernelName::FusedQ4kGemmF32))
-                }
-                _ => None,
+        // Fused dequant+GEMM: single-row lhs (decode) uses the per-column
+        // decode kernels, multi-row lhs (prefill) the per-element prefill
+        // kernels, for the quantization formats they support.
+        let fused = match (self.dtype, m_total == 1) {
+            (GgmlDType::Q4_0, true) if k.is_multiple_of(32) => {
+                Some((Source::FusedQ40Gemm, KernelName::FusedQ40GemmF32))
             }
-        } else {
-            None
+            (GgmlDType::Q4_0, false) if k.is_multiple_of(32) => {
+                Some((Source::FusedQ40GemmM, KernelName::FusedQ40GemmMF32))
+            }
+            (GgmlDType::Q4K, true) if k.is_multiple_of(256) => {
+                Some((Source::FusedQ4kGemm, KernelName::FusedQ4kGemmF32))
+            }
+            (GgmlDType::Q4K, false) if k.is_multiple_of(256) => {
+                Some((Source::FusedQ4kGemmM, KernelName::FusedQ4kGemmMF32))
+            }
+            (GgmlDType::Q5_0, true) if k.is_multiple_of(32) => {
+                Some((Source::FusedQ50Gemm, KernelName::FusedQ50GemmF32))
+            }
+            (GgmlDType::Q5_1, true) if k.is_multiple_of(32) => {
+                Some((Source::FusedQ51Gemm, KernelName::FusedQ51GemmF32))
+            }
+            (GgmlDType::Q8_0, true) if k.is_multiple_of(32) => {
+                Some((Source::FusedQ80Gemm, KernelName::FusedQ80GemmF32))
+            }
+            (GgmlDType::Q8_1, true) if k.is_multiple_of(32) => {
+                Some((Source::FusedQ81Gemm, KernelName::FusedQ81GemmF32))
+            }
+            (GgmlDType::Q5K, true) if k.is_multiple_of(256) => {
+                Some((Source::FusedQ5kGemm, KernelName::FusedQ5kGemmF32))
+            }
+            (GgmlDType::Q8K, true) if k.is_multiple_of(256) => {
+                Some((Source::FusedQ8kGemm, KernelName::FusedQ8kGemmF32))
+            }
+            _ => None,
         };
         let out = match fused {
-            Some((source, name)) => self.fused_quant_gemm(&lhs, lhs_offset, n, k, source, name)?,
+            Some((source, name)) => {
+                self.fused_quant_gemm(&lhs, lhs_offset, m_total, n, k, source, name)?
+            }
             None => {
                 let data_f32 = self.dequantize(n * k)?;
                 // The weight is (n, k) contiguous; view it as the (k, n) rhs (transposed).
@@ -357,25 +382,28 @@ impl QVulkanStorage {
         Ok((out, out_shape.into()))
     }
 
-    /// Fused dequant+matmul for a single lhs row:
-    /// `out[n] = lhs[k] @ dequant(weights[n, k])` with the weights
-    /// dequantized in the kernel (no f32 materialization).
+    /// Fused dequant+matmul: `out[m, n] = lhs[m, k] @ dequant(W[n, k])`
+    /// with the weights dequantized in the kernel (no f32
+    /// materialization). `m == 1` selects the decode kernels, `m > 1` the
+    /// prefill kernels.
+    #[allow(clippy::too_many_arguments)]
     fn fused_quant_gemm(
         &self,
         lhs: &VulkanStorage,
         lhs_offset: usize,
+        m: usize,
         n: usize,
         k: usize,
         source: Source,
         name: KernelName,
     ) -> Result<VulkanStorage> {
         let lhs_buf = match lhs.buffer() {
-            crate::vulkan_backend::VulkanStorageBuffer::F32(b) => {
-                b.clone().slice(lhs_offset as u64..(lhs_offset + k) as u64)
-            }
+            crate::vulkan_backend::VulkanStorageBuffer::F32(b) => b
+                .clone()
+                .slice(lhs_offset as u64..(lhs_offset + m * k) as u64),
             _ => crate::bail!("fused quant gemm: lhs must be f32"),
         };
-        let out = VulkanStorage::new(&self.device, n, DType::F32)?;
+        let out = VulkanStorage::new(&self.device, m * n, DType::F32)?;
         let dst = match out.buffer() {
             crate::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
             _ => crate::bail!("fused quant gemm: out was created as F32"),
@@ -393,14 +421,14 @@ impl QVulkanStorage {
                     | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                 ..Default::default()
             },
-            vec![1u64, n as u64, k as u64],
+            vec![m as u64, n as u64, k as u64],
         )
         .map_err(|e| crate::Error::Vulkan(e.to_string().into()))?;
         let params: Subbuffer<[u64]> = params_buf;
         let kernels = self.device.kernels();
         self.device.execute(move |cbb| {
             candle_vulkan_kernels::call_fused_quant_gemm_slang(
-                cbb, &kernels, source, name, &lhs_buf, &src, &dst, &params, 1, n,
+                cbb, &kernels, source, name, &lhs_buf, &src, &dst, &params, m, n,
             )
             .map_err(|e| e.to_string())
         })?;

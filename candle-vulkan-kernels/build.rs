@@ -6,6 +6,10 @@ fn main() {
     let src_dir = Path::new("shaders");
     // Slang production shaders live next to the `.comp` files and are
     // compiled with `slangc`.
+    // Re-run when the directory itself changes (e.g. a new shader file
+    // appears): `rerun-if-changed` on individual files only tracks files
+    // that existed at the last build.
+    println!("cargo:rerun-if-changed={}", src_dir.display());
     for entry in fs::read_dir(src_dir).expect("failed to read shaders dir") {
         let entry = entry.expect("failed to read shaders dir entry");
         let path = entry.path();
@@ -26,6 +30,7 @@ fn main() {
     let test_src_dir = Path::new("shaders/test");
     let test_out_dir = Path::new(&out_dir).join("test");
     fs::create_dir_all(&test_out_dir).expect("failed to create test SPIR-V directory");
+    println!("cargo:rerun-if-changed={}", test_src_dir.display());
     for entry in fs::read_dir(test_src_dir).expect("failed to read shaders/test") {
         let entry = entry.expect("failed to read shaders/test entry");
         let path = entry.path();

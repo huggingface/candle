@@ -31,6 +31,14 @@ pub enum KernelName {
     GemmF64,
     FusedQ40GemmF32,
     FusedQ4kGemmF32,
+    FusedQ40GemmMF32,
+    FusedQ4kGemmMF32,
+    FusedQ50GemmF32,
+    FusedQ51GemmF32,
+    FusedQ80GemmF32,
+    FusedQ81GemmF32,
+    FusedQ5kGemmF32,
+    FusedQ8kGemmF32,
     ZeroFill,
     ConstSetF32,
     ConstSetF16,
@@ -487,6 +495,14 @@ impl AsRef<str> for KernelName {
             Self::GemmF64 => "main",
             Self::FusedQ40GemmF32 => "main",
             Self::FusedQ4kGemmF32 => "main",
+            Self::FusedQ40GemmMF32 => "main",
+            Self::FusedQ4kGemmMF32 => "main",
+            Self::FusedQ50GemmF32 => "main",
+            Self::FusedQ51GemmF32 => "main",
+            Self::FusedQ80GemmF32 => "main",
+            Self::FusedQ81GemmF32 => "main",
+            Self::FusedQ5kGemmF32 => "main",
+            Self::FusedQ8kGemmF32 => "main",
             Self::ZeroFill => "main",
             Self::ConstSetF32 => "main",
             Self::ConstSetF16 => "main",
@@ -1353,6 +1369,14 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::GemmF64
         | KernelName::FusedQ40GemmF32
         | KernelName::FusedQ4kGemmF32
+        | KernelName::FusedQ40GemmMF32
+        | KernelName::FusedQ4kGemmMF32
+        | KernelName::FusedQ50GemmF32
+        | KernelName::FusedQ51GemmF32
+        | KernelName::FusedQ80GemmF32
+        | KernelName::FusedQ81GemmF32
+        | KernelName::FusedQ5kGemmF32
+        | KernelName::FusedQ8kGemmF32
         | KernelName::IndexAddF32U32
         | KernelName::IndexAddF32I64
         | KernelName::IndexAddF32U8

@@ -1,9 +1,11 @@
-//! Fused quantized GEMM dispatches: `out[n] = lhs[k] @ dequant(W[n, k])`
-//! for a single lhs row (decode).
+//! Fused quantized GEMM dispatches:
+//! `out[row, col] = lhs[row, k] @ dequant(W[col, k])`.
 //!
 //! The weight stays quantized in VRAM (no f32 materialization); the kernel
 //! dequantizes on the fly. `source`/`name` select the quantization format
-//! (Q4_0 or Q4_K).
+//! and the lhs row count: the decode variants (`*Gemm`, `m == 1`) use the
+//! single-row kernels, the prefill variants (`*GemmM`, `m > 1`) the
+//! multi-row kernels.
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
@@ -24,13 +26,14 @@ fn buf_info<T>(buf: &Subbuffer<[T]>) -> DescriptorBufferInfo<'_> {
     }
 }
 
-/// Records a fused dequant+GEMM dispatch onto `cbb` for a single-row lhs
-/// (decode). `w` holds the raw quantized bytes of the `(n, k)` weight,
-/// `lhs` is the single `(k,)` row, `output` is `(n,)` f32, and `params`
-/// holds `[m, n, k]` with `m == 1`. Each 32-thread workgroup handles 32
-/// output columns (one thread per column, in-register dequantization, no
-/// shared memory); `k` must be a multiple of the quantized block size
-/// (32 for Q4_0, 256 for Q4_K).
+/// Records a fused dequant+GEMM dispatch onto `cbb` for an `m`-row lhs.
+/// `w` holds the raw quantized bytes of the `(n, k)` weight, `lhs` is the
+/// `(m, k)` f32 matrix, `output` is the `(m, n)` f32 result, and `params`
+/// holds `[m, n, k]`. Each 32-thread workgroup handles 32 output columns
+/// (one thread per column for decode, one thread per output element for
+/// prefill; in-register dequantization, no shared memory); `k` must be a
+/// multiple of the quantized block size (32 for Q4_0/Q5_0/Q5_1/Q8_0/Q8_1,
+/// 256 for Q4_K/Q5_K/Q8_K).
 pub fn call_fused_quant_gemm_slang(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
@@ -43,7 +46,6 @@ pub fn call_fused_quant_gemm_slang(
     m: usize,
     n: usize,
 ) -> Result<(), VulkanKernelError> {
-    debug_assert_eq!(m, 1);
     let entry = kernels.load_entry(source, name)?;
     let info0 = buf_info(lhs);
     let info1 = buf_info(output);
@@ -62,7 +64,7 @@ pub fn call_fused_quant_gemm_slang(
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     unsafe {
-        cbb.dispatch([1, (n.div_ceil(TILE)) as u32, 1])
+        cbb.dispatch([1, (n.div_ceil(TILE)) as u32, m as u32])
     }
     .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     Ok(())

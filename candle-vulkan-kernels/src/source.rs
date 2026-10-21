@@ -10,6 +10,22 @@ const FUSED_Q40_GEMM_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4_0_gemm.spv"));
 const FUSED_Q4K_GEMM_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4k_gemm.spv"));
+const FUSED_Q40_GEMM_M_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4_0_gemm_m.spv"));
+const FUSED_Q4K_GEMM_M_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4k_gemm_m.spv"));
+const FUSED_Q50_GEMM_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5_0_gemm.spv"));
+const FUSED_Q51_GEMM_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5_1_gemm.spv"));
+const FUSED_Q80_GEMM_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8_0_gemm.spv"));
+const FUSED_Q81_GEMM_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8_1_gemm.spv"));
+const FUSED_Q5K_GEMM_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5k_gemm.spv"));
+const FUSED_Q8K_GEMM_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8k_gemm.spv"));
 const ZERO_FILL_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zero_fill.spv"));
 const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
 const CONST_SET_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f16.spv"));
@@ -353,6 +369,14 @@ pub enum Source {
     GemmF64,
     FusedQ40Gemm,
     FusedQ4kGemm,
+    FusedQ40GemmM,
+    FusedQ4kGemmM,
+    FusedQ50Gemm,
+    FusedQ51Gemm,
+    FusedQ80Gemm,
+    FusedQ81Gemm,
+    FusedQ5kGemm,
+    FusedQ8kGemm,
     ZeroFill,
     ConstSet,
     ConstSetF16,
@@ -799,6 +823,14 @@ impl Source {
             Self::GemmF64 => GEMM_F64_SPV,
             Self::FusedQ40Gemm => FUSED_Q40_GEMM_SPV,
             Self::FusedQ4kGemm => FUSED_Q4K_GEMM_SPV,
+            Self::FusedQ40GemmM => FUSED_Q40_GEMM_M_SPV,
+            Self::FusedQ4kGemmM => FUSED_Q4K_GEMM_M_SPV,
+            Self::FusedQ50Gemm => FUSED_Q50_GEMM_SPV,
+            Self::FusedQ51Gemm => FUSED_Q51_GEMM_SPV,
+            Self::FusedQ80Gemm => FUSED_Q80_GEMM_SPV,
+            Self::FusedQ81Gemm => FUSED_Q81_GEMM_SPV,
+            Self::FusedQ5kGemm => FUSED_Q5K_GEMM_SPV,
+            Self::FusedQ8kGemm => FUSED_Q8K_GEMM_SPV,
             Self::ZeroFill => ZERO_FILL_SPV,
             Self::ConstSet => CONST_SET_SPV,
             Self::ConstSetF16 => CONST_SET_F16_SPV,
@@ -1021,6 +1053,14 @@ impl AsRef<str> for Source {
             Self::GemmF64 => "gemm_f64",
             Self::FusedQ40Gemm => "fused_q4_0_gemm",
             Self::FusedQ4kGemm => "fused_q4k_gemm",
+            Self::FusedQ40GemmM => "fused_q4_0_gemm_m",
+            Self::FusedQ4kGemmM => "fused_q4k_gemm_m",
+            Self::FusedQ50Gemm => "fused_q5_0_gemm",
+            Self::FusedQ51Gemm => "fused_q5_1_gemm",
+            Self::FusedQ80Gemm => "fused_q8_0_gemm",
+            Self::FusedQ81Gemm => "fused_q8_1_gemm",
+            Self::FusedQ5kGemm => "fused_q5k_gemm",
+            Self::FusedQ8kGemm => "fused_q8k_gemm",
             Self::ZeroFill => "zero_fill",
             Self::ConstSet => "const_set",
             Self::ConstSetF16 => "const_set_f16",
