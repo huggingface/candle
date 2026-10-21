@@ -347,6 +347,24 @@ impl QMetalStorage {
         storage: &MetalStorage,
         layout: &crate::Layout,
     ) -> Result<(MetalStorage, Shape)> {
+        // One token runs the matrix-vector kernel (`fwd_mv`); more than one runs the
+        // matrix-matrix kernel at its 64-token tile.
+        self.fwd_with_tile(
+            self_shape,
+            storage,
+            layout,
+            candle_metal_kernels::QuantizedMmTile::Tokens64,
+        )
+    }
+
+    /// [`Self::fwd`] with the matrix-matrix kernel's token tile chosen by the caller.
+    pub(crate) fn fwd_with_tile(
+        &self,
+        self_shape: &Shape,
+        storage: &MetalStorage,
+        layout: &crate::Layout,
+        tile: candle_metal_kernels::QuantizedMmTile,
+    ) -> Result<(MetalStorage, Shape)> {
         use crate::MetalError;
 
         if !layout.is_contiguous() {
@@ -411,7 +429,7 @@ impl QMetalStorage {
             [vec![1; 4 - src_shape.rank()], src_shape.dims().to_vec()].concat(),
         );
 
-        candle_metal_kernels::call_quantized_matmul_mm_t(
+        candle_metal_kernels::call_quantized_matmul_mm_t_with_tile(
             device.device(),
             &encoder,
             device.kernels(),
@@ -430,6 +448,7 @@ impl QMetalStorage {
             dst_shape.dims(),
             0,
             &dst,
+            tile,
         )
         .map_err(MetalError::from)?;
 
@@ -498,5 +517,90 @@ impl From<GgmlDType> for candle_metal_kernels::GgmlDType {
             GgmlDType::F32 => candle_metal_kernels::GgmlDType::F32,
             GgmlDType::BF16 => candle_metal_kernels::GgmlDType::BF16,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{GgmlDType, QStorage, QTensor};
+    use crate::backend::BackendStorage;
+    use crate::{CpuStorage, Device, Result, Shape, Storage, Tensor};
+    use candle_metal_kernels::QuantizedMmTile;
+
+    /// The matrix-matrix kernel's result at `tile`, as raw f32 bits.
+    fn mm_bits(
+        w: &QStorage,
+        n: usize,
+        k: usize,
+        x: &Tensor,
+        tile: QuantizedMmTile,
+    ) -> Result<Vec<u32>> {
+        let QStorage::Metal(w) = w else {
+            crate::bail!("the weights are not on metal")
+        };
+        let (xs, xl) = x.storage_and_layout();
+        let Storage::Metal(xs) = &*xs else {
+            crate::bail!("the input is not on metal")
+        };
+        let (out, _) = w.fwd_with_tile(&Shape::from((n, k)), xs, xl, tile)?;
+        match out.to_cpu_storage()? {
+            CpuStorage::F32(v) => Ok(v.iter().map(|f| f.to_bits()).collect()),
+            _ => crate::bail!("qmatmul returned a non-f32 result"),
+        }
+    }
+
+    /// The 64-token tile accumulates every output element in the same order as the 32-token
+    /// tile, so for every type the matrix-matrix kernel serves the two results are equal bit for
+    /// bit: odd token counts (a partial last tile at either size), a count between the two tiles,
+    /// several full tiles, ragged weight rows, and a batch dimension.
+    #[test]
+    fn mm_tile64_is_byte_identical_to_tile32() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        let dtypes = [
+            GgmlDType::Q4_0,
+            GgmlDType::Q4_1,
+            GgmlDType::Q5_0,
+            GgmlDType::Q5_1,
+            GgmlDType::Q8_0,
+            GgmlDType::Q2K,
+            GgmlDType::Q3K,
+            GgmlDType::Q4K,
+            GgmlDType::Q5K,
+            GgmlDType::Q6K,
+            GgmlDType::F16,
+            GgmlDType::BF16,
+            GgmlDType::F32,
+        ];
+        // (batch, tokens, weight rows, k)
+        let shapes = [
+            (1, 7, 64, 256),
+            (1, 33, 200, 512),
+            (1, 130, 96, 256),
+            (2, 65, 128, 768),
+        ];
+        for dtype in dtypes {
+            for (b, m, n, k) in shapes {
+                let w = Tensor::randn(0f32, 1.0, (n, k), &Device::Cpu)?;
+                let q = QTensor::quantize(&w, dtype)?;
+                let w = QStorage::from_data(q.data()?, &device, dtype)?;
+                let x = (Tensor::randn(0f32, 1.0, (b, m, k), &device)? * 3.0)?;
+                let t32 = mm_bits(&w, n, k, &x, QuantizedMmTile::Tokens32)?;
+                let t64 = mm_bits(&w, n, k, &x, QuantizedMmTile::Tokens64)?;
+                assert_eq!(t32.len(), b * m * n);
+                // A kernel that wrote nothing would pass the comparison below.
+                assert!(
+                    t32.iter().any(|v| f32::from_bits(*v).abs() > 1e-3),
+                    "{dtype:?} {b}x{m}x{n}x{k}: the 32-token result is all zeros"
+                );
+                let differ = t32.iter().zip(&t64).filter(|(a, b)| a != b).count();
+                assert_eq!(
+                    differ,
+                    0,
+                    "{dtype:?} {b}x{m}x{n}x{k}: {differ} of {} outputs differ between the tiles",
+                    t32.len()
+                );
+            }
+        }
+        Ok(())
     }
 }

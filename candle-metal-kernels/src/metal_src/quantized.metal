@@ -6993,7 +6993,14 @@ kernel void kernel_get_rows_i32(
 #define SG_MAT_ROW 8
 
 // each block_q contains 16*nl weights
-template<typename T, typename T4x4, typename simdgroup_T8x8, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread T4x4 &)>
+//
+// NBN is the threadgroup's token tile: 32 tokens (the original) or 64. A threadgroup dequantizes
+// its 64 weight rows into threadgroup memory once per K step and multiplies them by NBN tokens, so
+// NBN = 64 halves how often each weight is fetched and dequantized per token. Each output element
+// is accumulated in the same order at either tile, so the two give byte-identical results.
+// Threadgroup memory: 4096 B of weights, then NBN x 32 floats of activations; a partial tile's
+// epilogue reuses the start as 64 x NBN floats (8192 B at NBN = 32, 16384 B at NBN = 64).
+template<typename T, typename T4x4, typename simdgroup_T8x8, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread T4x4 &), short NBN = 32>
 kernel void kernel_mul_mm(device const  uchar * src0,
                           device const  uchar * src1,
                           device        float * dst,
@@ -7015,6 +7022,10 @@ kernel void kernel_mul_mm(device const  uchar * src0,
                           uint3                 tgpig[[threadgroup_position_in_grid]],
                           uint                  tiitg[[thread_index_in_threadgroup]],
                           uint                  sgitg[[simdgroup_index_in_threadgroup]]) {
+    static_assert(NBN == 32 || NBN == 64, "the token tile is 32 or 64");
+    constexpr short TMN   = NBN / 16;   // 8x8 activation matrices per simdgroup per k-chunk
+    constexpr short NROWB = NBN / 32;   // token rows each thread loads per K step
+    constexpr short NMC   = 4 * TMN;    // accumulators per simdgroup
 
     threadgroup T     * sa = (threadgroup T     *)(shared_memory);
     threadgroup float * sb = (threadgroup float *)(shared_memory + 4096);
@@ -7023,19 +7034,18 @@ kernel void kernel_mul_mm(device const  uchar * src0,
     const uint r1 = tgpig.x;
     const uint im = tgpig.z;
 
-    // if this block is of 64x32 shape or smaller
+    // if this block is of 64xNBN shape or smaller
     short n_rows = (ne0 - r0*BLOCK_SIZE_M < BLOCK_SIZE_M) ? (ne0 - r0*BLOCK_SIZE_M) : BLOCK_SIZE_M;
-    short n_cols = (ne1 - r1*BLOCK_SIZE_N < BLOCK_SIZE_N) ? (ne1 - r1*BLOCK_SIZE_N) : BLOCK_SIZE_N;
+    short n_cols = (ne1 - r1*NBN < NBN) ? (ne1 - r1*NBN) : NBN;
 
     // a thread shouldn't load data outside of the matrix
     short thread_row = ((short)tiitg/THREAD_PER_ROW) < n_rows ? ((short)tiitg/THREAD_PER_ROW) : n_rows - 1;
-    short thread_col = ((short)tiitg/THREAD_PER_COL) < n_cols ? ((short)tiitg/THREAD_PER_COL) : n_cols - 1;
 
     simdgroup_T8x8     ma[4];
-    simdgroup_float8x8 mb[2];
-    simdgroup_float8x8 mc[8];
+    simdgroup_float8x8 mb[TMN];
+    simdgroup_float8x8 mc[NMC];
 
-    for (short i = 0; i < 8; i++){
+    for (short i = 0; i < NMC; i++){
         mc[i] = make_filled_simdgroup_matrix<float, 8>(0.f);
     }
 
@@ -7048,11 +7058,16 @@ kernel void kernel_mul_mm(device const  uchar * src0,
     ushort offset1 = il/nl;
 
     device const block_q * x = (device const block_q *)(src0 + (r0*BLOCK_SIZE_M + thread_row)*nb01 + offset0) + offset1;
-    device const float   * y = (device const float   *)(src1
-        + nb13 * i13
-        + nb12 * i12
-        + nb11 * (r1 * BLOCK_SIZE_N + thread_col)
-        + nb10 * (BLOCK_SIZE_K / THREAD_PER_COL * (tiitg % THREAD_PER_COL)));
+    device const float * y[NROWB];
+    for (short j = 0; j < NROWB; j++) {
+        const short tok = (short)tiitg/THREAD_PER_COL + 32*j;
+        const short thread_col = tok < n_cols ? tok : n_cols - 1;
+        y[j] = (device const float *)(src1
+            + nb13 * i13
+            + nb12 * i12
+            + nb11 * (r1 * NBN + thread_col)
+            + nb10 * (BLOCK_SIZE_K / THREAD_PER_COL * (tiitg % THREAD_PER_COL)));
+    }
 
     for (int loop_k = 0; loop_k < ne00; loop_k += BLOCK_SIZE_K) {
         // load data and store to threadgroup memory
@@ -7067,17 +7082,19 @@ kernel void kernel_mul_mm(device const  uchar * src0,
             +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = temp_a[i/4][i%4];
         }
 
-        *(threadgroup float2x4 *)(sb + (tiitg % THREAD_PER_COL)*8*32 + 8*(tiitg/THREAD_PER_COL)) = *((device float2x4 *) y);
+        for (short j = 0; j < NROWB; j++) {
+            *(threadgroup float2x4 *)(sb + (tiitg % THREAD_PER_COL)*8*NBN + 8*(tiitg/THREAD_PER_COL + 32*j)) = *((device float2x4 *) y[j]);
+            y[j] += BLOCK_SIZE_K;
+        }
 
         il = (il + 2 < nl) ? il + 2 : il % 2;
         x  = (il < 2) ? x + (2+nl-1)/nl : x;
-        y += BLOCK_SIZE_K;
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         // load matrices from threadgroup memory and conduct outer products
         threadgroup T     * lsma = (sa + THREAD_MAT_M*SG_MAT_SIZE*(sgitg%2));
-        threadgroup float * lsmb = (sb + THREAD_MAT_N*SG_MAT_SIZE*(sgitg/2));
+        threadgroup float * lsmb = (sb + TMN*SG_MAT_SIZE*(sgitg/2));
 
         #pragma unroll(4)
         for (short ik = 0; ik < BLOCK_SIZE_K / 8; ik++) {
@@ -7086,33 +7103,33 @@ kernel void kernel_mul_mm(device const  uchar * src0,
                 simdgroup_load(ma[i], lsma + SG_MAT_SIZE * i);
             }
             simdgroup_barrier(mem_flags::mem_none);
-            #pragma unroll(2)
-            for (short i = 0; i < 2; i++) {
+            #pragma unroll(TMN)
+            for (short i = 0; i < TMN; i++) {
                 simdgroup_load(mb[i], lsmb + SG_MAT_SIZE * i);
             }
 
             lsma += BLOCK_SIZE_M/SG_MAT_ROW * SG_MAT_SIZE;
-            lsmb += BLOCK_SIZE_N/SG_MAT_ROW * SG_MAT_SIZE;
+            lsmb += NBN/SG_MAT_ROW * SG_MAT_SIZE;
 
-            #pragma unroll(8)
-            for (short i = 0; i < 8; i++){
+            #pragma unroll(NMC)
+            for (short i = 0; i < NMC; i++){
                 simdgroup_multiply_accumulate(mc[i], mb[i/4], ma[i%4], mc[i]);
             }
         }
     }
 
-    if ((r0 + 1) * BLOCK_SIZE_M <= ne0 && (r1 + 1) * BLOCK_SIZE_N <= ne1) {
+    if ((r0 + 1) * BLOCK_SIZE_M <= ne0 && (r1 + 1) * NBN <= ne1) {
         device float * C = dst + (BLOCK_SIZE_M * r0 + 32 * (sgitg &  1)) \
-                               + (BLOCK_SIZE_N * r1 + 16 * (sgitg >> 1)) * ne0 + im*ne1*ne0;
-        for (short i = 0; i < 8; i++) {
+                               + (NBN * r1 + (NBN/2) * (sgitg >> 1)) * ne0 + im*ne1*ne0;
+        for (short i = 0; i < NMC; i++) {
             simdgroup_store(mc[i], C + 8 * (i%4) + 8 * ne0 * (i/4), ne0);
         }
     } else {
-        // block is smaller than 64x32, we should avoid writing data outside of the matrix
+        // block is smaller than 64xNBN, we should avoid writing data outside of the matrix
         threadgroup_barrier(mem_flags::mem_threadgroup);
         threadgroup float * temp_str = ((threadgroup float *) shared_memory) \
-                                      + 32 * (sgitg&1) + (16 * (sgitg>>1))*BLOCK_SIZE_M;
-        for (short i = 0; i < 8; i++) {
+                                      + 32 * (sgitg&1) + ((NBN/2) * (sgitg>>1))*BLOCK_SIZE_M;
+        for (short i = 0; i < NMC; i++) {
             simdgroup_store(mc[i], temp_str + 8*(i%4) + 8*BLOCK_SIZE_M*(i/4), BLOCK_SIZE_M);
         }
 
@@ -7120,7 +7137,7 @@ kernel void kernel_mul_mm(device const  uchar * src0,
 
         if (sgitg == 0) {
             for (int j = tiitg; j < n_cols; j += BLOCK_SIZE_N) {
-                device float  * D  = dst + (r0*BLOCK_SIZE_M) + (r1*BLOCK_SIZE_N + j)*ne0 + im*ne1*ne0;
+                device float  * D  = dst + (r0*BLOCK_SIZE_M) + (r1*NBN + j)*ne0 + im*ne1*ne0;
                 device float4 * D4 = (device float4 *) D;
 
                 threadgroup float  * C  = temp_str + (j*BLOCK_SIZE_M);
@@ -7403,6 +7420,24 @@ template [[host_name("kernel_mul_mm_iq1_s_f32")]]   kernel mat_mm_t kernel_mul_m
 template [[host_name("kernel_mul_mm_iq1_m_f32")]]   kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq1_m,   QK_NL, dequantize_iq1_m>;
 template [[host_name("kernel_mul_mm_iq4_nl_f32")]]  kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq4_nl,  2,     dequantize_iq4_nl>;
 template [[host_name("kernel_mul_mm_iq4_xs_f32")]]  kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq4_xs,  QK_NL, dequantize_iq4_xs>;
+
+// The same kernels with a 64-token tile (NBN = 64), for a multiply of more than 32 tokens.
+template [[host_name("kernel_mul_mm_f32_f32_n64")]]  kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   float4x4,      1,     dequantize_f32,  64>;
+template [[host_name("kernel_mul_mm_f16_f32_n64")]]  kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half4x4,       1,     dequantize_f16,  64>;
+#if defined(__HAVE_BFLOAT__)
+template [[host_name("kernel_mul_mm_bf16_f32_n64")]] kernel mat_mm_t kernel_mul_mm<bfloat, bfloat4x4, simdgroup_bfloat8x8, bfloat4x4,     1,     dequantize_bf16, 64>;
+#endif
+template [[host_name("kernel_mul_mm_q4_0_f32_n64")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0, 64>;
+template [[host_name("kernel_mul_mm_q4_1_f32_n64")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q4_1,    2,     dequantize_q4_1, 64>;
+template [[host_name("kernel_mul_mm_q5_0_f32_n64")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q5_0,    2,     dequantize_q5_0, 64>;
+template [[host_name("kernel_mul_mm_q5_1_f32_n64")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q5_1,    2,     dequantize_q5_1, 64>;
+template [[host_name("kernel_mul_mm_q8_0_f32_n64")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q8_0,    2,     dequantize_q8_0, 64>;
+template [[host_name("kernel_mul_mm_q2_K_f32_n64")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q2_K,    QK_NL, dequantize_q2_K, 64>;
+template [[host_name("kernel_mul_mm_q3_K_f32_n64")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q3_K,    QK_NL, dequantize_q3_K, 64>;
+template [[host_name("kernel_mul_mm_q4_K_f32_n64")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q4_K,    QK_NL, dequantize_q4_K, 64>;
+template [[host_name("kernel_mul_mm_q5_K_f32_n64")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q5_K,    QK_NL, dequantize_q5_K, 64>;
+template [[host_name("kernel_mul_mm_q6_K_f32_n64")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q6_K,    QK_NL, dequantize_q6_K, 64>;
+
 
 //
 // indirect matrix-matrix multiplication
