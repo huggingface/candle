@@ -308,15 +308,16 @@ __device__ void rmsnorm(const T * x, T * dst, const T * alpha, const int ncols, 
 // https://github.com/ggerganov/llama.cpp/blob/d59bd97065cd7ded6c4ecab54b1d5e0b1b11e318/ggml-cuda.cu#L4159
 template <typename T, typename ACC>
 __device__ void softmax(const T * x, T * dst, const int ncols) {
+    // Everything in ACC (f32 for the half types): one rounding, at the store.
     const int row = blockDim.x*blockIdx.x + threadIdx.x;
     const int block_size = blockDim.y;
     const int tid = threadIdx.y;
 
-    T max_val = -INFINITY;
+    ACC max_val = -INFINITY;
 
     for (int col = tid; col < ncols; col += block_size) {
         const int i = row*ncols + col;
-        max_val = maxg(max_val, x[i]);
+        max_val = maxg(max_val, static_cast<ACC>(x[i]));
     }
 
     // find the max value in the block
@@ -329,9 +330,7 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
 
     for (int col = tid; col < ncols; col += block_size) {
         const int i = row*ncols + col;
-        const T val = expg(x[i] - max_val);
-        tmp += static_cast<ACC>(val);
-        dst[i] = val;
+        tmp += expg(static_cast<ACC>(x[i]) - max_val);
     }
 
     // sum up partial sums
@@ -344,7 +343,30 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
 
     for (int col = tid; col < ncols; col += block_size) {
         const int i = row*ncols + col;
-        dst[i] *= inv_tmp;
+        dst[i] = static_cast<T>(expg(static_cast<ACC>(x[i]) - max_val) * inv_tmp);
+    }
+}
+
+// Backward of the softmax over the last dim: dx = y * (dy - sum(dy * y)),
+// with y the forward output. Same launch geometry as `softmax`.
+template <typename T, typename ACC>
+__device__ void softmax_bwd(const T * y, const T * dy, T * dx, const int ncols) {
+    const int row = blockDim.x*blockIdx.x + threadIdx.x;
+    const int block_size = blockDim.y;
+    const int tid = threadIdx.y;
+
+    ACC dot = 0.;
+    for (int col = tid; col < ncols; col += block_size) {
+        const int i = row*ncols + col;
+        dot += static_cast<ACC>(dy[i]) * static_cast<ACC>(y[i]);
+    }
+#pragma unroll
+    for (int mask = 16; mask > 0; mask >>= 1) {
+        dot += __shfl_xor_sync(0xffffffff, dot, mask, 32);
+    }
+    for (int col = tid; col < ncols; col += block_size) {
+        const int i = row*ncols + col;
+        dx[i] = static_cast<T>(static_cast<ACC>(y[i]) * (static_cast<ACC>(dy[i]) - dot));
     }
 }
 
@@ -675,6 +697,13 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
     softmax<TYPENAME, ACC_TYPENAME>(src, dst, n_cols);                         \
   }                                                                            \
 
+#define SOFTMAX_BWD_OP(TYPENAME, ACC_TYPENAME, FN_NAME) \
+  extern "C" __global__ void FN_NAME(                                          \
+      const TYPENAME *y, const TYPENAME *dy, TYPENAME *dx,                     \
+      const int n_cols) {                                                      \
+    softmax_bwd<TYPENAME, ACC_TYPENAME>(y, dy, dx, n_cols);                    \
+  }                                                                            \
+
 #define RMSNORM_OP(TYPENAME, FN_NAME) \
   extern "C" __global__ void FN_NAME(                                          \
       const TYPENAME *src, TYPENAME *dst, const TYPENAME *alpha,               \
@@ -855,6 +884,7 @@ extern "C" __global__ void fast_sum_small_f16(
 
 #if __CUDA_ARCH__ >= 800
 SOFTMAX_OP(__nv_bfloat16, float, softmax_bf16)
+SOFTMAX_BWD_OP(__nv_bfloat16, float, softmax_bwd_bf16)
 RMSNORM_OP(__nv_bfloat16, rmsnorm_bf16)
 LAYERNORM_OP(__nv_bfloat16, layernorm_bf16)
 ROPE_OP(__nv_bfloat16, rope_bf16, rope_i_bf16, rope_thd_bf16)
@@ -903,6 +933,7 @@ extern "C" __global__ void fast_argmax_bf16(
 
 #if __CUDA_ARCH__ >= 530
 SOFTMAX_OP(__half, float, softmax_f16)
+SOFTMAX_BWD_OP(__half, float, softmax_bwd_f16)
 RMSNORM_OP(__half, rmsnorm_f16)
 LAYERNORM_OP(__half, layernorm_f16)
 ROPE_OP(__half, rope_f16, rope_i_f16, rope_thd_f16)
@@ -914,7 +945,9 @@ SUM_OP(float, sum_f32)
 SUM_OP(double, sum_f64)
 SUM_OP(uint32_t, sum_u32)
 SOFTMAX_OP(float, float, softmax_f32)
+SOFTMAX_BWD_OP(float, float, softmax_bwd_f32)
 SOFTMAX_OP(double, double, softmax_f64)
+SOFTMAX_BWD_OP(double, double, softmax_bwd_f64)
 RMSNORM_OP(float, rmsnorm_f32)
 RMSNORM_OP(double, rmsnorm_f64)
 LAYERNORM_OP(float, layernorm_f32)

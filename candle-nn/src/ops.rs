@@ -1,7 +1,7 @@
 //! Tensor ops.
 //!
 
-use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
+use candle::{CpuStorage, DType, Device, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -320,9 +320,49 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             Ok((storage, Shape::from_dims(dims)))
         }
 
+        // The half types run in f32 and round once at the store, matching the
+        // CUDA kernel; f32 and f64 are their own accumulators.
+        fn softmax_half<
+            T: candle::WithDType + num_traits::AsPrimitive<f32> + num_traits::FromPrimitive,
+        >(
+            src: &[T],
+            layout: &Layout,
+        ) -> Result<(CpuStorage, Shape)> {
+            let src = match layout.contiguous_offsets() {
+                None => candle::bail!("input has to be contiguous"),
+                Some((o1, o2)) => &src[o1..o2],
+            };
+            let el_count = layout.shape().elem_count();
+            let dims = layout.shape().dims();
+            let dim_m1 = dims[dims.len() - 1];
+            let mut dst = vec![T::zero(); el_count];
+            src.par_chunks(dim_m1)
+                .zip(dst.par_chunks_mut(dim_m1))
+                .for_each_init(
+                    || vec![0f32; dim_m1],
+                    |exp, (src, dst)| {
+                        let mut max = f32::NEG_INFINITY;
+                        for s in src.iter() {
+                            max = max.max(s.as_());
+                        }
+                        let mut sum_exp = 0f32;
+                        for (s, e) in src.iter().zip(exp.iter_mut()) {
+                            *e = (s.as_() - max).exp();
+                            sum_exp += *e;
+                        }
+                        let inv = 1f32 / sum_exp;
+                        for (e, d) in exp.iter().zip(dst.iter_mut()) {
+                            *d = T::from_f32(*e * inv).unwrap();
+                        }
+                    },
+                );
+            let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            Ok((storage, Shape::from_dims(dims)))
+        }
+
         match storage {
-            CpuStorage::BF16(slice) => softmax::<half::bf16>(slice, layout),
-            CpuStorage::F16(slice) => softmax::<half::f16>(slice, layout),
+            CpuStorage::BF16(slice) => softmax_half::<half::bf16>(slice, layout),
+            CpuStorage::F16(slice) => softmax_half::<half::f16>(slice, layout),
             CpuStorage::F32(slice) => softmax::<f32>(slice, layout),
             CpuStorage::F64(slice) => softmax::<f64>(slice, layout),
             _ => candle::bail!("unsupported dtype for softmax {:?}", storage),
@@ -432,10 +472,169 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             candle::MetalStorage::new(output, device.clone(), elem_count, storage.dtype());
         Ok((newstorage, layout.shape().clone()))
     }
+
+    fn bwd(&self, _arg: &Tensor, res: &Tensor, grad_res: &Tensor) -> Result<Option<Tensor>> {
+        let dx = match res.device() {
+            Device::Cpu | Device::Cuda(_) => {
+                res.apply_op2_no_bwd(&grad_res.contiguous()?, &SoftmaxLastDimBwd)?
+            }
+            _ => {
+                // Composed on backends without the fused kernel, with the
+                // reduction in f32 for the half types.
+                let internal = match res.dtype() {
+                    DType::F16 | DType::BF16 => DType::F32,
+                    dt => dt,
+                };
+                let y = res.to_dtype(internal)?;
+                let dy = grad_res.to_dtype(internal)?;
+                let dot = (&dy * &y)?.sum_keepdim(D::Minus1)?;
+                (y * dy.broadcast_sub(&dot)?)?.to_dtype(res.dtype())?
+            }
+        };
+        Ok(Some(dx))
+    }
+}
+
+/// `dx = y * (dy - sum(dy * y, -1))` for `y = softmax_last_dim(x)`; the
+/// reduction and the arithmetic in f32 for the half types, one rounding.
+struct SoftmaxLastDimBwd;
+
+impl candle::CustomOp2 for SoftmaxLastDimBwd {
+    fn name(&self) -> &'static str {
+        "softmax-last-dim-bwd"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &CpuStorage,
+        l1: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        fn inner<T, A>(y: &[T], l1: &Layout, dy: &[T], l2: &Layout) -> Result<(CpuStorage, Shape)>
+        where
+            T: candle::WithDType + num_traits::AsPrimitive<A>,
+            A: num_traits::Float + num_traits::AsPrimitive<f64>,
+        {
+            let y = match l1.contiguous_offsets() {
+                None => candle::bail!("y has to be contiguous"),
+                Some((o1, o2)) => &y[o1..o2],
+            };
+            let dy = match l2.contiguous_offsets() {
+                None => candle::bail!("dy has to be contiguous"),
+                Some((o1, o2)) => &dy[o1..o2],
+            };
+            if y.len() != dy.len() {
+                candle::bail!(
+                    "softmax-bwd shape mismatch {:?} {:?}",
+                    l1.shape(),
+                    l2.shape()
+                )
+            }
+            let dims = l1.shape().dims();
+            let dim_m1 = dims[dims.len() - 1];
+            let mut dst = vec![T::zero(); y.len()];
+            y.par_chunks(dim_m1)
+                .zip(dy.par_chunks(dim_m1))
+                .zip(dst.par_chunks_mut(dim_m1))
+                .for_each(|((y, dy), dx)| {
+                    let mut dot = A::zero();
+                    for (a, b) in y.iter().zip(dy) {
+                        dot = dot + a.as_() * b.as_();
+                    }
+                    for ((a, b), o) in y.iter().zip(dy).zip(dx.iter_mut()) {
+                        let v: A = a.as_() * (b.as_() - dot);
+                        *o = T::from_f64(v.as_());
+                    }
+                });
+            let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            Ok((storage, Shape::from_dims(dims)))
+        }
+        match (s1, s2) {
+            (CpuStorage::BF16(a), CpuStorage::BF16(b)) => inner::<half::bf16, f32>(a, l1, b, l2),
+            (CpuStorage::F16(a), CpuStorage::F16(b)) => inner::<half::f16, f32>(a, l1, b, l2),
+            (CpuStorage::F32(a), CpuStorage::F32(b)) => inner::<f32, f32>(a, l1, b, l2),
+            (CpuStorage::F64(a), CpuStorage::F64(b)) => inner::<f64, f64>(a, l1, b, l2),
+            _ => candle::bail!("unsupported dtypes for softmax-bwd {:?} {:?}", s1, s2),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        s1: &candle::CudaStorage,
+        l1: &Layout,
+        s2: &candle::CudaStorage,
+        l2: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        use candle::cuda_backend::cudarc::driver::{
+            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
+        };
+        use candle::cuda_backend::{kernel_name, kernels, Map2, WrapErr};
+        use candle::{CudaDevice, WithDType};
+
+        struct S;
+        impl Map2 for S {
+            fn f<T: DeviceRepr + WithDType>(
+                &self,
+                y: &CudaSlice<T>,
+                l1: &Layout,
+                dy: &CudaSlice<T>,
+                l2: &Layout,
+                dev: &CudaDevice,
+            ) -> Result<CudaSlice<T>> {
+                let y = match l1.contiguous_offsets() {
+                    None => candle::bail!("y has to be contiguous"),
+                    Some((o1, o2)) => y.slice(o1..o2),
+                };
+                let dy = match l2.contiguous_offsets() {
+                    None => candle::bail!("dy has to be contiguous"),
+                    Some((o1, o2)) => dy.slice(o1..o2),
+                };
+                let el = l1.shape().elem_count();
+                if el != l2.shape().elem_count() {
+                    candle::bail!(
+                        "softmax-bwd shape mismatch {:?} {:?}",
+                        l1.shape(),
+                        l2.shape()
+                    )
+                }
+                let dims = l1.shape().dims();
+                let dim_m1 = dims[dims.len() - 1];
+                let (n_rows, n_cols) = (el / dim_m1, dim_m1);
+                let cfg = LaunchConfig {
+                    grid_dim: (n_rows as u32, 1, 1),
+                    block_dim: (1, 32, 1),
+                    shared_mem_bytes: 0,
+                };
+                let func =
+                    dev.get_or_load_func(&kernel_name::<T>("softmax_bwd"), &kernels::REDUCE)?;
+                // SAFETY: Set later by running the kernel.
+                let dst = unsafe { dev.alloc::<T>(el)? };
+                let mut builder = func.builder();
+                builder.arg(&y);
+                builder.arg(&dy);
+                builder.arg(&dst);
+                candle::builder_arg!(builder, n_cols as i32);
+                // SAFETY: ffi.
+                unsafe { builder.launch(cfg) }.w()?;
+                Ok(dst)
+            }
+        }
+
+        use candle::backend::BackendStorage;
+        let dev = s1.device();
+        let slice = S.map(&s1.slice, l1, &s2.slice, l2, dev)?;
+        let dst = candle::cuda_backend::CudaStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, l1.shape().clone()))
+    }
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
-    xs.apply_op1_no_bwd(&SoftmaxLastDim)
+    xs.apply_op1(SoftmaxLastDim)
 }
 
 #[derive(Debug, Clone)]
@@ -656,6 +855,32 @@ impl candle::CustomOp2 for RmsNorm {
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
     }
+
+    /// `y = w * x / sqrt(mean(x^2) + eps)` differentiated with the statistics
+    /// in f32 (the forward kernel's accumulation dtype) for the half types.
+    fn bwd(
+        &self,
+        x: &Tensor,
+        w: &Tensor,
+        _res: &Tensor,
+        dy: &Tensor,
+    ) -> Result<(Option<Tensor>, Option<Tensor>)> {
+        let d = x.dim(D::Minus1)?;
+        let internal = match x.dtype() {
+            DType::F16 | DType::BF16 => DType::F32,
+            dt => dt,
+        };
+        let x32 = x.to_dtype(internal)?;
+        let dy32 = dy.to_dtype(internal)?;
+        let w32 = w.to_dtype(internal)?;
+        let r = ((x32.sqr()?.sum_keepdim(D::Minus1)? / d as f64)? + self.eps as f64)?.sqrt()?;
+        let xhat = x32.broadcast_div(&r)?;
+        let dxhat = dy32.broadcast_mul(&w32)?;
+        let m = (dxhat.mul(&xhat)?.sum_keepdim(D::Minus1)? / d as f64)?;
+        let dx = (dxhat - xhat.broadcast_mul(&m)?)?.broadcast_div(&r)?;
+        let dw = dy32.mul(&xhat)?.reshape(((), d))?.sum(0)?;
+        Ok((Some(dx.to_dtype(x.dtype())?), Some(dw.to_dtype(w.dtype())?)))
+    }
 }
 
 pub fn rms_norm_slow(x: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
@@ -681,7 +906,7 @@ pub fn rms_norm(xs: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
             alpha.shape()
         )
     }
-    xs.apply_op2_no_bwd(alpha, &RmsNorm { eps })
+    xs.apply_op2(alpha, RmsNorm { eps })
 }
 
 #[derive(Debug, Clone)]
@@ -907,6 +1132,41 @@ impl candle::CustomOp3 for LayerNorm {
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
     }
+
+    /// `y = w * (x - mean(x)) / sqrt(var(x) + eps) + b` differentiated with
+    /// the statistics in f32 for the half types.
+    fn bwd(
+        &self,
+        x: &Tensor,
+        w: &Tensor,
+        b: &Tensor,
+        _res: &Tensor,
+        dy: &Tensor,
+    ) -> Result<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
+        let d = x.dim(D::Minus1)?;
+        let internal = match x.dtype() {
+            DType::F16 | DType::BF16 => DType::F32,
+            dt => dt,
+        };
+        let x32 = x.to_dtype(internal)?;
+        let dy32 = dy.to_dtype(internal)?;
+        let w32 = w.to_dtype(internal)?;
+        let mu = (x32.sum_keepdim(D::Minus1)? / d as f64)?;
+        let xc = x32.broadcast_sub(&mu)?;
+        let sigma = ((xc.sqr()?.sum_keepdim(D::Minus1)? / d as f64)? + self.eps as f64)?.sqrt()?;
+        let xhat = xc.broadcast_div(&sigma)?;
+        let dxhat = dy32.broadcast_mul(&w32)?;
+        let m1 = (dxhat.sum_keepdim(D::Minus1)? / d as f64)?;
+        let m2 = (dxhat.mul(&xhat)?.sum_keepdim(D::Minus1)? / d as f64)?;
+        let dx = (dxhat.broadcast_sub(&m1)? - xhat.broadcast_mul(&m2)?)?.broadcast_div(&sigma)?;
+        let dw = dy32.mul(&xhat)?.reshape(((), d))?.sum(0)?;
+        let db = dy32.reshape(((), d))?.sum(0)?;
+        Ok((
+            Some(dx.to_dtype(x.dtype())?),
+            Some(dw.to_dtype(w.dtype())?),
+            Some(db.to_dtype(b.dtype())?),
+        ))
+    }
 }
 
 pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {
@@ -941,7 +1201,7 @@ pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Resul
             beta.shape()
         )
     }
-    xs.apply_op3_no_bwd(alpha, beta, &LayerNorm { eps })
+    xs.apply_op3(alpha, beta, LayerNorm { eps })
 }
 
 // https://pytorch.org/docs/stable/generated/torch.nn.PixelShuffle.html
