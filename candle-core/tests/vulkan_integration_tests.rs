@@ -5590,3 +5590,87 @@ fn assert_printf_lines(captured: &str) {
         );
     }
 }
+
+/// Fused single-query decode attention must match a decomposed
+/// (q @ k^T * scale -> softmax -> @ v) reference computed in f32 on the
+/// host, including the GQA block grouping (query head h -> kv head
+/// h * num_kv_heads / num_heads, matching `repeat_kv`).
+#[test]
+fn test_vulkan_fused_decode_attention() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let dev = candle_core::Device::Vulkan(device);
+
+    let num_heads = 4usize;
+    let num_kv_heads = 2usize;
+    let head_dim = 16usize;
+    let kv_len = 33usize; // not a multiple of the 32-wide workgroup
+    let scale = 0.5f32;
+
+    // Deterministic pseudo-random data in [-1, 1] (keeps exp() bounded).
+    fn prng(i: usize) -> f32 {
+        let x =
+            (i as u64).wrapping_mul(2654435761u64).wrapping_shr(11) as f32 / (1u64 << 21) as f32;
+        x * 2.0 - 1.0
+    }
+    let q_data: Vec<f32> = (0..num_heads * head_dim).map(|i| prng(i + 1)).collect();
+    let k_data: Vec<f32> = (0..num_kv_heads * kv_len * head_dim)
+        .map(|i| prng(i + 1000))
+        .collect();
+    let v_data: Vec<f32> = (0..num_kv_heads * kv_len * head_dim)
+        .map(|i| prng(i + 2000))
+        .collect();
+
+    let q = candle_core::Tensor::from_vec(q_data.clone(), (num_heads, head_dim), &dev).unwrap();
+    let k = candle_core::Tensor::from_vec(k_data.clone(), (num_kv_heads, kv_len, head_dim), &dev)
+        .unwrap();
+    let v = candle_core::Tensor::from_vec(v_data.clone(), (num_kv_heads, kv_len, head_dim), &dev)
+        .unwrap();
+
+    let out = q
+        .fused_decode_attention(&k, &v, scale, num_kv_heads)
+        .unwrap();
+    let out_cpu = out
+        .to_device(&candle_core::Device::Cpu)
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+
+    // Decomposed f32 reference with the same GQA block grouping.
+    let mut ref_out = vec![0.0f32; num_heads * head_dim];
+    for h in 0..num_heads {
+        let g = h * num_kv_heads / num_heads;
+        let mut scores = vec![0.0f32; kv_len];
+        for j in 0..kv_len {
+            let mut s = 0.0f32;
+            for d in 0..head_dim {
+                s += q_data[h * head_dim + d] * k_data[g * kv_len * head_dim + j * head_dim + d];
+            }
+            scores[j] = s * scale;
+        }
+        let m = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let exps: Vec<f32> = scores.iter().map(|&s| (s - m).exp()).collect();
+        let sum = exps.iter().sum::<f32>();
+        let probs: Vec<f32> = exps.iter().map(|&e| e / sum).collect();
+        for d in 0..head_dim {
+            let mut acc = 0.0f32;
+            for j in 0..kv_len {
+                acc += probs[j] * v_data[g * kv_len * head_dim + j * head_dim + d];
+            }
+            ref_out[h * head_dim + d] = acc;
+        }
+    }
+
+    let max_err = out_cpu
+        .iter()
+        .flatten()
+        .zip(ref_out.iter())
+        .map(|(a, b)| (*a - *b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        max_err < 1e-4,
+        "fused_decode_attention max abs error {max_err} (expected < 1e-4)"
+    );
+    tracing::debug!("Vulkan fused decode attention matches the f32 reference (max err {max_err})");
+}

@@ -30,6 +30,8 @@ const FUSED_Q5K_GEMM_M_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5k_gemm_m.spv"));
 const FUSED_Q8K_GEMM_M_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8k_gemm_m.spv"));
+const DECODE_ATTENTION_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/decode_attention.spv"));
 const ZERO_FILL_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zero_fill.spv"));
 const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
 const CONST_SET_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f16.spv"));
@@ -383,6 +385,7 @@ pub enum Source {
     FusedQ8kGemm,
     FusedQ5kGemmM,
     FusedQ8kGemmM,
+    DecodeAttention,
     ZeroFill,
     ConstSet,
     ConstSetF16,
@@ -816,6 +819,9 @@ impl Source {
             | KernelName::UpsampleNearest2dF16
             | KernelName::UpsampleNearest2dF32
             | KernelName::UpsampleNearest2dF64 => 64,
+            // `decode_attention`: `float scale; uint64_t num_heads;
+            // uint64_t num_kv_heads; uint64_t head_dim; uint64_t kv_len;` (40 bytes).
+            KernelName::DecodeAttention => 40,
             _ => 0,
         }
     }
@@ -839,6 +845,7 @@ impl Source {
             Self::FusedQ8kGemm => FUSED_Q8K_GEMM_SPV,
             Self::FusedQ5kGemmM => FUSED_Q5K_GEMM_M_SPV,
             Self::FusedQ8kGemmM => FUSED_Q8K_GEMM_M_SPV,
+            Self::DecodeAttention => DECODE_ATTENTION_SPV,
             Self::ZeroFill => ZERO_FILL_SPV,
             Self::ConstSet => CONST_SET_SPV,
             Self::ConstSetF16 => CONST_SET_F16_SPV,
@@ -1071,6 +1078,7 @@ impl AsRef<str> for Source {
             Self::FusedQ8kGemm => "fused_q8k_gemm",
             Self::FusedQ5kGemmM => "fused_q5k_gemm_m",
             Self::FusedQ8kGemmM => "fused_q8k_gemm_m",
+            Self::DecodeAttention => "decode_attention",
             Self::ZeroFill => "zero_fill",
             Self::ConstSet => "const_set",
             Self::ConstSetF16 => "const_set_f16",

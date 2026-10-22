@@ -90,3 +90,21 @@ pub struct UpsampleParams {
     /// 1 if `align_corners` (bilinear only).
     pub align: u64,
 }
+
+/// `decode_attention` shader:
+/// `Params { uint64_t num_heads; uint64_t num_kv_heads; uint64_t head_dim;
+/// uint64_t kv_len; float scale; }`.
+#[repr(C)]
+#[derive(Clone, Copy, AnyBitPattern)]
+pub struct DecodeAttentionParams {
+    /// Number of query heads.
+    pub num_heads: u64,
+    /// Number of key/value heads.
+    pub num_kv_heads: u64,
+    /// Head dimension.
+    pub head_dim: u64,
+    /// Number of cached key/value positions.
+    pub kv_len: u64,
+    /// Attention scale (`1 / sqrt(head_dim)`).
+    pub scale: f32,
+}

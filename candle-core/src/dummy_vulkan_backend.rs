@@ -14,6 +14,23 @@ impl VulkanStorage {
     pub fn transfer_to_device(&self, _dst: &VulkanDevice) -> Result<Self> {
         Err(Error::NotCompiledWithVulkanSupport)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn fused_decode_attention(
+        &self,
+        _l: &Layout,
+        _k: &VulkanStorage,
+        _k_l: &Layout,
+        _v: &VulkanStorage,
+        _v_l: &Layout,
+        _scale: f32,
+        _num_heads: usize,
+        _num_kv_heads: usize,
+        _head_dim: usize,
+        _kv_len: usize,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithVulkanSupport)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

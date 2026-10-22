@@ -33,9 +33,11 @@ pub use kernels::{
     call_scatter_slang,
     call_zero_fill,
     call_fused_quant_gemm_slang,
+    call_decode_attention_slang,
 };
 pub use push_constants::{
     AffineParams, ConstSetParams, NormParams, ToDtypeParams, UnaryParams,
     UpsampleParams,
+    DecodeAttentionParams,
 };
 pub use source::Source;

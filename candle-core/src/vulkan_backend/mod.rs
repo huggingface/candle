@@ -11265,6 +11265,66 @@ impl VulkanStorage {
         let out_l = Layout::contiguous(l.shape());
         out.to_dtype(&out_l, out_dtype)
     }
+
+    /// Fused single-query decode attention: `self` is q `(num_heads, head_dim)`
+    /// f32, `k`/`v` are `(num_kv_heads, kv_len, head_dim)` f32, contiguous.
+    /// Returns the `(num_heads, head_dim)` f32 attention output. The GQA group
+    /// for query head `h` is `h * num_kv_heads / num_heads` (matching candle's
+    /// `repeat_kv`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn fused_decode_attention(
+        &self,
+        l: &Layout,
+        k: &VulkanStorage,
+        k_l: &Layout,
+        v: &VulkanStorage,
+        v_l: &Layout,
+        scale: f32,
+        num_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        kv_len: usize,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{DecodeAttentionParams, KernelName, Source};
+        let out = VulkanStorage::new(&self.device, num_heads * head_dim, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let (q_buf, q_keep) = self.f32_view(self, l)?;
+        let (k_buf, k_keep) = self.f32_view(k, k_l)?;
+        let (v_buf, v_keep) = self.f32_view(v, v_l)?;
+        let params = DecodeAttentionParams {
+            scale,
+            num_heads: num_heads as u64,
+            num_kv_heads: num_kv_heads as u64,
+            head_dim: head_dim as u64,
+            kv_len: kv_len as u64,
+        };
+        let kernels = self.device.kernels();
+        let (q_buf, k_buf, v_buf, out_buf) = (q_buf, k_buf, v_buf, out_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_decode_attention_slang(
+                cbb,
+                &kernels,
+                Source::DecodeAttention,
+                KernelName::DecodeAttention,
+                &q_buf,
+                &k_buf,
+                &v_buf,
+                &out_buf,
+                &params,
+                num_heads,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((q_keep, k_keep, v_keep));
+        Ok(out)
+    }
     pub fn rope_int(
         &self,
         l: &Layout,

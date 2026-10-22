@@ -41,6 +41,7 @@ pub mod sigmoid_slang;
 pub mod softmax_slang;
 pub mod rope_slang;
 pub mod zero_fill;
+pub mod decode_attention_slang;
 pub use affine::call_affine_slang;
 
 pub use const_set::{call_const_set_bf16, call_const_set_f16, call_const_set_f32};
@@ -82,3 +83,4 @@ pub use sigmoid_slang::call_sigmoid_slang;
 pub use softmax_slang::call_softmax_slang;
 pub use rope_slang::call_rope_slang;
 pub use zero_fill::call_zero_fill;
+pub use decode_attention_slang::call_decode_attention_slang;

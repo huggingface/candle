@@ -1459,6 +1459,67 @@ impl Tensor {
         self.sqr().and_then(|x| x.sum_all()).and_then(|x| x.sqrt())
     }
 
+    /// Fused single-query decode attention (Vulkan backend only): `self` is q
+    /// `(num_heads, head_dim)` f32, `k`/`v` are `(num_kv_heads, kv_len,
+    /// head_dim)` f32, all contiguous. Returns the `(num_heads, head_dim)` f32
+    /// attention output. The GQA group for query head `h` is
+    /// `h * num_kv_heads / num_heads` (matching `repeat_kv`). The caller must
+    /// fall back to the decomposed matmul+softmax+matmul path for `kv_len`
+    /// beyond the kernel cap.
+    pub fn fused_decode_attention(
+        &self,
+        k: &Tensor,
+        v: &Tensor,
+        scale: f32,
+        num_kv_heads: usize,
+    ) -> Result<Tensor> {
+        const MAX_KV_LEN: usize = 4096;
+        let (num_heads, head_dim) = self.dims2()?;
+        let (k_heads, kv_len, k_dim) = k.dims3()?;
+        let (v_heads, v_len, v_dim) = v.dims3()?;
+        if k_dim != head_dim
+            || v_dim != head_dim
+            || v_len != kv_len
+            || v_heads != k_heads
+            || k_heads != num_kv_heads
+        {
+            bail!(
+                "fused_decode_attention: shape mismatch: q {:?}, k {:?}, v {:?}",
+                self.dims(),
+                k.dims(),
+                v.dims()
+            );
+        }
+        if kv_len > MAX_KV_LEN {
+            bail!("fused_decode_attention: kv_len {kv_len} exceeds the kernel cap {MAX_KV_LEN}");
+        }
+        let (qs, ql) = self.storage_and_layout();
+        let (ks, kl) = k.storage_and_layout();
+        let (vs, vl) = v.storage_and_layout();
+        let out = match (&*qs, &*ks, &*vs) {
+            (Storage::Vulkan(qv), Storage::Vulkan(kv), Storage::Vulkan(vv)) => qv
+                .fused_decode_attention(
+                    ql,
+                    kv,
+                    kl,
+                    vv,
+                    vl,
+                    scale,
+                    num_heads,
+                    num_kv_heads,
+                    head_dim,
+                    kv_len,
+                )?,
+            _ => bail!("fused_decode_attention: requires contiguous f32 Vulkan tensors"),
+        };
+        Ok(from_storage(
+            Storage::Vulkan(out),
+            (num_heads, head_dim),
+            BackpropOp::none(),
+            false,
+        ))
+    }
+
     /// Performs strict matrix-vector multiplication (`[m, n] * [n] = [m]`).
     ///
     /// - If `self` is a matrix (`[m, n]`) and `rhs` is a vector (`[n]`), returns a vector (`[m]`).
