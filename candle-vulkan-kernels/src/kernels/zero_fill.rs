@@ -29,7 +29,12 @@ pub fn call_zero_fill(
     let entry = kernels.load_entry(Source::ZeroFill, KernelName::ZeroFill)?;
     let info0 = buf_info(dst);
     let info1 = buf_info(params);
-    let set = kernels.descriptor_set(&entry.set_layout, &[info0, info1])?;
+    let writes = vec![
+        WriteDescriptorSet::buffer(0, &info0),
+        WriteDescriptorSet::buffer(1, &info1),
+    ];
+    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
+        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)

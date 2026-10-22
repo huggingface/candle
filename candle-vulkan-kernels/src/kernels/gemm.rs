@@ -36,7 +36,14 @@ pub fn call_gemm_slang<T>(
     let info1 = buf_info(rhs);
     let info2 = buf_info(output);
     let info3 = buf_info(params);
-    let set = kernels.descriptor_set(&entry.set_layout, &[info0, info1, info2, info3])?;
+    let writes = vec![
+        WriteDescriptorSet::buffer(0, &info0),
+        WriteDescriptorSet::buffer(1, &info1),
+        WriteDescriptorSet::buffer(2, &info2),
+        WriteDescriptorSet::buffer(3, &info3),
+    ];
+    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
+        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)

@@ -36,7 +36,15 @@ pub fn call_rotary_emb_int_slang<T>(
     let cos_info = buf_info(cos);
     let sin_info = buf_info(sin);
     let params_info = buf_info(params);
-    let set = kernels.descriptor_set(&entry.set_layout, &[src_info, dst_info, cos_info, sin_info, params_info])?;
+    let writes = vec![
+        WriteDescriptorSet::buffer(0, &src_info),
+        WriteDescriptorSet::buffer(1, &dst_info),
+        WriteDescriptorSet::buffer(2, &cos_info),
+        WriteDescriptorSet::buffer(3, &sin_info),
+        WriteDescriptorSet::buffer(4, &params_info),
+    ];
+    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
+        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)

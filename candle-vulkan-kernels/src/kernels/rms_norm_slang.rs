@@ -37,7 +37,13 @@ pub fn call_rms_norm_slang(
     let src_info = buf_info(src);
     let alpha_info = buf_info(alpha);
     let dst_info = buf_info(dst);
-    let set = kernels.descriptor_set(&entry.set_layout, &[src_info, alpha_info, dst_info])?;
+    let writes = vec![
+        WriteDescriptorSet::buffer(0, &src_info),
+        WriteDescriptorSet::buffer(1, &alpha_info),
+        WriteDescriptorSet::buffer(2, &dst_info),
+    ];
+    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
+        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)

@@ -38,7 +38,12 @@ pub fn call_affine_slang<T>(
         range: Some(output.size()),
         ..Default::default()
     };
-    let set = kernels.descriptor_set(&entry.set_layout, &[input_info, output_info])?;
+    let writes = vec![
+        WriteDescriptorSet::buffer(0, &input_info),
+        WriteDescriptorSet::buffer(1, &output_info),
+    ];
+    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
+        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)

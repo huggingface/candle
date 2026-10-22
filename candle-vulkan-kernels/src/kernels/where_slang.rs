@@ -55,7 +55,15 @@ pub fn call_where_slang<T>(
         range: Some(params.size()),
         ..Default::default()
     };
-    let set = kernels.descriptor_set(&entry.set_layout, &[pred_info, true_info, false_info, output_info, params_info])?;
+    let writes = vec![
+        WriteDescriptorSet::buffer(0, &pred_info),
+        WriteDescriptorSet::buffer(1, &true_info),
+        WriteDescriptorSet::buffer(2, &false_info),
+        WriteDescriptorSet::buffer(3, &output_info),
+        WriteDescriptorSet::buffer(4, &params_info),
+    ];
+    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
+        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)

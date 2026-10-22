@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::layout::{
     DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateInfo, DescriptorType,
@@ -974,24 +973,10 @@ pub struct PipelineEntry {
 
 pub type Pipelines = HashMap<(Source, KernelName), PipelineEntry>;
 
-/// Key identifying a cached descriptor set: the set-layout pointer and the
-/// (buffer ptr, offset, range) per binding. The buffer pool reuses buffers,
-/// so the same (layout, bindings) pair maps to the same descriptor set.
-#[derive(Clone, Hash, Eq, PartialEq)]
-struct DssKey {
-    layout: usize,
-    bindings: Vec<(usize, u64, u64)>,
-}
-
 pub struct Kernels {
     device: Arc<Device>,
     dss_alloc: Arc<StandardDescriptorSetAllocator>,
     pipelines: RwLock<Pipelines>,
-    /// Bounded cache of descriptor sets keyed by (set-layout, per-binding
-    /// (buffer ptr, offset, range)). The buffer pool reuses buffers, so
-    /// repeated dispatches of the same kernel with the same buffers hit this
-    /// cache and skip the `DescriptorSet::new` (vkUpdateDescriptorSets) cost.
-    dss_cache: RwLock<HashMap<DssKey, Arc<DescriptorSet>>>,
 }
 
 impl Kernels {
@@ -1000,60 +985,11 @@ impl Kernels {
             device,
             dss_alloc,
             pipelines: RwLock::new(Pipelines::new()),
-            dss_cache: RwLock::new(HashMap::new()),
         }
     }
 
     pub fn dss_alloc(&self) -> &Arc<StandardDescriptorSetAllocator> {
         &self.dss_alloc
-    }
-
-    /// Max entries in the descriptor set cache: the buffer pool reuses a
-    /// bounded set of buffers, so the working set of descriptor sets is
-    /// small; when the cap is hit the cache is cleared (cheap, and the
-    /// descriptor sets are re-created on demand).
-    const DSS_CACHE_MAX: usize = 1024;
-
-    /// Returns a descriptor set for `set_layout` with one storage-buffer
-    /// binding per entry in `buf_infos` (binding 0..N-1), reusing a cached
-    /// set when the (layout, buffer ptr, offset, range) per binding matches
-    /// a previous call.
-    pub fn descriptor_set(
-        &self,
-        set_layout: &Arc<DescriptorSetLayout>,
-        buf_infos: &[DescriptorBufferInfo<'_>],
-    ) -> Result<Arc<DescriptorSet>, VulkanKernelError> {
-        let key = DssKey {
-            layout: Arc::as_ptr(set_layout) as *const _ as usize,
-            bindings: buf_infos
-                .iter()
-                .map(|b| {
-                    let ptr = b.buffer.map(|buf| buf as *const _ as usize).unwrap_or(0);
-                    (ptr, b.offset, b.range.unwrap_or(0))
-                })
-                .collect(),
-        };
-        {
-            let cache = self.dss_cache.read();
-            if let Some(set) = cache.get(&key) {
-                return Ok(set.clone());
-            }
-        }
-        let writes: Vec<WriteDescriptorSet> = buf_infos
-            .iter()
-            .enumerate()
-            .map(|(i, b)| WriteDescriptorSet::buffer(i as u32, b))
-            .collect();
-        let set = DescriptorSet::new(self.dss_alloc(), set_layout, &writes, &[])
-            .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
-        {
-            let mut cache = self.dss_cache.write();
-            if cache.len() >= Self::DSS_CACHE_MAX {
-                cache.clear();
-            }
-            cache.insert(key, set.clone());
-        }
-        Ok(set)
     }
 
     /// The full pipeline entry (pipeline + layouts), building on first use.

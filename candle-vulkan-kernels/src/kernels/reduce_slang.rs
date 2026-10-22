@@ -33,15 +33,16 @@ pub fn call_reduce_slang<T>(
     let params_info = buf_info(params);
     let out_f_info = out_f.map(buf_info);
     let out_i_info = out_i.map(buf_info);
-    let mut infos = vec![in_info];
-    if let Some(info) = out_f_info {
-        infos.push(info);
+    let mut writes = vec![WriteDescriptorSet::buffer(0, &in_info)];
+    if let Some(info) = &out_f_info {
+        writes.push(WriteDescriptorSet::buffer(1, info));
     }
-    if let Some(info) = out_i_info {
-        infos.push(info);
+    if let Some(info) = &out_i_info {
+        writes.push(WriteDescriptorSet::buffer(2, info));
     }
-    infos.push(params_info);
-    let set = kernels.descriptor_set(&entry.set_layout, &infos)?;
+    writes.push(WriteDescriptorSet::buffer(3, &params_info));
+    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
+        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)
