@@ -132,10 +132,13 @@ const FENCE_RING_SIZE: usize = 128;
 /// Minimum size in bytes for a buffer to enter the pool: smaller
 /// allocations are cheap and the pool bookkeeping is not worth it.
 pub(crate) const POOL_MIN_BYTES: usize = 4096;
-/// Maximum number of pooled buffers per (dtype, size).
-const POOL_MAX_PER_SIZE: usize = 4;
-/// Maximum total bytes held by the free pool.
-const POOL_MAX_BYTES: usize = 1024 * 1024 * 1024;
+/// Maximum number of pooled buffers per (dtype, size): decode reuses a
+/// handful of recurring shapes, each with a few buffers live at once.
+const POOL_MAX_PER_SIZE: usize = 8;
+/// Maximum total bytes held by the free pool: a few percent of the
+/// reference 32 GB device, comfortably above the recurring decode shapes
+/// (the skip-never-evict policy keeps retained buffers in place).
+const POOL_MAX_BYTES: usize = 2048 * 1024 * 1024;
 
 impl std::fmt::Debug for VulkanDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
