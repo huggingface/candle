@@ -32,14 +32,7 @@ pub fn call_conv_slang<T>(
     let w_info = buf_info(weights);
     let out_info = buf_info(output);
     let params_info = buf_info(params);
-    let writes = vec![
-        WriteDescriptorSet::buffer(0, &in_info),
-        WriteDescriptorSet::buffer(1, &w_info),
-        WriteDescriptorSet::buffer(2, &out_info),
-        WriteDescriptorSet::buffer(3, &params_info),
-    ];
-    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
-        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
+    let set = kernels.descriptor_set(&entry.set_layout, &[in_info, w_info, out_info, params_info])?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)

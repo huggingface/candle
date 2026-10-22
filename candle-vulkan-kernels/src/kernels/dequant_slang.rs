@@ -36,13 +36,7 @@ pub fn call_dequantize_slang(
     let src_info = buf_info(src);
     let dst_info = buf_info(dst);
     let params_info = buf_info(params);
-    let writes = vec![
-        WriteDescriptorSet::buffer(0, &src_info),
-        WriteDescriptorSet::buffer(1, &dst_info),
-        WriteDescriptorSet::buffer(2, &params_info),
-    ];
-    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
-        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
+    let set = kernels.descriptor_set(&entry.set_layout, &[src_info, dst_info, params_info])?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)

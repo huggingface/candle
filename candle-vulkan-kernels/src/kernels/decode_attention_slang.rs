@@ -40,14 +40,7 @@ pub fn call_decode_attention_slang(
     let k_info = buf_info(k);
     let v_info = buf_info(v);
     let dst_info = buf_info(dst);
-    let writes = vec![
-        WriteDescriptorSet::buffer(0, &q_info),
-        WriteDescriptorSet::buffer(1, &k_info),
-        WriteDescriptorSet::buffer(2, &v_info),
-        WriteDescriptorSet::buffer(3, &dst_info),
-    ];
-    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
-        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
+    let set = kernels.descriptor_set(&entry.set_layout, &[q_info, k_info, v_info, dst_info])?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)

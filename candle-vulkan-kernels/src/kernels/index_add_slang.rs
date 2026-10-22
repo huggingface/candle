@@ -40,14 +40,7 @@ pub fn call_index_add_slang<D, I>(
     let src_info = buf_info(src);
     let ids_info = buf_info(ids);
     let params_info = buf_info(params);
-    let writes = vec![
-        WriteDescriptorSet::buffer(0, &dst_info),
-        WriteDescriptorSet::buffer(1, &src_info),
-        WriteDescriptorSet::buffer(2, &ids_info),
-        WriteDescriptorSet::buffer(3, &params_info),
-    ];
-    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
-        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
+    let set = kernels.descriptor_set(&entry.set_layout, &[dst_info, src_info, ids_info, params_info])?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)

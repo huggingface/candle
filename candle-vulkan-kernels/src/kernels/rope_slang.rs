@@ -36,15 +36,7 @@ pub fn call_rope_slang(
     let sin_info = buf_info(sin);
     let dst_info = buf_info(dst);
     let params_info = buf_info(params);
-    let writes = vec![
-        WriteDescriptorSet::buffer(0, &src_info),
-        WriteDescriptorSet::buffer(1, &cos_info),
-        WriteDescriptorSet::buffer(2, &sin_info),
-        WriteDescriptorSet::buffer(3, &dst_info),
-        WriteDescriptorSet::buffer(4, &params_info),
-    ];
-    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
-        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
+    let set = kernels.descriptor_set(&entry.set_layout, &[src_info, cos_info, sin_info, dst_info, params_info])?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)

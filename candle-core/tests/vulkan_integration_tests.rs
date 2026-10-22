@@ -1728,13 +1728,7 @@ fn test_vulkan_matmul() {
         .into_iter()
         .flatten()
         .flatten()
-        .zip(
-            c3.to_vec3::<f32>()
-                .unwrap()
-                .into_iter()
-                .flatten()
-                .flatten(),
-        )
+        .zip(c3.to_vec3::<f32>().unwrap().into_iter().flatten().flatten())
     {
         assert!(
             (x - y).abs() < 1e-3 * (1.0 + y.abs()),

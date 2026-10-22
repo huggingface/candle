@@ -31,14 +31,7 @@ pub fn call_scatter_slang<T>(
     let dst_info = buf_info(dst);
     let ids_info = buf_info(ids);
     let params_info = buf_info(params);
-    let writes = vec![
-        WriteDescriptorSet::buffer(0, &src_info),
-        WriteDescriptorSet::buffer(1, &dst_info),
-        WriteDescriptorSet::buffer(2, &ids_info),
-        WriteDescriptorSet::buffer(3, &params_info),
-    ];
-    let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
-        .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
+    let set = kernels.descriptor_set(&entry.set_layout, &[src_info, dst_info, ids_info, params_info])?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)
