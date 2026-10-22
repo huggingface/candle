@@ -2,19 +2,10 @@
 // main_upsample_nearest1d: (b, c, src_sz) -> (b, c, dst_sz)
 // main_upsample_nearest2d: (b, c, src_h, src_w) -> (b, c, dst_h, dst_w)
 // main_upsample_bilinear2d: (b, c, src_h, src_w) -> (b, c, dst_h, dst_w)
+import common_upsample;
+
 StructuredBuffer<float> g_Src;
 RWStructuredBuffer<float> g_Out;
-struct Params
-{
-    uint64_t planes;
-    uint64_t d0;
-    uint64_t d1;
-    uint64_t d2;
-    uint64_t d3;
-    double scale_h;
-    double scale_w;
-    uint64_t align;
-};
 layout(push_constant) Params g_Params;
 // nearest1d: planes, d0=src_sz, d1=dst_sz
 // nearest2d: planes, d0=src_h, d1=src_w, d2=dst_h, d3=dst_w

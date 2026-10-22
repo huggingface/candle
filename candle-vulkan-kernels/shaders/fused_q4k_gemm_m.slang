@@ -8,47 +8,13 @@
 // of 256; n need not be a multiple of 32 (out-of-range columns early-exit).
 //
 // Params: [0]=m, [1]=n, [2]=k.
+import dequant_helpers;
+
 StructuredBuffer<float> g_Lhs; // (m, k) f32
 RWStructuredBuffer<float> g_Out; // (m, n) f32
 StructuredBuffer<uint8_t> g_W; // raw Q4_K bytes, (n, k)
 StructuredBuffer<uint64_t> g_Params;
 
-// Reinterpret an IEEE-754 half (16 bits) as a float (half crate).
-float f16_bits_to_f32(uint16_t h)
-{
-    uint sign = (h >> 15) & 1u;
-    uint exp = (h >> 10) & 0x1Fu;
-    uint mant = h & 0x3FFu;
-    uint32_t f;
-    if (exp == 0u)
-    {
-        if (mant == 0u)
-        {
-            f = sign << 31; // signed zero
-        }
-        else
-        {
-            uint m = mant;
-            uint shift = 0u;
-            while ((m & 0x400u) == 0u)
-            {
-                m <<= 1;
-                shift += 1;
-            }
-            m &= 0x3FFu;
-            f = (sign << 31) | ((113u - shift) << 23) | (m << 13);
-        }
-    }
-    else if (exp == 31u)
-    {
-        f = (sign << 31) | 0x7F800000u | (mant << 13);
-    }
-    else
-    {
-        f = (sign << 31) | ((exp + 112u) << 23) | (mant << 13);
-    }
-    return asfloat(f);
-}
 // Q4K/Q5K scale-min decoder (from candle quantized/utils.rs::get_scale_min_k4).
 // `off` is the block base offset in g_W; `soff` is the scale-array offset.
 uint2 get_scale_min_k4(uint j, uint off, uint soff)

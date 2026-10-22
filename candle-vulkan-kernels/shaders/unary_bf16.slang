@@ -1,44 +1,11 @@
 // Unary bf16 ops (emulated). Each entry point maps g_In[i] -> g_Out[i] for i < g_Params[0],
 // decoding to float, applying the op in float, and encoding back to bf16.
+import bf16_emulation;
+import common_unary;
+
 StructuredBuffer<uint16_t> g_In;
 RWStructuredBuffer<uint16_t> g_Out;
-struct Params
-{
-    uint64_t count;
-    double extra;
-};
 layout(push_constant) Params g_Params;
-
-// bf16 -> float (half crate bf16_to_f32).
-float bf16_decode(uint16_t b)
-{
-    uint x = (uint)b;
-    if ((x & 0x7FFFu) > 0x7F80u) { return bit_cast<float>(x | 0x40u); }
-    return bit_cast<float>(x << 16);
-}
-
-// float -> bf16 (half crate f32_to_bf16, round-to-nearest-even).
-uint16_t bf16_encode(float v)
-{
-    uint x = bit_cast<uint>(v);
-    if ((x & 0x7FFFFFFFu) > 0x7F800000u) { return (uint16_t)((x >> 16) | 0x0040u); }
-    uint rb = 0x8000u;
-    if ((x & rb) != 0u && (x & (3u * rb - 1u)) != 0u) { return (uint16_t)((x >> 16) + 1u); }
-    return (uint16_t)(x >> 16);
-}
-
-
-// Abramowitz-Stegun 7.1.26 approximation (|err| < 1.5e-7),
-// matching libm::erff (what candle's CPU path uses) to f32 precision.
-float erf_approx(float x)
-{
-    float sign = x < 0.0 ? -1.0 : 1.0;
-    float ax = abs(x);
-    float t = 1.0 / (1.0 + 0.3275911 * ax);
-    float poly = 0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)));
-    return sign * (1.0 - t * poly * exp(-ax * ax));
-}
-
 
 [shader("compute")]
 [numthreads(256, 1, 1)]

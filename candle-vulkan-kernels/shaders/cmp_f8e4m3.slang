@@ -8,40 +8,12 @@
 //
 // Params layout: [0]=total, [1]=lhs_ndim, [2]=rhs_ndim,
 //                [3..7]=lhs dims, [7..11]=rhs dims.
+import f8e4m3_emulation;
+
 StructuredBuffer<uint8_t> g_In;
 StructuredBuffer<uint8_t> g_Rhs;
 RWStructuredBuffer<uint8_t> g_Out;
 StructuredBuffer<uint64_t> g_Params;
-
-float f8e4m3_f2i(int e)
-{
-    if (e < -149) { return 0.0f; }
-    if (e > 127) { return bit_cast<float>(0x7f800000u); }
-    if (e >= -126) { return bit_cast<float>(uint(e + 127) << 23); }
-    return bit_cast<float>(1u << uint(e + 149));
-}
-
-float f8e4m3_decode(uint8_t bits)
-{
-    uint b = (uint)bits;
-    bool neg = (b & 0x80u) != 0u;
-    if ((b & 0x78u) == 0x78u)
-    {
-        if ((b & 0x07u) != 0u)
-        {
-            return bit_cast<float>(neg ? 0xffc00000u : 0x7fc00000u);
-        }
-        return bit_cast<float>(neg ? 0xff800000u : 0x7f800000u);
-    }
-    uint mag = b & 0x7fu;
-    float sign = neg ? -1.0f : 1.0f;
-    if (mag == 0u) { return (sign < 0.0f) ? -0.0f : 0.0f; }
-    uint exp = (b & 0x78u) >> 3;
-    float mant = (float)(b & 0x07u);
-    float scale = (exp == 0u) ? f8e4m3_f2i(1 - 7) : f8e4m3_f2i(int(exp) - 7);
-    float significand = (exp == 0u) ? (mant / f8e4m3_f2i(3)) : (1.0f + mant / f8e4m3_f2i(3));
-    return sign * significand * scale;
-}
 
 uint64_t rhs_offset(uint i)
 {

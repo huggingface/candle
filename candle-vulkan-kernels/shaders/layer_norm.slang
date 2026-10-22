@@ -3,16 +3,12 @@
 // mean[i] = sum_j(x[i][j]) / n
 // var[i] = sum_j(x[i][j]^2) / n - mean[i]^2
 // inv_std[i] = 1 / sqrt(var[i] + eps)
+import common_norm;
+
 StructuredBuffer<float> g_Src;
 StructuredBuffer<float> g_Alpha;
 StructuredBuffer<float> g_Beta;
 RWStructuredBuffer<float> g_Dst;
-struct Params
-{
-    uint64_t n_rows;
-    uint64_t n;
-    double eps;
-};
 layout(push_constant) Params g_Params;
 [shader("compute")]
 [numthreads(1, 1, 1)]

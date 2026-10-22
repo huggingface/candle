@@ -1,23 +1,9 @@
 // Unary f64 ops. Each entry point maps `g_In[i] -> g_Out[i]` for `i < g_Params[0]`.
+import common_unary;
+
 StructuredBuffer<double> g_In;
 RWStructuredBuffer<double> g_Out;
-struct Params
-{
-    uint64_t count;
-    double extra;
-};
 layout(push_constant) Params g_Params;
-
-// Abramowitz-Stegun 7.1.26 approximation (|err| < 1.5e-7),
-// matching libm::erff (what candle's CPU path uses) to f64 precision.
-float erf_approx(float x)
-{
-    float sign = x < 0.0 ? -1.0 : 1.0;
-    float ax = abs(x);
-    float t = 1.0 / (1.0 + 0.3275911 * ax);
-    float poly = 0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)));
-    return sign * (1.0 - t * poly * exp(-ax * ax));
-}
 
 [shader("compute")]
 [numthreads(256, 1, 1)]

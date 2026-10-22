@@ -16,17 +16,10 @@
 // Format specifiers follow the validation layer's restricted printf
 // format: 8-bit and 16-bit integers print with the 32-bit specifiers
 // (%u / %d), 64-bit integers with %ld, and 16/32/64-bit floats with %f.
+import bf16_emulation;
 
 StructuredBuffer<uint64_t> g_In;
 RWStructuredBuffer<uint64_t> g_Out;
-
-// bf16 -> float (half crate bf16_to_f32 bit pattern).
-float bf16_decode(uint16_t b)
-{
-    uint x = (uint)b;
-    if ((x & 0x7FFFu) > 0x7F80u) { return bit_cast<float>(x | 0x40u); }
-    return bit_cast<float>(x << 16);
-}
 
 [shader("compute")]
 [numthreads(1, 1, 1)]

@@ -5,17 +5,12 @@
 //
 // Params layout: [0]=total, [1]=lhs_ndim, [2]=rhs_ndim,
 //                [3..7]=lhs dims, [7..11]=rhs dims.
+import bf16_emulation;
+
 StructuredBuffer<uint16_t> g_In;
 StructuredBuffer<uint16_t> g_Rhs;
 RWStructuredBuffer<uint8_t> g_Out;
 StructuredBuffer<uint64_t> g_Params;
-
-float bf16_decode(uint16_t b)
-{
-    uint x = (uint)b;
-    if ((x & 0x7FFFu) > 0x7F80u) { return bit_cast<float>(x | 0x40u); }
-    return bit_cast<float>(x << 16);
-}
 
 uint64_t rhs_offset(uint i)
 {

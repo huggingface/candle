@@ -8,16 +8,12 @@
 // multiple of 32 (out-of-range columns early-exit).
 //
 // Params: [0]=m (must be 1), [1]=n, [2]=k.
+import dequant_helpers;
+
 StructuredBuffer<float> g_Lhs; // (k,) f32
 RWStructuredBuffer<float> g_Out; // (n,) f32
 StructuredBuffer<uint8_t> g_W; // raw Q8_K bytes, (n, k)
 StructuredBuffer<uint64_t> g_Params;
-
-// Reinterpret a byte as a signed int8.
-int sbyte(uint u)
-{
-    return (u & 0x80u) != 0u ? (int(u) - 256) : int(u);
-}
 
 [shader("compute")]
 [numthreads(32, 1, 1)]
