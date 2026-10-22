@@ -379,6 +379,12 @@ impl QVulkanStorage {
             (GgmlDType::Q8K, true) if k.is_multiple_of(256) => {
                 Some((Source::FusedQ8kGemm, KernelName::FusedQ8kGemmF32))
             }
+            (GgmlDType::Q5K, false) if k.is_multiple_of(256) => {
+                Some((Source::FusedQ5kGemmM, KernelName::FusedQ5kGemmMF32))
+            }
+            (GgmlDType::Q8K, false) if k.is_multiple_of(256) => {
+                Some((Source::FusedQ8kGemmM, KernelName::FusedQ8kGemmMF32))
+            }
             _ => None,
         };
         let out = match fused {
