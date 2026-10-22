@@ -1258,7 +1258,7 @@ fn test_vulkan_to_dtype_ints_f8() {
     let cpu = candle_core::Device::Cpu;
 
     // --- Integer round-trips (exact) ---
-    let i32_vals: Vec<i32> = (0..64).map(|i| (i as i32) * 3 - 96).collect();
+    let i32_vals: Vec<i32> = (0..64).map(|i| i * 3 - 96).collect();
     let i32_g = candle_core::Tensor::new(i32_vals.as_slice(), &dev).unwrap();
     let i32_c = candle_core::Tensor::new(i32_vals.as_slice(), &cpu).unwrap();
 
@@ -1727,14 +1727,12 @@ fn test_vulkan_matmul() {
         .unwrap()
         .into_iter()
         .flatten()
-        .into_iter()
         .flatten()
         .zip(
             c3.to_vec3::<f32>()
                 .unwrap()
                 .into_iter()
                 .flatten()
-                .into_iter()
                 .flatten(),
         )
     {
@@ -4227,8 +4225,8 @@ fn test_vulkan_binary_ops_i32() {
     let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
     let cpu = candle_core::Device::Cpu;
     let shape = candle_core::Shape::from((4, 8));
-    let lv: Vec<i32> = (0..32).map(|i| (i % 5 + 3) as i32).collect();
-    let rv: Vec<i32> = (0..32).map(|i| (i % 3 + 1) as i32).collect();
+    let lv: Vec<i32> = (0..32).map(|i| i % 5 + 3).collect();
+    let rv: Vec<i32> = (0..32).map(|i| i % 3 + 1).collect();
     let l = candle_core::Tensor::new(lv.as_slice(), &dev)
         .unwrap()
         .reshape(shape.clone())
@@ -4269,8 +4267,8 @@ fn test_vulkan_cmp_ops_i32() {
     let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
     let cpu = candle_core::Device::Cpu;
     let shape = candle_core::Shape::from((4, 8));
-    let lv: Vec<i32> = (0..32).map(|i| (i % 5 + 3) as i32).collect();
-    let rv: Vec<i32> = (0..32).map(|i| (i % 3 + 1) as i32).collect();
+    let lv: Vec<i32> = (0..32).map(|i| i % 5 + 3).collect();
+    let rv: Vec<i32> = (0..32).map(|i| i % 3 + 1).collect();
     let l = candle_core::Tensor::new(lv.as_slice(), &dev)
         .unwrap()
         .reshape(shape.clone())
@@ -4689,7 +4687,7 @@ fn test_vulkan_avg_pool2d_f16() {
         .to_vec1::<half::f16>()
         .unwrap()
         .into_iter()
-        .map(|x| f32::from(x))
+        .map(f32::from)
         .collect();
     let cpu = candle_core::Device::Cpu;
     let tc = candle_core::Tensor::new(v.as_slice(), &cpu)
@@ -4814,14 +4812,14 @@ fn test_vulkan_gather_f16() {
         .unwrap()
         .into_iter()
         .flatten()
-        .map(|x| f32::from(x))
+        .map(f32::from)
         .collect();
     let cv: Vec<f32> = c
         .to_vec2::<half::f16>()
         .unwrap()
         .into_iter()
         .flatten()
-        .map(|x| f32::from(x))
+        .map(f32::from)
         .collect();
     for (a, b) in gv.iter().zip(cv.iter()) {
         assert!((a - b).abs() < 0.05f32, "got {} vs exp {}", a, b);
@@ -5673,4 +5671,84 @@ fn test_vulkan_fused_decode_attention() {
         "fused_decode_attention max abs error {max_err} (expected < 1e-4)"
     );
     tracing::debug!("Vulkan fused decode attention matches the f32 reference (max err {max_err})");
+}
+
+/// Fused add + RMSNorm: `residual = x + h`, `norm = RMSNorm(residual) * alpha`.
+#[test]
+fn test_vulkan_fused_add_rms_norm() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let dev = candle_core::Device::Vulkan(device);
+
+    let n_rows = 5usize;
+    let n = 129usize; // not a multiple of the thread count
+    let eps = 1e-5f32;
+
+    fn prng(i: usize) -> f32 {
+        let x =
+            (i as u64).wrapping_mul(2654435761u64).wrapping_shr(11) as f32 / (1u64 << 21) as f32;
+        x * 2.0 - 1.0
+    }
+    let x_data: Vec<f32> = (0..n_rows * n).map(|i| prng(i + 1)).collect();
+    let h_data: Vec<f32> = (0..n_rows * n).map(|i| prng(i + 5000)).collect();
+    let alpha_data: Vec<f32> = (0..n).map(|i| prng(i + 9000)).collect();
+
+    let x = candle_core::Tensor::from_vec(x_data.clone(), (n_rows, n), &dev).unwrap();
+    let h = candle_core::Tensor::from_vec(h_data.clone(), (n_rows, n), &dev).unwrap();
+    let alpha = candle_core::Tensor::from_vec(alpha_data.clone(), (n,), &dev).unwrap();
+
+    let (residual, norm) = x.fused_add_rms_norm(&h, &alpha, eps).unwrap();
+    let residual_cpu = residual
+        .to_device(&candle_core::Device::Cpu)
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+    let norm_cpu = norm
+        .to_device(&candle_core::Device::Cpu)
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+
+    // Reference: residual = x + h; norm = residual / m * alpha.
+    let mut ref_residual = vec![0.0f32; n_rows * n];
+    let mut ref_norm = vec![0.0f32; n_rows * n];
+    for i in 0..n_rows {
+        let sum2: f64 = (0..n)
+            .map(|j| {
+                let a = (x_data[i * n + j] + h_data[i * n + j]) as f64;
+                ref_residual[i * n + j] = a as f32;
+                a * a
+            })
+            .sum();
+        let m = (sum2 / n as f64 + eps as f64).sqrt();
+        for j in 0..n {
+            ref_norm[i * n + j] =
+                (ref_residual[i * n + j] as f64 / m * alpha_data[j] as f64) as f32;
+        }
+    }
+
+    let res_err = residual_cpu
+        .iter()
+        .flatten()
+        .zip(ref_residual.iter())
+        .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+        .fold(0.0f32, f32::max);
+    let norm_err = norm_cpu
+        .iter()
+        .flatten()
+        .zip(ref_norm.iter())
+        .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+        .fold(0.0f32, f32::max);
+    assert!(
+        res_err <= 2e-3,
+        "fused_add_rms_norm residual max err {res_err} exceeds 2e-3"
+    );
+    assert!(
+        norm_err <= 2e-3,
+        "fused_add_rms_norm norm max err {norm_err} exceeds 2e-3"
+    );
+    tracing::debug!(
+        "Vulkan fused add + rmsnorm matches the reference (residual {res_err}, norm {norm_err})"
+    );
 }

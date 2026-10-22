@@ -63,9 +63,7 @@ pub fn call_fused_quant_gemm_slang(
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
-    unsafe {
-        cbb.dispatch([1, (n.div_ceil(TILE)) as u32, m as u32])
-    }
-    .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
+    unsafe { cbb.dispatch([1, (n.div_ceil(TILE)) as u32, m as u32]) }
+        .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     Ok(())
 }

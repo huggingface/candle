@@ -1,14 +1,14 @@
 //! Slang upsampling dispatch (nearest1d/nearest2d/bilinear2d).
 //! Parameters travel through the pipeline's push constant block, which
 //! also carries the `float` scale factors of the bilinear entry point.
-use vulkano::buffer::Subbuffer;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
-use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
-use vulkano::pipeline::PipelineBindPoint;
 use crate::err::VulkanKernelError;
 use crate::kernel::{KernelName, Kernels};
 use crate::push_constants::UpsampleParams;
 use crate::source::Source;
+use vulkano::buffer::Subbuffer;
+use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
+use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
+use vulkano::pipeline::PipelineBindPoint;
 
 fn buf_info<T>(buf: &Subbuffer<[T]>) -> DescriptorBufferInfo<'_> {
     DescriptorBufferInfo {

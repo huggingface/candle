@@ -31,6 +31,18 @@ impl VulkanStorage {
     ) -> Result<Self> {
         Err(Error::NotCompiledWithVulkanSupport)
     }
+
+    pub fn fused_add_rms_norm(
+        &self,
+        _l: &Layout,
+        _h: &VulkanStorage,
+        _h_l: &Layout,
+        _alpha: &VulkanStorage,
+        _alpha_l: &Layout,
+        _eps: f64,
+    ) -> Result<(Self, Self)> {
+        Err(Error::NotCompiledWithVulkanSupport)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

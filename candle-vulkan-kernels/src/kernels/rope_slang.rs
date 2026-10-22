@@ -1,12 +1,12 @@
 //! Slang rotary-embedding dispatch: one thread per (bh_i, i_t, i_d) pair.
 //! `params` must hold `[b*h, t, d]`.
+use crate::err::VulkanKernelError;
+use crate::kernel::{KernelName, Kernels};
+use crate::source::Source;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
-use crate::err::VulkanKernelError;
-use crate::kernel::{KernelName, Kernels};
-use crate::source::Source;
 fn buf_info<T>(buf: &Subbuffer<[T]>) -> DescriptorBufferInfo<'_> {
     DescriptorBufferInfo {
         buffer: Some(buf.buffer()),

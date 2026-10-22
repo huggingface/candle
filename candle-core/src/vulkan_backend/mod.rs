@@ -11266,6 +11266,94 @@ impl VulkanStorage {
         out.to_dtype(&out_l, out_dtype)
     }
 
+    /// Fused add + RMSNorm over the last dim. `self` is the residual `x`
+    /// `(n_rows, n)` f32, `h` is the add operand `(n_rows, n)` f32, and
+    /// `alpha` is the RMSNorm weight `(n,)` f32. Returns `(residual, norm)`
+    /// where `residual = x + h` and `norm[i][j] = residual[i][j] / m[i] *
+    /// alpha[j]` with `m[i] = sqrt(sum_j(residual[i][j]^2) / n + eps)`.
+    /// This fuses the residual add and the following RMSNorm into a single
+    /// dispatch.
+    pub fn fused_add_rms_norm(
+        &self,
+        l: &Layout,
+        h: &VulkanStorage,
+        h_l: &Layout,
+        alpha: &VulkanStorage,
+        alpha_l: &Layout,
+        eps: f64,
+    ) -> Result<(Self, Self)> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() < 2 {
+            return Err(Error::Vulkan(
+                "fused_add_rms_norm: needs >= 2 dims".to_string().into(),
+            ));
+        }
+        let n = *dims
+            .last()
+            .ok_or_else(|| Error::Vulkan("empty dims".to_string().into()))?;
+        let n_rows: usize = dims[..dims.len() - 1].iter().product();
+        if n_rows == 0 || n == 0 {
+            return Err(Error::Vulkan(
+                "fused_add_rms_norm: empty tensor".to_string().into(),
+            ));
+        }
+        if l.shape().elem_count() != n_rows * n {
+            return Err(Error::Vulkan(
+                "fused_add_rms_norm: layout length mismatch"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (x, keep_x) = self.f32_view(self, l)?;
+        let (h_buf, keep_h) = self.f32_view(h, h_l)?;
+        let (alpha_buf, keep_alpha) = self.f32_view(alpha, alpha_l)?;
+        let residual = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
+        let norm = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
+        let residual_buf = match &residual.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let norm_buf = match &norm.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let params = candle_vulkan_kernels::NormParams {
+            n_rows: n_rows as u64,
+            n: n as u64,
+            eps,
+        };
+        let kernels = self.device.kernels();
+        let (x, h_buf, alpha_buf, residual_buf, norm_buf) =
+            (x, h_buf, alpha_buf, residual_buf, norm_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_add_rms_norm_slang(
+                cbb,
+                &kernels,
+                Source::AddRmsNorm,
+                KernelName::AddRmsNorm,
+                &x,
+                &h_buf,
+                &alpha_buf,
+                &residual_buf,
+                &norm_buf,
+                &params,
+                n_rows,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_x, keep_h, keep_alpha));
+        Ok((residual, norm))
+    }
+
     /// Fused single-query decode attention: `self` is q `(num_heads, head_dim)`
     /// f32, `k`/`v` are `(num_kv_heads, kv_len, head_dim)` f32, contiguous.
     /// Returns the `(num_heads, head_dim)` f32 attention output. The GQA group

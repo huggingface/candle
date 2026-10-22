@@ -27,19 +27,18 @@ pub fn dispatch_single_buffer<T: BufferContents>(
         ..Default::default()
     };
     let writes = [WriteDescriptorSet::buffer(0, &out_info)];
-    let set = DescriptorSet::new(
-        kernels.dss_alloc(),
-        &entry.set_layout,
-        &writes,
-        &[],
-    )
-    .map_err(|e| match e {
-        vulkano::Validated::Error(e) => VulkanKernelError::DescriptorSet(e.to_string()),
-        vulkano::Validated::ValidationError(e) => VulkanKernelError::DescriptorSet(format!(
-            "validation error: {} (requires: {}; vuids: {:?})",
-            e.problem, e.requires_one_of, e.vuids
-        )),
-    })?;
+    let set =
+        DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[]).map_err(|e| {
+            match e {
+                vulkano::Validated::Error(e) => VulkanKernelError::DescriptorSet(e.to_string()),
+                vulkano::Validated::ValidationError(e) => {
+                    VulkanKernelError::DescriptorSet(format!(
+                        "validation error: {} (requires: {}; vuids: {:?})",
+                        e.problem, e.requires_one_of, e.vuids
+                    ))
+                }
+            }
+        })?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)

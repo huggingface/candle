@@ -6,26 +6,18 @@ const AFFINE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/affine.spv")
 const GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm.spv"));
 const GEMM_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm_f16.spv"));
 const GEMM_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gemm_f64.spv"));
-const FUSED_Q40_GEMM_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4_0_gemm.spv"));
-const FUSED_Q4K_GEMM_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4k_gemm.spv"));
+const FUSED_Q40_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4_0_gemm.spv"));
+const FUSED_Q4K_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4k_gemm.spv"));
 const FUSED_Q40_GEMM_M_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4_0_gemm_m.spv"));
 const FUSED_Q4K_GEMM_M_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4k_gemm_m.spv"));
-const FUSED_Q50_GEMM_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5_0_gemm.spv"));
-const FUSED_Q51_GEMM_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5_1_gemm.spv"));
-const FUSED_Q80_GEMM_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8_0_gemm.spv"));
-const FUSED_Q81_GEMM_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8_1_gemm.spv"));
-const FUSED_Q5K_GEMM_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5k_gemm.spv"));
-const FUSED_Q8K_GEMM_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8k_gemm.spv"));
+const FUSED_Q50_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5_0_gemm.spv"));
+const FUSED_Q51_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5_1_gemm.spv"));
+const FUSED_Q80_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8_0_gemm.spv"));
+const FUSED_Q81_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8_1_gemm.spv"));
+const FUSED_Q5K_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5k_gemm.spv"));
+const FUSED_Q8K_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8k_gemm.spv"));
 const FUSED_Q5K_GEMM_M_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5k_gemm_m.spv"));
 const FUSED_Q8K_GEMM_M_SPV: &[u8] =
@@ -35,8 +27,7 @@ const DECODE_ATTENTION_SPV: &[u8] =
 const ZERO_FILL_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zero_fill.spv"));
 const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
 const CONST_SET_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f16.spv"));
-const CONST_SET_BF16_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/const_set_bf16.spv"));
+const CONST_SET_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_bf16.spv"));
 const UNARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary.spv"));
 const BINARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary.spv"));
 const CMP_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp.spv"));
@@ -124,8 +115,7 @@ const TEST_FILL_F8E4M3_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f8e4m3.spv"));
 const TEST_FILL_F8E8M0_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f8e8m0.spv"));
-const TEST_PRINTF_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/test/test_printf.spv"));
+const TEST_PRINTF_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/test_printf.spv"));
 const TO_DTYPE_F16F32_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_f32.spv"));
 const TO_DTYPE_F16BF16_SPV: &[u8] =
@@ -150,221 +140,188 @@ const TO_DTYPE_F64BF16_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_bf16.spv"));
 const TO_DTYPE_F64F32_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_f32.spv"));
-    static TO_DTYPE_U8U32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_u32.spv"));
-    static TO_DTYPE_U8I16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_i16.spv"));
-    static TO_DTYPE_U8I32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_i32.spv"));
-    static TO_DTYPE_U8I64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_i64.spv"));
-    static TO_DTYPE_U8BF16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_bf16.spv"));
-    static TO_DTYPE_U8F16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f16.spv"));
-    static TO_DTYPE_U8F32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f32.spv"));
-    static TO_DTYPE_U8F64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f64.spv"));
-    static TO_DTYPE_U8F8E4M3_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f8e4m3.spv"));
-    static TO_DTYPE_U32U8_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_u8.spv"));
-    static TO_DTYPE_U32I16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_i16.spv"));
-    static TO_DTYPE_U32I32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_i32.spv"));
-    static TO_DTYPE_U32I64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_i64.spv"));
-    static TO_DTYPE_U32BF16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_bf16.spv"));
-    static TO_DTYPE_U32F16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f16.spv"));
-    static TO_DTYPE_U32F32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f32.spv"));
-    static TO_DTYPE_U32F64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f64.spv"));
-    static TO_DTYPE_U32F8E4M3_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f8e4m3.spv"));
-    static TO_DTYPE_I16U8_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_u8.spv"));
-    static TO_DTYPE_I16U32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_u32.spv"));
-    static TO_DTYPE_I16I32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_i32.spv"));
-    static TO_DTYPE_I16I64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_i64.spv"));
-    static TO_DTYPE_I16BF16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_bf16.spv"));
-    static TO_DTYPE_I16F16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f16.spv"));
-    static TO_DTYPE_I16F32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f32.spv"));
-    static TO_DTYPE_I16F64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f64.spv"));
-    static TO_DTYPE_I16F8E4M3_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f8e4m3.spv"));
-    static TO_DTYPE_I32U8_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_u8.spv"));
-    static TO_DTYPE_I32U32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_u32.spv"));
-    static TO_DTYPE_I32I16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_i16.spv"));
-    static TO_DTYPE_I32I64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_i64.spv"));
-    static TO_DTYPE_I32BF16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_bf16.spv"));
-    static TO_DTYPE_I32F16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f16.spv"));
-    static TO_DTYPE_I32F32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f32.spv"));
-    static TO_DTYPE_I32F64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f64.spv"));
-    static TO_DTYPE_I32F8E4M3_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f8e4m3.spv"));
-    static TO_DTYPE_I64U8_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_u8.spv"));
-    static TO_DTYPE_I64U32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_u32.spv"));
-    static TO_DTYPE_I64I16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_i16.spv"));
-    static TO_DTYPE_I64I32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_i32.spv"));
-    static TO_DTYPE_I64BF16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_bf16.spv"));
-    static TO_DTYPE_I64F16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f16.spv"));
-    static TO_DTYPE_I64F32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f32.spv"));
-    static TO_DTYPE_I64F64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f64.spv"));
-    static TO_DTYPE_I64F8E4M3_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f8e4m3.spv"));
-    static TO_DTYPE_F8E4M3U8_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_u8.spv"));
-    static TO_DTYPE_F8E4M3U32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_u32.spv"));
-    static TO_DTYPE_F8E4M3I16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_i16.spv"));
-    static TO_DTYPE_F8E4M3I32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_i32.spv"));
-    static TO_DTYPE_F8E4M3I64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_i64.spv"));
-    static TO_DTYPE_F8E4M3BF16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_bf16.spv"));
-    static TO_DTYPE_F8E4M3F16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_f16.spv"));
-    static TO_DTYPE_F8E4M3F32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_f32.spv"));
-    static TO_DTYPE_F8E4M3F64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_f64.spv"));
-    static TO_DTYPE_BF16U8_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_u8.spv"));
-    static TO_DTYPE_BF16U32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_u32.spv"));
-    static TO_DTYPE_BF16I16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_i16.spv"));
-    static TO_DTYPE_BF16I32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_i32.spv"));
-    static TO_DTYPE_BF16I64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_i64.spv"));
-    static TO_DTYPE_BF16F8E4M3_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_f8e4m3.spv"));
-    static TO_DTYPE_F16U8_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_u8.spv"));
-    static TO_DTYPE_F16U32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_u32.spv"));
-    static TO_DTYPE_F16I16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_i16.spv"));
-    static TO_DTYPE_F16I32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_i32.spv"));
-    static TO_DTYPE_F16I64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_i64.spv"));
-    static TO_DTYPE_F16F8E4M3_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_f8e4m3.spv"));
-    static TO_DTYPE_F32U8_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_u8.spv"));
-    static TO_DTYPE_F32U32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_u32.spv"));
-    static TO_DTYPE_F32I16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_i16.spv"));
-    static TO_DTYPE_F32I32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_i32.spv"));
-    static TO_DTYPE_F32I64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_i64.spv"));
-    static TO_DTYPE_F32F8E4M3_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_f8e4m3.spv"));
-    static TO_DTYPE_F64U8_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_u8.spv"));
-    static TO_DTYPE_F64U32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_u32.spv"));
-    static TO_DTYPE_F64I16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_i16.spv"));
-    static TO_DTYPE_F64I32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_i32.spv"));
-    static TO_DTYPE_F64I64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_i64.spv"));
-    static TO_DTYPE_F64F8E4M3_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_f8e4m3.spv"));
+static TO_DTYPE_U8U32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_u32.spv"));
+static TO_DTYPE_U8I16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_i16.spv"));
+static TO_DTYPE_U8I32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_i32.spv"));
+static TO_DTYPE_U8I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_i64.spv"));
+static TO_DTYPE_U8BF16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_bf16.spv"));
+static TO_DTYPE_U8F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f16.spv"));
+static TO_DTYPE_U8F32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f32.spv"));
+static TO_DTYPE_U8F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f64.spv"));
+static TO_DTYPE_U8F8E4M3_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f8e4m3.spv"));
+static TO_DTYPE_U32U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_u8.spv"));
+static TO_DTYPE_U32I16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_i16.spv"));
+static TO_DTYPE_U32I32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_i32.spv"));
+static TO_DTYPE_U32I64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_i64.spv"));
+static TO_DTYPE_U32BF16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_bf16.spv"));
+static TO_DTYPE_U32F16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f16.spv"));
+static TO_DTYPE_U32F32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f32.spv"));
+static TO_DTYPE_U32F64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f64.spv"));
+static TO_DTYPE_U32F8E4M3_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f8e4m3.spv"));
+static TO_DTYPE_I16U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_u8.spv"));
+static TO_DTYPE_I16U32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_u32.spv"));
+static TO_DTYPE_I16I32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_i32.spv"));
+static TO_DTYPE_I16I64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_i64.spv"));
+static TO_DTYPE_I16BF16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_bf16.spv"));
+static TO_DTYPE_I16F16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f16.spv"));
+static TO_DTYPE_I16F32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f32.spv"));
+static TO_DTYPE_I16F64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f64.spv"));
+static TO_DTYPE_I16F8E4M3_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f8e4m3.spv"));
+static TO_DTYPE_I32U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_u8.spv"));
+static TO_DTYPE_I32U32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_u32.spv"));
+static TO_DTYPE_I32I16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_i16.spv"));
+static TO_DTYPE_I32I64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_i64.spv"));
+static TO_DTYPE_I32BF16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_bf16.spv"));
+static TO_DTYPE_I32F16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f16.spv"));
+static TO_DTYPE_I32F32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f32.spv"));
+static TO_DTYPE_I32F64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f64.spv"));
+static TO_DTYPE_I32F8E4M3_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f8e4m3.spv"));
+static TO_DTYPE_I64U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_u8.spv"));
+static TO_DTYPE_I64U32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_u32.spv"));
+static TO_DTYPE_I64I16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_i16.spv"));
+static TO_DTYPE_I64I32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_i32.spv"));
+static TO_DTYPE_I64BF16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_bf16.spv"));
+static TO_DTYPE_I64F16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f16.spv"));
+static TO_DTYPE_I64F32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f32.spv"));
+static TO_DTYPE_I64F64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f64.spv"));
+static TO_DTYPE_I64F8E4M3_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f8e4m3.spv"));
+static TO_DTYPE_F8E4M3U8_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_u8.spv"));
+static TO_DTYPE_F8E4M3U32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_u32.spv"));
+static TO_DTYPE_F8E4M3I16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_i16.spv"));
+static TO_DTYPE_F8E4M3I32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_i32.spv"));
+static TO_DTYPE_F8E4M3I64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_i64.spv"));
+static TO_DTYPE_F8E4M3BF16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_bf16.spv"));
+static TO_DTYPE_F8E4M3F16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_f16.spv"));
+static TO_DTYPE_F8E4M3F32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_f32.spv"));
+static TO_DTYPE_F8E4M3F64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_f64.spv"));
+static TO_DTYPE_BF16U8_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_u8.spv"));
+static TO_DTYPE_BF16U32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_u32.spv"));
+static TO_DTYPE_BF16I16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_i16.spv"));
+static TO_DTYPE_BF16I32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_i32.spv"));
+static TO_DTYPE_BF16I64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_i64.spv"));
+static TO_DTYPE_BF16F8E4M3_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_f8e4m3.spv"));
+static TO_DTYPE_F16U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_u8.spv"));
+static TO_DTYPE_F16U32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_u32.spv"));
+static TO_DTYPE_F16I16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_i16.spv"));
+static TO_DTYPE_F16I32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_i32.spv"));
+static TO_DTYPE_F16I64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_i64.spv"));
+static TO_DTYPE_F16F8E4M3_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_f8e4m3.spv"));
+static TO_DTYPE_F32U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_u8.spv"));
+static TO_DTYPE_F32U32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_u32.spv"));
+static TO_DTYPE_F32I16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_i16.spv"));
+static TO_DTYPE_F32I32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_i32.spv"));
+static TO_DTYPE_F32I64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_i64.spv"));
+static TO_DTYPE_F32F8E4M3_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_f8e4m3.spv"));
+static TO_DTYPE_F64U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_u8.spv"));
+static TO_DTYPE_F64U32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_u32.spv"));
+static TO_DTYPE_F64I16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_i16.spv"));
+static TO_DTYPE_F64I32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_i32.spv"));
+static TO_DTYPE_F64I64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_i64.spv"));
+static TO_DTYPE_F64F8E4M3_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_f8e4m3.spv"));
 
-    static INDEX_ADD_F32U32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f32_u32.spv"));
-    static INDEX_ADD_F32I64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f32_i64.spv"));
-    static INDEX_ADD_F32U8_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f32_u8.spv"));
-    static INDEX_ADD_F16U32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f16_u32.spv"));
-    static INDEX_ADD_F16I64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f16_i64.spv"));
-    static INDEX_ADD_F16U8_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f16_u8.spv"));
-    static INDEX_ADD_F64U32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f64_u32.spv"));
-    static INDEX_ADD_F64I64_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f64_i64.spv"));
-    static INDEX_ADD_F64U8_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f64_u8.spv"));
-    static DEQUANT_F32_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_f32.spv"));
-    static DEQUANT_F16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_f16.spv"));
-    static DEQUANT_BF16_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_bf16.spv"));
-    static DEQUANT_Q4_0_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q4_0.spv"));
-    static DEQUANT_Q4_1_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q4_1.spv"));
-    static DEQUANT_Q5_0_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q5_0.spv"));
-    static DEQUANT_Q5_1_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q5_1.spv"));
-    static DEQUANT_Q8_0_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q8_0.spv"));
-    static DEQUANT_Q8_1_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q8_1.spv"));
-    static DEQUANT_Q2K_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q2k.spv"));
-    static DEQUANT_Q3K_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q3k.spv"));
-    static DEQUANT_Q4K_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q4k.spv"));
-    static DEQUANT_Q5K_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q5k.spv"));
-    static DEQUANT_Q6K_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q6k.spv"));
-    static DEQUANT_Q8K_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q8k.spv"));
-    static RMS_NORM_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/rms_norm.spv"));
-    static LAYER_NORM_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/layer_norm.spv"));
-    static SIGMOID_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/sigmoid.spv"));
-    static SOFTMAX_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/softmax.spv"));
-    static ROPE_SPV: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/rope.spv"));
+static INDEX_ADD_F32U32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f32_u32.spv"));
+static INDEX_ADD_F32I64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f32_i64.spv"));
+static INDEX_ADD_F32U8_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f32_u8.spv"));
+static INDEX_ADD_F16U32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f16_u32.spv"));
+static INDEX_ADD_F16I64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f16_i64.spv"));
+static INDEX_ADD_F16U8_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f16_u8.spv"));
+static INDEX_ADD_F64U32_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f64_u32.spv"));
+static INDEX_ADD_F64I64_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f64_i64.spv"));
+static INDEX_ADD_F64U8_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/index_add_f64_u8.spv"));
+static DEQUANT_F32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_f32.spv"));
+static DEQUANT_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_f16.spv"));
+static DEQUANT_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_bf16.spv"));
+static DEQUANT_Q4_0_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q4_0.spv"));
+static DEQUANT_Q4_1_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q4_1.spv"));
+static DEQUANT_Q5_0_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q5_0.spv"));
+static DEQUANT_Q5_1_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q5_1.spv"));
+static DEQUANT_Q8_0_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q8_0.spv"));
+static DEQUANT_Q8_1_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q8_1.spv"));
+static DEQUANT_Q2K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q2k.spv"));
+static DEQUANT_Q3K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q3k.spv"));
+static DEQUANT_Q4K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q4k.spv"));
+static DEQUANT_Q5K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q5k.spv"));
+static DEQUANT_Q6K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q6k.spv"));
+static DEQUANT_Q8K_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dequant_q8k.spv"));
+static RMS_NORM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rms_norm.spv"));
+static ADD_RMS_NORM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/add_rms_norm.spv"));
+static LAYER_NORM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/layer_norm.spv"));
+static SIGMOID_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sigmoid.spv"));
+static SOFTMAX_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/softmax.spv"));
+static ROPE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rope.spv"));
 
 /// The set of compiled compute shaders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -587,6 +544,7 @@ pub enum Source {
     DequantQ6K,
     DequantQ8K,
     RmsNorm,
+    AddRmsNorm,
     LayerNorm,
     Sigmoid,
     Softmax,
@@ -803,12 +761,9 @@ impl Source {
             | KernelName::UnaryTanhF64
             | KernelName::UnaryTanhF8e4m3 => 16,
             // `const_set`: `uint64_t count; float value;`
-            KernelName::ConstSetBf16
-            | KernelName::ConstSetF16
-            | KernelName::ConstSetF32 => 16,
+            KernelName::ConstSetBf16 | KernelName::ConstSetF16 | KernelName::ConstSetF32 => 16,
             // `rms_norm`/`layer_norm`: `uint64_t n_rows; uint64_t n; double eps;`
-            KernelName::LayerNorm
-            | KernelName::RmsNorm => 24,
+            KernelName::LayerNorm | KernelName::RmsNorm | KernelName::AddRmsNorm => 24,
             // `upsample`: 5 x `uint64_t` extents, 2 x `double` scales, `uint64_t` align.
             KernelName::UpsampleBilinear2dF16
             | KernelName::UpsampleBilinear2dF32
@@ -1047,6 +1002,7 @@ impl Source {
             Self::DequantQ6K => DEQUANT_Q6K_SPV,
             Self::DequantQ8K => DEQUANT_Q8K_SPV,
             Self::RmsNorm => RMS_NORM_SPV,
+            Self::AddRmsNorm => ADD_RMS_NORM_SPV,
             Self::LayerNorm => LAYER_NORM_SPV,
             Self::Sigmoid => SIGMOID_SPV,
             Self::Softmax => SOFTMAX_SPV,
@@ -1281,6 +1237,7 @@ impl AsRef<str> for Source {
             Self::DequantQ6K => "dequant_q6k",
             Self::DequantQ8K => "dequant_q8k",
             Self::RmsNorm => "rms_norm",
+            Self::AddRmsNorm => "add_rms_norm",
             Self::LayerNorm => "layer_norm",
             Self::Sigmoid => "sigmoid",
             Self::Softmax => "softmax",

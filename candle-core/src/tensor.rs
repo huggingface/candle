@@ -1520,6 +1520,39 @@ impl Tensor {
         ))
     }
 
+    /// Fused add + RMSNorm over the last dim (Vulkan only). `self` is the
+    /// residual `x`, `h` is the add operand (same shape as `x`), and `alpha`
+    /// is the RMSNorm weight (`x`'s last dim). Returns `(residual, norm)`
+    /// where `residual = x + h` and `norm = RMSNorm(residual) * alpha`. This
+    /// fuses the residual add and the following RMSNorm into a single dispatch.
+    pub fn fused_add_rms_norm(&self, h: &Self, alpha: &Self, eps: f32) -> Result<(Self, Self)> {
+        let shape = self.shape().clone();
+        if shape.elem_count() != h.shape().elem_count() {
+            bail!(
+                "fused_add_rms_norm: shape mismatch: self {:?}, h {:?}",
+                self.dims(),
+                h.dims()
+            );
+        }
+        let (xs, xl) = self.storage_and_layout();
+        let (hs, hl) = h.storage_and_layout();
+        let (as_, al) = alpha.storage_and_layout();
+        let (residual, norm) = match (&*xs, &*hs, &*as_) {
+            (Storage::Vulkan(xv), Storage::Vulkan(hv), Storage::Vulkan(av)) => {
+                xv.fused_add_rms_norm(xl, hv, hl, av, al, eps as f64)?
+            }
+            _ => bail!("fused_add_rms_norm: requires f32 Vulkan tensors"),
+        };
+        let residual_t = from_storage(
+            Storage::Vulkan(residual),
+            shape.clone(),
+            BackpropOp::none(),
+            false,
+        );
+        let norm_t = from_storage(Storage::Vulkan(norm), shape, BackpropOp::none(), false);
+        Ok((residual_t, norm_t))
+    }
+
     /// Performs strict matrix-vector multiplication (`[m, n] * [n] = [m]`).
     ///
     /// - If `self` is a matrix (`[m, n]`) and `rhs` is a vector (`[n]`), returns a vector (`[m]`).

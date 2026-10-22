@@ -3,13 +3,13 @@
 //! `i = (pre_i * nsrc + src_idx) * post + r`, executed with the
 //! `SPV_EXT_shader_atomic_float_add` capability (duplicate index positions
 //! are safe). `params` must hold `[total, post_dim, nsrc, max_idx]`.
+use crate::err::VulkanKernelError;
+use crate::kernel::{KernelName, Kernels};
+use crate::source::Source;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
-use crate::err::VulkanKernelError;
-use crate::kernel::{KernelName, Kernels};
-use crate::source::Source;
 
 fn buf_info<T>(buf: &Subbuffer<[T]>) -> DescriptorBufferInfo<'_> {
     DescriptorBufferInfo {

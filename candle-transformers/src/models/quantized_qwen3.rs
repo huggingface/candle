@@ -456,8 +456,9 @@ impl LayerWeights {
     fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let h = self.ln1.forward(x)?;
         let h = self.self_attn.forward(&h, mask, offset)?;
-        let x = (x + h)?;
-        let h2 = self.ln2.forward(&x)?;
+        // Fused add + RMSNorm: one kernel instead of add + RMSNorm (Vulkan f32);
+        // falls back to the decomposed path on other backends.
+        let (x, h2) = self.ln2.fused_add_forward(x, &h)?;
         let h2 = h2.apply(&self.mlp)?;
         x + h2
     }

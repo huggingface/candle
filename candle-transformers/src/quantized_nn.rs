@@ -116,6 +116,19 @@ impl RmsNorm {
         let weight = weight.dequantize(&weight.device())?;
         Ok(Self { weight, eps, span })
     }
+
+    /// Fused add + RMSNorm: computes `(x + h, RMSNorm(x + h) * self.weight)`.
+    /// On the Vulkan backend with f32 inputs this is a single fused dispatch;
+    /// otherwise it falls back to the decomposed add + RMSNorm.
+    pub fn fused_add_forward(&self, x: &Tensor, h: &Tensor) -> Result<(Tensor, Tensor)> {
+        let _enter = self.span.enter();
+        if x.device().is_vulkan() && x.dtype() == candle::DType::F32 {
+            return x.fused_add_rms_norm(h, &self.weight, self.eps as f32);
+        }
+        let x_new = (x + h)?;
+        let x_norm = candle_nn::ops::rms_norm(&x_new, &self.weight, self.eps as f32)?;
+        Ok((x_new, x_norm))
+    }
 }
 
 impl Module for RmsNorm {

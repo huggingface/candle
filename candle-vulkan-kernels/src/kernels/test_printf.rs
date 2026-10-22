@@ -36,19 +36,18 @@ pub fn call_test_printf<T: BufferContents>(
         WriteDescriptorSet::buffer(0, &in_info),
         WriteDescriptorSet::buffer(1, &out_info),
     ];
-    let set = DescriptorSet::new(
-        kernels.dss_alloc(),
-        &entry.set_layout,
-        &writes,
-        &[],
-    )
-    .map_err(|e| match e {
-        vulkano::Validated::Error(e) => VulkanKernelError::DescriptorSet(e.to_string()),
-        vulkano::Validated::ValidationError(e) => VulkanKernelError::DescriptorSet(format!(
-            "validation error: {} (requires: {}; vuids: {:?})",
-            e.problem, e.requires_one_of, e.vuids
-        )),
-    })?;
+    let set =
+        DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[]).map_err(|e| {
+            match e {
+                vulkano::Validated::Error(e) => VulkanKernelError::DescriptorSet(e.to_string()),
+                vulkano::Validated::ValidationError(e) => {
+                    VulkanKernelError::DescriptorSet(format!(
+                        "validation error: {} (requires: {}; vuids: {:?})",
+                        e.problem, e.requires_one_of, e.vuids
+                    ))
+                }
+            }
+        })?;
 
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;

@@ -1,11 +1,11 @@
 //! Slang Sigmoid dispatch.
+use crate::err::VulkanKernelError;
+use crate::kernel::{KernelName, Kernels};
+use crate::source::Source;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
-use crate::err::VulkanKernelError;
-use crate::kernel::{KernelName, Kernels};
-use crate::source::Source;
 
 fn buf_info<T>(buf: &Subbuffer<[T]>) -> DescriptorBufferInfo<'_> {
     DescriptorBufferInfo {

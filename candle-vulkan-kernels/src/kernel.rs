@@ -481,6 +481,7 @@ pub enum KernelName {
     DequantQ6K,
     DequantQ8K,
     RmsNorm,
+    AddRmsNorm,
     LayerNorm,
     Sigmoid,
     Softmax,
@@ -949,6 +950,7 @@ impl AsRef<str> for KernelName {
             Self::DequantQ6K => "main",
             Self::DequantQ8K => "main",
             Self::RmsNorm => "main",
+            Self::AddRmsNorm => "main",
             Self::LayerNorm => "main",
             Self::Sigmoid => "main",
             Self::Softmax => "main",
@@ -1030,10 +1032,8 @@ impl Kernels {
     ) -> Result<PipelineEntry, VulkanKernelError> {
         let words = source.spv_words();
         let create_info = vulkano::shader::ShaderModuleCreateInfo::new(&words);
-        let shader = unsafe {
-            vulkano::shader::ShaderModule::new(&self.device, &create_info)
-        }
-        .map_err(pipeline_error)?;
+        let shader = unsafe { vulkano::shader::ShaderModule::new(&self.device, &create_info) }
+            .map_err(pipeline_error)?;
 
         let entry_point = shader
             .entry_point(name.as_ref())
@@ -1041,8 +1041,7 @@ impl Kernels {
 
         let bindings: Vec<_> = (0..descriptor_bindings(name))
             .map(|i| {
-                let mut b =
-                    DescriptorSetLayoutBinding::new(DescriptorType::StorageBuffer);
+                let mut b = DescriptorSetLayoutBinding::new(DescriptorType::StorageBuffer);
                 b.binding = i;
                 b.stages = ShaderStages::COMPUTE;
                 b
@@ -1052,8 +1051,8 @@ impl Kernels {
             bindings: &bindings,
             ..Default::default()
         };
-        let set_layout = DescriptorSetLayout::new(&self.device, &create_info)
-            .map_err(pipeline_error)?;
+        let set_layout =
+            DescriptorSetLayout::new(&self.device, &create_info).map_err(pipeline_error)?;
 
         let set_layouts = [&set_layout];
         let push_constant_ranges: Vec<PushConstantRange> = {
@@ -1073,16 +1072,11 @@ impl Kernels {
             push_constant_ranges: &push_constant_ranges,
             ..Default::default()
         };
-        let layout = PipelineLayout::new(&self.device, &create_info)
-            .map_err(pipeline_error)?;
+        let layout = PipelineLayout::new(&self.device, &create_info).map_err(pipeline_error)?;
         let stage = PipelineShaderStageCreateInfo::new(&entry_point);
         let create_info = ComputePipelineCreateInfo::new(stage, &layout);
-        let pipeline = ComputePipeline::new(
-            &self.device,
-            None,
-            &create_info,
-        )
-        .map_err(pipeline_error)?;
+        let pipeline =
+            ComputePipeline::new(&self.device, None, &create_info).map_err(pipeline_error)?;
 
         Ok(PipelineEntry {
             pipeline,
@@ -1103,7 +1097,7 @@ impl Kernels {
 /// Kernels whose parameters travel through the push constant block declare
 /// one binding fewer than their pre-push-constant shaders.
 fn descriptor_bindings(name: KernelName) -> u32 {
-        match name {
+    match name {
         // affine: input/output (params are push constants).
         KernelName::AffineBf16
         | KernelName::AffineF16
@@ -1320,11 +1314,10 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         // zero_fill: dst + params.
         KernelName::ZeroFill => 2,
         // const_set: output (params are push constants).
-        KernelName::ConstSetBf16
-        | KernelName::ConstSetF16
-        | KernelName::ConstSetF32 => 1,
+        KernelName::ConstSetBf16 | KernelName::ConstSetF16 | KernelName::ConstSetF32 => 1,
         // row-norm kernels: src/alpha(/beta)/dst (params are push constants).
         KernelName::RmsNorm => 3,
+        KernelName::AddRmsNorm => 5,
         KernelName::LayerNorm => 4,
         // 1 storage buffer(s).
         KernelName::TestFillF16

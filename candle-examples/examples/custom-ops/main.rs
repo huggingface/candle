@@ -66,7 +66,7 @@ impl CustomOp1 for LayerNorm {
             candle::Storage::Vulkan(s) => s.clone(),
             _ => return Err(candle::Error::Msg("not vulkan".to_string())),
         };
-        let out = storage.rms_norm(layout, &alpha_storage, &alpha_l, self.eps as f64)?;
+        let out = storage.rms_norm(layout, &alpha_storage, alpha_l, self.eps as f64)?;
         Ok((out, layout.shape().clone()))
     }
 
