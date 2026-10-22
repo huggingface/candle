@@ -365,9 +365,7 @@ pub struct VulkanStorage {
 
 impl Clone for VulkanStorage {
     fn clone(&self) -> Self {
-        if let VulkanStorageBuffer::F32(b) = &self.buffer {
-            self.device.buffer_instance_add(b.buffer());
-        }
+        self.device.buffer_instance_add(&self.buffer.buffer());
         VulkanStorage {
             buffer: self.buffer.clone(),
             device: self.device.clone(),
@@ -384,39 +382,36 @@ impl VulkanStorage {
     /// (kernel write, copy, or `zero_fill`) before any read.
     pub fn new(device: &VulkanDevice, size: usize, dtype: DType) -> Result<Self> {
         let slice = match dtype {
-            DType::U8 => VulkanStorageBuffer::U8(Self::create_vram_buffer::<u8>(device, size)?),
-            DType::U32 => VulkanStorageBuffer::U32(Self::create_vram_buffer::<u32>(device, size)?),
-            DType::I16 => VulkanStorageBuffer::I16(Self::create_vram_buffer::<i16>(device, size)?),
-            DType::I32 => VulkanStorageBuffer::I32(Self::create_vram_buffer::<i32>(device, size)?),
-            DType::I64 => VulkanStorageBuffer::I64(Self::create_vram_buffer::<i64>(device, size)?),
+            DType::U8 => VulkanStorageBuffer::U8(Self::new_pooled::<u8>(device, dtype, size)?),
+            DType::U32 => VulkanStorageBuffer::U32(Self::new_pooled::<u32>(device, dtype, size)?),
+            DType::I16 => VulkanStorageBuffer::I16(Self::new_pooled::<i16>(device, dtype, size)?),
+            DType::I32 => VulkanStorageBuffer::I32(Self::new_pooled::<i32>(device, dtype, size)?),
+            DType::I64 => VulkanStorageBuffer::I64(Self::new_pooled::<i64>(device, dtype, size)?),
             DType::BF16 => {
-                VulkanStorageBuffer::BF16(Self::create_vram_buffer::<half::bf16>(device, size)?)
+                VulkanStorageBuffer::BF16(Self::new_pooled::<half::bf16>(device, dtype, size)?)
             }
             DType::F16 => {
-                VulkanStorageBuffer::F16(Self::create_vram_buffer::<half::f16>(device, size)?)
+                VulkanStorageBuffer::F16(Self::new_pooled::<half::f16>(device, dtype, size)?)
             }
-            DType::F32 => {
-                let b = Self::new_f32_pooled(device, size)?;
-                device.buffer_instance_add(b.buffer());
-                VulkanStorageBuffer::F32(b)
-            }
-            DType::F64 => VulkanStorageBuffer::F64(Self::create_vram_buffer::<f64>(device, size)?),
-            DType::F8E4M3 => VulkanStorageBuffer::F8E4M3(Self::create_vram_buffer::<
-                microfloat::f8e4m3,
-            >(device, size)?),
-            DType::F6E2M3 => VulkanStorageBuffer::F6E2M3(Self::create_vram_buffer::<
-                microfloat::f6e2m3fn,
-            >(device, size)?),
-            DType::F6E3M2 => VulkanStorageBuffer::F6E3M2(Self::create_vram_buffer::<
-                microfloat::f6e3m2fn,
-            >(device, size)?),
-            DType::F4 => VulkanStorageBuffer::F4(Self::create_vram_buffer::<microfloat::f4e2m1fn>(
-                device, size,
+            DType::F32 => VulkanStorageBuffer::F32(Self::new_pooled::<f32>(device, dtype, size)?),
+            DType::F64 => VulkanStorageBuffer::F64(Self::new_pooled::<f64>(device, dtype, size)?),
+            DType::F8E4M3 => VulkanStorageBuffer::F8E4M3(Self::new_pooled::<microfloat::f8e4m3>(
+                device, dtype, size,
             )?),
-            DType::F8E8M0 => VulkanStorageBuffer::F8E8M0(Self::create_vram_buffer::<
-                microfloat::f8e8m0fnu,
-            >(device, size)?),
+            DType::F6E2M3 => VulkanStorageBuffer::F6E2M3(Self::new_pooled::<microfloat::f6e2m3fn>(
+                device, dtype, size,
+            )?),
+            DType::F6E3M2 => VulkanStorageBuffer::F6E3M2(Self::new_pooled::<microfloat::f6e3m2fn>(
+                device, dtype, size,
+            )?),
+            DType::F4 => VulkanStorageBuffer::F4(Self::new_pooled::<microfloat::f4e2m1fn>(
+                device, dtype, size,
+            )?),
+            DType::F8E8M0 => VulkanStorageBuffer::F8E8M0(
+                Self::new_pooled::<microfloat::f8e8m0fnu>(device, dtype, size)?,
+            ),
         };
+        device.buffer_instance_add(&slice.buffer());
         Ok(Self {
             buffer: slice,
             device: device.clone(),
@@ -461,17 +456,21 @@ impl VulkanStorage {
         &self.buffer
     }
 
-    /// Allocates an f32 device buffer, taking a pooled buffer of exactly
-    /// the right size when one is available; otherwise a fresh
-    /// (uninitialized) allocation like `create_vram_buffer`.
-    fn new_f32_pooled(device: &VulkanDevice, size: usize) -> Result<Subbuffer<[f32]>> {
-        let bytes = size * std::mem::size_of::<f32>();
-        if bytes >= crate::vulkan_backend::device::POOL_F32_MIN_BYTES {
-            if let Some(buf) = device.pool_take_f32(bytes) {
-                return Ok(buf);
+    /// Allocates a device buffer of `size` elements of `dtype`, taking a
+    /// pooled buffer of exactly the right (dtype, size) when one is
+    /// available; otherwise a fresh (uninitialized) allocation like
+    /// `create_vram_buffer`.
+    fn new_pooled<T>(device: &VulkanDevice, dtype: DType, size: usize) -> Result<Subbuffer<[T]>>
+    where
+        T: BufferContents,
+    {
+        let bytes = size * std::mem::size_of::<T>();
+        if bytes >= crate::vulkan_backend::device::POOL_MIN_BYTES {
+            if let Some(arc) = device.pool_take(dtype, bytes) {
+                return Ok(Subbuffer::new(arc).cast_aligned::<T>());
             }
         }
-        Self::create_vram_buffer::<f32>(device, size)
+        Self::create_vram_buffer::<T>(device, size)
     }
 
     /// Creates an **uninitialized** device-local buffer holding `size`
@@ -1423,34 +1422,24 @@ impl VulkanStorage {
 
 impl Drop for VulkanStorage {
     fn drop(&mut self) {
-        // Return eligible f32 buffers to the pool so the next token's
-        // same-size allocation does not hit the allocator. Only the last
+        // Return eligible buffers to the pool so the next op's same-size
+        // allocation does not hit the allocator. Only the last
         // `VulkanStorage` instance may return the buffer (tracked per
         // buffer, see `BufferInstance`): a shallow clone keeps a live
         // instance alive, while a pending encode's captured subbuffer
         // does not block the return — the pool's pending gate and the
         // queue's FIFO order keep the GPU from racing a re-handed-out
         // buffer.
-        let f32 = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => b,
-            _ => return,
-        };
-        let bytes = f32.len() as usize * std::mem::size_of::<f32>();
-        if bytes < crate::vulkan_backend::device::POOL_F32_MIN_BYTES {
+        let arc = self.buffer.buffer();
+        let last = self.device.buffer_instance_sub(&arc);
+        if !last {
             return;
         }
-        if !self.device.buffer_instance_sub(f32.buffer()) {
+        let bytes = self.buffer.as_u8().len() as usize;
+        if bytes < crate::vulkan_backend::device::POOL_MIN_BYTES {
             return;
         }
-        let replacement = VulkanStorageBuffer::F32(f32.clone());
-        let buf = match std::mem::replace(&mut self.buffer, replacement) {
-            VulkanStorageBuffer::F32(b) => b,
-            other => {
-                drop(other);
-                return;
-            }
-        };
-        self.device.pool_return_f32(bytes, buf);
+        self.device.pool_return(self.dtype, bytes, arc);
     }
 }
 
