@@ -211,14 +211,20 @@ impl QVulkanStorage {
                 "dequantize: elem_count {elem_count} is not a multiple of block size {block}"
             );
         }
-        let num_blocks = elem_count / block;
+        self.dequantize_src(self.src_bytes(), elem_count)
+    }
+
+    /// Dequantizes `elem_count` elements from `src` (a byte-view of the
+    /// quantized data holding exactly `elem_count / block` blocks) to an f32
+    /// `VulkanStorage`. `elem_count` must be a multiple of the block size.
+    fn dequantize_src(&self, src: Subbuffer<[u8]>, elem_count: usize) -> Result<VulkanStorage> {
+        let num_blocks = elem_count / self.dtype.block_size();
         let (source, name) = dequantize_kernel(self.dtype);
         let out = VulkanStorage::new(&self.device, elem_count, DType::F32)?;
         let dst = match out.buffer() {
             crate::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
             _ => crate::bail!("dequantize: out was created as F32"),
         };
-        let src = self.src_bytes();
         // params[0] = num_blocks
         let params_buf = Buffer::from_iter(
             self.device.mem_alloc(),
@@ -247,8 +253,13 @@ impl QVulkanStorage {
         Ok(out)
     }
 
-    /// Gathers the requested embedding rows by dequantizing the whole
-    /// `(rows, hidden)` weight matrix to f32 and gathering along dim 0.
+    /// Gathers the requested embedding rows.
+    ///
+    /// A single id (decode) dequantizes only the requested row: each row is a
+    /// contiguous range of quantized blocks, so the per-type dequantize kernel
+    /// runs over a byte-view of that row (`hidden / block` blocks) instead of
+    /// the whole `(rows, hidden)` matrix. Multiple ids (prefill) dequantize
+    /// the whole matrix to f32 and gather along dim 0.
     pub fn embedding(
         &self,
         rows: usize,
@@ -262,17 +273,29 @@ impl QVulkanStorage {
                 self.dtype.block_size()
             )
         }
-        let data_f32 = self.dequantize(rows * hidden)?;
-        let data_l = Layout::new((rows, hidden).into(), vec![hidden, 1], 0);
-        // The Vulkan gather does per-element row selection (output shape = ids
-        // shape), so build 2D ids `(num_ids, hidden)` with each row the id
-        // repeated to gather full rows: `out[i][j] = data[ids[i]][j]`.
         let ids_cpu = ids_storage.to_cpu_storage()?;
         let ids_vals: Vec<u32> = match ids_cpu {
             CpuStorage::U32(v) => v,
             _ => crate::bail!("quantized embedding: ids must be u32"),
         };
+        // Decode fast path: dequantize the single requested row.
+        if ids_vals.len() == 1 {
+            let id = ids_vals[0] as usize;
+            if id >= rows {
+                crate::bail!("quantized embedding: id {id} out of range [0, {rows})");
+            }
+            let block = self.dtype.block_size();
+            let row_bytes = (hidden / block) * self.dtype.type_size();
+            let start = id as u64 * row_bytes as u64;
+            let src = self.src_bytes().slice(start..start + row_bytes as u64);
+            return self.dequantize_src(src, hidden);
+        }
         let num_ids = ids_vals.len();
+        let data_f32 = self.dequantize(rows * hidden)?;
+        let data_l = Layout::new((rows, hidden).into(), vec![hidden, 1], 0);
+        // The Vulkan gather does per-element row selection (output shape = ids
+        // shape), so build 2D ids `(num_ids, hidden)` with each row the id
+        // repeated to gather full rows: `out[i][j] = data[ids[i]][j]`.
         let ids2d: Vec<u32> = ids_vals
             .iter()
             .flat_map(|&id| std::iter::repeat_n(id, hidden))
