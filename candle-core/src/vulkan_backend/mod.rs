@@ -501,48 +501,48 @@ impl VulkanStorage {
         })?;
         Ok(vram_buffer)
     }
+    /// Returns the device's reusable host-visible readback buffer, growing
+    /// it when needed: a fresh allocation per readback would page in a new
+    /// host mapping every time.
+    fn readback_buffer(device: &VulkanDevice, bytes: u64) -> Result<std::sync::Arc<Buffer>> {
+        let mut readback = device
+            .readback()
+            .lock()
+            .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        if readback.as_ref().is_some_and(|b| b.size() >= bytes) {
+            return Ok(readback.clone().unwrap());
+        }
+        let buffer = Buffer::new(
+            device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            // Buffer::new takes the size from the layout.
+            DeviceLayout::from_size_alignment(bytes, 1).unwrap(),
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create host readback buffer: {error:?}").into())
+        })?;
+        *readback = Some(buffer.clone());
+        Ok(buffer)
+    }
+
     /// Copies a device-local (VRAM) buffer to a host-visible buffer and
-    /// returns its contents as an owned `Vec<T>`.
+    /// returns its contents as an owned `Vec<T>`. The copy is submitted as
+    /// its own immediate command buffer and waited on.
     fn copy_to_host<T>(device: &VulkanDevice, vram: &Subbuffer<[T]>) -> Result<Vec<T>>
     where
         T: BufferContents + Default + Clone,
     {
         let len = vram.len();
         let bytes = len * std::mem::size_of::<T>() as u64;
-        // Reuse the device's host-visible readback buffer, growing it when
-        // needed: a fresh allocation per readback would page in a new host
-        // mapping every time.
-        let buffer = {
-            let mut readback = device
-                .readback()
-                .lock()
-                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-            if readback.as_ref().is_some_and(|b| b.size() >= bytes) {
-                readback.clone().unwrap()
-            } else {
-                let buffer = Buffer::new(
-                    device.mem_alloc(),
-                    &BufferCreateInfo {
-                        usage: BufferUsage::TRANSFER_DST,
-                        ..Default::default()
-                    },
-                    &AllocationCreateInfo {
-                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                            | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                        ..Default::default()
-                    },
-                    // Buffer::new takes the size from the layout.
-                    DeviceLayout::from_size_alignment(bytes, 1).unwrap(),
-                )
-                .map_err(|error| {
-                    Error::Vulkan(
-                        format!("Unable to create host readback buffer: {error:?}").into(),
-                    )
-                })?;
-                *readback = Some(buffer.clone());
-                buffer
-            }
-        };
+        let buffer = Self::readback_buffer(device, bytes)?;
         let destination_buffer: Subbuffer<[T]> =
             Subbuffer::from(buffer).slice(0..bytes).cast_aligned::<T>();
         let mut builder = AutoCommandBufferBuilder::primary(
@@ -587,6 +587,37 @@ impl VulkanStorage {
         })?;
         Ok(data.to_vec())
     }
+
+    /// Like `copy_to_host`, but records the readback copy on the pending
+    /// batch and drains it with a single `synchronize`, so the copy is
+    /// submitted together with the deferred encodes that produced `vram`:
+    /// one queue submission and one fence wait instead of a second,
+    /// separate immediate submit and wait.
+    fn copy_to_host_batched<T>(device: &VulkanDevice, vram: &Subbuffer<[T]>) -> Result<Vec<T>>
+    where
+        T: BufferContents + Default + Clone,
+    {
+        let len = vram.len();
+        let bytes = len * std::mem::size_of::<T>() as u64;
+        let buffer = Self::readback_buffer(device, bytes)?;
+        let destination: Subbuffer<[T]> =
+            Subbuffer::from(buffer).slice(0..bytes).cast_aligned::<T>();
+        let src = vram.clone();
+        let dst = destination.clone();
+        device.execute(move |cbb| {
+            cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+        device.synchronize()?;
+        let data = destination.read().map_err(|error| {
+            Error::Vulkan(
+                format!("Unable to acquire read lock on readback buffer: {error:?}").into(),
+            )
+        })?;
+        Ok(data.to_vec())
+    }
+
     /// Runs the `test_fill_f16` slang kernel over this storage: element `i`
     /// is filled with the bits of `i` reinterpreted as an f16 value, so a
     /// 65,536-element storage ends up holding every possible f16 value.
@@ -1693,24 +1724,34 @@ impl BackendStorage for VulkanStorage {
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         let device = self.device.clone();
-        // Drain any deferred encodes first: the readback copy is submitted
-        // on the same queue and must not land ahead of pending work.
-        device.synchronize()?;
+        // The readback copy is recorded on the pending batch and drained
+        // with the deferred encodes by one `synchronize` (one queue
+        // submission), so it runs after all prior work on the queue.
         Ok(match &self.buffer {
-            VulkanStorageBuffer::U8(b) => CpuStorage::U8(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::U32(b) => CpuStorage::U32(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::I16(b) => CpuStorage::I16(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::I32(b) => CpuStorage::I32(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::I64(b) => CpuStorage::I64(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::BF16(b) => CpuStorage::BF16(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::F16(b) => CpuStorage::F16(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::F32(b) => CpuStorage::F32(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::F64(b) => CpuStorage::F64(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::F8E4M3(b) => CpuStorage::F8E4M3(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::F6E2M3(b) => CpuStorage::F6E2M3(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::F6E3M2(b) => CpuStorage::F6E3M2(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::F4(b) => CpuStorage::F4(Self::copy_to_host(&device, b)?),
-            VulkanStorageBuffer::F8E8M0(b) => CpuStorage::F8E8M0(Self::copy_to_host(&device, b)?),
+            VulkanStorageBuffer::U8(b) => CpuStorage::U8(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::U32(b) => CpuStorage::U32(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::I16(b) => CpuStorage::I16(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::I32(b) => CpuStorage::I32(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::I64(b) => CpuStorage::I64(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::BF16(b) => {
+                CpuStorage::BF16(Self::copy_to_host_batched(&device, b)?)
+            }
+            VulkanStorageBuffer::F16(b) => CpuStorage::F16(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::F32(b) => CpuStorage::F32(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::F64(b) => CpuStorage::F64(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::F8E4M3(b) => {
+                CpuStorage::F8E4M3(Self::copy_to_host_batched(&device, b)?)
+            }
+            VulkanStorageBuffer::F6E2M3(b) => {
+                CpuStorage::F6E2M3(Self::copy_to_host_batched(&device, b)?)
+            }
+            VulkanStorageBuffer::F6E3M2(b) => {
+                CpuStorage::F6E3M2(Self::copy_to_host_batched(&device, b)?)
+            }
+            VulkanStorageBuffer::F4(b) => CpuStorage::F4(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::F8E8M0(b) => {
+                CpuStorage::F8E8M0(Self::copy_to_host_batched(&device, b)?)
+            }
         })
     }
 
