@@ -210,7 +210,10 @@ impl RmsNorm {
         self.0.eps()
     }
 
-    /// Faster variant of the forward kernel, this can only be used on contiguous tensors though.
+    /// Forward pass through the composed (non-fused) ops rather than the fused kernel.
+    ///
+    /// The fused kernel used by `Module::forward` now supports backward, so this is only
+    /// needed to compare against the composed path or to avoid the fused kernel.
     pub fn forward_diff(&self, xs: &Tensor) -> Result<Tensor> {
         self.0.forward(xs)
     }
