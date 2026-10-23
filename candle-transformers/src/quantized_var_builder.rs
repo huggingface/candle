@@ -18,11 +18,12 @@ pub struct VarBuilder {
 
 impl VarBuilder {
     pub fn from_gguf<P: AsRef<std::path::Path>>(p: P, device: &Device) -> Result<Self> {
-        let mut file = std::fs::File::open(p)?;
-        let content = candle::quantized::gguf_file::Content::read(&mut file)?;
+        // SAFETY: the file must not be modified while the mapping is alive. Inherited from
+        // `memmap2::MmapOptions`, same contract as `Content::from_mmap`.
+        let (content, map) = unsafe { candle::quantized::gguf_file::Content::from_mmap(p)? };
         let mut data = std::collections::HashMap::new();
         for tensor_name in content.tensor_infos.keys() {
-            let tensor = content.tensor(&mut file, tensor_name, device)?;
+            let tensor = content.tensor_mapped(&map, tensor_name, device)?;
             data.insert(tensor_name.to_string(), Arc::new(tensor));
         }
         Ok(Self {
