@@ -1,10 +1,10 @@
 // Unary f8e4m3 ops (emulated). Each entry point maps g_In[i] -> g_Out[i] for i < g_Params[0],
 // decoding to float, applying the op in float, and encoding back to f8e4m3.
 import common_unary;
-import f8e4m3_emulation;
+import f8e4m3_type;
 
-StructuredBuffer<uint8_t> g_In;
-RWStructuredBuffer<uint8_t> g_Out;
+StructuredBuffer<FP8> g_In;
+RWStructuredBuffer<FP8> g_Out;
 layout(push_constant) Params g_Params;
 
 [shader("compute")]

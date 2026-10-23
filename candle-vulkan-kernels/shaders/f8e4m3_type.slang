@@ -1,12 +1,26 @@
-// f8e4m3 emulation module: encode/decode between the 8-bit f8e4m3 bit
-// pattern (uint8_t) and float, matching the `microfloat` crate's `f8e4m3`
-// format: 1 sign, 4 exponent (bias 7), 3 mantissa bits, IEEE-style NaN and
-// infinity, max finite 240, overflow -> infinity.
+// FloatE4M3 scalar type and encode/decode, native or emulated.
 //
-// Used by the f8e4m3 compute kernels, which store f8e4m3 data as raw bit
-// patterns and perform arithmetic in float:
-// from_f32(to_f32(a) OP to_f32(b)).
-module f8e4m3_emulation;
+// Compiled with -DFP8_NATIVE=1 on devices that enable the
+// VK_EXT_shader_float8 extension and the shaderFloat8 device feature:
+// `FP8` is the native Slang `FloatE4M3` type, stored directly in
+// `StructuredBuffer<FloatE4M3>` / `RWStructuredBuffer<FloatE4M3>`. The
+// 8-bit in-memory layout of `FloatE4M3` is exactly the
+// `microfloat::f8e4m3` bit pattern, so the encode/decode below convert
+// through the raw 8-bit pattern with `bit_cast` — the same microfloat
+// crate algorithms the CPU backend uses, bit for bit.
+//
+// Otherwise (the default) `FP8` is the 8-bit bit pattern (`uint8_t`)
+// and the same encode/decode functions apply to it directly.
+//
+// Format: 1 sign, 4 exponent (bias 7), 3 mantissa bits, IEEE-style NaN
+// and infinity, max finite 240, overflow -> infinity.
+module f8e4m3_type;
+
+#if defined(FP8_NATIVE)
+    public typealias FP8 = FloatE4M3;
+#else
+    public typealias FP8 = uint8_t;
+#endif
 
 // 2^e as float (microfloat exp2i), e in the f32-representable range.
 float f8e4m3_f2i(int e)
@@ -54,7 +68,7 @@ int f8e4m3_fl2(float v)
 }
 
 // f8e4m3 bit pattern -> float (microfloat decode_f32, bias 7, e4m3).
-public float f8e4m3_decode(uint8_t bits)
+public float f8e4m3_decode_bits(uint8_t bits)
 {
     uint b = (uint)bits;
     bool neg = (b & 0x80u) != 0u;
@@ -77,7 +91,7 @@ public float f8e4m3_decode(uint8_t bits)
 }
 
 // float -> f8e4m3 bit pattern (microfloat encode_f32, bias 7, e4m3).
-public uint8_t f8e4m3_encode(float v)
+public uint8_t f8e4m3_encode_bits(float v)
 {
     uint x = bit_cast<uint>(v);
     uint mag = x & 0x7fff_ffffu;
@@ -109,3 +123,29 @@ public uint8_t f8e4m3_encode(float v)
     }
     return (uint8_t)(neg ? (bits | 0x80u) : bits);
 }
+
+#if defined(FP8_NATIVE)
+    // float -> FloatE4M3 (native encode: round-to-nearest-even bit
+    // pattern, bit_cast into the native type).
+    public FloatE4M3 f8e4m3_encode(float v)
+    {
+        return bit_cast<FloatE4M3>(f8e4m3_encode_bits(v));
+    }
+
+    // FloatE4M3 -> float (native decode: bit_cast the pattern out, then
+    // decode).
+    public float f8e4m3_decode(FloatE4M3 b)
+    {
+        return f8e4m3_decode_bits(bit_cast<uint8_t>(b));
+    }
+#else
+    public float f8e4m3_decode(uint8_t b)
+    {
+        return f8e4m3_decode_bits(b);
+    }
+
+    public uint8_t f8e4m3_encode(float v)
+    {
+        return f8e4m3_encode_bits(v);
+    }
+#endif

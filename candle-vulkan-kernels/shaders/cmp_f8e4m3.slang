@@ -8,10 +8,10 @@
 //
 // Params layout: [0]=total, [1]=lhs_ndim, [2]=rhs_ndim,
 //                [3..7]=lhs dims, [7..11]=rhs dims.
-import f8e4m3_emulation;
+import f8e4m3_type;
 
-StructuredBuffer<uint8_t> g_In;
-StructuredBuffer<uint8_t> g_Rhs;
+StructuredBuffer<FP8> g_In;
+StructuredBuffer<FP8> g_Rhs;
 RWStructuredBuffer<uint8_t> g_Out;
 StructuredBuffer<uint64_t> g_Params;
 

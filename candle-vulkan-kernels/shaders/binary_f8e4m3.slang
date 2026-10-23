@@ -12,11 +12,11 @@
 // Params layout: [0]=total, [1]=lhs_ndim, [2]=rhs_ndim,
 //                [3..11]=lhs dims, [11..19]=rhs dims,
 //                [19]=lhs_data_ndim, [20..28]=lhs_data_dims.
-import f8e4m3_emulation;
+import f8e4m3_type;
 
-StructuredBuffer<uint8_t> g_In;
-StructuredBuffer<uint8_t> g_Rhs;
-RWStructuredBuffer<uint8_t> g_Out;
+StructuredBuffer<FP8> g_In;
+StructuredBuffer<FP8> g_Rhs;
+RWStructuredBuffer<FP8> g_Out;
 StructuredBuffer<uint64_t> g_Params;
 
 uint64_t rhs_offset(uint i)

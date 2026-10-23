@@ -1,9 +1,9 @@
 // affine (dst = src*mul + add) for f8e4m3 (emulated): decode to float, compute, encode back.
 import common_affine;
-import f8e4m3_emulation;
+import f8e4m3_type;
 
-StructuredBuffer<uint8_t> g_In;
-RWStructuredBuffer<uint8_t> g_Out;
+StructuredBuffer<FP8> g_In;
+RWStructuredBuffer<FP8> g_Out;
 layout(push_constant) Params g_Params;
 
 [shader("compute")]
