@@ -1,7 +1,8 @@
 //! Regression tests for the allocation caps added in huggingface/candle#3533.
 
-use candle_core::quantized::gguf_file::Content;
-use candle_core::Device;
+use candle_core::quantized::gguf_file::{self, Content};
+use candle_core::quantized::{GgmlDType, QMatMul, QStorage, QTensor};
+use candle_core::{Device, Module, Tensor};
 use std::io::Cursor;
 
 const GGUF_MAGIC: [u8; 4] = *b"GGUF";
@@ -133,4 +134,101 @@ fn rejects_string_length_above_remaining_file_bytes() {
     buf.extend_from_slice(&(1u64 << 20).to_le_bytes()); // 1 MB, below cap, above file size
     pad(&mut buf, 64);
     assert_rejects(buf, "string length");
+}
+
+fn next_tag() -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static TAG: AtomicUsize = AtomicUsize::new(0);
+    TAG.fetch_add(1, Ordering::Relaxed)
+}
+
+fn write_one_tensor(name: &str, dtype: GgmlDType, shape: (usize, usize)) -> std::path::PathBuf {
+    let dev = Device::Cpu;
+    let src = Tensor::rand(-1f32, 1f32, shape, &dev).unwrap();
+    let q = QTensor::quantize(&src, dtype).unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "candle-gguf-mapped-{}-{}-{name}.gguf",
+        std::process::id(),
+        next_tag()
+    ));
+    let mut file = std::fs::File::create(&path).unwrap();
+    gguf_file::write(&mut file, &[], &[(name, &q)]).unwrap();
+    path
+}
+
+/// A mapped tensor has to be the copied tensor: same block bytes, same dequantised values.
+/// Nothing may depend on where the storage lives.
+#[test]
+fn mapped_tensor_matches_the_copied_one() {
+    let dev = Device::Cpu;
+    let path = write_one_tensor("w", GgmlDType::Q4K, (4, 512));
+
+    let copied = {
+        let mut file = std::fs::File::open(&path).unwrap();
+        let content = Content::read(&mut file).unwrap();
+        content.tensor(&mut file, "w", &dev).unwrap()
+    };
+    // SAFETY: the test owns the file and does not modify it while the mapping is alive.
+    let (content, map) = unsafe { Content::from_mmap(&path).unwrap() };
+    let mapped = content.tensor_mapped(&map, "w", &dev).unwrap();
+
+    assert_eq!(copied.dtype(), mapped.dtype());
+    assert_eq!(copied.shape(), mapped.shape());
+    assert_eq!(
+        copied.data().unwrap().as_ref(),
+        mapped.data().unwrap().as_ref()
+    );
+    assert_eq!(
+        copied.dequantize(&dev).unwrap().to_vec2::<f32>().unwrap(),
+        mapped.dequantize(&dev).unwrap().to_vec2::<f32>().unwrap()
+    );
+
+    drop(mapped);
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// A window that is not a whole number of blocks, is misaligned, or runs past the mapping is
+/// an error rather than a silent slice.
+#[test]
+fn mapped_window_is_checked() {
+    let path = write_one_tensor("w", GgmlDType::Q4K, (2, 512));
+    let (content, map) = unsafe { Content::from_mmap(&path).unwrap() };
+    let info = content.tensor_infos.get("w").unwrap();
+    let start = (content.tensor_data_offset + info.offset) as usize;
+    let size = info.shape.elem_count() / info.ggml_dtype.block_size() * info.ggml_dtype.type_size();
+
+    assert!(QStorage::from_mapped(map.clone(), start..start + size - 1, info.ggml_dtype).is_err());
+    assert!(
+        QStorage::from_mapped(map.clone(), start + 1..start + 1 + size, info.ggml_dtype).is_err()
+    );
+    assert!(QStorage::from_mapped(map.clone(), start..map.len() + 1, info.ggml_dtype).is_err());
+    let storage = QStorage::from_mapped(map, start..start + size, info.ggml_dtype).unwrap();
+    let qtensor = QTensor::new(storage, info.shape.clone()).unwrap();
+    assert_eq!(qtensor.storage_size_in_bytes(), size);
+
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// The matmul path, including the repack cache, has to work straight off a mapped storage.
+#[test]
+fn mapped_tensor_matmuls_like_the_copied_one() {
+    let dev = Device::Cpu;
+    let path = write_one_tensor("w", GgmlDType::Q4K, (4, 512));
+
+    let copied = {
+        let mut file = std::fs::File::open(&path).unwrap();
+        let content = Content::read(&mut file).unwrap();
+        content.tensor(&mut file, "w", &dev).unwrap()
+    };
+    // SAFETY: the test owns the file and does not modify it while the mapping is alive.
+    let (content, map) = unsafe { Content::from_mmap(&path).unwrap() };
+    let mapped = content.tensor_mapped(&map, "w", &dev).unwrap();
+
+    let xs = Tensor::rand(-1f32, 1f32, (3, 512), &dev).unwrap();
+    let a = QMatMul::from_qtensor(copied).unwrap().forward(&xs).unwrap();
+    let b = QMatMul::from_qtensor(mapped).unwrap().forward(&xs).unwrap();
+    assert_eq!(a.dims(), b.dims());
+    assert_eq!(a.to_vec2::<f32>().unwrap(), b.to_vec2::<f32>().unwrap());
+
+    std::fs::remove_file(&path).unwrap();
 }
