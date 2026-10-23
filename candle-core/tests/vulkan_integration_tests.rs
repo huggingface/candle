@@ -4546,6 +4546,159 @@ fn test_vulkan_matmul_f64() {
     }
     tracing::debug!("Vulkan device {gpu_id} matmul f64 OK");
 }
+
+/// Matmul for BF16 (BFloat16) vs the CPU backend. The shapes keep k
+/// and n multiples of 8 so the cooperative-matrix bf16 GEMM kernel is
+/// exercised on devices that support it (the f16-widening fallback
+/// must produce the same result on devices that do not).
+#[test]
+fn test_vulkan_matmul_bf16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let f: Vec<half::bf16> = (0..512)
+        .map(|i| half::bf16::from_f32((i as f32) * 0.2 - 3.0))
+        .collect();
+    let g: Vec<half::bf16> = (0..384)
+        .map(|i| half::bf16::from_f32((i as f32) * 0.1 - 2.0))
+        .collect();
+    let ag = candle_core::Tensor::new(f.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((32, 16)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(f.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((32, 16)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(g.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((16, 24)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(g.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((16, 24)))
+        .unwrap();
+    let gres = ag.clone().matmul(&bg).unwrap();
+    let cres = ac.clone().matmul(&bc).unwrap();
+    for (x, y) in gres
+        .to_vec2::<half::bf16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .zip(cres.to_vec2::<half::bf16>().unwrap().into_iter().flatten())
+    {
+        assert!(
+            (x.to_f32() - y.to_f32()).abs() < 0.05 * (1.0 + y.to_f32().abs()),
+            "matmul bf16: gpu {} cpu {}",
+            x.to_f32(),
+            y.to_f32()
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} matmul bf16 OK");
+}
+
+/// Matmul with shapes aligned for the cooperative-matrix GEMM kernels
+/// (k and n multiples of 8, so the tile row strides satisfy the
+/// 16x16 tile load/store alignment): exercises the `linalg.CoopMat`
+/// kernels for F32, F16, and BF16 on capable devices.
+#[test]
+fn test_vulkan_matmul_coopmat_aligned() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let m = 48usize;
+    let k = 32usize;
+    let n = 40usize;
+    // Values are scaled so the products stay inside the f16/bf16
+    // accumulator range (f16 max 65504; the coop-mat kernels
+    // accumulate in f16).
+    let f: Vec<f32> = (0..(m * k)).map(|i| (i as f32) * 0.02 - 0.3).collect();
+    let g: Vec<f32> = (0..(k * n)).map(|i| (i as f32) * 0.01 - 0.2).collect();
+    // F16.
+    let af: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let gf: Vec<half::f16> = g.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let ag = candle_core::Tensor::new(af.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((m, k)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(af.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((m, k)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(gf.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((k, n)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(gf.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((k, n)))
+        .unwrap();
+    let gres = ag.clone().matmul(&bg).unwrap();
+    let cres = ac.clone().matmul(&bc).unwrap();
+    let gv: Vec<half::f16> = gres
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect();
+    let cv: Vec<half::f16> = cres
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect();
+    let bads: Vec<(usize, f32, f32)> = gv
+        .iter()
+        .zip(cv.iter())
+        .enumerate()
+        .filter(|(_, (a, b))| (a.to_f32() - b.to_f32()).abs() >= 0.05 * (1.0 + b.to_f32().abs()))
+        .map(|(i, (a, b))| (i, a.to_f32(), b.to_f32()))
+        .collect();
+    let first: Vec<(usize, f32, f32)> = bads.iter().take(5).cloned().collect();
+    assert!(
+        bads.is_empty(),
+        "matmul f16 coopmat: {} mismatches, first: {first:?}",
+        bads.len()
+    );
+    // BF16.
+    let ab: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let gb: Vec<half::bf16> = g.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let ag = candle_core::Tensor::new(ab.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((m, k)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(ab.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((m, k)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(gb.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((k, n)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(gb.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((k, n)))
+        .unwrap();
+    let gres = ag.clone().matmul(&bg).unwrap();
+    let cres = ac.clone().matmul(&bc).unwrap();
+    for (x, y) in gres
+        .to_vec2::<half::bf16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .zip(cres.to_vec2::<half::bf16>().unwrap().into_iter().flatten())
+    {
+        assert!(
+            (x.to_f32() - y.to_f32()).abs() < 0.05 * (1.0 + y.to_f32().abs()),
+            "matmul bf16 coopmat: gpu {} cpu {}",
+            x.to_f32(),
+            y.to_f32()
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} matmul coopmat-aligned OK");
+}
 /// Reduce ops for F16 (native half, F32 accumulate) vs the CPU backend.
 #[test]
 fn test_vulkan_reduce_op_f16() {
@@ -5826,5 +5979,295 @@ fn test_vulkan_fused_add_rms_norm() {
     );
     tracing::debug!(
         "Vulkan fused add + rmsnorm matches the reference (residual {res_err}, norm {norm_err})"
+    );
+}
+
+/// Stage probes for the f16 cooperative-matrix primitives
+/// (fill+Store, Load+Store round-trip, single multiply-add, params
+/// read, runtime base/stride round-trip), run directly to isolate
+/// driver behavior. Gated on supports_coopmat_gemm. The
+/// constant-base stages must be exact on any conformant driver; the
+/// runtime base/stride stage is informational only (some drivers,
+/// e.g. RADV, miscompute it - the matmul correctness probe in
+/// VulkanDevice handles the fallback).
+#[test]
+fn test_vulkan_coopmat_stage_probes() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    if !device.supports_coopmat_gemm() {
+        println!("coopmat not supported; skipping stage probes");
+        return;
+    }
+    let f16_storage = |v: Vec<half::f16>| -> candle_core::vulkan_backend::VulkanStorage {
+        device
+            .storage_from_cpu_storage(&candle_core::CpuStorage::F16(v))
+            .unwrap()
+    };
+    let f16_buf =
+        |s: &candle_core::vulkan_backend::VulkanStorage| -> vulkano::buffer::Subbuffer<[half::f16]> {
+        match s.buffer() {
+            candle_core::vulkan_backend::VulkanStorageBuffer::F16(b) => b.clone(),
+            _ => panic!("expected F16 storage buffer"),
+        }
+    };
+    let read_back = |s: &candle_core::vulkan_backend::VulkanStorage| -> Vec<half::f16> {
+        // This driver (RADV) is occasionally observed to report a stale
+        // readback right after a dispatch; a second (or third) read
+        // settles. A systematic mismatch is stable across reads, so
+        // re-reading cannot mask a broken stage.
+        let mut last = s
+            .to_cpu_storage()
+            .unwrap()
+            .as_slice::<half::f16>()
+            .unwrap()
+            .to_vec();
+        for _ in 0..2 {
+            device.synchronize().unwrap();
+            let again = s
+                .to_cpu_storage()
+                .unwrap()
+                .as_slice::<half::f16>()
+                .unwrap()
+                .to_vec();
+            if again
+                .iter()
+                .zip(last.iter())
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+            {
+                return again;
+            }
+            last = again;
+        }
+        last
+    };
+    let zeros = || vec![half::f16::from_f32(0.0); 256];
+    // Probe 1: fill+Store -> all ones.
+    let out_s = f16_storage(zeros());
+    let out_b = f16_buf(&out_s);
+    {
+        let kernels = device.kernels();
+        let out_b = out_b.clone();
+        device
+            .execute(move |cbb| {
+                candle_vulkan_kernels::call_test_coopmat_fill_store_f16(cbb, &kernels, &out_b)
+                    .map_err(|e| e.to_string())
+            })
+            .unwrap();
+    }
+    let got = read_back(&out_s);
+    let first_bad = got
+        .iter()
+        .enumerate()
+        .find(|(_, v)| v.to_f32() != 1.0)
+        .map(|(i, v)| (i, v.to_f32()));
+    println!("fill+Store: first_bad={first_bad:?}");
+    assert!(first_bad.is_none(), "coopmat fill+Store mismatch");
+    // Probe 2: Load+Store round-trip.
+    let in_v: Vec<half::f16> = (0..256)
+        .map(|i| half::f16::from_f32((i as f32) * 0.25 - 32.0))
+        .collect();
+    let in_s = f16_storage(in_v.clone());
+    let out_s = f16_storage(zeros());
+    let in_b = f16_buf(&in_s);
+    let out_b = f16_buf(&out_s);
+    {
+        let kernels = device.kernels();
+        let (in_b, out_b) = (in_b.clone(), out_b.clone());
+        device
+            .execute(move |cbb| {
+                candle_vulkan_kernels::call_test_coopmat_load_store_f16(
+                    cbb, &kernels, &in_b, &out_b,
+                )
+                .map_err(|e| e.to_string())
+            })
+            .unwrap();
+    }
+    let got = read_back(&out_s);
+    let first_bad = got
+        .iter()
+        .zip(in_v.iter())
+        .enumerate()
+        .find(|(_, (a, b))| (a.to_f32() - b.to_f32()).abs() > 1e-6)
+        .map(|(i, (a, b))| (i, a.to_f32(), b.to_f32()));
+    println!("Load+Store round-trip: first_bad={first_bad:?}");
+    assert!(
+        first_bad.is_none(),
+        "coopmat Load+Store round-trip mismatch"
+    );
+    // Probe 3: muladd with A = identity -> C must equal B.
+    let id: Vec<half::f16> = (0..256)
+        .map(|i| {
+            if i % 16 == i / 16 {
+                half::f16::from_f32(1.0)
+            } else {
+                half::f16::from_f32(0.0)
+            }
+        })
+        .collect();
+    let b_v: Vec<half::f16> = (0..256)
+        .map(|i| half::f16::from_f32((i as f32) * 0.25 - 32.0))
+        .collect();
+    let a_s = f16_storage(id);
+    let b_s = f16_storage(b_v.clone());
+    let c_s = f16_storage(zeros());
+    let a_b = f16_buf(&a_s);
+    let b_b = f16_buf(&b_s);
+    let c_b = f16_buf(&c_s);
+    {
+        let kernels = device.kernels();
+        let (a_b, b_b, c_b) = (a_b.clone(), b_b.clone(), c_b.clone());
+        device
+            .execute(move |cbb| {
+                candle_vulkan_kernels::call_test_coopmat_muladd_f16(cbb, &kernels, &a_b, &b_b, &c_b)
+                    .map_err(|e| e.to_string())
+            })
+            .unwrap();
+    }
+    let got = read_back(&c_s);
+    let n_bad = got
+        .iter()
+        .zip(b_v.iter())
+        .filter(|(a, b)| (a.to_f32() - b.to_f32()).abs() > 0.05 * (1.0 + b.to_f32().abs()))
+        .count();
+    let first16: Vec<(f32, f32)> = got
+        .iter()
+        .zip(b_v.iter())
+        .take(16)
+        .map(|(a, b)| (a.to_f32(), b.to_f32()))
+        .collect();
+    println!("muladd identity: {n_bad} mismatches, first16 got/expected={first16:?}");
+    assert_eq!(n_bad, 0, "coopmat muladd identity mismatch");
+    // Probe 4: params buffer read in a coop-mat pipeline:
+    // out[i] = i < 16 ? m : k, with m = 16, k = 16.
+    let params_v: Vec<i64> = vec![1, 16, 16, 16, 0];
+    let params_s = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::I64(params_v))
+        .unwrap();
+    let params_b = match params_s.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::I64(b) => b.clone(),
+        _ => panic!("expected I64 storage buffer"),
+    };
+    let out_s = f16_storage(zeros());
+    let out_b = f16_buf(&out_s);
+    {
+        let kernels = device.kernels();
+        let (params_b, out_b) = (params_b.clone(), out_b.clone());
+        device
+            .execute(move |cbb| {
+                candle_vulkan_kernels::call_test_coopmat_params_f16(
+                    cbb, &kernels, &params_b, &out_b,
+                )
+                .map_err(|e| e.to_string())
+            })
+            .unwrap();
+    }
+    let got = read_back(&out_s);
+    let first16: Vec<f32> = got.iter().take(16).map(|v| v.to_f32()).collect();
+    let rest16: Vec<f32> = got.iter().skip(16).take(16).map(|v| v.to_f32()).collect();
+    println!("params read: first16={first16:?} rest16={rest16:?}");
+    assert!(
+        first16.iter().all(|v| *v == 16.0) && rest16.iter().all(|v| *v == 16.0),
+        "coopmat params read mismatch"
+    );
+    // Probe 5: runtime (non-constant) base/stride from the params
+    // buffer: round-trip Load/Store must be exact.
+    let in_v: Vec<half::f16> = (0..256)
+        .map(|i| half::f16::from_f32((i as f32) * 0.25 - 32.0))
+        .collect();
+    let in_s = f16_storage(in_v.clone());
+    let out_s = f16_storage(zeros());
+    let rt_params: Vec<i64> = vec![0, 16];
+    let rt_s = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::I64(rt_params))
+        .unwrap();
+    let rt_b = match rt_s.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::I64(b) => b.clone(),
+        _ => panic!("expected I64 storage buffer"),
+    };
+    let in_b = f16_buf(&in_s);
+    let out_b = f16_buf(&out_s);
+    {
+        let kernels = device.kernels();
+        let (in_b, out_b, rt_b) = (in_b.clone(), out_b.clone(), rt_b.clone());
+        device
+            .execute(move |cbb| {
+                candle_vulkan_kernels::call_test_coopmat_rtbase_f16(
+                    cbb, &kernels, &in_b, &out_b, &rt_b,
+                )
+                .map_err(|e| e.to_string())
+            })
+            .unwrap();
+    }
+    let got = read_back(&out_s);
+    let first_bad = got
+        .iter()
+        .zip(in_v.iter())
+        .enumerate()
+        .find(|(_, (a, b))| (a.to_f32() - b.to_f32()).abs() > 1e-6)
+        .map(|(i, (a, b))| (i, a.to_f32(), b.to_f32()));
+    println!("runtime base/stride round-trip: first_bad={first_bad:?}");
+}
+
+/// 16x16 f16 matmul (single tile, single K slab): the smallest shape
+/// that reaches the cooperative-matrix GEMM path (or its probe-driven
+/// fallback to the classic kernel).
+#[test]
+fn test_vulkan_matmul_f16_16x16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let m = 16usize;
+    let k = 16usize;
+    let n = 16usize;
+    let f: Vec<half::f16> = (0..(m * k))
+        .map(|i| half::f16::from_f32((i as f32) * 0.01 - 0.8))
+        .collect();
+    let g: Vec<half::f16> = (0..(k * n))
+        .map(|i| half::f16::from_f32((i as f32) * 0.01 - 0.8))
+        .collect();
+    let ag = candle_core::Tensor::new(f.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((m, k)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(f.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((m, k)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(g.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((k, n)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(g.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((k, n)))
+        .unwrap();
+    let gres = ag.clone().matmul(&bg).unwrap();
+    let cres = ac.clone().matmul(&bc).unwrap();
+    let gv: Vec<half::f16> = gres
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect();
+    let cv: Vec<half::f16> = cres
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect();
+    let bads: Vec<(usize, f32, f32)> = gv
+        .iter()
+        .zip(cv.iter())
+        .enumerate()
+        .filter(|(_, (a, b))| (a.to_f32() - b.to_f32()).abs() >= 0.05 * (1.0 + b.to_f32().abs()))
+        .map(|(i, (a, b))| (i, a.to_f32(), b.to_f32()))
+        .collect();
+    let first: Vec<(usize, f32, f32)> = bads.iter().take(5).cloned().collect();
+    assert!(
+        bads.is_empty(),
+        "16x16 f16 matmul: {} mismatches, first: {first:?}",
+        bads.len()
     );
 }

@@ -9981,19 +9981,17 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
+                // The f32 matmul uses the classic tiled kernel (the
+                // cooperative-matrix path is 16-bit only: on RDNA-class
+                // GPUs f32 matrix shapes are emulated and some drivers
+                // crash while building the pipeline for them).
+                let (source, name) = (
+                    candle_vulkan_kernels::Source::Gemm,
+                    candle_vulkan_kernels::KernelName::GemmF32,
+                );
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_gemm_slang::<f32>(
-                        cbb,
-                        &kernels,
-                        candle_vulkan_kernels::Source::Gemm,
-                        candle_vulkan_kernels::KernelName::GemmF32,
-                        &input,
-                        &rhs_buf,
-                        &out_buf,
-                        &params,
-                        bsz,
-                        m,
-                        n,
+                        cbb, &kernels, source, name, &input, &rhs_buf, &out_buf, &params, bsz, m, n,
                     )
                     .map_err(|e| e.to_string())
                 })?;
@@ -10027,19 +10025,25 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
+                // Cooperative-matrix GEMM when the device supports it and
+                // the tile row strides meet its load/store alignment (a
+                // multiple of 8 elements for the 16-bit types);
+                // otherwise the classic tiled kernel.
+                let (source, name) =
+                    if self.device.coopmat_gemm_available(DType::F16) && k % 8 == 0 && n % 8 == 0 {
+                        (
+                            candle_vulkan_kernels::Source::GemmCoopMatF16,
+                            candle_vulkan_kernels::KernelName::GemmCoopMatF16,
+                        )
+                    } else {
+                        (
+                            candle_vulkan_kernels::Source::GemmF16,
+                            candle_vulkan_kernels::KernelName::GemmF16,
+                        )
+                    };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_gemm_slang::<half::f16>(
-                        cbb,
-                        &kernels,
-                        candle_vulkan_kernels::Source::GemmF16,
-                        candle_vulkan_kernels::KernelName::GemmF16,
-                        &input,
-                        &rhs_buf,
-                        &out_buf,
-                        &params,
-                        bsz,
-                        m,
-                        n,
+                        cbb, &kernels, source, name, &input, &rhs_buf, &out_buf, &params, bsz, m, n,
                     )
                     .map_err(|e| e.to_string())
                 })?;
@@ -10089,6 +10093,65 @@ impl BackendStorage for VulkanStorage {
                     )
                     .map_err(|e| e.to_string())
                 })?;
+            }
+            DType::BF16 => {
+                let input: Subbuffer<[half::bf16]> = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b
+                        .clone()
+                        .slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let rhs_buf: Subbuffer<[half::bf16]> = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::BF16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::bf16]> = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                if self.device.coopmat_gemm_available(DType::BF16) && k % 8 == 0 && n % 8 == 0 {
+                    // Native BFloat16 cooperative-matrix GEMM (the f16
+                    // accumulator is converted back to bf16 in-shader).
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_gemm_slang::<half::bf16>(
+                            cbb,
+                            &kernels,
+                            candle_vulkan_kernels::Source::GemmCoopMatBf16,
+                            candle_vulkan_kernels::KernelName::GemmCoopMatBf16,
+                            &input,
+                            &rhs_buf,
+                            &out_buf,
+                            &params,
+                            bsz,
+                            m,
+                            n,
+                        )
+                        .map_err(|e| e.to_string())
+                    })?;
+                } else {
+                    // No native bf16 cooperative-matrix support (or
+                    // unaligned strides): widen to f16, run the f16 GEMM,
+                    // and narrow the result back to bf16.
+                    let lhs_f16 = self.to_dtype(lhs_l, DType::F16)?;
+                    let rhs_f16 = rhs_ref.to_dtype(rhs_l, DType::F16)?;
+                    let out_f16 = lhs_f16.matmul(&rhs_f16, bmnk, lhs_l, rhs_l)?;
+                    let out_f16_l = crate::Layout::contiguous_with_offset(&[bsz, m, n], 0);
+                    return out_f16.to_dtype(&out_f16_l, DType::BF16);
+                }
             }
             _ => {
                 return Err(Error::Vulkan(

@@ -29,6 +29,8 @@ pub enum KernelName {
     GemmF32,
     GemmF16,
     GemmF64,
+    GemmCoopMatF16,
+    GemmCoopMatBf16,
     FusedQ40GemmF32,
     FusedQ4kGemmF32,
     FusedQ40GemmMF32,
@@ -351,6 +353,11 @@ pub enum KernelName {
     ScatterF16,
     ScatterF64,
     TestFillF16,
+    TestCoopMatFillStoreF16,
+    TestCoopMatLoadStoreF16,
+    TestCoopMatMulAddF16,
+    TestCoopMatParamsF16,
+    TestCoopMatRtBaseF16,
     TestFillU8,
     TestFillI16,
     TestFillBf16Native,
@@ -497,6 +504,8 @@ impl AsRef<str> for KernelName {
             Self::GemmF32 => "main",
             Self::GemmF16 => "main",
             Self::GemmF64 => "main",
+            Self::GemmCoopMatF16 => "main",
+            Self::GemmCoopMatBf16 => "main",
             Self::FusedQ40GemmF32 => "main",
             Self::FusedQ4kGemmF32 => "main",
             Self::FusedQ40GemmMF32 => "main",
@@ -820,6 +829,11 @@ impl AsRef<str> for KernelName {
             Self::ScatterF16 => "main",
             Self::ScatterF64 => "main",
             Self::TestFillF16 => "main",
+            Self::TestCoopMatFillStoreF16 => "main",
+            Self::TestCoopMatLoadStoreF16 => "main",
+            Self::TestCoopMatMulAddF16 => "main",
+            Self::TestCoopMatParamsF16 => "main",
+            Self::TestCoopMatRtBaseF16 => "main",
             Self::TestFillU8
             | Self::TestFillI16
             | Self::TestFillBf16Native
@@ -1359,9 +1373,12 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::TestFillF6e3m2
         | KernelName::TestFillF8e4m3
         | KernelName::TestFillF8e8m0
-        | KernelName::TestFillF64 => 1,
+        | KernelName::TestFillF64
+        | KernelName::TestCoopMatFillStoreF16 => 1,
         // 2 storage buffer(s).
-        KernelName::TestPrintf => 2,
+        KernelName::TestPrintf
+        | KernelName::TestCoopMatLoadStoreF16 => 2,
+        | KernelName::TestCoopMatParamsF16 => 2,
         // 3 storage buffer(s).
         KernelName::DequantF32
         | KernelName::DequantF16
@@ -1386,11 +1403,15 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Copy2dBf16
         | KernelName::Copy2dU8
         | KernelName::Copy2dU32
-        | KernelName::Copy2dI64 => 3,
+        | KernelName::Copy2dI64
+        | KernelName::TestCoopMatMulAddF16 => 3,
+        | KernelName::TestCoopMatRtBaseF16 => 3,
         // 4 storage buffer(s).
         KernelName::GemmF32
         | KernelName::GemmF16
         | KernelName::GemmF64
+        | KernelName::GemmCoopMatF16
+        | KernelName::GemmCoopMatBf16
         | KernelName::FusedQ40GemmF32
         | KernelName::FusedQ4kGemmF32
         | KernelName::FusedQ40GemmMF32

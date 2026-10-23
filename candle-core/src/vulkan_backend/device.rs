@@ -28,6 +28,7 @@ use vulkano::VulkanLibrary;
 
 use candle_vulkan_kernels::Kernels;
 
+use crate::backend::{BackendDevice, BackendStorage};
 use crate::{DType, Error, Result};
 
 /// A device that can be used to run computations with the Vulkan backend.
@@ -116,6 +117,24 @@ struct DeviceInner {
     /// When true, the `BFloat16` Slang type (the GPU storage type of
     /// `half::bf16`) can be used in shaders.
     supports_bf16: bool,
+    /// Cooperative-matrix support, as enabled at device creation: the
+    /// VK_KHR_cooperative_matrix device extension plus the
+    /// cooperativeMatrix device feature both have to be reported by the
+    /// physical device. When true, the `linalg.CoopMat` Slang type (and
+    /// the cooperative-matrix GEMM kernels) can be used in shaders.
+    supports_coopmat: bool,
+    /// The device's subgroup size; the compiled coop-mat GEMM shaders
+    /// assume exactly one 64-thread subgroup per workgroup.
+    subgroup_size: u32,
+    /// Core `vulkanMemoryModel` feature enabled at device creation;
+    /// the coop-mat GEMM shaders declare the VulkanMemoryModel
+    /// SPIR-V capability, so it is required for them to load.
+    vulkan_memory_model: bool,
+    /// One-time probe results for the coop-mat GEMM pipelines: `None`
+    /// until the first use, then the build outcome is cached for the
+    /// lifetime of the device.
+    coopmat_gemm_f16: std::sync::OnceLock<bool>,
+    coopmat_gemm_bf16: std::sync::OnceLock<bool>,
     gpu_id: usize,
 }
 
@@ -227,6 +246,35 @@ impl VulkanDevice {
             .iter()
             .any(|e| e.extension_name.eq("VK_KHR_shader_bfloat16"));
         let bf16 = bf16_ext && supported.shader_b_float16_type;
+        // Cooperative matrix support: the VK_KHR_cooperative_matrix
+        // device extension plus the cooperativeMatrix device feature.
+        // Enables the `linalg.CoopMat` Slang type for hardware GEMM.
+        // The companion features the extension defines (robust buffer
+        // access, BFloat16 and FloatE4M3 cooperative matrices) are
+        // enabled too when the device reports them. Enable only what
+        // the device reports, so creation never fails.
+        let cm_ext = physical
+            .extension_properties()
+            .iter()
+            .any(|e| e.extension_name.eq("VK_KHR_cooperative_matrix"));
+        let cm = cm_ext && supported.cooperative_matrix;
+        let cm_robust = cm && supported.cooperative_matrix_robust_buffer_access;
+        let cm_bf16 = cm && supported.shader_b_float16_cooperative_matrix;
+        let cm_f8 = cm && supported.shader_float8_cooperative_matrix;
+        // The compiled coop-mat GEMM shaders assume one 64-thread
+        // subgroup per workgroup; the device's subgroup size is
+        // captured before `physical` is moved into `Device::new`.
+        let subgroup_size = physical.properties().subgroup_size.unwrap_or(0);
+        // The coop-mat GEMM shaders also declare the VulkanMemoryModel
+        // SPIR-V capability (the cooperative-matrix ops use subgroup
+        // memory semantics), so the core feature must be enabled too.
+        let vmm = supported.vulkan_memory_model;
+        // With the VulkanMemoryModel feature enabled, SPIR-V instructions
+        // that use `Device` as the memory scope (e.g. the atomics in
+        // `index_add`) additionally require the
+        // vulkanMemoryModelDeviceScope feature (VUID
+        // RuntimeSpirv-vulkanMemoryModel-06265).
+        let vmm_ds = vmm && supported.vulkan_memory_model_device_scope;
         // Atomic float add (used by `index_add`): F32/F64 need
         // VK_EXT_shader_atomic_float, F16 needs VK_EXT_shader_atomic_float2.
         // Enable only what the device reports, so creation never fails.
@@ -247,6 +295,7 @@ impl VulkanDevice {
             ext_shader_atomic_float2: atomic_f16,
             ext_shader_float8: fp8_ext,
             khr_shader_bfloat16: bf16_ext,
+            khr_cooperative_matrix: cm_ext,
             ..Default::default()
         };
         let feats = DeviceFeatures {
@@ -261,6 +310,12 @@ impl VulkanDevice {
             shader_float64: f64,
             shader_float8: fp8,
             shader_b_float16_type: bf16,
+            cooperative_matrix: cm,
+            cooperative_matrix_robust_buffer_access: cm_robust,
+            shader_b_float16_cooperative_matrix: cm_bf16,
+            shader_float8_cooperative_matrix: cm_f8,
+            vulkan_memory_model: vmm,
+            vulkan_memory_model_device_scope: vmm_ds,
             shader_buffer_float32_atomic_add: atomic_f32,
             shader_buffer_float64_atomic_add: atomic_f64,
             shader_buffer_float16_atomic_add: atomic_f16,
@@ -327,6 +382,11 @@ impl VulkanDevice {
                 atomic_f16,
                 supports_f8e4m3: fp8,
                 supports_bf16: bf16,
+                supports_coopmat: cm,
+                subgroup_size,
+                vulkan_memory_model: vmm,
+                coopmat_gemm_f16: std::sync::OnceLock::new(),
+                coopmat_gemm_bf16: std::sync::OnceLock::new(),
                 gpu_id,
             }),
         })
@@ -481,6 +541,199 @@ impl VulkanDevice {
     /// `half::bf16`.
     pub fn supports_bf16(&self) -> bool {
         self.inner.supports_bf16
+    }
+
+    /// True when the cooperative-matrix GEMM kernels can run: the
+    /// VK_KHR_cooperative_matrix extension + cooperativeMatrix feature
+    /// were enabled at device creation and the device's subgroup size
+    /// matches the compiled shaders (one 64-thread subgroup per
+    /// workgroup).
+    pub fn supports_coopmat_gemm(&self) -> bool {
+        self.inner.supports_coopmat
+            && self.inner.vulkan_memory_model
+            && self.inner.subgroup_size == 64
+    }
+
+    /// True when the cooperative-matrix GEMM pipeline for `dtype` can
+    /// run on this device: the feature/subgroup gate above plus a
+    /// one-time correctness probe. Some drivers advertise the
+    /// cooperative-matrix features but miscompute the runtime-base
+    /// load/store (or reject the pipeline build), so the first use
+    /// runs a known 16x16 product through the kernel once and caches
+    /// the outcome; a failed probe keeps the classic tiled kernel.
+    pub(crate) fn coopmat_gemm_available(&self, dtype: DType) -> bool {
+        if !self.supports_coopmat_gemm() {
+            return false;
+        }
+        let lock = match dtype {
+            DType::F16 => &self.inner.coopmat_gemm_f16,
+            DType::BF16 => &self.inner.coopmat_gemm_bf16,
+            _ => return false,
+        };
+        *lock.get_or_init(|| {
+            let (source, name) = match dtype {
+                DType::F16 => (
+                    candle_vulkan_kernels::Source::GemmCoopMatF16,
+                    candle_vulkan_kernels::KernelName::GemmCoopMatF16,
+                ),
+                _ => (
+                    candle_vulkan_kernels::Source::GemmCoopMatBf16,
+                    candle_vulkan_kernels::KernelName::GemmCoopMatBf16,
+                ),
+            };
+            if self.inner.kernels.load_entry(source, name).is_err() {
+                return false;
+            }
+            match dtype {
+                DType::F16 => self.probe_coopmat_f16(source, name),
+                _ => self.probe_coopmat_bf16(source, name),
+            }
+        })
+    }
+
+    /// Correctness probe for the f16 cooperative-matrix GEMM: a known
+    /// 16x16 product (A all 1.0, B[i] = (i % 16) * 0.5, so every
+    /// element of A @ B is 30.0) run through `source`/`name` and
+    /// checked against the expected value.
+    fn probe_coopmat_f16(
+        &self,
+        source: candle_vulkan_kernels::Source,
+        name: candle_vulkan_kernels::KernelName,
+    ) -> bool {
+        let a = vec![f16::from_f32(1.0); 256];
+        let b: Vec<f16> = (0..256)
+            .map(|i| f16::from_f32((i % 16) as f32 * 0.5))
+            .collect();
+        let out = vec![f16::from_f32(0.0); 256];
+        let a_s = match self.storage_from_cpu_storage(&crate::CpuStorage::F16(a)) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let b_s = match self.storage_from_cpu_storage(&crate::CpuStorage::F16(b)) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let out_s = match self.storage_from_cpu_storage(&crate::CpuStorage::F16(out)) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let (a_b, b_b, out_b) = (a_s.buffer(), b_s.buffer(), out_s.buffer());
+        let (a_b, b_b, out_b) = match (a_b, b_b, out_b) {
+            (
+                super::VulkanStorageBuffer::F16(a),
+                super::VulkanStorageBuffer::F16(b),
+                super::VulkanStorageBuffer::F16(o),
+            ) => (a.clone(), b.clone(), o.clone()),
+            _ => return false,
+        };
+        let params = match Buffer::from_iter(
+            &self.inner.mem_alloc,
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![1u64, 16, 16, 16, 0],
+        ) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        let kernels = self.kernels();
+        let (a_b, b_b, out_b, params) = (a_b.clone(), b_b.clone(), out_b.clone(), params.clone());
+        if self
+            .execute(move |cbb| {
+                candle_vulkan_kernels::call_gemm_slang::<f16>(
+                    cbb, &kernels, source, name, &a_b, &b_b, &out_b, &params, 1, 16, 16,
+                )
+                .map_err(|e| e.to_string())
+            })
+            .is_err()
+        {
+            return false;
+        }
+        match out_s.to_cpu_storage() {
+            Ok(cpu) => match cpu.as_slice::<f16>() {
+                Ok(got) => got.iter().all(|v| (v.to_f32() - 30.0).abs() < 2.0),
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    /// Correctness probe for the bf16 cooperative-matrix GEMM (same
+    /// known product as the f16 probe; the bf16 kernel accumulates in
+    /// f16 and stores bf16, so the tolerance is the bf16 step at 30).
+    fn probe_coopmat_bf16(
+        &self,
+        source: candle_vulkan_kernels::Source,
+        name: candle_vulkan_kernels::KernelName,
+    ) -> bool {
+        let a = vec![half::bf16::from_f32(1.0); 256];
+        let b: Vec<half::bf16> = (0..256)
+            .map(|i| half::bf16::from_f32((i % 16) as f32 * 0.5))
+            .collect();
+        let out = vec![half::bf16::from_f32(0.0); 256];
+        let a_s = match self.storage_from_cpu_storage(&crate::CpuStorage::BF16(a)) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let b_s = match self.storage_from_cpu_storage(&crate::CpuStorage::BF16(b)) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let out_s = match self.storage_from_cpu_storage(&crate::CpuStorage::BF16(out)) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let (a_b, b_b, out_b) = (a_s.buffer(), b_s.buffer(), out_s.buffer());
+        let (a_b, b_b, out_b) = match (a_b, b_b, out_b) {
+            (
+                super::VulkanStorageBuffer::BF16(a),
+                super::VulkanStorageBuffer::BF16(b),
+                super::VulkanStorageBuffer::BF16(o),
+            ) => (a.clone(), b.clone(), o.clone()),
+            _ => return false,
+        };
+        let params = match Buffer::from_iter(
+            &self.inner.mem_alloc,
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![1u64, 16, 16, 16, 0],
+        ) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        let kernels = self.kernels();
+        let (a_b, b_b, out_b, params) = (a_b.clone(), b_b.clone(), out_b.clone(), params.clone());
+        if self
+            .execute(move |cbb| {
+                candle_vulkan_kernels::call_gemm_slang::<half::bf16>(
+                    cbb, &kernels, source, name, &a_b, &b_b, &out_b, &params, 1, 16, 16,
+                )
+                .map_err(|e| e.to_string())
+            })
+            .is_err()
+        {
+            return false;
+        }
+        match out_s.to_cpu_storage() {
+            Ok(cpu) => match cpu.as_slice::<half::bf16>() {
+                Ok(got) => got.iter().all(|v| (v.to_f32() - 30.0).abs() < 0.5),
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
     }
 
     /// The underlying Vulkan physical device (for querying properties
