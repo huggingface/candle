@@ -583,6 +583,27 @@ fn sum(device: &Device) -> Result<()> {
             ]]
         );
     }
+
+    let data = &[[1u8, 2, 3], [4, 5, 6]];
+    let tensor = Tensor::new(data, device)?;
+    assert_eq!(tensor.sum_keepdim(1)?.to_vec2::<u8>()?, &[[6], [15]]);
+    let data = &[[1i64, 2, 3], [4, 5, 6]];
+    let tensor = Tensor::new(data, device)?;
+    assert_eq!(tensor.sum_keepdim(1)?.to_vec2::<i64>()?, &[[6], [15]]);
+
+    let mut data = vec![16_777_217u32];
+    data.extend([1u32; 32]);
+    let tensor = Tensor::new(data.as_slice(), device)?;
+    assert_eq!(tensor.sum_keepdim(0)?.to_vec1::<u32>()?, &[16_777_249]);
+    if !device.is_metal() {
+        let mut data = vec![16_777_217f64];
+        data.extend([1f64; 32]);
+        let tensor = Tensor::new(data.as_slice(), device)?;
+        assert_eq!(tensor.sum_keepdim(0)?.to_vec1::<f64>()?, &[16_777_249.]);
+    }
+
+    let empty = Tensor::new(&[[1f32, 2.]; 4], device)?.narrow(1, 0, 0)?;
+    assert_eq!(empty.sum(1)?.to_vec1::<f32>()?, &[0.; 4]);
     Ok(())
 }
 
@@ -1207,6 +1228,33 @@ fn slice_scatter(device: &Device) -> Result<()> {
             [3.0, 4.0, 5.0],
             [100.0, 101.0, 102.0],
             [103.0, 104.0, 105.0],
+        ]
+    );
+
+    // The source is a view whose storage continues past it, which is what
+    // `narrow` yields. Only the two rows the view describes may be written:
+    // sizing the copy from the storage instead lets it run to the end of the
+    // source's buffer and overwrite the rows after the scatter point.
+    let big = Tensor::arange(100f32, 112f32, device)?.reshape((4, 3))?;
+    let src_view = big.narrow(0, 0, 2)?;
+    assert_eq!(
+        t.slice_scatter0(&src_view, 1)?.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [100.0, 101.0, 102.0],
+            [103.0, 104.0, 105.0],
+            [9.0, 10.0, 11.0]
+        ]
+    );
+    // Same, with the view starting partway into its storage.
+    let src_view = big.narrow(0, 2, 1)?;
+    assert_eq!(
+        t.slice_scatter0(&src_view, 2)?.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [3.0, 4.0, 5.0],
+            [106.0, 107.0, 108.0],
+            [9.0, 10.0, 11.0]
         ]
     );
     Ok(())

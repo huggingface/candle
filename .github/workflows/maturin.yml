@@ -13,15 +13,17 @@ on:
       - candle-pyo3/**
   workflow_dispatch:
 
-permissions:
-  contents: read
 
 env:
   PROTOC_VERSION: '25.0'
   FEATURES_FLAG: '--features onnx'
 
+permissions: {}
+
 jobs:
   linux:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -47,6 +49,8 @@ jobs:
           path: ./candle-pyo3/dist
 
   windows:
+    permissions:
+      contents: read
     runs-on: windows-latest
     strategy:
       matrix:
@@ -76,6 +80,8 @@ jobs:
           path: ./candle-pyo3/dist
 
   macos:
+    permissions:
+      contents: read
     runs-on: macos-latest
     strategy:
       matrix:
@@ -104,6 +110,8 @@ jobs:
           path: ./candle-pyo3/dist
 
   sdist:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2

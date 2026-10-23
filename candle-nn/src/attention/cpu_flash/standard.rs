@@ -4,7 +4,6 @@
 
 use candle::{Device, Result, Storage, Tensor, WithDType};
 use rayon::prelude::*;
-use std::f32;
 
 use super::dot_f32;
 use super::online_softmax::online_softmax_step;
