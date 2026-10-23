@@ -99,7 +99,7 @@ __device__ T sign_(T t) {
 
 // Vectorized bf16 unary op — 8 elements per float4 load, promotes to f32 for computation.
 // FLOAT_FUNC: expression using xf (float) that produces the result float (e.g. xf / (1.0f + expf(-xf)))
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800 || defined(CANDLE_CUDA_BF16_FALLBACK)
 #define UNARY_OP_BF16_VEC(FN_NAME, FLOAT_FUNC) \
 extern "C" __global__ void FN_NAME( \
     const size_t numel, \
