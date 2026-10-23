@@ -323,6 +323,107 @@ static SIGMOID_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sigmoid.sp
 static SOFTMAX_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/softmax.spv"));
 static ROPE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rope.spv"));
 
+// Native-`BFloat16` variants of the pure-bf16 kernels (build.rs
+// recompiles these with `-DBF16_NATIVE=1`); used when the device
+// enables VK_KHR_shader_bfloat16 and reports shaderBFloat16Type.
+const AFFINE_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/affine_bf16_native.spv"));
+const BINARY_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/binary_bf16_native.spv"));
+const CMP_BF16_NATIVE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp_bf16_native.spv"));
+const CONST_SET_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/const_set_bf16_native.spv"));
+const CONV_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/conv_bf16_native.spv"));
+const COPY2D_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_bf16_native.spv"));
+const GATHER_IDX_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_bf16_native.spv"));
+const REDUCE_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/reduce_bf16_native.spv"));
+const UNARY_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/unary_bf16_native.spv"));
+const WHERE_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/where_bf16_native.spv"));
+const TO_DTYPE_BF16_F16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_f16_native.spv"));
+const TO_DTYPE_BF16_F32_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_f32_native.spv"));
+const TO_DTYPE_BF16_F64_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_f64_native.spv"));
+const TO_DTYPE_BF16_I16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_i16_native.spv"));
+const TO_DTYPE_BF16_I32_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_i32_native.spv"));
+const TO_DTYPE_BF16_I64_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_i64_native.spv"));
+const TO_DTYPE_BF16_U32_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_u32_native.spv"));
+const TO_DTYPE_BF16_U8_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_u8_native.spv"));
+const TO_DTYPE_F16_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_bf16_native.spv"));
+const TO_DTYPE_F32_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_bf16_native.spv"));
+const TO_DTYPE_F64_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_bf16_native.spv"));
+const TO_DTYPE_I16_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_bf16_native.spv"));
+const TO_DTYPE_I32_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_bf16_native.spv"));
+const TO_DTYPE_I64_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_bf16_native.spv"));
+const TO_DTYPE_U32_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_bf16_native.spv"));
+const TO_DTYPE_U8_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_bf16_native.spv"));
+const AFFINE_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/affine_f8e4m3_native.spv"));
+const BINARY_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/binary_f8e4m3_native.spv"));
+const CMP_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/cmp_f8e4m3_native.spv"));
+const UNARY_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/unary_f8e4m3_native.spv"));
+const WHERE_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/where_f8e4m3_native.spv"));
+const TO_DTYPE_F8E4M3_F16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_f16_native.spv"));
+const TO_DTYPE_F8E4M3_F32_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_f32_native.spv"));
+const TO_DTYPE_F8E4M3_F64_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_f64_native.spv"));
+const TO_DTYPE_F8E4M3_I16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_i16_native.spv"));
+const TO_DTYPE_F8E4M3_I32_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_i32_native.spv"));
+const TO_DTYPE_F8E4M3_I64_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_i64_native.spv"));
+const TO_DTYPE_F8E4M3_U32_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_u32_native.spv"));
+const TO_DTYPE_F8E4M3_U8_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_u8_native.spv"));
+const TO_DTYPE_F16_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f16_f8e4m3_native.spv"));
+const TO_DTYPE_F32_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f32_f8e4m3_native.spv"));
+const TO_DTYPE_F64_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f64_f8e4m3_native.spv"));
+const TO_DTYPE_I16_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i16_f8e4m3_native.spv"));
+const TO_DTYPE_I32_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i32_f8e4m3_native.spv"));
+const TO_DTYPE_I64_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_i64_f8e4m3_native.spv"));
+const TO_DTYPE_U32_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u32_f8e4m3_native.spv"));
+const TO_DTYPE_U8_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_u8_f8e4m3_native.spv"));
+const TO_DTYPE_BF16_F8E4M3_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_bf16_f8e4m3_native.spv"));
+const TO_DTYPE_F8E4M3_BF16_NATIVE_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/to_dtype_f8e4m3_bf16_native.spv"));
+
 /// The set of compiled compute shaders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
@@ -1012,6 +1113,74 @@ impl Source {
             .chunks_exact(4)
             .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
             .collect()
+    }
+    /// Raw SPIR-V words for the native variant of this shader
+    /// (`-DBF16_NATIVE=1` and/or `-DFP8_NATIVE=1` in build.rs), or
+    /// `None` when the shader has no native variant, or when the variant
+    /// needs a native type the device does not support (`native_bf16` for
+    /// the `BFloat16` type, `native_fp8` for the `FloatE4M3` type).
+    pub fn native_spv_words(self, native_bf16: bool, native_fp8: bool) -> Option<Vec<u32>> {
+        let (bytes, needs_bf16, needs_fp8): (&[u8], bool, bool) = match self {
+            Self::AffineBf16 => (AFFINE_BF16_NATIVE_SPV, true, false),
+            Self::BinaryBf16 => (BINARY_BF16_NATIVE_SPV, true, false),
+            Self::CmpBf16 => (CMP_BF16_NATIVE_SPV, true, false),
+            Self::ConstSetBf16 => (CONST_SET_BF16_NATIVE_SPV, true, false),
+            Self::ConvBf16 => (CONV_BF16_NATIVE_SPV, true, false),
+            Self::Copy2dBf16 => (COPY2D_BF16_NATIVE_SPV, true, false),
+            Self::GatherIdxBf16 => (GATHER_IDX_BF16_NATIVE_SPV, true, false),
+            Self::ReduceBf16 => (REDUCE_BF16_NATIVE_SPV, true, false),
+            Self::UnaryBf16 => (UNARY_BF16_NATIVE_SPV, true, false),
+            Self::WhereBf16 => (WHERE_BF16_NATIVE_SPV, true, false),
+            Self::ToDtypeBf16F16 => (TO_DTYPE_BF16_F16_NATIVE_SPV, true, false),
+            Self::ToDtypeBf16F32 => (TO_DTYPE_BF16_F32_NATIVE_SPV, true, false),
+            Self::ToDtypeBf16F64 => (TO_DTYPE_BF16_F64_NATIVE_SPV, true, false),
+            Self::ToDtypeBf16I16 => (TO_DTYPE_BF16_I16_NATIVE_SPV, true, false),
+            Self::ToDtypeBf16I32 => (TO_DTYPE_BF16_I32_NATIVE_SPV, true, false),
+            Self::ToDtypeBf16I64 => (TO_DTYPE_BF16_I64_NATIVE_SPV, true, false),
+            Self::ToDtypeBf16U32 => (TO_DTYPE_BF16_U32_NATIVE_SPV, true, false),
+            Self::ToDtypeBf16U8 => (TO_DTYPE_BF16_U8_NATIVE_SPV, true, false),
+            Self::ToDtypeF16Bf16 => (TO_DTYPE_F16_BF16_NATIVE_SPV, true, false),
+            Self::ToDtypeF32Bf16 => (TO_DTYPE_F32_BF16_NATIVE_SPV, true, false),
+            Self::ToDtypeF64Bf16 => (TO_DTYPE_F64_BF16_NATIVE_SPV, true, false),
+            Self::ToDtypeI16Bf16 => (TO_DTYPE_I16_BF16_NATIVE_SPV, true, false),
+            Self::ToDtypeI32Bf16 => (TO_DTYPE_I32_BF16_NATIVE_SPV, true, false),
+            Self::ToDtypeI64Bf16 => (TO_DTYPE_I64_BF16_NATIVE_SPV, true, false),
+            Self::ToDtypeU32Bf16 => (TO_DTYPE_U32_BF16_NATIVE_SPV, true, false),
+            Self::ToDtypeU8Bf16 => (TO_DTYPE_U8_BF16_NATIVE_SPV, true, false),
+            Self::AffineF8e4m3 => (AFFINE_F8E4M3_NATIVE_SPV, false, true),
+            Self::BinaryF8e4m3 => (BINARY_F8E4M3_NATIVE_SPV, false, true),
+            Self::CmpF8e4m3 => (CMP_F8E4M3_NATIVE_SPV, false, true),
+            Self::UnaryF8e4m3 => (UNARY_F8E4M3_NATIVE_SPV, false, true),
+            Self::WhereF8e4m3 => (WHERE_F8E4M3_NATIVE_SPV, false, true),
+            Self::ToDtypeF8e4m3F16 => (TO_DTYPE_F8E4M3_F16_NATIVE_SPV, false, true),
+            Self::ToDtypeF8e4m3F32 => (TO_DTYPE_F8E4M3_F32_NATIVE_SPV, false, true),
+            Self::ToDtypeF8e4m3F64 => (TO_DTYPE_F8E4M3_F64_NATIVE_SPV, false, true),
+            Self::ToDtypeF8e4m3I16 => (TO_DTYPE_F8E4M3_I16_NATIVE_SPV, false, true),
+            Self::ToDtypeF8e4m3I32 => (TO_DTYPE_F8E4M3_I32_NATIVE_SPV, false, true),
+            Self::ToDtypeF8e4m3I64 => (TO_DTYPE_F8E4M3_I64_NATIVE_SPV, false, true),
+            Self::ToDtypeF8e4m3U32 => (TO_DTYPE_F8E4M3_U32_NATIVE_SPV, false, true),
+            Self::ToDtypeF8e4m3U8 => (TO_DTYPE_F8E4M3_U8_NATIVE_SPV, false, true),
+            Self::ToDtypeF16F8e4m3 => (TO_DTYPE_F16_F8E4M3_NATIVE_SPV, false, true),
+            Self::ToDtypeF32F8e4m3 => (TO_DTYPE_F32_F8E4M3_NATIVE_SPV, false, true),
+            Self::ToDtypeF64F8e4m3 => (TO_DTYPE_F64_F8E4M3_NATIVE_SPV, false, true),
+            Self::ToDtypeI16F8e4m3 => (TO_DTYPE_I16_F8E4M3_NATIVE_SPV, false, true),
+            Self::ToDtypeI32F8e4m3 => (TO_DTYPE_I32_F8E4M3_NATIVE_SPV, false, true),
+            Self::ToDtypeI64F8e4m3 => (TO_DTYPE_I64_F8E4M3_NATIVE_SPV, false, true),
+            Self::ToDtypeU32F8e4m3 => (TO_DTYPE_U32_F8E4M3_NATIVE_SPV, false, true),
+            Self::ToDtypeU8F8e4m3 => (TO_DTYPE_U8_F8E4M3_NATIVE_SPV, false, true),
+            Self::ToDtypeBf16F8e4m3 => (TO_DTYPE_BF16_F8E4M3_NATIVE_SPV, true, true),
+            Self::ToDtypeF8e4m3Bf16 => (TO_DTYPE_F8E4M3_BF16_NATIVE_SPV, true, true),
+            _ => return None,
+        };
+        if (needs_bf16 && !native_bf16) || (needs_fp8 && !native_fp8) {
+            return None;
+        }
+        Some(
+            bytes
+                .chunks_exact(4)
+                .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+                .collect(),
+        )
     }
 }
 

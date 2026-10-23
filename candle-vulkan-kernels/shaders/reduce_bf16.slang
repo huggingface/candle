@@ -4,10 +4,10 @@
 // out[row] = min_c in[row*cols + c]                      (main_reduce_min)
 // out[row] = argmin_c in[row*cols + c]                   (main_reduce_argmin)
 // out[row] = argmax_c in[row*cols + c]                   (main_reduce_argmax)
-import bf16_emulation;
+import bf16_type;
 
-StructuredBuffer<uint16_t> g_In;
-RWStructuredBuffer<uint16_t> g_OutF;
+StructuredBuffer<BF16> g_In;
+RWStructuredBuffer<BF16> g_OutF;
 RWStructuredBuffer<uint> g_OutI;
 StructuredBuffer<uint64_t> g_Params; // [0]=rows, [1]=cols
 

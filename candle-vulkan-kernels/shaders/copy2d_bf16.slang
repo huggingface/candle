@@ -2,8 +2,10 @@
 // 2D row-wise copy (values in elements):
 // for row in 0..d1: dst[dst_o + row*dst_s .. +d2] = src[src_o + row*src_s .. +d2].
 // Also used for copy_strided_src with a UniformBlocks source (dst_s = d2).
-StructuredBuffer<uint16_t> g_Src;
-RWStructuredBuffer<uint16_t> g_Dst;
+import bf16_type;
+
+StructuredBuffer<BF16> g_Src;
+RWStructuredBuffer<BF16> g_Dst;
 StructuredBuffer<uint64_t> g_Params; // [0]=d1, [1]=d2, [2]=src_stride, [3]=dst_stride, [4]=src_offset, [5]=dst_offset
 
 [shader("compute")]

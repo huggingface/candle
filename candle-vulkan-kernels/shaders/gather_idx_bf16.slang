@@ -1,8 +1,10 @@
 // bf16 copy (stored as the 16-bit bit pattern).
 // Indexed copy: out[i] = src[idx[i / blen] + (i % blen)].
 // blen == 1 -> element-wise gather; blen > 1 -> block gather.
-StructuredBuffer<uint16_t> g_Src;
-RWStructuredBuffer<uint16_t> g_Dst;
+import bf16_type;
+
+StructuredBuffer<BF16> g_Src;
+RWStructuredBuffer<BF16> g_Dst;
 StructuredBuffer<uint> g_Idx;
 StructuredBuffer<uint64_t> g_Params; // [0]=total, [1]=block_len, [2]=dst_offset
 

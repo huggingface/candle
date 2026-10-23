@@ -1,10 +1,10 @@
 // Fills a bf16 (emulated u16) storage buffer with a constant value.
 //
 // Push constants: g_Params.count = element count, g_Params.value = fill value.
-import bf16_emulation;
+import bf16_type;
 import common_const_set;
 
-RWStructuredBuffer<uint16_t> g_Out;
+RWStructuredBuffer<BF16> g_Out;
 layout(push_constant) Params g_Params;
 [shader("compute")]
 [numthreads(256, 1, 1)]

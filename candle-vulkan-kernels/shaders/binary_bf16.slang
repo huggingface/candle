@@ -9,11 +9,11 @@
 // Params layout: [0]=total, [1]=lhs_ndim, [2]=rhs_ndim,
 //                [3..11]=lhs dims, [11..19]=rhs dims,
 //                [19]=lhs_data_ndim, [20..28]=lhs_data_dims.
-import bf16_emulation;
+import bf16_type;
 
-StructuredBuffer<uint16_t> g_In;
-StructuredBuffer<uint16_t> g_Rhs;
-RWStructuredBuffer<uint16_t> g_Out;
+StructuredBuffer<BF16> g_In;
+StructuredBuffer<BF16> g_Rhs;
+RWStructuredBuffer<BF16> g_Out;
 StructuredBuffer<uint64_t> g_Params;
 
 uint64_t rhs_offset(uint i)

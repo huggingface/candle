@@ -1,8 +1,7 @@
-import bf16_emulation;
-import f8e4m3_emulation;
+import bf16_type;
 
 StructuredBuffer<uint8_t> g_In;
-RWStructuredBuffer<uint16_t> g_Out;
+RWStructuredBuffer<BF16> g_Out;
 layout(push_constant) uint64_t g_Count;
 [shader("compute")]
 [numthreads(256, 1, 1)]

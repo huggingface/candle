@@ -16,7 +16,7 @@
 // Format specifiers follow the validation layer's restricted printf
 // format: 8-bit and 16-bit integers print with the 32-bit specifiers
 // (%u / %d), 64-bit integers with %ld, and 16/32/64-bit floats with %f.
-import bf16_emulation;
+import bf16_type;
 
 StructuredBuffer<uint64_t> g_In;
 RWStructuredBuffer<uint64_t> g_Out;

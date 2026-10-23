@@ -5,10 +5,12 @@
 //
 // Params: [0]=total, [1]=ndim, [2..6]=pred dims, [6..10]=true dims,
 //         [10..14]=false dims.
+import bf16_type;
+
 StructuredBuffer<uint8_t> g_Pred;
-StructuredBuffer<uint16_t> g_True;
-StructuredBuffer<uint16_t> g_False;
-RWStructuredBuffer<uint16_t> g_Out;
+StructuredBuffer<BF16> g_True;
+StructuredBuffer<BF16> g_False;
+RWStructuredBuffer<BF16> g_Out;
 StructuredBuffer<uint64_t> g_Params;
 // Offset into the operand whose dims start at params[base], for flat
 // index `i` decomposed over the pred (full logical) dims.

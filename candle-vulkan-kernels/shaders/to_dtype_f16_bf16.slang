@@ -1,8 +1,8 @@
 // to_dtype: F16 (half) -> BF16 (emulated u16).
-import bf16_emulation;
+import bf16_type;
 
 StructuredBuffer<half> g_In;
-RWStructuredBuffer<uint16_t> g_Out;
+RWStructuredBuffer<BF16> g_Out;
 layout(push_constant) uint64_t g_Count;
 
 [shader("compute")]

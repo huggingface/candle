@@ -752,13 +752,9 @@ impl VulkanStorage {
     /// Fills this bf16 storage with all 65,536 possible 16-bit bit patterns:
     /// element `i` holds the bit pattern of `i`. The storage must be BF16.
     ///
-    /// Uses the emulated (raw 16-bit) fill path. vulkano 0.35.2 does not
-    /// expose `VK_KHR_shader_bfloat16`, so native bfloat16 compute cannot be
-    /// enabled on the device; the raw 16-bit store path round-trips the exact
-    /// same BF16 bit patterns and is the path that is verifiable today. The
-    /// native shader (`fill_native_bf16.slang`) and
-    /// `call_test_fill_bf16_native` are kept for a vulkano release that can
-    /// enable bfloat16.
+    /// Uses the emulated (raw 16-bit) fill path; see `fill_bf16_native`
+    /// for the native `BFloat16` path (VK_KHR_shader_bfloat16 +
+    /// shaderBFloat16Type).
     pub fn fill_bf16(&self) -> Result<()> {
         let buffer = match &self.buffer {
             VulkanStorageBuffer::BF16(buffer) => buffer,
@@ -802,6 +798,27 @@ impl VulkanStorage {
                 buffer,
                 total,
             )
+        })
+    }
+    /// Fills this bf16 storage with all 65,536 possible 16-bit bit patterns
+    /// using the native `BFloat16` fill path. The storage must be BF16.
+    ///
+    /// Requires the device to have native BFloat16 support (see
+    /// `VulkanDevice::supports_bf16`): the shader stores the patterns as
+    /// native `BFloat16` elements.
+    pub fn fill_bf16_native(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::BF16(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_bf16_native requires BF16 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_bf16_native", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_bf16_native(cbb, kernels.as_ref(), buffer, total)
         })
     }
     /// Fills this u32 storage with 256 distinct values, each beyond the 16-bit

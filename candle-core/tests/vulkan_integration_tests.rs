@@ -111,6 +111,32 @@ fn test_vulkan_device_f8e4m3_support() {
 }
 
 #[test]
+fn test_vulkan_device_bf16_support() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let phys = device.physical_device();
+    // The cached capability must agree with the physical device: the
+    // VK_KHR_shader_bfloat16 extension advertised AND the
+    // shaderBFloat16Type feature supported are exactly what device
+    // creation enables.
+    let ext = phys
+        .extension_properties()
+        .iter()
+        .any(|p| p.extension_name == "VK_KHR_shader_bfloat16");
+    let feat = phys.supported_features().shader_b_float16_type;
+    assert_eq!(
+        device.supports_bf16(),
+        ext && feat,
+        "supports_bf16 must reflect the device's VK_KHR_shader_bfloat16 + shaderBFloat16Type support (ext={ext} feature={feat})"
+    );
+    tracing::debug!(
+        "Vulkan device {gpu_id} bf16: ext={ext} feature={feat} enabled={}",
+        device.supports_bf16()
+    );
+}
+
+#[test]
 fn test_vulkan_device_storage() {
     (*INIT);
     let gpu_id = *GPU_ID;
@@ -269,6 +295,37 @@ fn test_vulkan_device_fill_bf16_emulated() {
         "fill_bf16_emulated produced duplicate values"
     );
     tracing::debug!("Vulkan device {gpu_id} fill_bf16_emulated round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_bf16_native() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    if !device.supports_bf16() {
+        tracing::debug!(
+            "Vulkan device {gpu_id} fill_bf16_native skipped: no native BFloat16 support"
+        );
+        return;
+    }
+    // 65,536 elements: one slot for every possible 16-bit bit pattern.
+    let shape = candle_core::Shape::from(65536);
+    let storage = device.zeros_impl(&shape, candle_core::DType::BF16).unwrap();
+    // Force the native BFloat16 path.
+    storage.fill_bf16_native().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<half::bf16>().unwrap().to_vec();
+    assert_eq!(data.len(), 65536);
+    // Every element must hold the bit pattern of its index (a valid bf16);
+    // all 65,536 f32->bf16 conversions in the shader are exact.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u16,
+            "fill_bf16_native mismatch at index {index}"
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} fill_bf16_native round-tripped OK");
 }
 #[test]
 fn test_vulkan_device_fill_u32() {

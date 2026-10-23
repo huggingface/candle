@@ -1,10 +1,10 @@
 // Unary bf16 ops (emulated). Each entry point maps g_In[i] -> g_Out[i] for i < g_Params[0],
 // decoding to float, applying the op in float, and encoding back to bf16.
-import bf16_emulation;
+import bf16_type;
 import common_unary;
 
-StructuredBuffer<uint16_t> g_In;
-RWStructuredBuffer<uint16_t> g_Out;
+StructuredBuffer<BF16> g_In;
+RWStructuredBuffer<BF16> g_Out;
 layout(push_constant) Params g_Params;
 
 [shader("compute")]

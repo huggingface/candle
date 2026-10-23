@@ -28,8 +28,25 @@ fn main() {
             .expect("slang shader without file stem")
             .to_string_lossy();
         let out_path = Path::new(&out_dir).join(format!("{name}.spv"));
-        compile_slang(&path, &out_path, None);
+        compile_slang(&path, &out_path, None, &[]);
         println!("cargo:rerun-if-changed={}", path.display());
+        // Native-variant pass: recompile the bf16/f8e4m3 kernels with
+        // `-DBF16_NATIVE=1` and/or `-DFP8_NATIVE=1` so they use the
+        // device's native `BFloat16` type (VK_KHR_shader_bfloat16 +
+        // shaderBFloat16Type) and/or native `FloatE4M3` type
+        // (VK_EXT_shader_float8 + shaderFloat8) when the device supports
+        // them; the default `<name>.spv` above is the emulated fallback.
+        let mut native_defines: Vec<&str> = Vec::new();
+        if NATIVE_BF16_SHADERS.iter().any(|s| *s == &*name) {
+            native_defines.push("BF16_NATIVE=1");
+        }
+        if NATIVE_FP8_SHADERS.iter().any(|s| *s == &*name) {
+            native_defines.push("FP8_NATIVE=1");
+        }
+        if !native_defines.is_empty() {
+            let native_out = Path::new(&out_dir).join(format!("{name}_native.spv"));
+            compile_slang(&path, &native_out, None, native_defines.as_slice());
+        }
     }
     // Test-only shaders live under `shaders/test/`. The SPIR-V output goes
     // to `${OUT_DIR}/test/` so a test shader can never collide with a
@@ -49,12 +66,78 @@ fn main() {
             .expect("slang shader without file stem")
             .to_string_lossy();
         let out_path = test_out_dir.join(format!("{name}.spv"));
-        compile_slang(&path, &out_path, Some(src_dir));
+        compile_slang(&path, &out_path, Some(src_dir), &[]);
         println!("cargo:rerun-if-changed={}", path.display());
     }
 }
 
-fn compile_slang(source_path: &Path, out_path: &Path, include_dir: Option<&Path>) {
+/// Shaders that get the native-`BFloat16` variant (see the loop above):
+/// their stems plus `_native.spv` are emitted with `-DBF16_NATIVE=1`.
+const NATIVE_BF16_SHADERS: &[&str] = &[
+    "affine_bf16",
+    "binary_bf16",
+    "cmp_bf16",
+    "const_set_bf16",
+    "conv_bf16",
+    "copy2d_bf16",
+    "gather_idx_bf16",
+    "reduce_bf16",
+    "unary_bf16",
+    "where_bf16",
+    "to_dtype_bf16_f16",
+    "to_dtype_bf16_f32",
+    "to_dtype_bf16_f64",
+    "to_dtype_bf16_i16",
+    "to_dtype_bf16_i32",
+    "to_dtype_bf16_i64",
+    "to_dtype_bf16_u32",
+    "to_dtype_bf16_u8",
+    "to_dtype_f16_bf16",
+    "to_dtype_f32_bf16",
+    "to_dtype_f64_bf16",
+    "to_dtype_i16_bf16",
+    "to_dtype_i32_bf16",
+    "to_dtype_i64_bf16",
+    "to_dtype_u32_bf16",
+    "to_dtype_u8_bf16",
+];
+
+/// Shaders that get the native-`FloatE4M3` variant (see the loop above):
+/// their stems plus `_native.spv` are emitted with `-DFP8_NATIVE=1`. The
+/// two cross `bf16<->f8e4m3` shaders are in both lists and get both
+/// defines.
+const NATIVE_FP8_SHADERS: &[&str] = &[
+    "affine_f8e4m3",
+    "binary_f8e4m3",
+    "cmp_f8e4m3",
+    "unary_f8e4m3",
+    "where_f8e4m3",
+    "to_dtype_f8e4m3_f16",
+    "to_dtype_f8e4m3_f32",
+    "to_dtype_f8e4m3_f64",
+    "to_dtype_f8e4m3_i16",
+    "to_dtype_f8e4m3_i32",
+    "to_dtype_f8e4m3_i64",
+    "to_dtype_f8e4m3_u32",
+    "to_dtype_f8e4m3_u8",
+    "to_dtype_f16_f8e4m3",
+    "to_dtype_f32_f8e4m3",
+    "to_dtype_f64_f8e4m3",
+    "to_dtype_i16_f8e4m3",
+    "to_dtype_i32_f8e4m3",
+    "to_dtype_i64_f8e4m3",
+    "to_dtype_u32_f8e4m3",
+    "to_dtype_u8_f8e4m3",
+    "to_dtype_bf16_f8e4m3",
+    "to_dtype_f8e4m3_bf16",
+];
+
+fn compile_slang(
+    source_path: &Path,
+    out_path: &Path,
+    include_dir: Option<&Path>,
+    defines: &[&str],
+) {
     // `SLANGC` overrides the slangc executable (e.g. a specific installation
     // or version); unset or empty falls back to `slangc` from the PATH.
     let slangc = match std::env::var("SLANGC") {
@@ -75,6 +158,10 @@ fn compile_slang(source_path: &Path, out_path: &Path, include_dir: Option<&Path>
     if let Some(dir) = include_dir {
         args.push("-I".to_string());
         args.push(dir.to_string_lossy().into_owned());
+    }
+    // Preprocessor macros (e.g. `BF16_NATIVE=1` for the native bf16 pass).
+    for define in defines {
+        args.push(format!("-D{define}"));
     }
     // Extra slangc flags from the SLANGCFLAGS environment variable.
     if let Ok(extra) = std::env::var("SLANGCFLAGS") {

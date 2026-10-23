@@ -1,9 +1,9 @@
 // affine (dst = src*mul + add) for bf16 (emulated): decode to float, compute, encode back.
-import bf16_emulation;
+import bf16_type;
 import common_affine;
 
-StructuredBuffer<uint16_t> g_In;
-RWStructuredBuffer<uint16_t> g_Out;
+StructuredBuffer<BF16> g_In;
+RWStructuredBuffer<BF16> g_Out;
 layout(push_constant) Params g_Params;
 
 [shader("compute")]

@@ -16,11 +16,11 @@
 //   out (b, c_out, o_h, o_w)
 //   params: [0]=b, [1]=c_in, [2]=c_out, [3]=k_h, [4]=k_w, [5]=i_h, [6]=i_w,
 //           [7]=o_h, [8]=o_w, [9]=padding, [10]=stride, [11]=dilation
-import bf16_emulation;
+import bf16_type;
 
-StructuredBuffer<uint16_t> g_In;
-StructuredBuffer<uint16_t> g_W;
-RWStructuredBuffer<uint16_t> g_Out;
+StructuredBuffer<BF16> g_In;
+StructuredBuffer<BF16> g_W;
+RWStructuredBuffer<BF16> g_Out;
 StructuredBuffer<uint64_t> g_Params;
 
 [shader("compute")]

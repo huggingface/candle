@@ -977,14 +977,37 @@ pub struct Kernels {
     device: Arc<Device>,
     dss_alloc: Arc<StandardDescriptorSetAllocator>,
     pipelines: RwLock<Pipelines>,
+    /// True when the device enables VK_KHR_shader_bfloat16 and reports
+    /// shaderBFloat16Type: the native-`BFloat16` kernel variants
+    /// (`*_native.spv`, compiled with `-DBF16_NATIVE=1`) are used for the
+    /// pure-bf16 kernels; otherwise the emulated variants are used.
+    native_bf16: bool,
+    /// True when the device enables VK_EXT_shader_float8 and reports
+    /// shaderFloat8: the native-`FloatE4M3` kernel variants
+    /// (`*_native.spv`, compiled with `-DFP8_NATIVE=1`) are used for the
+    /// pure-f8e4m3 kernels; otherwise the emulated variants are used.
+    native_fp8: bool,
 }
 
 impl Kernels {
     pub fn new(device: Arc<Device>, dss_alloc: Arc<StandardDescriptorSetAllocator>) -> Self {
+        let physical = device.physical_device();
+        let native_bf16 = physical
+            .extension_properties()
+            .iter()
+            .any(|e| e.extension_name.eq("VK_KHR_shader_bfloat16"))
+            && physical.supported_features().shader_b_float16_type;
+        let native_fp8 = physical
+            .extension_properties()
+            .iter()
+            .any(|e| e.extension_name.eq("VK_EXT_shader_float8"))
+            && physical.supported_features().shader_float8;
         Self {
             device,
             dss_alloc,
             pipelines: RwLock::new(Pipelines::new()),
+            native_bf16,
+            native_fp8,
         }
     }
 
@@ -1030,7 +1053,9 @@ impl Kernels {
         source: Source,
         name: KernelName,
     ) -> Result<PipelineEntry, VulkanKernelError> {
-        let words = source.spv_words();
+        let words = source
+            .native_spv_words(self.native_bf16, self.native_fp8)
+            .unwrap_or_else(|| source.spv_words());
         let create_info = vulkano::shader::ShaderModuleCreateInfo::new(&words);
         let shader = unsafe { vulkano::shader::ShaderModule::new(&self.device, &create_info) }
             .map_err(pipeline_error)?;

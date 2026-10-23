@@ -110,6 +110,12 @@ struct DeviceInner {
     /// physical device. When true, the `FloatE4M3` Slang type (the GPU
     /// storage type of `microfloat::f8e4m3`) can be used in shaders.
     supports_f8e4m3: bool,
+    /// Native BFloat16 support, as enabled at device creation: the
+    /// VK_KHR_shader_bfloat16 device extension and the shaderBFloat16Type
+    /// device feature both have to be reported by the physical device.
+    /// When true, the `BFloat16` Slang type (the GPU storage type of
+    /// `half::bf16`) can be used in shaders.
+    supports_bf16: bool,
     gpu_id: usize,
 }
 
@@ -211,6 +217,16 @@ impl VulkanDevice {
             .iter()
             .any(|e| e.extension_name.eq("VK_EXT_shader_float8"));
         let fp8 = fp8_ext && supported.shader_float8;
+        // Native BFloat16 support: the VK_KHR_shader_bfloat16 device
+        // extension plus the shaderBFloat16Type device feature. The Slang
+        // `BFloat16` type (the GPU storage type of `half::bf16`) requires
+        // both. Enable only what the device reports, so creation never
+        // fails.
+        let bf16_ext = physical
+            .extension_properties()
+            .iter()
+            .any(|e| e.extension_name.eq("VK_KHR_shader_bfloat16"));
+        let bf16 = bf16_ext && supported.shader_b_float16_type;
         // Atomic float add (used by `index_add`): F32/F64 need
         // VK_EXT_shader_atomic_float, F16 needs VK_EXT_shader_atomic_float2.
         // Enable only what the device reports, so creation never fails.
@@ -230,6 +246,7 @@ impl VulkanDevice {
             ext_shader_atomic_float: atomic_f32 || atomic_f64,
             ext_shader_atomic_float2: atomic_f16,
             ext_shader_float8: fp8_ext,
+            khr_shader_bfloat16: bf16_ext,
             ..Default::default()
         };
         let feats = DeviceFeatures {
@@ -243,6 +260,7 @@ impl VulkanDevice {
             shader_int64: i64,
             shader_float64: f64,
             shader_float8: fp8,
+            shader_b_float16_type: bf16,
             shader_buffer_float32_atomic_add: atomic_f32,
             shader_buffer_float64_atomic_add: atomic_f64,
             shader_buffer_float16_atomic_add: atomic_f16,
@@ -284,7 +302,9 @@ impl VulkanDevice {
                 fence: Arc::new(fence),
             });
         }
-        tracing::debug!("Initializing vulkan device '{gpu_id}' (f8e4m3_native={fp8})");
+        tracing::debug!(
+            "Initializing vulkan device '{gpu_id}' (f8e4m3_native={fp8} bf16_native={bf16})"
+        );
         Ok(Self {
             inner: Arc::new(DeviceInner {
                 device,
@@ -306,6 +326,7 @@ impl VulkanDevice {
                 atomic_f64,
                 atomic_f16,
                 supports_f8e4m3: fp8,
+                supports_bf16: bf16,
                 gpu_id,
             }),
         })
@@ -454,13 +475,12 @@ impl VulkanDevice {
         }
     }
 
+    /// True when native BFloat16 support was enabled at device creation
+    /// (VK_KHR_shader_bfloat16 + shaderBFloat16Type feature): shaders may
+    /// use the Slang `BFloat16` type, the GPU storage type of
+    /// `half::bf16`.
     pub fn supports_bf16(&self) -> bool {
-        self.inner
-            .device
-            .physical_device()
-            .extension_properties()
-            .iter()
-            .any(|property| property.extension_name.eq("VK_KHR_shader_bfloat16"))
+        self.inner.supports_bf16
     }
 
     /// The underlying Vulkan physical device (for querying properties

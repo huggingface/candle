@@ -5,10 +5,10 @@
 //
 // Params layout: [0]=total, [1]=lhs_ndim, [2]=rhs_ndim,
 //                [3..7]=lhs dims, [7..11]=rhs dims.
-import bf16_emulation;
+import bf16_type;
 
-StructuredBuffer<uint16_t> g_In;
-StructuredBuffer<uint16_t> g_Rhs;
+StructuredBuffer<BF16> g_In;
+StructuredBuffer<BF16> g_Rhs;
 RWStructuredBuffer<uint8_t> g_Out;
 StructuredBuffer<uint64_t> g_Params;
 

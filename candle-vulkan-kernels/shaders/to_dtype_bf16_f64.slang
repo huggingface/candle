@@ -1,7 +1,7 @@
 // to_dtype: BF16 (emulated u16) -> F64 (double).
-import bf16_emulation;
+import bf16_type;
 
-StructuredBuffer<uint16_t> g_In;
+StructuredBuffer<BF16> g_In;
 RWStructuredBuffer<double> g_Out;
 layout(push_constant) uint64_t g_Count;
 

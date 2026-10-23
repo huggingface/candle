@@ -1,7 +1,6 @@
-import bf16_emulation;
-import f8e4m3_emulation;
+import bf16_type;
 
-StructuredBuffer<uint16_t> g_In;
+StructuredBuffer<BF16> g_In;
 RWStructuredBuffer<int32_t> g_Out;
 layout(push_constant) uint64_t g_Count;
 [shader("compute")]
