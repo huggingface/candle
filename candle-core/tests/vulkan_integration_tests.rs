@@ -86,6 +86,31 @@ fn test_vulkan_device_properties() {
     );
 }
 #[test]
+fn test_vulkan_device_f8e4m3_support() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = VulkanDevice::new(gpu_id).unwrap();
+    let phys = device.physical_device();
+    // The cached capability must agree with the physical device: the
+    // VK_EXT_shader_float8 extension advertised AND the shaderFloat8
+    // feature supported are exactly what device creation enables.
+    let ext = phys
+        .extension_properties()
+        .iter()
+        .any(|p| p.extension_name == "VK_EXT_shader_float8");
+    let feat = phys.supported_features().shader_float8;
+    assert_eq!(
+        device.supports_f8e4m3(),
+        ext && feat,
+        "supports_f8e4m3 must reflect the device's VK_EXT_shader_float8 + shaderFloat8 support (ext={ext} feature={feat})"
+    );
+    tracing::debug!(
+        "Vulkan device {gpu_id} f8e4m3: ext={ext} feature={feat} enabled={}",
+        device.supports_f8e4m3()
+    );
+}
+
+#[test]
 fn test_vulkan_device_storage() {
     (*INIT);
     let gpu_id = *GPU_ID;
@@ -1728,13 +1753,7 @@ fn test_vulkan_matmul() {
         .into_iter()
         .flatten()
         .flatten()
-        .zip(
-            c3.to_vec3::<f32>()
-                .unwrap()
-                .into_iter()
-                .flatten()
-                .flatten(),
-        )
+        .zip(c3.to_vec3::<f32>().unwrap().into_iter().flatten().flatten())
     {
         assert!(
             (x - y).abs() < 1e-3 * (1.0 + y.abs()),

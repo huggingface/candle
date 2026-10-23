@@ -104,6 +104,12 @@ struct DeviceInner {
     atomic_f32: bool,
     atomic_f64: bool,
     atomic_f16: bool,
+    /// Native FloatE4M3 (FP8 E4M3) support, as enabled at device
+    /// creation: the VK_EXT_shader_float8 device extension and the
+    /// shaderFloat8 device feature both have to be reported by the
+    /// physical device. When true, the `FloatE4M3` Slang type (the GPU
+    /// storage type of `microfloat::f8e4m3`) can be used in shaders.
+    supports_f8e4m3: bool,
     gpu_id: usize,
 }
 
@@ -195,6 +201,16 @@ impl VulkanDevice {
         let i16 = supported.shader_int16;
         let i64 = supported.shader_int64;
         let f64 = supported.shader_float64;
+        // FP8 (FloatE4M3) support: the VK_EXT_shader_float8 device
+        // extension plus the shaderFloat8 device feature. The Slang
+        // `FloatE4M3` type (the GPU storage type of `microfloat::f8e4m3`)
+        // requires both. Enable only what the device reports, so creation
+        // never fails.
+        let fp8_ext = physical
+            .extension_properties()
+            .iter()
+            .any(|e| e.extension_name.eq("VK_EXT_shader_float8"));
+        let fp8 = fp8_ext && supported.shader_float8;
         // Atomic float add (used by `index_add`): F32/F64 need
         // VK_EXT_shader_atomic_float, F16 needs VK_EXT_shader_atomic_float2.
         // Enable only what the device reports, so creation never fails.
@@ -213,6 +229,7 @@ impl VulkanDevice {
             khr_shader_non_semantic_info: printf_enabled,
             ext_shader_atomic_float: atomic_f32 || atomic_f64,
             ext_shader_atomic_float2: atomic_f16,
+            ext_shader_float8: fp8_ext,
             ..Default::default()
         };
         let feats = DeviceFeatures {
@@ -225,6 +242,7 @@ impl VulkanDevice {
             shader_int16: i16,
             shader_int64: i64,
             shader_float64: f64,
+            shader_float8: fp8,
             shader_buffer_float32_atomic_add: atomic_f32,
             shader_buffer_float64_atomic_add: atomic_f64,
             shader_buffer_float16_atomic_add: atomic_f16,
@@ -266,7 +284,7 @@ impl VulkanDevice {
                 fence: Arc::new(fence),
             });
         }
-        tracing::debug!("Initializing vulkan device '{gpu_id}'");
+        tracing::debug!("Initializing vulkan device '{gpu_id}' (f8e4m3_native={fp8})");
         Ok(Self {
             inner: Arc::new(DeviceInner {
                 device,
@@ -287,6 +305,7 @@ impl VulkanDevice {
                 atomic_f32,
                 atomic_f64,
                 atomic_f16,
+                supports_f8e4m3: fp8,
                 gpu_id,
             }),
         })
@@ -302,6 +321,14 @@ impl VulkanDevice {
             DType::F16 => self.inner.atomic_f16,
             _ => false,
         }
+    }
+
+    /// True when native FloatE4M3 (FP8 E4M3) support was enabled at
+    /// device creation (VK_EXT_shader_float8 + shaderFloat8 feature):
+    /// shaders may use the Slang `FloatE4M3` type, the GPU storage type
+    /// of `microfloat::f8e4m3`.
+    pub fn supports_f8e4m3(&self) -> bool {
+        self.inner.supports_f8e4m3
     }
 
     pub(crate) fn device(&self) -> &Arc<Device> {
