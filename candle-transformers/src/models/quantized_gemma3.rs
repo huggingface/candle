@@ -215,8 +215,26 @@ impl LayerWeights {
         // during decode) and strided views of the accumulated k/v; no
         // per-token cat or reallocation.
         let (k, v) = self.kv_cache.append(&k, &v)?;
+        let kv_len = k.dim(2)?;
 
-        // Repeat KV for GQA
+        // Single-query decode on Vulkan: fused GQA-native attention (one
+        // kernel pair; no repeat_kv, no matmul chain).
+        if b_sz == 1
+            && seq_len == 1
+            && mask.is_none()
+            && q.dtype() == DType::F32
+            && matches!(q.device(), Device::Vulkan(_))
+        {
+            let q2 = q.contiguous()?.reshape((self.n_head, self.head_dim))?;
+            let k2 = k.reshape((self.n_kv_head, kv_len, self.head_dim))?;
+            let v2 = v.reshape((self.n_kv_head, kv_len, self.head_dim))?;
+            let scale = (1.0 / (self.head_dim as f64).sqrt()) as f32;
+            let ctx = q2.fused_decode_attention(&k2, &v2, scale, self.n_kv_head)?;
+            let ctx = ctx.reshape((b_sz, seq_len, self.q_dim))?;
+            return self.attention_wo.forward(&ctx);
+        }
+
+        // Repeat KV for GQA (prefill path)
         let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
 
