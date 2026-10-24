@@ -18,8 +18,9 @@ use crate::quantized_nn::RmsNorm;
 use candle::quantized::gguf_file;
 use candle::quantized::QTensor;
 use candle::D;
-use candle::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::kv_cache::PreallocKvCache;
+use candle::{DType, Device, IndexOp, Result, Storage, Tensor};
+use candle_nn::attention::cpu_flash::causal::causal_decode_f32_interleaved;
+use candle_nn::kv_cache::{PreallocKvCache, RawInterleavedKvCache};
 use candle_nn::{Embedding, Module};
 
 pub const MAX_SEQ_LEN: usize = 131072; // Gemma 3 supports 128K context window
@@ -138,6 +139,8 @@ struct LayerWeights {
 
     // Cache (pre-allocated; both backends)
     kv_cache: PreallocKvCache,
+    // CPU: raw interleaved cache backing the fused decode kernel
+    raw_cache: Option<RawInterleavedKvCache>,
 
     // Tracing
     span_attn: tracing::Span,
@@ -211,6 +214,65 @@ impl LayerWeights {
             .rotary_embedding
             .apply_rotary_emb_qkv(&q, &k, index_pos)?;
 
+        // CPU single-query decode: raw interleaved cache + fused
+        // multi-threaded, prefetched, GQA-aware decode kernel (no tensor
+        if b_sz == 1 && seq_len == 1 && q.dtype() == DType::F32 {
+            if let Some(rc) = self.raw_cache.as_mut() {
+                let q_cont = q.squeeze(0)?.squeeze(1)?.contiguous()?;
+                let (q_g, q_l) = q_cont.storage_and_layout();
+                let q_data: &[f32] = match &*q_g {
+                    Storage::Cpu(c) => &c.as_slice::<f32>()?[q_l.start_offset()..],
+                    _ => candle::bail!("expected CPU storage"),
+                };
+                let k_cont = k.squeeze(0)?.squeeze(1)?.contiguous()?;
+                let (k_g, k_l) = k_cont.storage_and_layout();
+                let k_data: &[f32] = match &*k_g {
+                    Storage::Cpu(c) => &c.as_slice::<f32>()?[k_l.start_offset()..],
+                    _ => candle::bail!("expected CPU storage"),
+                };
+                let v_cont = v.squeeze(0)?.squeeze(1)?.contiguous()?;
+                let (v_g, v_l) = v_cont.storage_and_layout();
+                let v_data: &[f32] = match &*v_g {
+                    Storage::Cpu(c) => &c.as_slice::<f32>()?[v_l.start_offset()..],
+                    _ => candle::bail!("expected CPU storage"),
+                };
+                let k_len = self.n_kv_head * self.head_dim;
+                rc.write_kv(&k_data[..k_len], &v_data[..k_len]);
+                let ctx = causal_decode_f32_interleaved(
+                    &q_data[..self.n_head * self.head_dim],
+                    rc.data(),
+                    self.n_head,
+                    self.n_kv_head,
+                    self.head_dim,
+                    rc.len(),
+                    1.0 / (self.head_dim as f32).sqrt(),
+                )?;
+                let ctx = ctx.reshape((b_sz, seq_len, self.q_dim))?;
+                return self.attention_wo.forward(&ctx);
+            }
+        }
+
+        // CPU: populate the raw cache with the new rows so later decode
+        // steps can use the fused raw kernel (the tensor cache below
+        // serves the matmul prefill).
+        if b_sz == 1 && q.dtype() == DType::F32 {
+            if let Some(rc) = self.raw_cache.as_mut() {
+                let k_cont = k.squeeze(0)?.transpose(0, 1)?.contiguous()?;
+                let (k_g, k_l) = k_cont.storage_and_layout();
+                let k_data: &[f32] = match &*k_g {
+                    Storage::Cpu(c) => &c.as_slice::<f32>()?[k_l.start_offset()..],
+                    _ => candle::bail!("expected CPU storage"),
+                };
+                let v_cont = v.squeeze(0)?.transpose(0, 1)?.contiguous()?;
+                let (v_g, v_l) = v_cont.storage_and_layout();
+                let v_data: &[f32] = match &*v_g {
+                    Storage::Cpu(c) => &c.as_slice::<f32>()?[v_l.start_offset()..],
+                    _ => candle::bail!("expected CPU storage"),
+                };
+                rc.write_kv_batch(k_data, v_data, seq_len);
+            }
+        }
+
         // Pre-allocated KV cache: in-place row append (a one-row copy
         // during decode) and strided views of the accumulated k/v; no
         // per-token cat or reallocation.
@@ -234,10 +296,9 @@ impl LayerWeights {
             return self.attention_wo.forward(&ctx);
         }
 
-        // Repeat KV for GQA (prefill path)
+        // Prefill path: repeat KV for GQA, then the matmul chain.
         let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
-
         // Scaled Dot-Product Attention
         let scale = 1.0 / (self.head_dim as f64).sqrt();
         let mut attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
@@ -437,6 +498,9 @@ impl ModelWeights {
                     DType::F32,
                     device,
                 )?,
+                raw_cache: (device.is_cpu()).then(|| {
+                    RawInterleavedKvCache::new(head_count_kv, key_length, MAX_KV_CACHE_LEN)
+                }),
                 span_attn,
                 span_mlp,
             })
