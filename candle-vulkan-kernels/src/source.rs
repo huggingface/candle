@@ -887,9 +887,10 @@ impl Source {
             | KernelName::UpsampleNearest2dF16
             | KernelName::UpsampleNearest2dF32
             | KernelName::UpsampleNearest2dF64 => 64,
-            // `decode_attention`: `float scale; uint64_t num_heads;
-            // uint64_t num_kv_heads; uint64_t head_dim; uint64_t kv_len;` (40 bytes).
-            KernelName::DecodeAttention => 40,
+            // `decode_attention` (both passes): `uint64_t num_heads;
+            // uint64_t num_kv_heads; uint64_t head_dim; uint64_t kv_len;
+            // float scale;` (40 bytes).
+            KernelName::DecodeAttention | KernelName::DecodeAttentionCombine => 40,
             _ => 0,
         }
     }

@@ -1463,9 +1463,10 @@ impl Tensor {
     /// `(num_heads, head_dim)` f32, `k`/`v` are `(num_kv_heads, kv_len,
     /// head_dim)` f32, all contiguous. Returns the `(num_heads, head_dim)` f32
     /// attention output. The GQA group for query head `h` is
-    /// `h * num_kv_heads / num_heads` (matching `repeat_kv`). The caller must
-    /// fall back to the decomposed matmul+softmax+matmul path for `kv_len`
-    /// beyond the kernel cap.
+    /// `h * num_kv_heads / num_heads` (matching `repeat_kv`). Two dispatches:
+    /// a per-(head, KV-chunk) flash-decode pass over a partials scratch buffer,
+    /// then a small per-head reduction, so any `kv_len` is supported
+    /// (`head_dim` must be at most 512).
     pub fn fused_decode_attention(
         &self,
         k: &Tensor,
@@ -1473,7 +1474,6 @@ impl Tensor {
         scale: f32,
         num_kv_heads: usize,
     ) -> Result<Tensor> {
-        const MAX_KV_LEN: usize = 4096;
         let (num_heads, head_dim) = self.dims2()?;
         let (k_heads, kv_len, k_dim) = k.dims3()?;
         let (v_heads, v_len, v_dim) = v.dims3()?;
@@ -1490,8 +1490,8 @@ impl Tensor {
                 v.dims()
             );
         }
-        if kv_len > MAX_KV_LEN {
-            bail!("fused_decode_attention: kv_len {kv_len} exceeds the kernel cap {MAX_KV_LEN}");
+        if head_dim > 512 {
+            bail!("fused_decode_attention: head_dim {head_dim} exceeds the kernel limit of 512");
         }
         let (qs, ql) = self.storage_and_layout();
         let (ks, kl) = k.storage_and_layout();

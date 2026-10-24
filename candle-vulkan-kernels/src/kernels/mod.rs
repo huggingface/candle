@@ -51,7 +51,7 @@ pub use cmp_slang::call_cmp_slang;
 pub use const_set::{call_const_set_bf16, call_const_set_f16, call_const_set_f32};
 pub use conv_slang::call_conv_slang;
 pub use copy2d_slang::call_copy2d_slang;
-pub use decode_attention_slang::call_decode_attention_slang;
+pub use decode_attention_slang::{call_decode_attention_slang, DECODE_ATTENTION_CHUNK};
 pub use dequant_slang::call_dequantize_slang;
 pub use fused_quant_gemm_slang::call_fused_quant_gemm_slang;
 pub use gather_idx_slang::call_gather_idx_slang;

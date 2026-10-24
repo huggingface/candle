@@ -49,6 +49,7 @@ pub enum KernelName {
     FusedQ5kGemmMF32,
     FusedQ8kGemmMF32,
     DecodeAttention,
+    DecodeAttentionCombine,
     ZeroFill,
     ConstSetF32,
     ConstSetF16,
@@ -521,6 +522,7 @@ impl AsRef<str> for KernelName {
             Self::FusedQ5kGemmMF32 => "main",
             Self::FusedQ8kGemmMF32 => "main",
             Self::DecodeAttention => "main",
+            Self::DecodeAttentionCombine => "decode_attention_combine",
             Self::ZeroFill => "main",
             Self::ConstSetF32 => "main",
             Self::ConstSetF16 => "main",
@@ -1476,7 +1478,6 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::FusedQ8kGemmF32
         | KernelName::FusedQ5kGemmMF32
         | KernelName::FusedQ8kGemmMF32
-        | KernelName::DecodeAttention
         | KernelName::IndexAddF32U32
         | KernelName::IndexAddF32I64
         | KernelName::IndexAddF32U8
@@ -1670,7 +1671,9 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::WhereF16
         | KernelName::WhereF64
         | KernelName::AffineCoopMatF16
-        | KernelName::AffineCoopMatBf16 => 5,
+        | KernelName::AffineCoopMatBf16
+        | KernelName::DecodeAttention
+        | KernelName::DecodeAttentionCombine => 5,
     }
 }
 

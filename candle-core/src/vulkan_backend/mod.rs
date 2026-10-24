@@ -11901,9 +11901,25 @@ impl VulkanStorage {
         head_dim: usize,
         kv_len: usize,
     ) -> Result<Self> {
-        use candle_vulkan_kernels::{DecodeAttentionParams, KernelName, Source};
+        use candle_vulkan_kernels::{
+            call_decode_attention_slang, DecodeAttentionParams, DECODE_ATTENTION_CHUNK,
+        };
+        let num_chunks = kv_len.div_ceil(DECODE_ATTENTION_CHUNK);
         let out = VulkanStorage::new(&self.device, num_heads * head_dim, DType::F32)?;
+        let scratch = VulkanStorage::new(
+            &self.device,
+            num_heads * num_chunks * (2 + head_dim),
+            DType::F32,
+        )?;
         let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let scratch_buf = match &scratch.buffer {
             VulkanStorageBuffer::F32(b) => b.clone(),
             _ => {
                 return Err(Error::Vulkan(
@@ -11922,19 +11938,20 @@ impl VulkanStorage {
             kv_len: kv_len as u64,
         };
         let kernels = self.device.kernels();
-        let (q_buf, k_buf, v_buf, out_buf) = (q_buf, k_buf, v_buf, out_buf);
+        let (q_buf, k_buf, v_buf, scratch_buf, out_buf) =
+            (q_buf, k_buf, v_buf, scratch_buf, out_buf);
         self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_decode_attention_slang(
+            call_decode_attention_slang(
                 cbb,
                 &kernels,
-                Source::DecodeAttention,
-                KernelName::DecodeAttention,
                 &q_buf,
                 &k_buf,
                 &v_buf,
+                &scratch_buf,
                 &out_buf,
                 &params,
                 num_heads,
+                num_chunks,
             )
             .map_err(|e| e.to_string())
         })?;

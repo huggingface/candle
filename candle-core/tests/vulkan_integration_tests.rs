@@ -5830,13 +5830,23 @@ fn test_vulkan_fused_decode_attention() {
     let gpu_id = *GPU_ID;
     let device = VulkanDevice::new(gpu_id).unwrap();
     let dev = candle_core::Device::Vulkan(device);
+    // Small case: not a multiple of the 32-wide workgroup; the kv_len is
+    // not a multiple of the 128-position chunk either.
+    check_fused_decode_attention(&dev, 4, 2, 16, 33, 0.5);
+    // Large case: kv_len above the old 4096 kernel cap (two-kernel
+    // flash-decode removes the cap), not a multiple of 128 or 32, and
+    // enough chunks (40) to exercise the combine pass.
+    check_fused_decode_attention(&dev, 4, 2, 16, 5000, 0.5);
+}
 
-    let num_heads = 4usize;
-    let num_kv_heads = 2usize;
-    let head_dim = 16usize;
-    let kv_len = 33usize; // not a multiple of the 32-wide workgroup
-    let scale = 0.5f32;
-
+fn check_fused_decode_attention(
+    dev: &candle_core::Device,
+    num_heads: usize,
+    num_kv_heads: usize,
+    head_dim: usize,
+    kv_len: usize,
+    scale: f32,
+) {
     // Deterministic pseudo-random data in [-1, 1] (keeps exp() bounded).
     fn prng(i: usize) -> f32 {
         let x =
@@ -5851,10 +5861,10 @@ fn test_vulkan_fused_decode_attention() {
         .map(|i| prng(i + 2000))
         .collect();
 
-    let q = candle_core::Tensor::from_vec(q_data.clone(), (num_heads, head_dim), &dev).unwrap();
-    let k = candle_core::Tensor::from_vec(k_data.clone(), (num_kv_heads, kv_len, head_dim), &dev)
+    let q = candle_core::Tensor::from_vec(q_data.clone(), (num_heads, head_dim), dev).unwrap();
+    let k = candle_core::Tensor::from_vec(k_data.clone(), (num_kv_heads, kv_len, head_dim), dev)
         .unwrap();
-    let v = candle_core::Tensor::from_vec(v_data.clone(), (num_kv_heads, kv_len, head_dim), &dev)
+    let v = candle_core::Tensor::from_vec(v_data.clone(), (num_kv_heads, kv_len, head_dim), dev)
         .unwrap();
 
     let out = q
@@ -5890,7 +5900,6 @@ fn test_vulkan_fused_decode_attention() {
             ref_out[h * head_dim + d] = acc;
         }
     }
-
     let max_err = out_cpu
         .iter()
         .flatten()
@@ -5899,9 +5908,9 @@ fn test_vulkan_fused_decode_attention() {
         .fold(0.0f32, f32::max);
     assert!(
         max_err < 1e-4,
-        "fused_decode_attention max abs error {max_err} (expected < 1e-4)"
+        "fused_decode_attention (kv_len {kv_len}) max abs error {max_err} (expected < 1e-4)"
     );
-    tracing::debug!("Vulkan fused decode attention matches the f32 reference (max err {max_err})");
+    tracing::debug!("Vulkan fused decode attention (kv_len {kv_len}) matches the f32 reference (max err {max_err})");
 }
 
 /// Fused add + RMSNorm: `residual = x + h`, `norm = RMSNorm(residual) * alpha`.
