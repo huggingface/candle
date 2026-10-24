@@ -1,15 +1,18 @@
 //! Lazy compute-pipeline cache for the Vulkan backend.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::RwLock;
 
+use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CopyBufferInfo, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::layout::{
     DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateInfo, DescriptorType,
 };
 use vulkano::device::Device;
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::pipeline::compute::ComputePipelineCreateInfo;
 use vulkano::pipeline::layout::{PipelineLayoutCreateInfo, PushConstantRange};
 use vulkano::pipeline::{ComputePipeline, PipelineLayout, PipelineShaderStageCreateInfo};
@@ -31,6 +34,8 @@ pub enum KernelName {
     GemmF64,
     GemmCoopMatF16,
     GemmCoopMatBf16,
+    AffineCoopMatF16,
+    AffineCoopMatBf16,
     FusedQ40GemmF32,
     FusedQ4kGemmF32,
     FusedQ40GemmMF32,
@@ -353,11 +358,6 @@ pub enum KernelName {
     ScatterF16,
     ScatterF64,
     TestFillF16,
-    TestCoopMatFillStoreF16,
-    TestCoopMatLoadStoreF16,
-    TestCoopMatMulAddF16,
-    TestCoopMatParamsF16,
-    TestCoopMatRtBaseF16,
     TestFillU8,
     TestFillI16,
     TestFillBf16Native,
@@ -506,6 +506,8 @@ impl AsRef<str> for KernelName {
             Self::GemmF64 => "main",
             Self::GemmCoopMatF16 => "main",
             Self::GemmCoopMatBf16 => "main",
+            Self::AffineCoopMatF16 => "main",
+            Self::AffineCoopMatBf16 => "main",
             Self::FusedQ40GemmF32 => "main",
             Self::FusedQ4kGemmF32 => "main",
             Self::FusedQ40GemmMF32 => "main",
@@ -829,11 +831,6 @@ impl AsRef<str> for KernelName {
             Self::ScatterF16 => "main",
             Self::ScatterF64 => "main",
             Self::TestFillF16 => "main",
-            Self::TestCoopMatFillStoreF16 => "main",
-            Self::TestCoopMatLoadStoreF16 => "main",
-            Self::TestCoopMatMulAddF16 => "main",
-            Self::TestCoopMatParamsF16 => "main",
-            Self::TestCoopMatRtBaseF16 => "main",
             Self::TestFillU8
             | Self::TestFillI16
             | Self::TestFillBf16Native
@@ -1001,10 +998,18 @@ pub struct Kernels {
     /// (`*_native.spv`, compiled with `-DFP8_NATIVE=1`) are used for the
     /// pure-f8e4m3 kernels; otherwise the emulated variants are used.
     native_fp8: bool,
+    /// Memory allocator for lazily-created kernel-side buffers.
+    mem_alloc: Arc<StandardMemoryAllocator>,
+    /// Lazily-created 8-byte zero source for `prime_coopmat_output`.
+    coopmat_zeros: OnceLock<Subbuffer<[u8]>>,
 }
 
 impl Kernels {
-    pub fn new(device: Arc<Device>, dss_alloc: Arc<StandardDescriptorSetAllocator>) -> Self {
+    pub fn new(
+        device: Arc<Device>,
+        dss_alloc: Arc<StandardDescriptorSetAllocator>,
+        mem_alloc: Arc<StandardMemoryAllocator>,
+    ) -> Self {
         let physical = device.physical_device();
         let native_bf16 = physical
             .extension_properties()
@@ -1022,6 +1027,58 @@ impl Kernels {
             pipelines: RwLock::new(Pipelines::new()),
             native_bf16,
             native_fp8,
+            mem_alloc,
+            coopmat_zeros: OnceLock::new(),
+        }
+    }
+
+    /// Lazily-created 8-byte zero source buffer.
+    fn coopmat_zeros(&self) -> &Subbuffer<[u8]> {
+        self.coopmat_zeros.get_or_init(|| {
+            Buffer::from_iter(
+                &self.mem_alloc,
+                &BufferCreateInfo {
+                    usage: BufferUsage::TRANSFER_SRC,
+                    ..Default::default()
+                },
+                &AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                        | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                    ..Default::default()
+                },
+                [0u8; 8],
+            )
+            .expect("coopmat zero buffer")
+        })
+    }
+
+    /// Workaround for an RADV ordering bug (observed on the R9700 with
+    /// radv 26.2.4): when a command buffer that is NOT the first one
+    /// submitted to the queue records a transfer command after a
+    /// cooperative-matrix dispatch, the transfer reads the dispatch's
+    /// output buffer as it was *before* the dispatch — unless a transfer
+    /// has already written to that buffer earlier in the same command
+    /// buffer. Compute commands reading the output are not affected.
+    /// Recording a tiny zero copy into the output buffer right before
+    /// the dispatch makes the buffer visible to the readbacks that follow
+    /// the dispatch in the same submission.
+    pub(crate) fn prime_coopmat_output<T>(
+        &self,
+        cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        output: &Subbuffer<[T]>,
+    ) -> Result<(), VulkanKernelError> {
+        // A buffer without TRANSFER_DST cannot be the destination of a
+        // readback transfer in this command buffer, so the ordering bug
+        // cannot bite; skip the prime (and keep the dispatch valid).
+        if output.size() >= 8 && output.buffer().usage().contains(BufferUsage::TRANSFER_DST) {
+            cbb.copy_buffer(CopyBufferInfo::new(
+                self.coopmat_zeros().clone(),
+                output.clone(),
+            ))
+            .map(|_| ())
+            .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))
+        } else {
+            Ok(())
         }
     }
 
@@ -1373,12 +1430,9 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::TestFillF6e3m2
         | KernelName::TestFillF8e4m3
         | KernelName::TestFillF8e8m0
-        | KernelName::TestFillF64
-        | KernelName::TestCoopMatFillStoreF16 => 1,
+        | KernelName::TestFillF64 => 1,
         // 2 storage buffer(s).
-        KernelName::TestPrintf
-        | KernelName::TestCoopMatLoadStoreF16 => 2,
-        | KernelName::TestCoopMatParamsF16 => 2,
+        KernelName::TestPrintf => 2,
         // 3 storage buffer(s).
         KernelName::DequantF32
         | KernelName::DequantF16
@@ -1403,9 +1457,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Copy2dBf16
         | KernelName::Copy2dU8
         | KernelName::Copy2dU32
-        | KernelName::Copy2dI64
-        | KernelName::TestCoopMatMulAddF16 => 3,
-        | KernelName::TestCoopMatRtBaseF16 => 3,
+        | KernelName::Copy2dI64 => 3,
         // 4 storage buffer(s).
         KernelName::GemmF32
         | KernelName::GemmF16
@@ -1616,7 +1668,9 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::WhereBf16
         | KernelName::WhereF8e4m3
         | KernelName::WhereF16
-        | KernelName::WhereF64 => 5,
+        | KernelName::WhereF64
+        | KernelName::AffineCoopMatF16
+        | KernelName::AffineCoopMatBf16 => 5,
     }
 }
 

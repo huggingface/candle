@@ -80,6 +80,9 @@ pub enum Op {
     // The third argument is the reduced shape with `keepdim=true`.
     Reduce(Tensor, ReduceOp, Vec<usize>),
     Matmul(Tensor, Tensor),
+    // `y = lhs @ rhs + bias`: the matrix product with the bias
+    // (one value per column) added to every row.
+    AffineMatmul(Tensor, Tensor, Tensor),
     Gather(Tensor, Tensor, usize),
     Scatter(Tensor, Tensor, Tensor, usize),
     ScatterAdd(Tensor, Tensor, Tensor, usize),

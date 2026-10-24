@@ -7,7 +7,7 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer
 use vulkano::descriptor_set::{DescriptorBufferInfo, DescriptorSet, WriteDescriptorSet};
 use vulkano::pipeline::PipelineBindPoint;
 const TILE: usize = 16;
-fn buf_info<T>(buf: &Subbuffer<[T]>) -> DescriptorBufferInfo<'_> {
+pub(super) fn buf_info<T>(buf: &Subbuffer<[T]>) -> DescriptorBufferInfo<'_> {
     DescriptorBufferInfo {
         buffer: Some(buf.buffer()),
         offset: buf.offset(),
@@ -31,6 +31,12 @@ pub fn call_gemm_slang<T>(
     m: usize,
     n: usize,
 ) -> Result<(), VulkanKernelError> {
+    // RADV workaround: prime the output buffer so a readback recorded
+    // after this dispatch in the same command buffer sees the GEMM's
+    // store (see `Kernels::prime_coopmat_output`).
+    if matches!(source, Source::GemmCoopMatF16 | Source::GemmCoopMatBf16) {
+        kernels.prime_coopmat_output(cbb, output)?;
+    }
     let entry = kernels.load_entry(source, name)?;
     let info0 = buf_info(lhs);
     let info1 = buf_info(rhs);

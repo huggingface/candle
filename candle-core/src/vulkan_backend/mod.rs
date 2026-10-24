@@ -520,6 +520,7 @@ impl VulkanStorage {
     ///   to be a multiple of 4, so the 4-byte-multiple prefix is
     ///   transferred and the 1-3 trailing bytes are left for the
     ///   caller's kernel (`ConstFillPlan::Tail`).
+    ///
     /// Anything else is `ConstFillPlan::Kernel`: the caller dispatches
     /// the const-set/zero-fill shader over the whole region.
     fn try_fill_const<T>(
@@ -532,7 +533,7 @@ impl VulkanStorage {
         T: BufferContents + Copy,
     {
         let byte_len = sub.size() as usize;
-        if byte_len % 4 == 0 && byte_len > 65536 && sub.offset() % 4 == 0 {
+        if byte_len.is_multiple_of(4) && byte_len > 65536 && sub.offset().is_multiple_of(4) {
             let u32_sub = sub.clone().reinterpret::<[u32]>();
             self.device.execute(move |cbb| {
                 cbb.fill_buffer(u32_sub, pattern)
@@ -541,7 +542,11 @@ impl VulkanStorage {
             })?;
             return Ok(ConstFillPlan::Done);
         }
-        if byte_len >= 4 && byte_len % 4 != 0 && byte_len <= 65536 && sub.offset() % 4 == 0 {
+        if byte_len >= 4
+            && !byte_len.is_multiple_of(4)
+            && byte_len <= 65536
+            && sub.offset().is_multiple_of(4)
+        {
             let elem_len = std::mem::size_of::<T>();
             let prefix_elems = ((byte_len / 4) * 4 / elem_len) as u64;
             let data: Box<[T]> = vec![elem; prefix_elems as usize].into_boxed_slice();
@@ -612,6 +617,7 @@ impl VulkanStorage {
         })?;
         Ok(vram_buffer)
     }
+
     /// Returns the device's reusable host-visible readback buffer, growing
     /// it when needed: a fresh allocation per readback would page in a new
     /// host mapping every time.
@@ -9975,13 +9981,19 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         }
-        // Convert rhs to match self.dtype if needed.
+        // Convert rhs to match self.dtype if needed. A converted rhs is
+        // a fresh contiguous (b,k,n) buffer: to_dtype materializes
+        // non-contiguous layouts, so it is always in the standard layout.
         let rhs_converted;
-        let rhs_ref: &VulkanStorage = if self.dtype == rhs.dtype {
-            rhs
+        let rhs_ref: &VulkanStorage;
+        let rhs_converted_flag: bool;
+        if self.dtype == rhs.dtype {
+            rhs_ref = rhs;
+            rhs_converted_flag = false;
         } else {
             rhs_converted = rhs.to_dtype(rhs_l, self.dtype)?;
-            &rhs_converted
+            rhs_ref = &rhs_converted;
+            rhs_converted_flag = true;
         };
         let (bsz, m, n, k) = bmnk;
         if m == 0 || n == 0 || k == 0 || bsz == 0 {
@@ -10029,39 +10041,22 @@ impl BackendStorage for VulkanStorage {
             rs[rank - 1] == 1 && rs[rank - 2] == n && (rank == 2 || rs[rank - 3] == k * n);
         let transposed =
             rs[rank - 2] == 1 && rs[rank - 1] == k && (rank == 2 || rs[rank - 3] == n * k);
-        if !standard && !transposed {
+        if !rhs_converted_flag && !standard && !transposed {
             let rhs_elem = rhs_l.shape().elem_count();
             let mut rhs_mat = VulkanStorage::new(&self.device, rhs_elem, rhs.dtype)?;
             rhs.copy_strided_src(&mut rhs_mat, 0, rhs_l)?;
             let rhs_mat_l = crate::Layout::contiguous_with_offset(rhs_l.shape(), 0);
             return self.matmul(&rhs_mat, bmnk, lhs_l, &rhs_mat_l);
         }
-        let rhs_transposed = transposed && !standard;
-        let rhs_start = rhs_l.start_offset();
+        let rhs_transposed = !rhs_converted_flag && transposed && !standard;
+        let rhs_start = if rhs_converted_flag {
+            0
+        } else {
+            rhs_l.start_offset()
+        };
         let rhs_len = bsz * n * k;
         let out = VulkanStorage::new(&self.device, bsz * m * n, self.dtype)?;
         let kernels = self.device.kernels();
-        let params_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![
-                bsz as u64,
-                m as u64,
-                n as u64,
-                k as u64,
-                rhs_transposed as u64,
-            ],
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[u64]> = params_buf;
         match self.dtype {
             DType::F32 => {
                 let input: Subbuffer<[f32]> = match &self.buffer {
@@ -10100,6 +10095,7 @@ impl BackendStorage for VulkanStorage {
                     candle_vulkan_kernels::Source::Gemm,
                     candle_vulkan_kernels::KernelName::GemmF32,
                 );
+                let params = self.gemm_params(bsz, m, n, k, rhs_transposed)?;
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_gemm_slang::<f32>(
                         cbb, &kernels, source, name, &input, &rhs_buf, &out_buf, &params, bsz, m, n,
@@ -10136,22 +10132,30 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                // Cooperative-matrix GEMM when the device supports it and
-                // the tile row strides meet its load/store alignment (a
-                // multiple of 8 elements for the 16-bit types);
-                // otherwise the classic tiled kernel.
-                let (source, name) =
-                    if self.device.coopmat_gemm_available(DType::F16) && k % 8 == 0 && n % 8 == 0 {
-                        (
-                            candle_vulkan_kernels::Source::GemmCoopMatF16,
-                            candle_vulkan_kernels::KernelName::GemmCoopMatF16,
-                        )
-                    } else {
-                        (
-                            candle_vulkan_kernels::Source::GemmF16,
-                            candle_vulkan_kernels::KernelName::GemmF16,
-                        )
-                    };
+
+                // Cooperative-matrix GEMM when the device supports it
+                // and m, k and n are multiples of 16: the cooperative-
+                // matrix load/store stride must be a multiple of the
+                // 16-element tile row (32 bytes for the 16-bit types),
+                // and the lhs rows must not run past the end of the lhs
+                // allocation (cooperativeMatrixRobustBufferAccess is not
+                // exposed by RADV). Otherwise the classic tiled kernel.
+                let use_coopmat = self.device.coopmat_gemm_available(DType::F16)
+                    && m % 16 == 0
+                    && k % 16 == 0
+                    && n % 16 == 0;
+                let params = self.gemm_params(bsz, m, n, k, rhs_transposed)?;
+                let (source, name) = if use_coopmat {
+                    (
+                        candle_vulkan_kernels::Source::GemmCoopMatF16,
+                        candle_vulkan_kernels::KernelName::GemmCoopMatF16,
+                    )
+                } else {
+                    (
+                        candle_vulkan_kernels::Source::GemmF16,
+                        candle_vulkan_kernels::KernelName::GemmF16,
+                    )
+                };
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_gemm_slang::<half::f16>(
                         cbb, &kernels, source, name, &input, &rhs_buf, &out_buf, &params, bsz, m, n,
@@ -10188,6 +10192,7 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
+                let params = self.gemm_params(bsz, m, n, k, rhs_transposed)?;
                 self.device.execute(move |cbb| {
                     candle_vulkan_kernels::call_gemm_slang::<f64>(
                         cbb,
@@ -10234,7 +10239,12 @@ impl BackendStorage for VulkanStorage {
                         ))
                     }
                 };
-                if self.device.coopmat_gemm_available(DType::BF16) && k % 8 == 0 && n % 8 == 0 {
+                let use_coopmat = self.device.coopmat_gemm_available(DType::BF16)
+                    && m % 16 == 0
+                    && k % 16 == 0
+                    && n % 16 == 0;
+                let params = self.gemm_params(bsz, m, n, k, rhs_transposed)?;
+                if use_coopmat {
                     // Native BFloat16 cooperative-matrix GEMM (the f16
                     // accumulator is converted back to bf16 in-shader).
                     self.device.execute(move |cbb| {
@@ -10256,10 +10266,14 @@ impl BackendStorage for VulkanStorage {
                 } else {
                     // No native bf16 cooperative-matrix support (or
                     // unaligned strides): widen to f16, run the f16 GEMM,
-                    // and narrow the result back to bf16.
+                    // and narrow the result back to bf16. to_dtype
+                    // materializes non-contiguous layouts, so the
+                    // widened tensors are contiguous at offset 0.
                     let lhs_f16 = self.to_dtype(lhs_l, DType::F16)?;
                     let rhs_f16 = rhs_ref.to_dtype(rhs_l, DType::F16)?;
-                    let out_f16 = lhs_f16.matmul(&rhs_f16, bmnk, lhs_l, rhs_l)?;
+                    let lhs_f16_l = crate::Layout::contiguous_with_offset(lhs_l.shape(), 0);
+                    let rhs_f16_l = crate::Layout::contiguous_with_offset(rhs_l.shape(), 0);
+                    let out_f16 = lhs_f16.matmul(&rhs_f16, bmnk, &lhs_f16_l, &rhs_f16_l)?;
                     let out_f16_l = crate::Layout::contiguous_with_offset(&[bsz, m, n], 0);
                     return out_f16.to_dtype(&out_f16_l, DType::BF16);
                 }
@@ -10273,6 +10287,41 @@ impl BackendStorage for VulkanStorage {
             }
         }
         Ok(out)
+    }
+
+    fn affine_matmul(
+        &self,
+        rhs: &Self,
+        bias: &Self,
+        bmnk: (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        bias_l: &Layout,
+    ) -> Result<Self> {
+        let (bsz, m, n, k) = bmnk;
+        // Fused cooperative-matrix affine (one dispatch instead of
+        // matmul + add) when the device supports it and m, k and n are
+        // multiples of 16 (the cooperative-matrix load/store constraints,
+        // see matmul); anything else falls back to the unfused matmul +
+        // add.
+        if matches!(self.dtype, DType::F16 | DType::BF16)
+            && self.dtype == rhs.dtype
+            && m % 16 == 0
+            && k % 16 == 0
+            && n % 16 == 0
+            && self.device.coopmat_affine_available(self.dtype)
+        {
+            if let Some(out) = self.affine_coopmat(rhs, bias, bmnk, lhs_l, rhs_l, bias_l)? {
+                return Ok(out);
+            }
+        }
+        let out = self.matmul(rhs, bmnk, lhs_l, rhs_l)?;
+        let out_l = if bsz == 1 {
+            crate::Layout::contiguous_with_offset(&[m, n], 0)
+        } else {
+            crate::Layout::contiguous_with_offset(&[bsz, m, n], 0)
+        };
+        out.binary_impl::<crate::op::Add>(bias, &out_l, bias_l)
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
@@ -11393,6 +11442,229 @@ impl BackendStorage for VulkanStorage {
             }
         }
         Ok(())
+    }
+}
+
+impl VulkanStorage {
+    /// The 5-element `[bsz, m, n, k, rhs_transposed]` params buffer for
+    /// the GEMM and affine cooperative-matrix kernels (host-visible,
+    /// written before the batch is submitted).
+    fn gemm_params(
+        &self,
+        bsz: usize,
+        m: usize,
+        n: usize,
+        k: usize,
+        rhs_transposed: bool,
+    ) -> Result<Subbuffer<[u64]>> {
+        let buf = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![
+                bsz as u64,
+                m as u64,
+                n as u64,
+                k as u64,
+                rhs_transposed as u64,
+                // Dedicated copies of k and n for the cooperative-matrix
+                // Stride operand: RADV miscompiles the cooperative-matrix
+                // load/store when the stride is the same SSA value as the
+                // one feeding the k loop condition.
+                k as u64,
+                n as u64,
+            ],
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        Ok(buf)
+    }
+
+    /// The fused cooperative-matrix affine dispatch:
+    /// `out[b, m, n] = lhs[b, m, k] @ rhs[b, k, n] + bias[n]`.
+    /// Returns `None` (and the caller falls back to the unfused
+    /// matmul + add) when the layouts are not the ones the kernel
+    /// handles directly: a single contiguous lhs block, a standard or
+    /// transposed rhs (as in `matmul`), and a contiguous rank-1 bias.
+    fn affine_coopmat(
+        &self,
+        rhs: &Self,
+        bias: &Self,
+        bmnk: (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        bias_l: &Layout,
+    ) -> Result<Option<Self>> {
+        let (bsz, m, n, k) = bmnk;
+        if m == 0 || n == 0 || k == 0 || bsz == 0 {
+            return Ok(None);
+        }
+        let (lhs_start, lhs_len) = match lhs_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } if len == bsz * m * k => {
+                (start_offset, len)
+            }
+            _ => return Ok(None),
+        };
+        let rank = rhs_l.dims().len();
+        if rank < 2 {
+            return Ok(None);
+        }
+        let rs = rhs_l.stride();
+        let standard =
+            rs[rank - 1] == 1 && rs[rank - 2] == n && (rank == 2 || rs[rank - 3] == k * n);
+        let transposed =
+            rs[rank - 2] == 1 && rs[rank - 1] == k && (rank == 2 || rs[rank - 3] == n * k);
+        if !standard && !transposed {
+            return Ok(None);
+        }
+        let rhs_transposed = transposed && !standard;
+        let rhs_start = rhs_l.start_offset();
+        let rhs_len = bsz * n * k;
+        let bias_dims = bias_l.shape().dims();
+        if bias_dims.len() != 1 || bias_dims[0] != n || bias_l.stride()[0] != 1 {
+            return Ok(None);
+        }
+        let bias_start = bias_l.start_offset();
+        let bias_len = n;
+        let bias_converted;
+        let bias_ref: &Self = if self.dtype == bias.dtype {
+            bias
+        } else {
+            bias_converted = bias.to_dtype(bias_l, self.dtype)?;
+            &bias_converted
+        };
+        let out = VulkanStorage::new(&self.device, bsz * m * n, self.dtype)?;
+        let kernels = self.device.kernels();
+        match self.dtype {
+            DType::F16 => {
+                let input: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let rhs_buf: Subbuffer<[half::f16]> = match &rhs.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let bias_buf: Subbuffer<[half::f16]> = match &bias_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(bias_start as u64..(bias_start + bias_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = self.gemm_params(bsz, m, n, k, rhs_transposed)?;
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_affine_coopmat_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::AffineCoopMatF16,
+                        candle_vulkan_kernels::KernelName::AffineCoopMatF16,
+                        &input,
+                        &rhs_buf,
+                        &bias_buf,
+                        &out_buf,
+                        &params,
+                        bsz,
+                        m,
+                        n,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input: Subbuffer<[half::bf16]> = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b
+                        .clone()
+                        .slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let rhs_buf: Subbuffer<[half::bf16]> = match &rhs.buffer {
+                    VulkanStorageBuffer::BF16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let bias_buf: Subbuffer<[half::bf16]> = match &bias_ref.buffer {
+                    VulkanStorageBuffer::BF16(b) => b
+                        .clone()
+                        .slice(bias_start as u64..(bias_start + bias_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::bf16]> = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = self.gemm_params(bsz, m, n, k, rhs_transposed)?;
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_affine_coopmat_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::AffineCoopMatBf16,
+                        candle_vulkan_kernels::KernelName::AffineCoopMatBf16,
+                        &input,
+                        &rhs_buf,
+                        &bias_buf,
+                        &out_buf,
+                        &params,
+                        bsz,
+                        m,
+                        n,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    "dtype checked above (dtype={:?})".to_string().into(),
+                ))
+            }
+        }
+        Ok(Some(out))
     }
 }
 

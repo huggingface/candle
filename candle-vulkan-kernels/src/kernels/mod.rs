@@ -23,7 +23,6 @@ pub mod rotary_emb_int_slang;
 pub mod scatter_slang;
 pub mod sigmoid_slang;
 pub mod softmax_slang;
-pub mod test_coopmat_f16;
 pub mod test_fill_bf16;
 pub mod test_fill_f16;
 pub mod test_fill_f32;
@@ -44,7 +43,7 @@ pub mod unary_slang;
 pub mod upsample_slang;
 pub mod where_slang;
 pub mod zero_fill;
-pub use affine::call_affine_slang;
+pub use affine::{call_affine_coopmat_slang, call_affine_slang};
 
 pub use add_rms_norm_slang::call_add_rms_norm_slang;
 pub use binary_slang::call_binary_slang;
@@ -67,11 +66,6 @@ pub use rotary_emb_int_slang::call_rotary_emb_int_slang;
 pub use scatter_slang::call_scatter_slang;
 pub use sigmoid_slang::call_sigmoid_slang;
 pub use softmax_slang::call_softmax_slang;
-pub use test_coopmat_f16::{
- call_test_coopmat_fill_store_f16, call_test_coopmat_load_store_f16,
- call_test_coopmat_muladd_f16, call_test_coopmat_params_f16,
- call_test_coopmat_rtbase_f16,
-};
 pub use test_fill_bf16::{call_test_fill_bf16_emulated, call_test_fill_bf16_native};
 pub use test_fill_f16::call_test_fill_f16;
 pub use test_fill_f32::call_test_fill_f32;

@@ -28,7 +28,7 @@ fn main() {
             .expect("slang shader without file stem")
             .to_string_lossy();
         let out_path = Path::new(&out_dir).join(format!("{name}.spv"));
-        compile_slang(&path, &out_path, None, &[]);
+        compile_slang(&path, &out_path, None, &[], coopmat_flags(&name));
         println!("cargo:rerun-if-changed={}", path.display());
         // Native-variant pass: recompile the bf16/f8e4m3 kernels with
         // `-DBF16_NATIVE=1` and/or `-DFP8_NATIVE=1` so they use the
@@ -45,7 +45,7 @@ fn main() {
         }
         if !native_defines.is_empty() {
             let native_out = Path::new(&out_dir).join(format!("{name}_native.spv"));
-            compile_slang(&path, &native_out, None, native_defines.as_slice());
+            compile_slang(&path, &native_out, None, native_defines.as_slice(), &[]);
         }
     }
     // Test-only shaders live under `shaders/test/`. The SPIR-V output goes
@@ -66,7 +66,7 @@ fn main() {
             .expect("slang shader without file stem")
             .to_string_lossy();
         let out_path = test_out_dir.join(format!("{name}.spv"));
-        compile_slang(&path, &out_path, Some(src_dir), &[]);
+        compile_slang(&path, &out_path, Some(src_dir), &[], &[]);
         println!("cargo:rerun-if-changed={}", path.display());
     }
 }
@@ -132,11 +132,34 @@ const NATIVE_FP8_SHADERS: &[&str] = &[
     "to_dtype_f8e4m3_bf16",
 ];
 
+/// Shaders that use the SPIR-V cooperative-matrix load/store ops
+/// (`linalg.CoopMat`): compiled with `-capability spirv_1_4` so the
+/// buffer pointers land in the `StorageBuffer` storage class. Below
+/// SPIR-V 1.4, Slang emits them in the legacy `Uniform` class, which
+/// `OpCooperativeMatrixLoadKHR`/`StoreKHR` reject (the spec restricts
+/// those ops to the Workgroup, StorageBuffer and PhysicalStorageBuffer
+/// classes) and drivers mislower.
+const COOPMAT_SHADERS: &[&str] = &[
+    "gemm_coopmat_f16",
+    "gemm_coopmat_bf16",
+    "affine_coopmat_f16",
+    "affine_coopmat_bf16",
+];
+
+fn coopmat_flags(name: &str) -> &'static [&'static str] {
+    if COOPMAT_SHADERS.iter().any(|s| *s == name) {
+        &["-capability", "spirv_1_4"]
+    } else {
+        &[]
+    }
+}
+
 fn compile_slang(
     source_path: &Path,
     out_path: &Path,
     include_dir: Option<&Path>,
     defines: &[&str],
+    extra_flags: &[&str],
 ) {
     // `SLANGC` overrides the slangc executable (e.g. a specific installation
     // or version); unset or empty falls back to `slangc` from the PATH.
@@ -153,6 +176,11 @@ fn compile_slang(
         "-target".to_string(),
         "spirv".to_string(),
     ];
+    // Extra flags (e.g. `-capability spirv_1_4` for the cooperative-matrix
+    // shaders).
+    for flag in extra_flags {
+        args.push(flag.to_string());
+    }
     // Include search path so `import` resolves module files that live in
     // `shaders/`; needed for the test shaders under `shaders/test/`.
     if let Some(dir) = include_dir {

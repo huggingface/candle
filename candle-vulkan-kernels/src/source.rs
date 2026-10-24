@@ -10,6 +10,10 @@ const GEMM_COOPMAT_F16_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/gemm_coopmat_f16.spv"));
 const GEMM_COOPMAT_BF16_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/gemm_coopmat_bf16.spv"));
+const AFFINE_COOPMAT_F16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/affine_coopmat_f16.spv"));
+const AFFINE_COOPMAT_BF16_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/affine_coopmat_bf16.spv"));
 const FUSED_Q40_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4_0_gemm.spv"));
 const FUSED_Q4K_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4k_gemm.spv"));
 const FUSED_Q40_GEMM_M_SPV: &[u8] =
@@ -99,16 +103,6 @@ const SCATTER_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scatter
 const SCATTER_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scatter_f64.spv"));
 
 const TEST_FILL_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_f16.spv"));
-const TEST_COOPMAT_FILL_STORE_F16_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/test/test_coopmat_fill_store_f16.spv"));
-const TEST_COOPMAT_LOAD_STORE_F16_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/test/test_coopmat_load_store_f16.spv"));
-const TEST_COOPMAT_MULADD_F16_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/test/test_coopmat_muladd_f16.spv"));
-const TEST_COOPMAT_PARAMS_F16_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/test/test_coopmat_params.spv"));
-const TEST_COOPMAT_RTBASE_F16_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/test/test_coopmat_rtbase.spv"));
 const TEST_FILL_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_u8.spv"));
 const TEST_FILL_I16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test/fill_i16.spv"));
 const TEST_FILL_BF16_NATIVE_SPV: &[u8] =
@@ -447,6 +441,8 @@ pub enum Source {
     GemmF64,
     GemmCoopMatF16,
     GemmCoopMatBf16,
+    AffineCoopMatF16,
+    AffineCoopMatBf16,
     FusedQ40Gemm,
     FusedQ4kGemm,
     FusedQ40GemmM,
@@ -531,11 +527,6 @@ pub enum Source {
     ScatterF16,
     ScatterF64,
     TestFillF16,
-    TestCoopMatFillStoreF16,
-    TestCoopMatLoadStoreF16,
-    TestCoopMatMulAddF16,
-    TestCoopMatParamsF16,
-    TestCoopMatRtBaseF16,
     TestFillU8,
     TestFillI16,
     TestFillBf16Native,
@@ -912,6 +903,8 @@ impl Source {
             Self::GemmF64 => GEMM_F64_SPV,
             Self::GemmCoopMatF16 => GEMM_COOPMAT_F16_SPV,
             Self::GemmCoopMatBf16 => GEMM_COOPMAT_BF16_SPV,
+            Self::AffineCoopMatF16 => AFFINE_COOPMAT_F16_SPV,
+            Self::AffineCoopMatBf16 => AFFINE_COOPMAT_BF16_SPV,
             Self::FusedQ40Gemm => FUSED_Q40_GEMM_SPV,
             Self::FusedQ4kGemm => FUSED_Q4K_GEMM_SPV,
             Self::FusedQ40GemmM => FUSED_Q40_GEMM_M_SPV,
@@ -996,11 +989,6 @@ impl Source {
             Self::ScatterF16 => SCATTER_F16_SPV,
             Self::ScatterF64 => SCATTER_F64_SPV,
             Self::TestFillF16 => TEST_FILL_F16_SPV,
-            Self::TestCoopMatFillStoreF16 => TEST_COOPMAT_FILL_STORE_F16_SPV,
-            Self::TestCoopMatLoadStoreF16 => TEST_COOPMAT_LOAD_STORE_F16_SPV,
-            Self::TestCoopMatMulAddF16 => TEST_COOPMAT_MULADD_F16_SPV,
-            Self::TestCoopMatParamsF16 => TEST_COOPMAT_PARAMS_F16_SPV,
-            Self::TestCoopMatRtBaseF16 => TEST_COOPMAT_RTBASE_F16_SPV,
             Self::TestFillU8 => TEST_FILL_U8_SPV,
             Self::TestFillI16 => TEST_FILL_I16_SPV,
             Self::TestFillBf16Native => TEST_FILL_BF16_NATIVE_SPV,
@@ -1221,6 +1209,8 @@ impl AsRef<str> for Source {
             Self::GemmF64 => "gemm_f64",
             Self::GemmCoopMatF16 => "gemm_coopmat_f16",
             Self::GemmCoopMatBf16 => "gemm_coopmat_bf16",
+            Self::AffineCoopMatF16 => "affine_coopmat_f16",
+            Self::AffineCoopMatBf16 => "affine_coopmat_bf16",
             Self::FusedQ40Gemm => "fused_q4_0_gemm",
             Self::FusedQ4kGemm => "fused_q4k_gemm",
             Self::FusedQ40GemmM => "fused_q4_0_gemm_m",
@@ -1306,11 +1296,6 @@ impl AsRef<str> for Source {
             Self::ScatterF16 => "scatter_f16",
             Self::ScatterF64 => "scatter_f64",
             Self::TestFillF16 => "test_fill_f16",
-            Self::TestCoopMatFillStoreF16 => "main",
-            Self::TestCoopMatLoadStoreF16 => "main",
-            Self::TestCoopMatMulAddF16 => "main",
-            Self::TestCoopMatParamsF16 => "main",
-            Self::TestCoopMatRtBaseF16 => "main",
             Self::TestFillU8 => "test_fill_u8",
             Self::TestFillI16 => "test_fill_i16",
             Self::TestFillBf16Native => "test_fill_bf16_native",

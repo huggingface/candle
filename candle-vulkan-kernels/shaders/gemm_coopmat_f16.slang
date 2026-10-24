@@ -18,7 +18,13 @@
 // 32-bit unsigned arithmetic: some drivers (RADV) miscompile the
 // load/store when the base/stride are passed as 64-bit values.
 //
-// Params: [0]=batch, [1]=m, [2]=n, [3]=k, [4]=rhs_transposed (0/1)
+// Params: [0]=batch, [1]=m, [2]=n, [3]=k, [4]=rhs_transposed (0/1),
+// [5]=k (cooperative-matrix stride copy), [6]=n (cooperative-matrix
+// stride copy).
+// Some drivers (RADV) miscompile the cooperative-matrix load/store
+// when the Stride operand is the same value as one feeding the k
+// loop condition: the stride is read from dedicated params slots
+// (params[5]=k, params[6]=n) so it is a distinct SSA value.
 typealias MatA_t =
     linalg.CoopMat<half, MemoryScope.Subgroup, 16, 16, linalg.CoopMatMatrixUse.MatrixA>;
 typealias MatB_t =
@@ -43,27 +49,29 @@ void main_gemm(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_
     uint n = (uint)g_Params[2];
     uint k = (uint)g_Params[3];
     uint rt = (uint)g_Params[4];
+    uint sk = (uint)g_Params[5];
+    uint sn = (uint)g_Params[6];
 
     MatC_t matC;
     matC.fill(0.0h);
     for (uint k0 = 0u; k0 < k; k0 += 16u)
     {
         MatA_t matA = MatA_t.Load<linalg.CoopMatMatrixLayout.RowMajor>(
-            g_Lhs, batch * m * k + row * k + k0, k);
+            g_Lhs, batch * m * k + row * k + k0, sk);
         MatB_t matB;
         if (rt == 1u)
         {
             matB = MatB_t.Load<linalg.CoopMatMatrixLayout.ColumnMajor>(
-                g_Rhs, batch * n * k + col * k + k0, k);
+                g_Rhs, batch * n * k + col * k + k0, sk);
         }
         else
         {
             matB = MatB_t.Load<linalg.CoopMatMatrixLayout.RowMajor>(
-                g_Rhs, batch * k * n + k0 * n + col, n);
+                g_Rhs, batch * k * n + k0 * n + col, sn);
         }
         matC = linalg.coopMatMulAdd<half, false, half, half, half,
             MemoryScope.Subgroup, 16, 16, 16>(matA, matB, matC);
     }
     matC.Store<linalg.CoopMatMatrixLayout.RowMajor>(
-        g_Out, batch * m * n + row * n + col, n);
+        g_Out, batch * m * n + row * n + col, sn);
 }

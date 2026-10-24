@@ -1645,6 +1645,73 @@ impl Tensor {
         Ok(from_storage(storage, c_shape, op, false))
     }
 
+    /// Returns the affine matrix product `self @ rhs + bias`.
+    ///
+    /// # Arguments
+    ///
+    /// * `self` - A tensor with dimensions `m, k` or `b, m, k`.
+    /// * `rhs` - A tensor with dimensions `k, n` or `b, k, n` (the batch
+    ///   dimension, when present, must match `self`'s).
+    /// * `bias` - A 1D tensor with `n` elements, added to every row of the
+    ///   product.
+    ///
+    /// The resulting tensor has dimensions `m, n` or `b, m, n`. Backends
+    /// with a fused kernel (the Vulkan cooperative-matrix affine) compute
+    /// the product and the bias addition in a single dispatch; otherwise
+    /// this is the `matmul` followed by the element-wise add.
+    pub fn affine_matmul(&self, rhs: &Self, bias: &Self) -> Result<Self> {
+        let a_dims = self.dims();
+        let b_dims = rhs.dims();
+        let bias_dims = bias.dims();
+        let (m, k, n, bsz) = match (a_dims.len(), b_dims.len()) {
+            (2, 2) => (a_dims[0], a_dims[1], b_dims[1], 1),
+            (3, 2) => (a_dims[1], a_dims[2], b_dims[1], a_dims[0]),
+            (3, 3) if a_dims[0] == b_dims[0] => (a_dims[1], a_dims[2], b_dims[2], a_dims[0]),
+            _ => {
+                return Err(Error::ShapeMismatchBinaryOp {
+                    lhs: self.shape().clone(),
+                    rhs: rhs.shape().clone(),
+                    op: "affine_matmul",
+                }
+                .bt())
+            }
+        };
+        if b_dims[b_dims.len() - 2] != k || bias_dims.len() != 1 || bias_dims[0] != n {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "affine_matmul",
+            }
+            .bt());
+        }
+        let c_shape = if a_dims.len() == 2 {
+            Shape::from((m, n))
+        } else {
+            Shape::from((a_dims[0], m, n))
+        };
+        if c_shape.elem_count() == 0 || k == 0 {
+            {
+                let lhs_storage = self.storage();
+                let rhs_storage = rhs.storage();
+                lhs_storage.same_device(&rhs_storage, "affine_matmul")?;
+                lhs_storage.same_dtype(&rhs_storage, "affine_matmul")?;
+            }
+            let storage = self.device().zeros(&c_shape, self.dtype())?;
+            let op = BackpropOp::new3(self, rhs, bias, Op::AffineMatmul);
+            return Ok(from_storage(storage, c_shape, op, false));
+        }
+        let storage = self.storage().affine_matmul(
+            &rhs.storage(),
+            &bias.storage(),
+            (bsz, m, n, k),
+            self.layout(),
+            rhs.layout(),
+            bias.layout(),
+        )?;
+        let op = BackpropOp::new3(self, rhs, bias, Op::AffineMatmul);
+        Ok(from_storage(storage, c_shape, op, false))
+    }
+
     /// Matrix-multiplication with broadcasting support.
     ///
     /// Compared to `matmul` the two matrixes are allowed to have different dimensions as long as

@@ -958,6 +958,47 @@ impl Storage {
         }
     }
 
+    pub(crate) fn affine_matmul(
+        &self,
+        rhs: &Self,
+        bias: &Self,
+        bmnk: (usize, usize, usize, usize),
+        lhs_layout: &Layout,
+        rhs_layout: &Layout,
+        bias_layout: &Layout,
+    ) -> Result<Self> {
+        self.same_device(rhs, "affine_matmul")?;
+        self.same_device(bias, "affine_matmul")?;
+        match (self, rhs, bias) {
+            (Self::Cpu(lhs), Self::Cpu(rhs), Self::Cpu(bias)) => {
+                let storage =
+                    lhs.affine_matmul(rhs, bias, bmnk, lhs_layout, rhs_layout, bias_layout)?;
+                Ok(Self::Cpu(storage))
+            }
+            (Self::Cuda(lhs), Self::Cuda(rhs), Self::Cuda(bias)) => {
+                let storage =
+                    lhs.affine_matmul(rhs, bias, bmnk, lhs_layout, rhs_layout, bias_layout)?;
+                Ok(Self::Cuda(storage))
+            }
+            (Self::Metal(lhs), Self::Metal(rhs), Self::Metal(bias)) => {
+                let storage =
+                    lhs.affine_matmul(rhs, bias, bmnk, lhs_layout, rhs_layout, bias_layout)?;
+                Ok(Self::Metal(storage))
+            }
+            (Self::Vulkan(lhs), Self::Vulkan(rhs), Self::Vulkan(bias)) => {
+                let storage =
+                    lhs.affine_matmul(rhs, bias, bmnk, lhs_layout, rhs_layout, bias_layout)?;
+                Ok(Self::Vulkan(storage))
+            }
+            (lhs, rhs, _) => Err(Error::DeviceMismatchBinaryOp {
+                lhs: lhs.device().location(),
+                rhs: rhs.device().location(),
+                op: "affine_matmul",
+            }
+            .bt()),
+        }
+    }
+
     // self, the source can be strided whereas dst is contiguous.
     pub(crate) fn copy_strided_src(
         &self,

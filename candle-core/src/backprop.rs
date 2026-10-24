@@ -56,7 +56,8 @@ impl Tensor {
                     | Op::Scatter(t1, t2, t3, _)
                     | Op::ScatterAdd(t1, t2, t3, _)
                     | Op::CustomOp3(t1, t2, t3, _)
-                    | Op::WhereCond(t1, t2, t3) => {
+                    | Op::WhereCond(t1, t2, t3)
+                    | Op::AffineMatmul(t1, t2, t3) => {
                         let (tg, nodes) = walk(t1, nodes, already_seen);
                         track_grad |= tg;
                         let (tg, nodes) = walk(t2, nodes, already_seen);
@@ -467,6 +468,24 @@ impl Tensor {
                         let rhs_grad = lhs.t()?.matmul(&grad)?;
                         let rhs_sum_grad = grads.or_insert(rhs)?;
                         *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
+                    }
+                    Op::AffineMatmul(lhs, rhs, bias) => {
+                        // `y = lhs @ rhs + bias`: the matmul grads plus
+                        // the bias grad (the column sums of `grad`).
+                        let lhs_grad = grad.matmul(&rhs.t()?)?;
+                        let lhs_sum_grad = grads.or_insert(lhs)?;
+                        *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
+
+                        let rhs_grad = lhs.t()?.matmul(&grad)?;
+                        let rhs_sum_grad = grads.or_insert(rhs)?;
+                        *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
+
+                        let mut bias_grad = grad.clone();
+                        for d in 0..node.dims().len() - 1 {
+                            bias_grad = bias_grad.sum(d)?;
+                        }
+                        let bias_sum_grad = grads.or_insert(bias)?;
+                        *bias_sum_grad = bias_sum_grad.add(&bias_grad)?;
                     }
                     Op::Cat(args, dim) => {
                         let mut start_idx = 0;

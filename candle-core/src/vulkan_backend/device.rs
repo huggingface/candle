@@ -135,6 +135,11 @@ struct DeviceInner {
     /// lifetime of the device.
     coopmat_gemm_f16: std::sync::OnceLock<bool>,
     coopmat_gemm_bf16: std::sync::OnceLock<bool>,
+    /// One-time probe results for the coop-mat affine (GEMM + bias)
+    /// pipelines: `None` until the first use, then the build outcome
+    /// is cached for the lifetime of the device.
+    coopmat_affine_f16: std::sync::OnceLock<bool>,
+    coopmat_affine_bf16: std::sync::OnceLock<bool>,
     gpu_id: usize,
 }
 
@@ -347,7 +352,11 @@ impl VulkanDevice {
             &device,
             &StandardDescriptorSetAllocatorCreateInfo::default(),
         ));
-        let kernels = Arc::new(Kernels::new(device.clone(), dss_alloc.clone()));
+        let kernels = Arc::new(Kernels::new(
+            device.clone(),
+            dss_alloc.clone(),
+            mem_alloc.clone(),
+        ));
         let mut fence_ring = Vec::with_capacity(FENCE_RING_SIZE);
         for _ in 0..FENCE_RING_SIZE {
             let fence = Fence::new(&device, &FenceCreateInfo::default())
@@ -387,6 +396,8 @@ impl VulkanDevice {
                 vulkan_memory_model: vmm,
                 coopmat_gemm_f16: std::sync::OnceLock::new(),
                 coopmat_gemm_bf16: std::sync::OnceLock::new(),
+                coopmat_affine_f16: std::sync::OnceLock::new(),
+                coopmat_affine_bf16: std::sync::OnceLock::new(),
                 gpu_id,
             }),
         })
@@ -621,7 +632,7 @@ impl VulkanDevice {
         let (a_b, b_b, out_b) = match (a_b, b_b, out_b) {
             (
                 super::VulkanStorageBuffer::F16(a),
-                super::VulkanStorageBuffer::F16(b),
+                crate::vulkan_backend::VulkanStorageBuffer::F16(b),
                 super::VulkanStorageBuffer::F16(o),
             ) => (a.clone(), b.clone(), o.clone()),
             _ => return false,
@@ -637,7 +648,7 @@ impl VulkanDevice {
                     | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                 ..Default::default()
             },
-            vec![1u64, 16, 16, 16, 0],
+            vec![1u64, 16, 16, 16, 0, 16, 16],
         ) {
             Ok(b) => b,
             Err(_) => return false,
@@ -657,7 +668,10 @@ impl VulkanDevice {
         }
         match out_s.to_cpu_storage() {
             Ok(cpu) => match cpu.as_slice::<f16>() {
-                Ok(got) => got.iter().all(|v| (v.to_f32() - 30.0).abs() < 2.0),
+                Ok(got) => got
+                    .iter()
+                    .enumerate()
+                    .all(|(i, v)| (v.to_f32() - 8.0 * (i % 16) as f32).abs() < 0.5),
                 Err(_) => false,
             },
             Err(_) => false,
@@ -709,7 +723,7 @@ impl VulkanDevice {
                     | MemoryTypeFilter::HOST_RANDOM_ACCESS,
                 ..Default::default()
             },
-            vec![1u64, 16, 16, 16, 0],
+            vec![1u64, 16, 16, 16, 0, 16, 16],
         ) {
             Ok(b) => b,
             Err(_) => return false,
@@ -729,7 +743,207 @@ impl VulkanDevice {
         }
         match out_s.to_cpu_storage() {
             Ok(cpu) => match cpu.as_slice::<half::bf16>() {
-                Ok(got) => got.iter().all(|v| (v.to_f32() - 30.0).abs() < 0.5),
+                Ok(got) => got
+                    .iter()
+                    .enumerate()
+                    .all(|(i, v)| (v.to_f32() - 8.0 * (i % 16) as f32).abs() < 0.5),
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    /// True when the cooperative-matrix affine (GEMM + bias) pipeline
+    /// for `dtype` can run on this device: the cooperative-matrix GEMM
+    /// gate (which includes its own correctness probe) plus a one-time
+    /// probe of the affine kernel itself. The probe checks the part of
+    /// the kernel the GEMM probe does not cover: the bias tile loaded
+    /// with a zero row stride (f16) / the per-element bias add (bf16).
+    /// A failed probe keeps the unfused matmul + add path.
+    pub(crate) fn coopmat_affine_available(&self, dtype: DType) -> bool {
+        if !self.coopmat_gemm_available(dtype) {
+            return false;
+        }
+        let lock = match dtype {
+            DType::F16 => &self.inner.coopmat_affine_f16,
+            DType::BF16 => &self.inner.coopmat_affine_bf16,
+            _ => return false,
+        };
+        *lock.get_or_init(|| match dtype {
+            DType::F16 => self.probe_coopmat_affine_f16(),
+            _ => self.probe_coopmat_affine_bf16(),
+        })
+    }
+
+    /// Correctness probe for the f16 cooperative-matrix affine:
+    /// A all 1.0, B all 0.0, so the product is zero and every output
+    /// row must equal the bias vector (this exercises the
+    /// zero-row-stride bias load and the store).
+    fn probe_coopmat_affine_f16(&self) -> bool {
+        let a = vec![half::f16::from_f32(1.0); 256];
+        let b = vec![half::f16::from_f32(0.0); 256];
+        let bias: Vec<half::f16> = (0..16)
+            .map(|i| half::f16::from_f32((i as f32) * 0.5))
+            .collect();
+        let out = vec![half::f16::from_f32(0.0); 256];
+        let (a_s, b_s, bias_s, out_s) = match (
+            self.storage_from_cpu_storage(&crate::CpuStorage::F16(a)),
+            self.storage_from_cpu_storage(&crate::CpuStorage::F16(b)),
+            self.storage_from_cpu_storage(&crate::CpuStorage::F16(bias)),
+            self.storage_from_cpu_storage(&crate::CpuStorage::F16(out)),
+        ) {
+            (Ok(a), Ok(b), Ok(c), Ok(d)) => (a, b, c, d),
+            _ => return false,
+        };
+        let (a_b, b_b, bias_b, out_b) =
+            match (a_s.buffer(), b_s.buffer(), bias_s.buffer(), out_s.buffer()) {
+                (
+                    super::VulkanStorageBuffer::F16(a),
+                    crate::vulkan_backend::VulkanStorageBuffer::F16(b),
+                    super::VulkanStorageBuffer::F16(c),
+                    super::VulkanStorageBuffer::F16(d),
+                ) => (a.clone(), b.clone(), c.clone(), d.clone()),
+                _ => return false,
+            };
+        let params = match Buffer::from_iter(
+            &self.inner.mem_alloc,
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![1u64, 16, 16, 16, 0, 16, 16],
+        ) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        let kernels = self.kernels();
+        let (a_b, b_b, bias_b, out_b, params) = (
+            a_b.clone(),
+            b_b.clone(),
+            bias_b.clone(),
+            out_b.clone(),
+            params.clone(),
+        );
+        if self
+            .execute(move |cbb| {
+                candle_vulkan_kernels::call_affine_coopmat_slang::<half::f16>(
+                    cbb,
+                    &kernels,
+                    candle_vulkan_kernels::Source::AffineCoopMatF16,
+                    candle_vulkan_kernels::KernelName::AffineCoopMatF16,
+                    &a_b,
+                    &b_b,
+                    &bias_b,
+                    &out_b,
+                    &params,
+                    1,
+                    16,
+                    16,
+                )
+                .map_err(|e| e.to_string())
+            })
+            .is_err()
+        {
+            return false;
+        }
+        match out_s.to_cpu_storage() {
+            Ok(cpu) => match cpu.as_slice::<half::f16>() {
+                Ok(got) => got
+                    .iter()
+                    .enumerate()
+                    .all(|(i, v)| (v.to_f32() - ((i % 16) as f32) * 0.5).abs() < 0.05),
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    /// Correctness probe for the bf16 cooperative-matrix affine (same
+    /// known case as the f16 probe; the kernel accumulates in f16 and
+    /// stores bf16, so the tolerance is the bf16 step at 7.5).
+    fn probe_coopmat_affine_bf16(&self) -> bool {
+        let a = vec![half::bf16::from_f32(1.0); 256];
+        let b = vec![half::bf16::from_f32(0.0); 256];
+        let bias: Vec<half::bf16> = (0..16)
+            .map(|i| half::bf16::from_f32((i as f32) * 0.5))
+            .collect();
+        let out = vec![half::bf16::from_f32(0.0); 256];
+        let (a_s, b_s, bias_s, out_s) = match (
+            self.storage_from_cpu_storage(&crate::CpuStorage::BF16(a)),
+            self.storage_from_cpu_storage(&crate::CpuStorage::BF16(b)),
+            self.storage_from_cpu_storage(&crate::CpuStorage::BF16(bias)),
+            self.storage_from_cpu_storage(&crate::CpuStorage::BF16(out)),
+        ) {
+            (Ok(a), Ok(b), Ok(c), Ok(d)) => (a, b, c, d),
+            _ => return false,
+        };
+        let (a_b, b_b, bias_b, out_b) =
+            match (a_s.buffer(), b_s.buffer(), bias_s.buffer(), out_s.buffer()) {
+                (
+                    super::VulkanStorageBuffer::BF16(a),
+                    super::VulkanStorageBuffer::BF16(b),
+                    super::VulkanStorageBuffer::BF16(c),
+                    super::VulkanStorageBuffer::BF16(d),
+                ) => (a.clone(), b.clone(), c.clone(), d.clone()),
+                _ => return false,
+            };
+        let params = match Buffer::from_iter(
+            &self.inner.mem_alloc,
+            &BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            vec![1u64, 16, 16, 16, 0, 16, 16],
+        ) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        let kernels = self.kernels();
+        let (a_b, b_b, bias_b, out_b, params) = (
+            a_b.clone(),
+            b_b.clone(),
+            bias_b.clone(),
+            out_b.clone(),
+            params.clone(),
+        );
+        if self
+            .execute(move |cbb| {
+                candle_vulkan_kernels::call_affine_coopmat_slang::<half::bf16>(
+                    cbb,
+                    &kernels,
+                    candle_vulkan_kernels::Source::AffineCoopMatBf16,
+                    candle_vulkan_kernels::KernelName::AffineCoopMatBf16,
+                    &a_b,
+                    &b_b,
+                    &bias_b,
+                    &out_b,
+                    &params,
+                    1,
+                    16,
+                    16,
+                )
+                .map_err(|e| e.to_string())
+            })
+            .is_err()
+        {
+            return false;
+        }
+        match out_s.to_cpu_storage() {
+            Ok(cpu) => match cpu.as_slice::<half::bf16>() {
+                Ok(got) => got
+                    .iter()
+                    .enumerate()
+                    .all(|(i, v)| (v.to_f32() - ((i % 16) as f32) * 0.5).abs() < 0.5),
                 Err(_) => false,
             },
             Err(_) => false,
@@ -1094,5 +1308,81 @@ impl VBuf {
             VBuf::F32(_) => None,
             VBuf::U32(b) => Some(b),
         }
+    }
+}
+
+#[cfg(test)]
+mod coopmat_regressions {
+    //! Regression tests for driver-specific ordering bugs affecting the
+    //! cooperative-matrix kernels (see `Kernels::prime_coopmat_output`).
+
+    use super::*;
+
+    /// RADV (observed on the R9700 with radv 26.2.4) reports the output of
+    /// a cooperative-matrix dispatch to a *transfer* command recorded after
+    /// the dispatch in the same command buffer as if it were the buffer's
+    /// content *before* the dispatch — unless a transfer had already written
+    /// to that buffer earlier in the same command buffer. Compute commands
+    /// are not affected. `Kernels::prime_coopmat_output` records a tiny
+    /// zero copy into the output buffer right before each cooperative-matrix
+    /// dispatch to work around the bug.
+    ///
+    /// This test reproduces the failing shape: an upload batch, a
+    /// `synchronize`, then the GEMM and its readback batched together in a
+    /// command buffer that is not the first one submitted to the queue.
+    /// Without the prime the readback returns the pre-GEMM contents
+    /// (all zeros).
+    #[test]
+    fn coopmat_gemm_readback_same_batch() {
+        let gpu = std::env::var("CANDLE_VULKAN_TEST_GPU")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let dev = match VulkanDevice::new(gpu) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        if !dev.coopmat_gemm_available(DType::F16) {
+            eprintln!("skipping: no f16 cooperative-matrix support");
+            return;
+        }
+        let d = crate::Device::Vulkan(dev.clone());
+        let data: Vec<f32> = (0..256).map(|i| (i as f32) * 0.01 + 0.5).collect();
+        let a = crate::Tensor::new(data.as_slice(), &d)
+            .expect("a")
+            .reshape(&[16, 16])
+            .expect("a2")
+            .to_dtype(DType::F16)
+            .expect("a16");
+        let b = crate::Tensor::new(data.as_slice(), &d)
+            .expect("b")
+            .reshape(&[16, 16])
+            .expect("b2")
+            .to_dtype(DType::F16)
+            .expect("b16");
+        dev.synchronize().expect("mid-sync");
+        // GEMM + readback are queued into one pending batch, so they
+        // record into a single command buffer that is NOT the first one
+        // submitted to the queue.
+        let c = a.matmul(&b).expect("matmul");
+        let got: Vec<Vec<half::f16>> = c.to_vec2().expect("rb");
+        let refv: Vec<Vec<f32>> = (0..16)
+            .map(|m| {
+                (0..16)
+                    .map(|n| (0..16).map(|k| data[m * 16 + k] * data[k * 16 + n]).sum())
+                    .collect()
+            })
+            .collect();
+        let bad = got
+            .iter()
+            .zip(refv.iter())
+            .flat_map(|(row, rrow)| {
+                row.iter()
+                    .zip(rrow.iter())
+                    .map(|(g, r)| (g.to_f32() - r).abs() > 0.01 * r.abs().max(1.0))
+            })
+            .filter(|b| *b)
+            .count();
+        assert_eq!(bad, 0, "coopmat readback saw stale output");
     }
 }
