@@ -6271,3 +6271,127 @@ fn test_vulkan_matmul_f16_16x16() {
         bads.len()
     );
 }
+
+// ============================================================================
+// Constant-fill transfer paths: vkCmdFillBuffer / vkCmdUpdateBuffer / shaders.
+// Each case is sized/aligned to hit exactly one of the three strategies in
+// `VulkanStorage::zero_fill` and `const_set`/`try_fill_const`.
+// ============================================================================
+
+#[test]
+fn test_vulkan_const_fill_transfer_paths() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let device = candle_core::Device::Vulkan(VulkanDevice::new(gpu_id).unwrap());
+    use candle_core::{DType, Tensor};
+
+    // const_set -> vkCmdFillBuffer: f32, 20000 elements (80000 B:
+    // multiple of 4, above 64 KiB).
+    let t = Tensor::full(1.5f32, &[20000], &device).unwrap();
+    let v = t.to_vec1::<f32>().unwrap();
+    assert!(v.iter().all(|&x| x == 1.5f32), "fill_buffer f32 mismatch");
+
+    // const_set -> const-set shader: f32, 100 elements (400 B: multiple of
+    // 4, at or below 64 KiB).
+    let t = Tensor::full(-2.25f32, &[100], &device).unwrap();
+    let v = t.to_vec1::<f32>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == -2.25f32),
+        "const-set shader f32 mismatch"
+    );
+
+    // const_set -> vkCmdUpdateBuffer: f16, 1001 elements (2002 B: not a
+    // multiple of 4, at or below 64 KiB).
+    let t = Tensor::full(half::f16::from_f32(0.5), &[1001], &device).unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == half::f16::from_f32(0.5)),
+        "update_buffer f16 mismatch"
+    );
+
+    // const_set with a 4-byte-aligned non-zero start offset ->
+    // vkCmdUpdateBuffer (1000-element prefix) plus the 1-element
+    // const-set kernel for the 2-byte tail: f16 view [2..1003] of a
+    // 20000-element tensor (2002 B region, 4-byte offset).
+    let t = Tensor::full(half::f16::from_f32(0.0), &[20000], &device).unwrap();
+    let view = t.narrow(0, 2, 1001).unwrap();
+    view.const_set(candle_core::scalar::Scalar::F16(half::f16::from_f32(2.5)))
+        .unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v[..2].iter().all(|&x| x == half::f16::ZERO)
+            && v[2..1003].iter().all(|&x| x == half::f16::from_f32(2.5))
+            && v[1003..].iter().all(|&x| x == half::f16::ZERO),
+        "update_buffer narrow f16 mismatch"
+    );
+
+    // const_set with an unaligned start offset -> const-set kernel for
+    // the whole region: f16 view [3..1004] (2002 B region, 6-byte offset).
+    let t = Tensor::full(half::f16::from_f32(0.0), &[20000], &device).unwrap();
+    let view = t.narrow(0, 3, 1001).unwrap();
+    view.const_set(candle_core::scalar::Scalar::F16(half::f16::from_f32(1.25)))
+        .unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v[..3].iter().all(|&x| x == half::f16::ZERO)
+            && v[3..1004].iter().all(|&x| x == half::f16::from_f32(1.25))
+            && v[1004..].iter().all(|&x| x == half::f16::ZERO),
+        "const-set kernel unaligned-offset f16 mismatch"
+    );
+
+    // const_set -> vkCmdFillBuffer: bf16, 40000 elements (80000 B).
+    let t = Tensor::full(half::bf16::from_f32(3.5), &[40000], &device).unwrap();
+    let v = t.to_vec1::<half::bf16>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == half::bf16::from_f32(3.5)),
+        "fill_buffer bf16 mismatch"
+    );
+
+    // zeros -> vkCmdFillBuffer: f32, 16385 elements (65540 B: multiple of 4,
+    // just above 64 KiB).
+    let t = Tensor::zeros(&[16385], DType::F32, &device).unwrap();
+    let v = t.to_vec1::<f32>().unwrap();
+    assert!(v.iter().all(|&x| x == 0.0), "zero fill_buffer f32 mismatch");
+
+    // zeros -> vkCmdUpdateBuffer: f16, 1001 elements (2002 B: not a multiple
+    // of 4, at or below 64 KiB).
+    let t = Tensor::zeros(&[1001], DType::F16, &device).unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == half::f16::ZERO),
+        "zero update_buffer f16 mismatch"
+    );
+
+    // zeros -> zero-fill shader: f16, 20001 elements (40002 B: not a
+    // multiple of 4, above the 64 KiB update cap).
+    let t = Tensor::zeros(&[20001], DType::F16, &device).unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == half::f16::ZERO),
+        "zero-fill shader odd-size f16 mismatch"
+    );
+
+    // zeros -> zero-fill shader: tiny regions under 4 bytes have no
+    // 4-byte-multiple prefix, so they always take the kernel path.
+    let t = Tensor::zeros(&[3], DType::U8, &device).unwrap();
+    let v = t.to_vec1::<u8>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == 0),
+        "zero-fill shader u8 tiny mismatch"
+    );
+
+    let t = Tensor::zeros(&[1], DType::F16, &device).unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == half::f16::ZERO),
+        "zero-fill shader f16 tiny mismatch"
+    );
+
+    // const_set -> const-set kernel: f16, 1 element (2 B: under 4 bytes).
+    let t = Tensor::full(half::f16::from_f32(7.0), &[1], &device).unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == half::f16::from_f32(7.0)),
+        "const-set kernel f16 tiny mismatch"
+    );
+}

@@ -374,6 +374,21 @@ impl Clone for VulkanStorage {
     }
 }
 
+/// The outcome of a constant-fill attempt with the transfer commands
+/// (`vkCmdFillBuffer`/`vkCmdUpdateBuffer`), as reported by
+/// `VulkanStorage::try_fill_const`.
+enum ConstFillPlan<T> {
+    /// The whole region was enqueued.
+    Done,
+    /// A 4-byte-multiple prefix was transferred; the caller writes the
+    /// remaining bytes (1-3; exactly one element for 2-byte element
+    /// types) with its const-set/zero-fill kernel over `tail`.
+    Tail(Subbuffer<[T]>),
+    /// No transfer command fits; the caller dispatches its kernel over
+    /// the whole region.
+    Kernel,
+}
+
 impl VulkanStorage {
     /// Creates a new storage of `size` elements of `dtype`.
     ///
@@ -429,27 +444,123 @@ impl VulkanStorage {
         if byte_len == 0 {
             return Ok(());
         }
-        let params_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![byte_len as u64],
-        )
-        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[u64]> = params_buf;
         let dst = self.buffer().as_u8();
         let kernels = self.device.kernels();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_zero_fill(cbb, &kernels, &dst, &params, byte_len)
-                .map_err(|e| e.to_string())
-        })
+        match self.try_fill_const(&dst, 0u8, 0)? {
+            ConstFillPlan::Done => {}
+            ConstFillPlan::Tail(tail) => {
+                // 1-3 trailing bytes the transfer commands cannot reach
+                // (see `try_fill_const`): the byte-granular zero-fill
+                // kernel finishes the job.
+                let tail_len = tail.size();
+                let tail_params_buf = Buffer::from_iter(
+                    self.device.mem_alloc(),
+                    &BufferCreateInfo {
+                        usage: BufferUsage::STORAGE_BUFFER,
+                        ..Default::default()
+                    },
+                    &AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                            | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                        ..Default::default()
+                    },
+                    vec![tail_len],
+                )
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                let tail_params: Subbuffer<[u64]> = tail_params_buf;
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_zero_fill(
+                        cbb,
+                        &kernels,
+                        &tail,
+                        &tail_params,
+                        tail_len as usize,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            ConstFillPlan::Kernel => {
+                // No transfer command fits this size (a multiple of 4
+                // bytes at or below the 64 KiB update cap, or above it
+                // without meeting the fill constraints): the
+                // byte-granular zero-fill kernel.
+                let params_buf = Buffer::from_iter(
+                    self.device.mem_alloc(),
+                    &BufferCreateInfo {
+                        usage: BufferUsage::STORAGE_BUFFER,
+                        ..Default::default()
+                    },
+                    &AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                            | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                        ..Default::default()
+                    },
+                    vec![byte_len as u64],
+                )
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                let params: Subbuffer<[u64]> = params_buf;
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_zero_fill(cbb, &kernels, &dst, &params, byte_len)
+                        .map_err(|e| e.to_string())
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Enqueues a constant fill of `sub` with the cheaper transfer
+    /// commands when the region fits their constraints:
+    /// - `vkCmdFillBuffer` for 4-byte-aligned regions above 64 KiB: the
+    ///   GPU stamps the 4-byte `pattern` (the element's bytes, repeated
+    ///   to 4 bytes for 1- and 2-byte element types);
+    /// - `vkCmdUpdateBuffer` for regions up to 64 KiB (the
+    ///   `vkCmdUpdateBuffer` cap) that are not a multiple of 4 bytes:
+    ///   the repeated value is written from the host. The Vulkan spec
+    ///   (VUID-vkCmdUpdateBuffer-dataSize-00038) requires the data size
+    ///   to be a multiple of 4, so the 4-byte-multiple prefix is
+    ///   transferred and the 1-3 trailing bytes are left for the
+    ///   caller's kernel (`ConstFillPlan::Tail`).
+    /// Anything else is `ConstFillPlan::Kernel`: the caller dispatches
+    /// the const-set/zero-fill shader over the whole region.
+    fn try_fill_const<T>(
+        &self,
+        sub: &Subbuffer<[T]>,
+        elem: T,
+        pattern: u32,
+    ) -> Result<ConstFillPlan<T>>
+    where
+        T: BufferContents + Copy,
+    {
+        let byte_len = sub.size() as usize;
+        if byte_len % 4 == 0 && byte_len > 65536 && sub.offset() % 4 == 0 {
+            let u32_sub = sub.clone().reinterpret::<[u32]>();
+            self.device.execute(move |cbb| {
+                cbb.fill_buffer(u32_sub, pattern)
+                    .map_err(|e| e.to_string())
+                    .map(|_| ())
+            })?;
+            return Ok(ConstFillPlan::Done);
+        }
+        if byte_len >= 4 && byte_len % 4 != 0 && byte_len <= 65536 && sub.offset() % 4 == 0 {
+            let elem_len = std::mem::size_of::<T>();
+            let prefix_elems = ((byte_len / 4) * 4 / elem_len) as u64;
+            let data: Box<[T]> = vec![elem; prefix_elems as usize].into_boxed_slice();
+            let sub_owned = (*sub).clone();
+            let prefix_sub = sub_owned.slice(0..prefix_elems);
+            self.device.execute(move |cbb| {
+                cbb.update_buffer(prefix_sub, data)
+                    .map_err(|e| e.to_string())
+                    .map(|_| ())
+            })?;
+            let total_elems = (byte_len / elem_len) as u64;
+            let tail = (*sub).clone().slice(prefix_elems..total_elems);
+            return Ok(if tail.size() > 0 {
+                ConstFillPlan::Tail(tail)
+            } else {
+                ConstFillPlan::Done
+            });
+        }
+        Ok(ConstFillPlan::Kernel)
     }
 
     pub fn buffer(&self) -> &VulkanStorageBuffer {
@@ -11107,7 +11218,6 @@ impl BackendStorage for VulkanStorage {
         }
         Ok(())
     }
-
     fn const_set(&mut self, scalar: crate::scalar::Scalar, l: &Layout) -> Result<()> {
         use crate::scalar::Scalar;
         let value = match (self.dtype, &scalar) {
@@ -11189,24 +11299,90 @@ impl BackendStorage for VulkanStorage {
         match &self.buffer {
             VulkanStorageBuffer::F32(buffer) => {
                 let sub = buffer.clone().slice(range);
-                self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_const_set_f32(cbb, &kernels, &sub, &params, len)
-                        .map_err(|e| e.to_string())
-                })?;
+                let pattern = u32::from_le_bytes(value.to_le_bytes());
+                match self.try_fill_const(&sub, value, pattern)? {
+                    ConstFillPlan::Done => {}
+                    // An f32 region is always a multiple of 4 bytes, so
+                    // only the kernel fallback is possible here.
+                    ConstFillPlan::Tail(_) | ConstFillPlan::Kernel => {
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_const_set_f32(
+                                cbb, &kernels, &sub, &params, len,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                }
             }
             VulkanStorageBuffer::F16(buffer) => {
                 let sub = buffer.clone().slice(range);
-                self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_const_set_f16(cbb, &kernels, &sub, &params, len)
-                        .map_err(|e| e.to_string())
-                })?;
+                let elem = half::f16::from_f32(value);
+                let b = elem.to_le_bytes();
+                let pattern = u32::from_le_bytes([b[0], b[1], b[0], b[1]]);
+                match self.try_fill_const(&sub, elem, pattern)? {
+                    ConstFillPlan::Done => {}
+                    ConstFillPlan::Tail(tail) => {
+                        // The 2-byte tail is exactly one f16 element.
+                        let tail_len = tail.size() / 2;
+                        let tail_params = candle_vulkan_kernels::ConstSetParams {
+                            count: tail_len,
+                            value,
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_const_set_f16(
+                                cbb,
+                                &kernels,
+                                &tail,
+                                &tail_params,
+                                tail_len as usize,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    ConstFillPlan::Kernel => {
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_const_set_f16(
+                                cbb, &kernels, &sub, &params, len,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                }
             }
             VulkanStorageBuffer::BF16(buffer) => {
                 let sub = buffer.clone().slice(range);
-                self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_const_set_bf16(cbb, &kernels, &sub, &params, len)
-                        .map_err(|e| e.to_string())
-                })?;
+                let elem = half::bf16::from_f32(value);
+                let b = elem.to_bits().to_le_bytes();
+                let pattern = u32::from_le_bytes([b[0], b[1], b[0], b[1]]);
+                match self.try_fill_const(&sub, elem, pattern)? {
+                    ConstFillPlan::Done => {}
+                    ConstFillPlan::Tail(tail) => {
+                        // The 2-byte tail is exactly one bf16 element.
+                        let tail_len = tail.size() / 2;
+                        let tail_params = candle_vulkan_kernels::ConstSetParams {
+                            count: tail_len,
+                            value,
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_const_set_bf16(
+                                cbb,
+                                &kernels,
+                                &tail,
+                                &tail_params,
+                                tail_len as usize,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    ConstFillPlan::Kernel => {
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_const_set_bf16(
+                                cbb, &kernels, &sub, &params, len,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                }
             }
             _ => {
                 return Err(Error::Vulkan(
