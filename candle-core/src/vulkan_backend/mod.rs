@@ -573,17 +573,17 @@ impl VulkanStorage {
     }
 
     /// Allocates a device buffer of `size` elements of `dtype`, taking a
-    /// pooled buffer of exactly the right (dtype, size) when one is
-    /// available; otherwise a fresh (uninitialized) allocation like
-    /// `create_vram_buffer`.
+    /// pooled buffer from the smallest size class that fits when one is
+    /// available (sliced to exactly `size`); otherwise a fresh
+    /// (uninitialized) allocation like `create_vram_buffer`.
     fn new_pooled<T>(device: &VulkanDevice, dtype: DType, size: usize) -> Result<Subbuffer<[T]>>
     where
         T: BufferContents,
     {
         let bytes = size * std::mem::size_of::<T>();
         if bytes >= crate::vulkan_backend::device::POOL_MIN_BYTES {
-            if let Some(arc) = device.pool_take(dtype, bytes) {
-                return Ok(Subbuffer::new(arc).cast_aligned::<T>());
+            if let Some(sub) = device.pool_take(dtype, bytes) {
+                return Ok(sub.cast_aligned::<T>());
             }
         }
         Self::create_vram_buffer::<T>(device, size)
@@ -1604,7 +1604,7 @@ impl Drop for VulkanStorage {
         if bytes < crate::vulkan_backend::device::POOL_MIN_BYTES {
             return;
         }
-        self.device.pool_return(self.dtype, bytes, arc);
+        self.device.pool_return(self.dtype, arc);
     }
 }
 

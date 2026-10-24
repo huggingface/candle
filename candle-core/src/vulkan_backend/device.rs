@@ -51,9 +51,30 @@ struct BufferInstance {
     count: std::sync::atomic::AtomicUsize,
 }
 
+/// A pooled buffer: its actual byte size and the buffer itself.
+type PooledBuffer = (usize, Arc<Buffer>);
+
 /// The free buffer pool: reusable device buffers keyed by the element
-/// `DType` and the buffer's byte length.
-type FreePool = std::collections::HashMap<(DType, usize), Vec<Arc<Buffer>>>;
+/// `DType` and a size class (the buffer's byte size rounded up to
+/// `POOL_CLASS`). A take of `bytes` reuses the smallest pooled class
+/// that fits (sliced down to `bytes`), so growing tensors find pooled
+/// buffers instead of missing on exact-byte keys. `total_bytes` is the
+/// running sum of the pooled buffers' actual sizes, kept on insert and
+/// take so the cap checks stay O(1).
+struct FreePool {
+    /// (dtype, size class) -> pooled buffers
+    map: std::collections::HashMap<(DType, usize), Vec<PooledBuffer>>,
+    total_bytes: usize,
+}
+
+impl FreePool {
+    fn new() -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+            total_bytes: 0,
+        }
+    }
+}
 
 /// Shared state of a `VulkanDevice`.
 struct DeviceInner {
@@ -80,15 +101,15 @@ struct DeviceInner {
     /// buffer of the batch and the allocator may recycle the memory.
     keepalive_f32: std::sync::Mutex<Vec<Subbuffer<[f32]>>>,
     keepalive_u32: std::sync::Mutex<Vec<Subbuffer<[u32]>>>,
-    /// Buffers that can be handed out immediately, keyed by (dtype, byte
-    /// length): the GPU has been idle on them since the last
+    /// Buffers that can be handed out immediately, keyed by (dtype, size
+    /// class): the GPU has been idle on them since the last
     /// `synchronize`. `Drop for VulkanStorage` returns eligible buffers
     /// here and `VulkanStorage::new` takes from here.
     pool_free: std::sync::Mutex<FreePool>,
     /// Buffers returned while a batch was pending; `synchronize`
     /// promotes them to `pool_free` after the batch's fence signals (the
     /// GPU is done with them then, like the keepalive lists).
-    pool_pending: std::sync::Mutex<Vec<(DType, usize, std::sync::Arc<Buffer>)>>,
+    pool_pending: std::sync::Mutex<Vec<(DType, std::sync::Arc<Buffer>)>>,
     /// Live `VulkanStorage` instance counts per buffer (see
     /// `BufferInstance`), keyed by the buffer's address: an entry only
     /// exists while at least one live holder pins the allocation, so the
@@ -168,9 +189,19 @@ const FENCE_RING_SIZE: usize = 128;
 /// Minimum size in bytes for a buffer to enter the pool: smaller
 /// allocations are cheap and the pool bookkeeping is not worth it.
 pub(crate) const POOL_MIN_BYTES: usize = 4096;
-/// Maximum number of pooled buffers per (dtype, size): decode reuses a
-/// handful of recurring shapes, each with a few buffers live at once.
+/// Maximum number of pooled buffers per (dtype, size class): decode
+/// reuses a handful of recurring shapes, each with a few buffers live
+/// at once.
 const POOL_MAX_PER_SIZE: usize = 8;
+/// Size-class granularity for pooled buffers: a buffer is pooled in the
+/// class of its rounded-up byte size, and a take of `bytes` reuses the
+/// smallest pooled class that fits, so growing tensors (e.g. per-token
+/// attention intermediates) actually reuse pooled buffers instead of
+/// missing on exact-byte keys.
+const POOL_CLASS: usize = 64 * 1024;
+/// Maximum number of distinct (dtype, size class) entries in the free
+/// pool: caps the bookkeeping and the number of long-lived allocations.
+const POOL_MAX_ENTRIES: usize = 512;
 /// Maximum total bytes held by the free pool: a few percent of the
 /// reference 32 GB device, comfortably above the recurring decode shapes
 /// (the skip-never-evict policy keeps retained buffers in place).
@@ -381,7 +412,7 @@ impl VulkanDevice {
                 fence_next: AtomicUsize::new(0),
                 keepalive_f32: std::sync::Mutex::new(Vec::new()),
                 keepalive_u32: std::sync::Mutex::new(Vec::new()),
-                pool_free: std::sync::Mutex::new(std::collections::HashMap::new()),
+                pool_free: std::sync::Mutex::new(FreePool::new()),
                 pool_pending: std::sync::Mutex::new(Vec::new()),
                 buffer_instances: std::sync::Mutex::new(std::collections::HashMap::new()),
                 readback: std::sync::Mutex::new(None),
@@ -441,19 +472,43 @@ impl VulkanDevice {
         &self.inner.readback
     }
 
-    /// Takes a pooled buffer of `dtype` and exactly `bytes` bytes, if one
-    /// is available (see the `pool_free` field on `DeviceInner`).
-    pub(crate) fn pool_take(&self, dtype: DType, bytes: usize) -> Option<Arc<Buffer>> {
+    /// Takes a pooled buffer of `dtype` that can hold `bytes` bytes, if
+    /// one is available (see the `pool_free` field on `DeviceInner`):
+    /// the smallest pooled class that fits is popped and sliced down to
+    /// exactly `bytes`.
+    pub(crate) fn pool_take(&self, dtype: DType, bytes: usize) -> Option<Subbuffer<[u8]>> {
         let mut free = self.inner.pool_free.lock().ok()?;
-        free.get_mut(&(dtype, bytes)).and_then(|v| v.pop())
+        // The smallest class that holds at least one buffer of `bytes`
+        // bytes: a class `c` entry holds at most `c` bytes, and a
+        // buffer's actual size can be smaller than its class.
+        let mut best: Option<usize> = None;
+        for ((dt, class), v) in free.map.iter() {
+            if *dt != dtype || *class < bytes {
+                continue;
+            }
+            if v.iter().any(|(actual, _)| *actual >= bytes) && best.is_none_or(|b| class < &b) {
+                best = Some(*class);
+            }
+        }
+        let class = best?;
+        let (actual, arc) = {
+            let entry = free.map.get_mut(&(dtype, class))?;
+            let pos = entry.iter().position(|(a, _)| *a >= bytes)?;
+            entry.remove(pos)
+        };
+        if free.map.get(&(dtype, class)).is_none_or(Vec::is_empty) {
+            free.map.remove(&(dtype, class));
+        }
+        free.total_bytes -= actual;
+        Some(Subbuffer::new(arc).slice(0..bytes as u64))
     }
 
-    /// Returns a buffer of `dtype` and `bytes` bytes to the pool. While a
-    /// batch is pending the buffer is held in `pool_pending` until that
-    /// batch's fence signals (the GPU may still be using it); otherwise it
-    /// goes straight to the free pool. Buffers that would exceed the
-    /// per-size or total caps are dropped.
-    pub(crate) fn pool_return(&self, dtype: DType, bytes: usize, buf: Arc<Buffer>) {
+    /// Returns a buffer of `dtype` to the pool. While a batch is pending
+    /// the buffer is held in `pool_pending` until that batch's fence
+    /// signals (the GPU may still be using it); otherwise it goes
+    /// straight to the free pool. Buffers that would exceed the
+    /// per-class, per-entry or total caps are dropped.
+    pub(crate) fn pool_return(&self, dtype: DType, buf: Arc<Buffer>) {
         let pending_batch = match self.inner.pending.lock().ok() {
             Some(p) => !p.is_empty(),
             None => true,
@@ -463,22 +518,30 @@ impl VulkanDevice {
                 Some(p) => p,
                 None => return,
             };
-            pending.push((dtype, bytes, buf));
+            pending.push((dtype, buf));
             return;
         }
         let mut free = match self.inner.pool_free.lock().ok() {
             Some(f) => f,
             None => return,
         };
-        Self::pool_insert(&mut free, dtype, bytes, buf);
+        Self::pool_insert(&mut free, dtype, buf);
     }
 
-    /// Inserts one buffer into the free pool, honoring the caps.
-    fn pool_insert(free: &mut FreePool, dtype: DType, bytes: usize, buf: Arc<Buffer>) {
-        let total: usize = free.iter().map(|(k, v)| k.1.saturating_mul(v.len())).sum();
-        let entry = free.entry((dtype, bytes)).or_default();
-        if entry.len() < POOL_MAX_PER_SIZE && total + bytes <= POOL_MAX_BYTES {
-            entry.push(buf);
+    /// Inserts one buffer into the free pool, honoring the caps. The
+    /// buffer's actual byte size counts against `total_bytes`; its size
+    /// class (rounded up) is the pool key.
+    fn pool_insert(free: &mut FreePool, dtype: DType, buf: Arc<Buffer>) {
+        let actual = buf.size() as usize;
+        let class = actual.div_ceil(POOL_CLASS) * POOL_CLASS;
+        let key = (dtype, class);
+        if !free.map.contains_key(&key) && free.map.len() >= POOL_MAX_ENTRIES {
+            return;
+        }
+        let entry = free.map.entry(key).or_default();
+        if entry.len() < POOL_MAX_PER_SIZE && free.total_bytes + actual <= POOL_MAX_BYTES {
+            entry.push((actual, buf));
+            free.total_bytes += actual;
         }
     }
 
@@ -1185,8 +1248,8 @@ impl VulkanDevice {
                     .pool_free
                     .lock()
                     .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                for (dtype, bytes, buf) in drained {
-                    Self::pool_insert(&mut free, dtype, bytes, buf);
+                for (dtype, buf) in drained {
+                    Self::pool_insert(&mut free, dtype, buf);
                 }
             }
             if std::env::var("CANDLE_VULKAN_PROFILE").is_ok() {
