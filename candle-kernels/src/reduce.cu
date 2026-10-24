@@ -104,7 +104,7 @@ fast_sum(const size_t src_numel, const size_t el_to_sum_per_block,
 }
 
 // Specialized vectorized fast_sum for bf16: 8 elements per float4 load
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800 || defined(CANDLE_CUDA_BF16_FALLBACK)
 __device__ void
 fast_sum_bf16_vec(const size_t src_numel, const size_t el_to_sum_per_block,
                   const size_t num_dims, const size_t *info,
@@ -755,7 +755,7 @@ fast_sum_small_impl(const size_t dst_el, const size_t el_to_sum_per_block,
   dst[gid] = sum;
 }
 
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800 || defined(CANDLE_CUDA_BF16_FALLBACK)
 extern "C" __global__ void fast_sum_small_bf16(
     const size_t dst_el, const size_t el_to_sum_per_block,
     const size_t num_dims, const size_t *info, const __nv_bfloat16 *src,
@@ -853,7 +853,7 @@ extern "C" __global__ void fast_sum_small_f16(
 }
 #endif
 
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800 || defined(CANDLE_CUDA_BF16_FALLBACK)
 SOFTMAX_OP(__nv_bfloat16, float, softmax_bf16)
 RMSNORM_OP(__nv_bfloat16, rmsnorm_bf16)
 LAYERNORM_OP(__nv_bfloat16, layernorm_bf16)
