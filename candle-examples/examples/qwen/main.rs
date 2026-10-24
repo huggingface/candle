@@ -13,10 +13,10 @@ use candle_transformers::models::qwen3::{Config as Config3, ModelForCausalLM as 
 use candle_transformers::models::qwen3_moe::{Config as ConfigMoe3, ModelForCausalLM as ModelMoe3};
 
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 enum Model {
@@ -311,11 +311,7 @@ fn main() -> Result<()> {
             format!("Qwen/Qwen{version}-{size}")
         }
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model(model_id).with_revision(args.revision);
 
     let tokenizer_filename = match (args.weight_path.as_ref(), args.tokenizer_file.as_ref()) {
         (Some(_), Some(file)) => std::path::PathBuf::from(file),

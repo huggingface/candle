@@ -11,10 +11,10 @@ mod model;
 use model::{Config, Model};
 
 use candle::{DType, Device, Module, Tensor};
+use candle_examples::hub::Api;
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -236,18 +236,18 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        args.model_id
-            .unwrap_or_else(|| args.which.model_id().to_string()),
-        RepoType::Model,
-        args.revision
-            .unwrap_or_else(|| args.which.revision().to_string()),
-    ));
+    let repo = api
+        .model(
+            args.model_id
+                .unwrap_or_else(|| args.which.model_id().to_string()),
+        )
+        .with_revision(
+            args.revision
+                .unwrap_or_else(|| args.which.revision().to_string()),
+        );
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => api
-            .model("EleutherAI/gpt-neox-20b".to_string())
-            .get("tokenizer.json")?,
+        None => api.model("EleutherAI/gpt-neox-20b").get("tokenizer.json")?,
     };
     let config_filename = match args.config_file {
         Some(file) => std::path::PathBuf::from(file),

@@ -1,4 +1,7 @@
 // Adapted from https://github.com/guoqingbao/attention.rs/blob/main/src/moe.rs
+#[cfg(feature = "cutile")]
+pub mod cutile;
+
 #[cfg(feature = "cuda")]
 use candle::cuda_backend::kernels::ffi;
 #[allow(unused_imports)]

@@ -2,6 +2,20 @@ use core::ffi::c_void;
 #[allow(dead_code)]
 #[allow(improper_ctypes)]
 extern "C" {
+    #[cfg(feature = "cutile")]
+    pub fn candle_launch_moe_align(
+        topk_ids: *const i32,
+        sorted_token_ids: *mut i32,
+        expert_ids: *mut i32,
+        num_tokens_post_pad: *mut i32,
+        cumsum: *mut i32,
+        num_experts: i32,
+        block_size: i32,
+        numel: i32,
+        max_num_tokens_padded: i32,
+        stream: *mut c_void,
+    ) -> i32;
+
     // for unquntized models
     pub fn moe_gemm_wmma(
         input: *const c_void,         // device pointer [size_m, size_k]

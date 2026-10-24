@@ -738,14 +738,20 @@ impl QuantizedModelForCausalLM {
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, offset: usize) -> Result<Tensor> {
-        let (batch_size, seq_len) = input_ids.dims2()?;
+        let (_batch_size, seq_len) = input_ids.dims2()?;
 
         // Embed tokens
         let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
         // Skip mask materialization when using CPU flash attention
         let mask = if seq_len > 1 && !(self.use_flash_attn && self.device.is_cpu()) {
-            Some(self.create_causal_mask(batch_size, seq_len, offset)?)
+            Some(crate::utils::build_additive_causal_mask(
+                seq_len,
+                offset,
+                None,
+                &self.device,
+                DType::F32,
+            )?)
         } else {
             None
         };
@@ -763,31 +769,6 @@ impl QuantizedModelForCausalLM {
         let logits = last_hidden.apply(&self.lm_head)?;
 
         Ok(logits)
-    }
-
-    fn create_causal_mask(
-        &self,
-        batch_size: usize,
-        tgt_len: usize,
-        offset: usize,
-    ) -> Result<Tensor> {
-        let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| {
-                (0..tgt_len + offset).map(move |j| {
-                    if j <= i + offset {
-                        0f32
-                    } else {
-                        f32::NEG_INFINITY
-                    }
-                })
-            })
-            .collect();
-
-        Tensor::from_slice(
-            &mask,
-            (batch_size, 1, tgt_len, tgt_len + offset),
-            &self.device,
-        )
     }
 
     pub fn clear_kv_cache(&mut self) {

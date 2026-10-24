@@ -96,14 +96,14 @@ impl Args {
         let tokenizer_path = match &self.tokenizer {
             Some(config) => std::path::PathBuf::from(config),
             None => {
-                let api = hf_hub::api::sync::Api::new()?;
+                let api = candle_examples::hub::Api::new()?;
                 let repo = match self.which {
                     Which::Q2k9b => "THUDM/GLM-4-9B-0414",
                     Which::Q2k32b => "THUDM/GLM-4-32B-0414",
                     Which::Q4k9b => "THUDM/GLM-4-9B-0414",
                     Which::Q4k32b => "THUDM/GLM-4-32B-0414",
                 };
-                let api = api.model(repo.to_string());
+                let api = api.model(repo);
                 api.get("tokenizer.json")?
             }
         };
@@ -136,13 +136,8 @@ impl Args {
                         "main",
                     ),
                 };
-                let api = hf_hub::api::sync::Api::new()?;
-                api.repo(hf_hub::Repo::with_revision(
-                    repo.to_string(),
-                    hf_hub::RepoType::Model,
-                    revision.to_string(),
-                ))
-                .get(filename)?
+                let api = candle_examples::hub::Api::new()?;
+                api.model(repo).with_revision(revision).get(filename)?
             }
         };
         Ok(model_path)

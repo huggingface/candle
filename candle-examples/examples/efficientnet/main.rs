@@ -52,8 +52,8 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("lmz/candle-efficientnet".into());
+            let api = candle_examples::hub::Api::new()?;
+            let api = api.model("lmz/candle-efficientnet");
             let filename = match args.which {
                 Which::B0 => "efficientnet-b0.safetensors",
                 Which::B1 => "efficientnet-b1.safetensors",

@@ -110,16 +110,16 @@ pub fn main() -> anyhow::Result<()> {
     };
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model(hf_repo.to_string());
+            let api = candle_examples::hub::Api::new()?;
+            let api = api.model(hf_repo);
             api.get("model.safetensors")?
         }
         Some(model) => model.into(),
     };
     let config_file = match args.config {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model(hf_repo.to_string());
+            let api = candle_examples::hub::Api::new()?;
+            let api = api.model(hf_repo);
             api.get("config.json")?
         }
         Some(config) => config.into(),
@@ -168,8 +168,8 @@ pub fn main() -> anyhow::Result<()> {
 pub fn get_tokenizer(hf_repo: &str, tokenizer: Option<String>) -> anyhow::Result<Tokenizer> {
     let tokenizer = match tokenizer {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model(hf_repo.to_string());
+            let api = candle_examples::hub::Api::new()?;
+            let api = api.model(hf_repo);
             api.get("tokenizer.json")?
         }
         Some(file) => file.into(),

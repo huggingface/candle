@@ -52,14 +52,14 @@ pub fn main() -> anyhow::Result<()> {
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
         None => match args.which {
-            Which::SqueezeNet => hf_hub::api::sync::Api::new()?
-                .model("lmz/candle-onnx".into())
+            Which::SqueezeNet => candle_examples::hub::Api::new()?
+                .model("lmz/candle-onnx")
                 .get("squeezenet1.1-7.onnx")?,
-            Which::EfficientNet => hf_hub::api::sync::Api::new()?
-                .model("onnx/EfficientNet-Lite4".into())
+            Which::EfficientNet => candle_examples::hub::Api::new()?
+                .model("onnx/EfficientNet-Lite4")
                 .get("efficientnet-lite4-11.onnx")?,
-            Which::EsrGan => hf_hub::api::sync::Api::new()?
-                .model("qualcomm/Real-ESRGAN-x4plus".into())
+            Which::EsrGan => candle_examples::hub::Api::new()?
+                .model("qualcomm/Real-ESRGAN-x4plus")
                 .get("Real-ESRGAN-x4plus.onnx")?,
         },
     };

@@ -162,7 +162,10 @@ impl FlashAttn {
 
         let elem_count = out_shape.elem_count();
         let mut dst = unsafe { dev.alloc::<T>(elem_count) }?;
-        let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
+        // LSE layout is (b, h, seqlen_q); the epilogue predicates its stores on actual_seq_len.
+        let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * num_heads * seqlen_q)?;
+        // Must start at zero for every launch: the persistent scheduler hands out tiles from it.
+        let mut tile_count_semaphore = dev.alloc_zeros::<i32>(1)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -186,6 +189,7 @@ impl FlashAttn {
             let (v_ptr, _guard) = v.device_ptr(&stream);
             let (dst_ptr, _guard) = dst.device_ptr_mut(&stream);
             let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr_mut(&stream);
+            let (tile_count_semaphore_ptr, _guard) = tile_count_semaphore.device_ptr_mut(&stream);
             ffi::run_mha_v3(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
@@ -193,6 +197,7 @@ impl FlashAttn {
                 dst_ptr as *const core::ffi::c_void,
                 softmax_lse_ptr as *const core::ffi::c_void,
                 /* alibi_slopes_ptr */ alibi_slopes_ptr,
+                /* tile_count_semaphore_ptr */ tile_count_semaphore_ptr as *const i32,
                 /* cu_seqlens_q_ptr */ std::ptr::null(),
                 /* cu_seqlens_k_ptr */ std::ptr::null(),
                 /* q_batch_stride */ q_stride[0] as u32,
@@ -226,6 +231,7 @@ impl FlashAttn {
                 /* window_size_right */ window_size_right,
                 /* total_q, dummy */ 0u32,
                 /* total_k, dummy */ 0u32,
+                /* stream_ptr */ stream.cu_stream() as *mut core::ffi::c_void,
             )
         }
 
@@ -586,9 +592,6 @@ impl FlashAttnVarLen {
             .filter(|v| v <= &self.max_seqlen_k)
             .map(|v| v as i32)
             .unwrap_or(-1);
-        if window_size_left < self.max_seqlen_k as i32 {
-            window_size_left = self.max_seqlen_k.clone() as i32;
-        }
 
         // if window_size_right > self.max_seqlen_k or None => -1
         let mut window_size_right = self
@@ -596,9 +599,6 @@ impl FlashAttnVarLen {
             .filter(|v| v <= &self.max_seqlen_k)
             .map(|v| v as i32)
             .unwrap_or(-1);
-        if window_size_right < self.max_seqlen_k as i32 {
-            window_size_right = self.max_seqlen_k.clone() as i32;
-        }
 
         let head_size = round_multiple(head_size_og, 8);
         let head_size_rounded = round_multiple(head_size, 32);
@@ -608,6 +608,8 @@ impl FlashAttnVarLen {
         let elem_count = out_shape.elem_count();
         let mut dst = unsafe { dev.alloc::<T>(elem_count) }?;
         let mut softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q)?;
+        // Must start at zero for every launch: the persistent scheduler hands out tiles from it.
+        let mut tile_count_semaphore = dev.alloc_zeros::<i32>(1)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -632,6 +634,7 @@ impl FlashAttnVarLen {
             let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr_mut(&stream);
             let (seqlens_q_ptr, _guard) = seqlens_q.device_ptr(&stream);
             let (seqlens_k_ptr, _guard) = seqlens_k.device_ptr(&stream);
+            let (tile_count_semaphore_ptr, _guard) = tile_count_semaphore.device_ptr_mut(&stream);
             ffi::run_mha_v3(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
@@ -639,6 +642,7 @@ impl FlashAttnVarLen {
                 dst_ptr as *const core::ffi::c_void,
                 softmax_lse_ptr as *const core::ffi::c_void,
                 /* alibi_slopes_ptr */ alibi_slopes_ptr,
+                /* tile_count_semaphore_ptr */ tile_count_semaphore_ptr as *const i32,
                 /* cu_seqlens_q_ptr */ seqlens_q_ptr as *const i32,
                 /* cu_seqlens_k_ptr */ seqlens_k_ptr as *const i32,
                 /* q_batch_stride */ 0,
@@ -672,6 +676,7 @@ impl FlashAttnVarLen {
                 /* window_size_right */ window_size_right,
                 /* total_q */ total_q as u32,
                 /* total_k */ total_k as u32,
+                /* stream_ptr */ stream.cu_stream() as *mut core::ffi::c_void,
             )
         }
 

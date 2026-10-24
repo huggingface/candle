@@ -149,12 +149,29 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     vb: crate::VarBuilder,
 ) -> Result<LayerNorm> {
     let config = config.into();
-    let weight = vb.get_with_hints(size, "weight", crate::Init::Const(1.))?;
+
+    // Convert old format to new format if needed from a PyTorch state_dict.
+    // Safetensors are not always in the newer weight/bias format.
+    // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_utils.py#L575
+    // Prefer an existing alias when present; otherwise default to "weight"/"bias" so
+    // VarMap-backed builders can still lazily Init missing tensors. Bias is only
+    // probed when config.affine is true (rms_norm / layer_norm_no_bias).
+    let weight_name = ["weight", "gamma"]
+        .into_iter()
+        .find(|name| vb.contains_tensor(name))
+        .unwrap_or("weight");
+    let weight = vb.get_with_hints(size, weight_name, crate::Init::Const(1.))?;
+
     let bias = if config.affine {
-        Some(vb.get_with_hints(size, "bias", crate::Init::Const(0.))?)
+        let bias_name = ["bias", "beta"]
+            .into_iter()
+            .find(|name| vb.contains_tensor(name))
+            .unwrap_or("bias");
+        Some(vb.get_with_hints(size, bias_name, crate::Init::Const(0.))?)
     } else {
         None
     };
+
     Ok(LayerNorm {
         weight,
         bias,

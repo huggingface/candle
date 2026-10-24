@@ -1,11 +1,11 @@
 use std::cmp::min;
 
 use candle::{bail, DType, Device, Result, Tensor};
+use candle_examples::hub::Api;
 use candle_transformers::models::llava::{
     config::{HFPreProcessorConfig, LLaVAConfig},
     utils::select_best_resolution,
 };
-use hf_hub::api::sync::Api;
 use image::{imageops::overlay, DynamicImage, GenericImageView, Rgb, RgbImage};
 use serde::{Deserialize, Serialize};
 
@@ -74,7 +74,7 @@ fn default_image_std() -> Vec<f32> {
 impl ImageProcessor {
     pub fn from_pretrained(clip_id: &str) -> Result<Self> {
         let api = Api::new().map_err(|e| candle::Error::Msg(e.to_string()))?;
-        let api = api.model(clip_id.to_string());
+        let api = api.model(clip_id);
         let config_filename = api
             .get("preprocessor_config.json")
             .map_err(|e| candle::Error::Msg(e.to_string()))?;

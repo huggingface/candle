@@ -16,9 +16,9 @@ use candle_transformers::models::rwkv_v7::{
 };
 
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 
 const EOS_TOKEN_ID: u32 = 261;
 
@@ -623,17 +623,19 @@ fn main() -> Result<()> {
     }
 
     let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        args.model_id
-            .unwrap_or_else(|| args.which.model_id().to_string()),
-        RepoType::Model,
-        args.revision
-            .unwrap_or_else(|| args.which.revision().to_string()),
-    ));
+    let repo = api
+        .model(
+            args.model_id
+                .unwrap_or_else(|| args.which.model_id().to_string()),
+        )
+        .with_revision(
+            args.revision
+                .unwrap_or_else(|| args.which.revision().to_string()),
+        );
     let tokenizer = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .model("lmz/candle-rwkv".to_string())
+            .model("lmz/candle-rwkv")
             .get("rwkv_vocab_v20230424.json")?,
     };
     let config_filename = match (&args.config_file, args.which.is_v7()) {
@@ -652,15 +654,9 @@ fn main() -> Result<()> {
                     anyhow::bail!("quantized RWKV v7 models are not yet supported");
                 }
                 vec![match args.which {
-                    Which::World1b5 => api
-                        .model("lmz/candle-rwkv".to_string())
-                        .get("world1b5-q4k.gguf")?,
-                    Which::World3b => api
-                        .model("lmz/candle-rwkv".to_string())
-                        .get("world3b-q4k.gguf")?,
-                    Which::Eagle7b => api
-                        .model("lmz/candle-rwkv".to_string())
-                        .get("eagle7b-q4k.gguf")?,
+                    Which::World1b5 => api.model("lmz/candle-rwkv").get("world1b5-q4k.gguf")?,
+                    Which::World3b => api.model("lmz/candle-rwkv").get("world3b-q4k.gguf")?,
+                    Which::Eagle7b => api.model("lmz/candle-rwkv").get("eagle7b-q4k.gguf")?,
                     Which::World6_1b6 => repo.get("rwkv-6-world-1b6-q4k.gguf")?,
                     _ => unreachable!(),
                 }]

@@ -6,8 +6,16 @@ on:
 
 name: Continuous integration
 
+env:
+  # Incremental compilation would just be overhead, so we can disable it entirely.
+  CARGO_INCREMENTAL: 0
+
+permissions: {}
+
 jobs:
   check:
+    permissions:
+      contents: read
     name: Check
     runs-on: ${{ matrix.os }}
     strategy:
@@ -15,36 +23,43 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04, windows-latest, macOS-latest, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
       - name: Remove cargo config (macOS ring crate fix)
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          key: ${{ matrix.os }}
+          # Save only from main
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run macos with metal
-        if: matrix.os == 'macOS-latest' 
-        run: cargo check --workspace --features metal
+        if: matrix.os == 'macOS-latest'
+        run: cargo check --workspace --all-targets --features metal
 
       - name: Run normal cpu
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'
-        run: cargo check --workspace
+        run: cargo check --workspace --all-targets
 
       - name: Run with avx2
         if: matrix.os == 'ubuntu-24.04'
         run: |
           export RUSTFLAGS="-C target-feature=avx2"
-          cargo check --workspace 
+          cargo check --workspace --all-targets
 
       - name: Run with arm neon
         if: matrix.os == 'ubuntu-24.04-arm'
         run: |
           export RUSTFLAGS="-C target-feature=neon"
-          cargo check --workspace 
+          cargo check --workspace --all-targets
 
   test:
+    permissions:
+      contents: read
     name: Test Suite
     runs-on: ${{ matrix.os }}
     strategy:
@@ -59,14 +74,19 @@ jobs:
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           df -h
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
       - name: Remove cargo config (macOS ring crate fix)
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          key: ${{ matrix.os }}
+          # Save only from main
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install lld (Linux only)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y lld
@@ -74,28 +94,38 @@ jobs:
         if: runner.os == 'Linux'
         env:
           RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
-        run: cargo test --workspace
+        run: |
+          cargo test --workspace --lib --bins --tests
+          cargo test --workspace --doc
       - name: Run tests (Windows & macOS)
         if: runner.os != 'Linux'
-        run: cargo test --workspace
+        run: |
+          cargo test --workspace --lib --bins --tests
+          cargo test --workspace --doc
 
   fmt:
+    permissions:
+      contents: read
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249  # stable
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
   clippy:
+    permissions:
+      contents: read
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249  # stable
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --tests --examples --benches -- -D warnings
- 

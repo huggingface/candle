@@ -149,6 +149,8 @@ cargo run --example quantized --release
 
 In order to use **CUDA** add `--features cuda` to the example command line. If
 you have cuDNN installed, use `--features cudnn` for even more speedups.
+The opt-in `cutile` feature supports writing JIT-compiled CUDA kernels in Rust;
+see the [cuTile guide](./candle-book/src/guide/cutile.md) for setup and interop details.
 
 There are also some wasm examples for whisper and
 [llama2.c](https://github.com/karpathy/llama2.c). You can either build them with

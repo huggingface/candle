@@ -82,6 +82,30 @@ fn broadcast_matmul(device: &Device) -> Result<()> {
     Ok(())
 }
 
+// A stride-zero batch dim on the lhs, as produced by `broadcast_as`, must give the same
+// result as materializing that batch. The batches of rhs cannot be folded into the columns
+// of one matmul the way a batch-invariant rhs folds into the rows, so this exercises the
+// per-batch loop.
+fn broadcast_matmul_stride_zero_lhs(device: &Device) -> Result<()> {
+    for (b, m, n, k) in [(32, 32, 32, 32), (3, 1, 2, 5), (4, 2, 3, 1), (2, 5, 1, 3)] {
+        let lhs = Tensor::randn(0f32, 1f32, (1, m, k), device)?;
+        let rhs = Tensor::randn(0f32, 1f32, (b, k, n), device)?;
+
+        let out = lhs.broadcast_as((b, m, k))?.matmul(&rhs)?;
+        assert_eq!(out.dims(), &[b, m, n]);
+
+        // Every batch is the same lhs against that batch of rhs.
+        let lhs = lhs.i(0)?;
+        for idx in 0..b {
+            let diff = (out.i(idx)? - lhs.matmul(&rhs.i(idx)?)?)?
+                .sqr()?
+                .sum_all()?;
+            assert!(diff.to_vec0::<f32>()? < 1e-6, "batch {idx} differs");
+        }
+    }
+    Ok(())
+}
+
 fn zero_matmul(device: &Device) -> Result<()> {
     let lhs = Tensor::zeros((2, 0), DType::F32, device)?;
     let rhs = Tensor::zeros((0, 3), DType::F32, device)?;
@@ -149,6 +173,35 @@ fn zero_matmul_device_validation(device: &Device) -> Result<()> {
     Ok(())
 }
 
+// A rank-2 rhs is broadcast over the batch dims only, which `broadcast_matmul` folds into a
+// single 2D matmul instead of copying the rhs. Check the folded path against the per-batch
+// products it stands for, contiguous lhs (folded) and non-contiguous lhs (fallback) alike.
+fn broadcast_matmul_rank2_rhs(device: &Device) -> Result<()> {
+    let rhs = Tensor::randn(0f32, 1f32, (5, 2), device)?;
+    for lhs in [
+        Tensor::randn(0f32, 1f32, (3, 4, 5), device)?,
+        Tensor::randn(0f32, 1f32, (3, 6, 4, 5), device)?,
+        Tensor::randn(0f32, 1f32, (1, 1, 5), device)?,
+        Tensor::randn(0f32, 1f32, (3, 5, 4), device)?.transpose(1, 2)?,
+    ] {
+        let out = lhs.broadcast_matmul(&rhs)?;
+        let mut dims = lhs.dims().to_vec();
+        let n = dims.len();
+        dims[n - 1] = 2;
+        assert_eq!(out.dims(), dims.as_slice());
+        // Same product, computed the way the doc comment describes it.
+        let batch: usize = lhs.dims()[..n - 2].iter().product();
+        let (m, k) = (lhs.dims()[n - 2], lhs.dims()[n - 1]);
+        let flat = lhs.reshape((batch, m, k))?;
+        let out = out.reshape((batch, m, 2))?;
+        for b in 0..batch {
+            let diff = (out.i(b)? - flat.i(b)?.matmul(&rhs)?)?.sqr()?.sum_all()?;
+            assert!(diff.to_vec0::<f32>()? < 1e-6);
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn tensor_dot() -> Result<()> {
     let lhs = Tensor::new(&[1., 2., 3.], &Device::Cpu)?;
@@ -210,6 +263,12 @@ test_device!(
     broadcast_matmul_metal
 );
 test_device!(
+    broadcast_matmul_stride_zero_lhs,
+    broadcast_matmul_stride_zero_lhs_cpu,
+    broadcast_matmul_stride_zero_lhs_gpu,
+    broadcast_matmul_stride_zero_lhs_metal
+);
+test_device!(
     zero_matmul,
     zero_matmul_cpu,
     zero_matmul_gpu,
@@ -226,6 +285,12 @@ test_device!(
     zero_matmul_device_validation_cpu,
     zero_matmul_device_validation_gpu,
     zero_matmul_device_validation_metal
+);
+test_device!(
+    broadcast_matmul_rank2_rhs,
+    broadcast_matmul_rank2_rhs_cpu,
+    broadcast_matmul_rank2_rhs_gpu,
+    broadcast_matmul_rank2_rhs_metal
 );
 test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal);
 test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal);

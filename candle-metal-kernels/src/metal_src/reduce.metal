@@ -82,7 +82,7 @@ METAL_FUNC IndexT get_strided_idx_fallback(
 
     IndexT strided_i = 0;
     for (IndexT d = D; d < num_dims; d++) {
-        IndexT dim_idx = num_dims - 1 - d;
+        IndexT dim_idx = num_dims - 1 - (d - D);
         IndexT dim = dims[dim_idx];
         strided_i += (idx % dim) * strides[dim_idx];
         idx /= dim;

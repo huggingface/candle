@@ -596,12 +596,10 @@ fn main() -> Result<()> {
 
     // Load model from HuggingFace
     println!("Loading model from {}...", args.model_id);
-    let api = hf_hub::api::sync::Api::new()?;
-    let repo = api.repo(hf_hub::Repo::with_revision(
-        args.model_id.clone(),
-        hf_hub::RepoType::Model,
-        args.revision.clone(),
-    ));
+    let api = candle_examples::hub::Api::new()?;
+    let repo = api
+        .model(args.model_id.clone())
+        .with_revision(args.revision.clone());
 
     // Load config
     let config_file = repo.get("config.json")?;

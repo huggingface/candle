@@ -10,10 +10,10 @@ use clap::Parser;
 use candle_transformers::models::deepseek2::{DeepSeekV2, DeepSeekV2Config};
 
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -237,11 +237,7 @@ fn main() -> Result<()> {
             Which::V2Chat => "deepseek-ai/DeepSeek-V2-Chat".to_string(),
         },
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model(model_id).with_revision(args.revision);
     let tokenizer_filename = repo.get("tokenizer.json")?;
     let filenames = candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
     println!("retrieved the files in {:?}", start.elapsed());

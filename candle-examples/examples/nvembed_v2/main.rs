@@ -6,10 +6,10 @@ extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
 use candle::{DType, IndexOp, Shape, Tensor, D};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::models::nvembed_v2::model::Model;
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{PaddingDirection, PaddingParams, Tokenizer, TruncationParams};
 
 #[derive(Parser, Debug)]
@@ -50,7 +50,7 @@ impl Args {
         };
 
         let api = Api::new()?;
-        let repo = api.repo(Repo::new(model_name.to_string(), RepoType::Model));
+        let repo = api.model(&model_name);
 
         let model_files = match &self.model_files {
             Some(files) => files

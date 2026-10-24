@@ -33,8 +33,8 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("lmz/candle-convmixer".into());
+            let api = candle_examples::hub::Api::new()?;
+            let api = api.model("lmz/candle-convmixer");
             api.get("convmixer_1024_20_ks9_p14.safetensors")?
         }
         Some(model) => model.into(),

@@ -158,11 +158,11 @@ struct Model {
 }
 
 fn load_snac(device: &Device) -> Result<SnacModel> {
-    let api = hf_hub::api::sync::Api::new()?;
-    let m = api.model("hubertsiuzdak/snac_24khz".to_string());
+    let api = candle_examples::hub::Api::new()?;
+    let m = api.model("hubertsiuzdak/snac_24khz");
     let config = m.get("config.json")?;
     let config: SnacConfig = serde_json::from_reader(std::fs::File::open(config)?)?;
-    let m = api.model("lmz/candle-snac".to_string());
+    let m = api.model("lmz/candle-snac");
     let model = m.get("snac_24khz.safetensors")?;
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, device)? };
     let model = SnacModel::new(&config, vb)?;
@@ -172,7 +172,7 @@ fn load_snac(device: &Device) -> Result<SnacModel> {
 impl Model {
     fn load(args: Args) -> Result<Self> {
         let start = std::time::Instant::now();
-        let api = hf_hub::api::sync::Api::new()?;
+        let api = candle_examples::hub::Api::new()?;
         let model_id = match args.model_id {
             Some(model_id) => model_id.to_string(),
             None => match args.which {
@@ -183,11 +183,7 @@ impl Model {
             Some(r) => r,
             None => "main".to_string(),
         };
-        let repo = api.repo(hf_hub::Repo::with_revision(
-            model_id,
-            hf_hub::RepoType::Model,
-            revision,
-        ));
+        let repo = api.model(model_id).with_revision(revision);
         let model_files = match args.model_file {
             Some(m) => vec![m.into()],
             None => match args.which {
@@ -307,7 +303,8 @@ impl Model {
         let mut codes0 = vec![];
         let mut codes1 = vec![];
         let mut codes2 = vec![];
-        for audio_tokens in audio_tokens.chunks_exact(7) {
+        let (audio_token_chunks, _) = audio_tokens.as_chunks::<7>();
+        for audio_tokens in audio_token_chunks {
             codes0.push(audio_tokens[0]);
             for i in [1, 4] {
                 codes1.push(audio_tokens[i]);

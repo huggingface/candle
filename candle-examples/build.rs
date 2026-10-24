@@ -1,6 +1,6 @@
 #![allow(unused)]
+#[cfg(feature = "buildtime-download")]
 mod buildtime_downloader;
-use buildtime_downloader::download_model;
 
 struct KernelDirectories {
     kernel_glob: &'static str,
@@ -44,6 +44,7 @@ fn main() {
     // option_env! automatically detects changes in the env var and trigger rebuilds correctly.
     // Example value:
     // CANDLE_BUILDTIME_MODEL_REVISION="sentence-transformers/all-MiniLM-L6-v2:c9745ed1d9f207416be6d2e6f8de32d1f16199bf"
+    #[cfg(feature = "buildtime-download")]
     if let Some(model_rev) = core::option_env!("CANDLE_BUILDTIME_MODEL_REVISION") {
         buildtime_downloader::download_model(model_rev).expect("Model download failed!");
     }

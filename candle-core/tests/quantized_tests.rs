@@ -1276,6 +1276,62 @@ quantized_matmul!(
     quantized_matmul_q8_0_metal,
     GgmlDType::Q8_0
 );
+
+#[test]
+fn quantized_matmul_q4_0_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 4, 256), GgmlDType::Q4_0)
+}
+
+#[test]
+fn quantized_matmul_q8_0_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 4, 256), GgmlDType::Q8_0)
+}
+
+#[test]
+fn quantized_matmul_q6k_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 8, 256), GgmlDType::Q6K)
+}
+
+#[test]
+fn quantized_matmul_q5k_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 8, 256), GgmlDType::Q5K)
+}
+
+#[test]
+fn quantized_matmul_q4k_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 8, 256), GgmlDType::Q4K)
+}
+
+#[test]
+fn quantized_matmul_q4k_repacked_gemv_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 1, 8, 256), GgmlDType::Q4K)
+}
+
+#[test]
+fn quantized_matmul_q4_0_repacked_gemv_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 1, 4, 256), GgmlDType::Q4_0)
+}
+
+#[test]
+fn quantized_matmul_q5k_repacked_gemv_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 1, 8, 256), GgmlDType::Q5K)
+}
+
+#[test]
+fn quantized_matmul_q6k_repacked_gemv_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 1, 8, 256), GgmlDType::Q6K)
+}
+
+#[test]
+fn quantized_matmul_q8_0_repacked_gemv_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 1, 4, 256), GgmlDType::Q8_0)
+}
+
+#[test]
+fn quantized_matmul_q4k_repack_fallback_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 3, 8, 256), GgmlDType::Q4K)
+}
+
 quantized_matmul!(
     quantized_matmul_q8_1_bis,
     quantized_matmul_q8_1_cpu,
@@ -1513,3 +1569,204 @@ test_device!(
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cuda,
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
 );
+
+// Repacked aarch64 kernels must agree with the dequantized reference across the m tiers
+// that select different paths: 1 (gemv), 4/512 (tiled), 3 (per-row gemv), 23 (tiled + gemv tail).
+#[test]
+fn qmatmul_repack_matches_reference_across_m() -> Result<()> {
+    let dev = Device::Cpu;
+    let (k, n) = (512, 256);
+    for dtype in [
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+        GgmlDType::Q8_0,
+    ] {
+        let weight = Tensor::rand(-1f32, 1f32, (n, k), &dev)?;
+        let qtensor = quantized::QTensor::quantize(&weight, dtype)?;
+        let wref = qtensor.dequantize(&dev)?;
+        let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
+        for m in [1usize, 3, 4, 8, 23, 512] {
+            let lhs = Tensor::rand(-1f32, 1f32, (m, k), &dev)?;
+            let got = matmul.forward(&lhs)?;
+            let want = lhs.matmul(&wref.t()?)?;
+            let diff = (&got - &want)?.abs()?.max_all()?.to_scalar::<f32>()?;
+            let scale = want.abs()?.max_all()?.to_scalar::<f32>()?.max(1.0);
+            assert!(
+                diff / scale < 5e-2,
+                "{dtype:?} m={m}: rel diff {} too large",
+                diff / scale
+            );
+        }
+    }
+    Ok(())
+}
+
+// Indexed (MoE) gemv must match dequantize + per-pair matmul for stacked expert weights.
+// aarch64 only: x86 has no indexed path yet and falls back to dequantize-and-gather.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn indexed_gemv_matches_reference() -> Result<()> {
+    let dev = Device::Cpu;
+    let (n_experts, n_out, k) = (8usize, 64usize, 512usize);
+    for dtype in [GgmlDType::Q4K, GgmlDType::Q6K, GgmlDType::Q8_0] {
+        let w = Tensor::rand(-1f32, 1f32, (n_experts, n_out, k), &dev)?;
+        let qt = quantized::QTensor::quantize(&w, dtype)?;
+        let wref = qt.dequantize(&dev)?;
+        // 24x4 = 96 pairs exercises the bucketed per-expert matmul path; skewed ids
+        // land some experts with dozens of rows and others with none
+        for (batch, topk, x_t) in [(3usize, 4usize, 1usize), (2, 2, 2), (24, 4, 1)] {
+            let x = Tensor::rand(-1f32, 1f32, (batch, x_t, k), &dev)?;
+            let ids_v: Vec<u32> = (0..batch * topk)
+                .map(|i| ((i * i * 3 + 1) % n_experts) as u32)
+                .collect();
+            let ids = Tensor::from_vec(ids_v.clone(), (batch, topk), &dev)?;
+            let got = qt.indexed_gemv(&x, &ids)?.expect("indexed path supported");
+            for b in 0..batch {
+                for t in 0..topk {
+                    let e = ids_v[b * topk + t] as usize;
+                    let xr = x
+                        .narrow(0, b, 1)?
+                        .narrow(1, t.min(x_t - 1), 1)?
+                        .squeeze(0)?;
+                    let we = wref.narrow(0, e, 1)?.squeeze(0)?;
+                    let want = xr.matmul(&we.t()?)?.squeeze(0)?;
+                    let g = got
+                        .narrow(0, b, 1)?
+                        .narrow(1, t, 1)?
+                        .squeeze(0)?
+                        .squeeze(0)?;
+                    let diff = (&g - &want)?.abs()?.max_all()?.to_scalar::<f32>()?;
+                    let scale = want.abs()?.max_all()?.to_scalar::<f32>()?.max(1.0);
+                    assert!(
+                        diff / scale < 5e-2,
+                        "{dtype:?} b={b} t={t}: rel diff {}",
+                        diff / scale
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn bf16_lhs_matmul_matches_f32() -> Result<()> {
+    let dev = Device::Cpu;
+    let (n, k) = (64usize, 512usize);
+    for m in [1usize, 4, 9] {
+        let w = Tensor::rand(-1f32, 1f32, (n, k), &dev)?;
+        let qt = quantized::QTensor::quantize(&w, GgmlDType::Q4K)?;
+        let mm = quantized::QMatMul::from_qtensor(qt)?;
+        let x = Tensor::rand(-1f32, 1f32, (1, m, k), &dev)?;
+        let y32 = mm.forward(&x)?;
+        let ybf = mm
+            .forward(&x.to_dtype(DType::BF16)?)?
+            .to_dtype(DType::F32)?;
+        let diff = (&y32 - &ybf)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let scale = y32.abs()?.max_all()?.to_scalar::<f32>()?.max(1.0);
+        assert!(diff / scale < 3e-2, "m={m}: rel diff {}", diff / scale);
+    }
+    Ok(())
+}
+
+// The batched CPU matmul must produce exactly the same values as running the input one row at a
+// time: both paths call the same `vec_dot` kernels per output element, only the loop order differs.
+// `n` is kept away from the repacked-kernel shapes (multiples of 4/8/16) so that this exercises the
+// generic `k_quants::matmul` on every architecture, and `CustomOp1` is applied directly so that the
+// float weight types are not dequantized by `QMatMul`.
+#[test]
+fn qmatmul_batched_rows_match_single_row_cpu() -> Result<()> {
+    let dev = Device::Cpu;
+    let (n, k) = (23usize, 512usize);
+    for dtype in [
+        GgmlDType::F32,
+        GgmlDType::F16,
+        GgmlDType::BF16,
+        GgmlDType::Q4_0,
+        GgmlDType::Q4_1,
+        GgmlDType::Q5_0,
+        GgmlDType::Q5_1,
+        GgmlDType::Q8_0,
+        GgmlDType::Q8_1,
+        GgmlDType::Q2K,
+        GgmlDType::Q3K,
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+        GgmlDType::Q8K,
+    ] {
+        let w = Tensor::rand(-1f32, 1f32, (n, k), &dev)?;
+        let qtensor = quantized::QTensor::quantize(&w, dtype)?;
+        for m in [2usize, 3, 4, 7, 8, 9, 16, 17, 33, 64] {
+            let lhs = Tensor::rand(-1f32, 1f32, (m, k), &dev)?;
+            let batched = lhs.apply_op1_no_bwd(&qtensor)?.to_vec2::<f32>()?;
+            for (row_idx, batched_row) in batched.iter().enumerate() {
+                let row = lhs.narrow(0, row_idx, 1)?;
+                let single = row.apply_op1_no_bwd(&qtensor)?.to_vec2::<f32>()?;
+                assert_eq!(
+                    batched_row, &single[0],
+                    "{dtype:?} m={m}: row {row_idx} differs from the single-row result"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+// `k_quants::matmul` is a safe fn that writes `dst` through a raw pointer from the pool threads, so
+// an undersized `dst` has to be rejected up front rather than written out of bounds.
+#[test]
+#[should_panic(expected = "dst too small")]
+fn qmatmul_cpu_rejects_undersized_dst() {
+    let (m, k, n) = (2, 32, 4);
+    let lhs = vec![1f32; m * k];
+    let rhs = vec![1f32; k * n];
+    let mut rhs_t = vec![k_quants::BlockQ4_0::zeros(); n * k / 32];
+    k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t);
+    let mut dst = vec![0f32; n];
+    let _ = k_quants::matmul((m, k, n), &lhs, &rhs_t, &mut dst);
+}
+
+// Timing harness for the CPU quantized matmul prefill path, not a correctness test. Run with:
+// cargo test -p candle-core --release --test quantized_tests -- --ignored --nocapture bench_qmatmul_prefill_cpu
+#[test]
+#[ignore]
+fn bench_qmatmul_prefill_cpu() -> Result<()> {
+    let dev = Device::Cpu;
+    // (dtype, n, k, batch sizes). n = 2040 and n = 8184 are not multiples of 16, which keeps Q4K
+    // and Q8_0 on the generic path on x86 even when the repacked kernels are available; the
+    // 8184 x 8192 weights (38 MB / 71 MB) do not fit in a typical LLC.
+    let cases: [(GgmlDType, usize, usize, &[usize]); 8] = [
+        (GgmlDType::Q4K, 2048, 2048, &[1, 32, 128, 512]),
+        (GgmlDType::Q8_0, 2048, 2048, &[1, 32, 128, 512]),
+        (GgmlDType::Q4K, 2040, 2048, &[1, 32, 128, 512]),
+        (GgmlDType::Q4_0, 2048, 2048, &[1, 32, 128, 512]),
+        (GgmlDType::Q5K, 2048, 2048, &[1, 32, 128, 512]),
+        (GgmlDType::Q2K, 2048, 2048, &[1, 32, 128, 512]),
+        (GgmlDType::Q4K, 8184, 8192, &[1, 32, 128]),
+        (GgmlDType::Q8_0, 8184, 8192, &[1, 32, 128]),
+    ];
+    for (dtype, n, k, ms) in cases {
+        let w = Tensor::rand(-1f32, 1f32, (n, k), &dev)?;
+        let matmul = quantized::QMatMul::from_qtensor(quantized::QTensor::quantize(&w, dtype)?)?;
+        for &m in ms {
+            let lhs = Tensor::rand(-1f32, 1f32, (m, k), &dev)?;
+            for _ in 0..3 {
+                std::hint::black_box(matmul.forward(&lhs)?);
+            }
+            let iters = (4096 / m).clamp(4, 200);
+            let start = std::time::Instant::now();
+            for _ in 0..iters {
+                std::hint::black_box(matmul.forward(&lhs)?);
+            }
+            let secs = start.elapsed().as_secs_f64() / iters as f64;
+            println!(
+                "{dtype:?} n={n} k={k} m={m:>4}: {:>9.3} ms/call {:>9.0} rows/s",
+                secs * 1e3,
+                m as f64 / secs
+            );
+        }
+    }
+    Ok(())
+}

@@ -1,10 +1,10 @@
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_nn::VarBuilder;
 use candle_transformers::models::colpali::Model;
 use candle_transformers::models::{colpali, paligemma};
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use image::DynamicImage;
 use pdf2image::{RenderOptionsBuilder, PDF};
 use tokenizers::Tokenizer;
@@ -107,7 +107,7 @@ impl PageRetriever {
                 .images_to_tensor(batch, self.config.vision_config.image_size)?
                 .to_device(&self.device)?
                 .to_dtype(dtype)?;
-            let dummy_input = dummy_input.repeat((page_images.dims()[0], 0))?;
+            let dummy_input = dummy_input.repeat((page_images.dims()[0], 1))?;
 
             let image_embeddings = self.model.forward_images(&page_images, &dummy_input)?;
             let text_embeddings = self.model.forward_text(&input)?;
@@ -200,20 +200,13 @@ fn main() -> Result<()> {
         Some(model_id) => model_id.to_string(),
         None => "vidore/colpali-v1.2-merged".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model(model_id).with_revision(args.revision);
 
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .repo(Repo::with_revision(
-                "vidore/colpali".to_string(),
-                RepoType::Model,
-                "main".to_string(),
-            ))
+            .model("vidore/colpali".to_string())
+            .with_revision("main".to_string())
             .get("tokenizer.json")?,
     };
 

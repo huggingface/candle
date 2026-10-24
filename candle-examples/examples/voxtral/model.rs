@@ -1,5 +1,4 @@
-use std::path::PathBuf;
-
+use super::download;
 use anyhow::{Context, Error, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use candle::{utils, DType, Device, Tensor};
@@ -9,12 +8,9 @@ use candle_transformers::models::voxtral::{
     VoxtralCache, VoxtralConfig, VoxtralEncoderConfig, VoxtralForConditionalGeneration,
     VoxtralGenerationConfig, VoxtralLlamaConfig as LlamaConfig,
 };
-use serde_json;
-
 use std::io::Cursor;
+use std::path::PathBuf;
 use tekken::Tekkenizer;
-
-use super::download;
 
 const SAMPLE_RATE: u32 = 16000;
 
@@ -110,7 +106,7 @@ impl VoxtralModel {
         cursor.read_f32_into::<LittleEndian>(&mut mel_filters)?;
 
         let audio_features =
-            voxtral::extract_features(&padded_audio, &mel_filters, &self.device()).unwrap();
+            voxtral::extract_features(&padded_audio, &mel_filters, self.device()).unwrap();
 
         let (result, tokens) = transcribe_with_voxtral(
             &self.model,

@@ -11,10 +11,10 @@ use candle_transformers::models::quantized_stable_lm::Model as QStableLM;
 use candle_transformers::models::stable_lm::{Config, Model as StableLM};
 
 use candle::{DType, Device, Tensor};
+use candle_examples::hub::Api;
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 enum Model {
@@ -232,11 +232,7 @@ fn main() -> Result<()> {
         },
     };
 
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model(model_id).with_revision(args.revision);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("tokenizer.json")?,
@@ -250,13 +246,13 @@ fn main() -> Result<()> {
             (Which::V1Orig | Which::V1, true) => vec![repo.get("model-q4k.gguf")?],
             (Which::V2, true) => {
                 let gguf = api
-                    .model("lmz/candle-stablelm".to_string())
+                    .model("lmz/candle-stablelm")
                     .get("stablelm-2-1_6b-q4k.gguf")?;
                 vec![gguf]
             }
             (Which::V2Zephyr, true) => {
                 let gguf = api
-                    .model("lmz/candle-stablelm".to_string())
+                    .model("lmz/candle-stablelm")
                     .get("stablelm-2-zephyr-1_6b-q4k.gguf")?;
                 vec![gguf]
             }

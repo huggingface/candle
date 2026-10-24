@@ -80,13 +80,9 @@ fn main() -> anyhow::Result<()> {
 pub fn load_weights(model: Option<String>, device: &Device) -> anyhow::Result<nn::VarBuilder<'_>> {
     let model_file = match model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let repo = hf_hub::Repo::with_revision(
-                "OFA-Sys/chinese-clip-vit-base-patch16".to_string(),
-                hf_hub::RepoType::Model,
-                "refs/pr/3".to_string(),
-            );
-            let api = api.repo(repo);
+            let api = candle_examples::hub::Api::new()?
+                .model("OFA-Sys/chinese-clip-vit-base-patch16")
+                .with_revision("refs/pr/3");
             api.get("model.safetensors")?
         }
         Some(model) => model.into(),
@@ -97,13 +93,9 @@ pub fn load_weights(model: Option<String>, device: &Device) -> anyhow::Result<nn
 
 pub fn load_tokenizer() -> anyhow::Result<Tokenizer> {
     let tokenizer_file = {
-        let api = hf_hub::api::sync::Api::new()?;
-        let repo = hf_hub::Repo::with_revision(
-            "OFA-Sys/chinese-clip-vit-base-patch16".to_string(),
-            hf_hub::RepoType::Model,
-            "refs/pr/3".to_string(),
-        );
-        let api = api.repo(repo);
+        let api = candle_examples::hub::Api::new()?
+            .model("OFA-Sys/chinese-clip-vit-base-patch16")
+            .with_revision("refs/pr/3");
         api.get("tokenizer.json")?
     };
 
