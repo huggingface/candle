@@ -11706,6 +11706,52 @@ impl VulkanStorage {
         };
         Ok((buf, Some(f32)))
     }
+    /// Return an f32 subbuffer view of `s` for the `decode_attention`
+    /// kernel's k/v contract: a `(heads, rows, cols)` layout with
+    /// contiguous rows (`stride(2) == 1`, `stride(1) == cols`) and a
+    /// uniform head stride (`stride(0) == kv_stride`,
+    /// `kv_stride >= rows * cols`). The returned subbuffer spans
+    /// `[start_offset, start_offset + (heads - 1) * kv_stride + rows *
+    /// cols)`; the kernel re-derives the row offsets from `kv_stride`,
+    /// so the tail padding of a pre-allocated cache is never read.
+    fn f32_head_rows_view(
+        &self,
+        s: &VulkanStorage,
+        l: &Layout,
+        kv_stride: usize,
+    ) -> Result<Subbuffer<[f32]>> {
+        if s.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "fused_decode_attention: k/v must be f32".to_string().into(),
+            ));
+        }
+        let dims = l.dims();
+        if dims.len() != 3 {
+            return Err(Error::Vulkan(
+                "fused_decode_attention: k/v must be 3-d".to_string().into(),
+            ));
+        }
+        let (heads, rows, cols) = (dims[0], dims[1], dims[2]);
+        let strides = l.stride();
+        if strides[2] != 1
+            || strides[1] != cols
+            || strides[0] != kv_stride
+            || kv_stride < rows * cols
+        {
+            return Err(Error::Vulkan(
+                "fused_decode_attention: k/v must have contiguous rows \
+                 (strides (kv_stride, cols, 1))"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let start = l.start_offset();
+        let len = heads.saturating_sub(1) * kv_stride + rows * cols;
+        match &s.buffer {
+            VulkanStorageBuffer::F32(b) => Ok(b.clone().slice(start as u64..(start + len) as u64)),
+            _ => Err(Error::Vulkan("dtype is F32".to_string().into())),
+        }
+    }
 
     fn alloc_params(&self, params: Vec<u64>) -> Result<Subbuffer<[u64]>> {
         let params_buf = Buffer::from_iter(
@@ -11883,10 +11929,11 @@ impl VulkanStorage {
     }
 
     /// Fused single-query decode attention: `self` is q `(num_heads, head_dim)`
-    /// f32, `k`/`v` are `(num_kv_heads, kv_len, head_dim)` f32, contiguous.
-    /// Returns the `(num_heads, head_dim)` f32 attention output. The GQA group
-    /// for query head `h` is `h * num_kv_heads / num_heads` (matching candle's
-    /// `repeat_kv`).
+    /// f32, `k`/`v` are `(num_kv_heads, kv_len, head_dim)` f32 with
+    /// contiguous rows (strides `(kv_stride, head_dim, 1)`, `kv_stride >=
+    /// kv_len * head_dim`). Returns the `(num_heads, head_dim)` f32
+    /// attention output. The GQA group for query head `h` is
+    /// `h * num_kv_heads / num_heads` (matching candle's `repeat_kv`).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn fused_decode_attention(
         &self,
@@ -11900,6 +11947,7 @@ impl VulkanStorage {
         num_kv_heads: usize,
         head_dim: usize,
         kv_len: usize,
+        kv_stride: usize,
     ) -> Result<Self> {
         use candle_vulkan_kernels::{
             call_decode_attention_slang, DecodeAttentionParams, DECODE_ATTENTION_CHUNK,
@@ -11928,14 +11976,15 @@ impl VulkanStorage {
             }
         };
         let (q_buf, q_keep) = self.f32_view(self, l)?;
-        let (k_buf, k_keep) = self.f32_view(k, k_l)?;
-        let (v_buf, v_keep) = self.f32_view(v, v_l)?;
+        let k_buf = self.f32_head_rows_view(k, k_l, kv_stride)?;
+        let v_buf = self.f32_head_rows_view(v, v_l, kv_stride)?;
         let params = DecodeAttentionParams {
             scale,
             num_heads: num_heads as u64,
             num_kv_heads: num_kv_heads as u64,
             head_dim: head_dim as u64,
             kv_len: kv_len as u64,
+            kv_stride: kv_stride as u64,
         };
         let kernels = self.device.kernels();
         let (q_buf, k_buf, v_buf, scratch_buf, out_buf) =
@@ -11955,7 +12004,7 @@ impl VulkanStorage {
             )
             .map_err(|e| e.to_string())
         })?;
-        drop((q_keep, k_keep, v_keep));
+        drop(q_keep);
         Ok(out)
     }
     pub fn rope_int(

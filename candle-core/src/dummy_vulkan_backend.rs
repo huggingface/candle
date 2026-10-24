@@ -28,6 +28,7 @@ impl VulkanStorage {
         _num_kv_heads: usize,
         _head_dim: usize,
         _kv_len: usize,
+        _kv_stride: usize,
     ) -> Result<Self> {
         Err(Error::NotCompiledWithVulkanSupport)
     }

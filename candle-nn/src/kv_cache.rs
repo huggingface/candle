@@ -149,6 +149,84 @@ impl KvCache {
         self.v.reset();
     }
 }
+/// KV cache pre-allocated for `max_seq_len` rows on the target device.
+///
+/// The full `(b, num_kv_heads, max_seq_len, head_dim)` k and v tensors are
+/// allocated once in [`Self::new`]; every [`Self::append`] copies the
+/// incoming rows into the cache in place (a single one-row copy during
+/// decode) and returns `narrow` views of the accumulated k/v. Unlike
+/// [`ConcatKvCache`] there is no growing `Tensor::cat` and no per-token
+/// reallocation, so long decodes do not pay O(n^2) copy traffic or
+/// per-token pool churn.
+///
+/// The returned views keep the cache's row stride (`max_seq_len *
+/// head_dim`); the Vulkan `fused_decode_attention` kernel consumes that
+/// layout directly (via its `kv_stride`), other consumers may
+/// materialize the views with `contiguous()`.
+#[derive(Debug, Clone)]
+pub struct PreallocKvCache {
+    k: Tensor,
+    v: Tensor,
+    seq_len: usize,
+    max_seq_len: usize,
+}
+
+impl PreallocKvCache {
+    pub fn new(
+        b: usize,
+        num_kv_heads: usize,
+        max_seq_len: usize,
+        head_dim: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Self> {
+        let shape = (b, num_kv_heads, max_seq_len, head_dim);
+        Ok(Self {
+            k: Tensor::zeros(shape, dtype, device)?,
+            v: Tensor::zeros(shape, dtype, device)?,
+            seq_len: 0,
+            max_seq_len,
+        })
+    }
+
+    /// Append `l` rows (`k` and `v` have shape
+    /// `(b, num_kv_heads, l, head_dim)`) and return the accumulated
+    /// `(b, num_kv_heads, seq_len, head_dim)` views of the cache.
+    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        let l = k.dim(2)?;
+        if self.seq_len + l > self.max_seq_len {
+            candle::bail!(
+                "PreallocKvCache overflow: seq_len {} plus {} exceeds max_seq_len {}",
+                self.seq_len,
+                l,
+                self.max_seq_len
+            );
+        }
+        // slice_set copies the rows into the cache in place (a one-row
+        // copy during decode) and requires contiguous operands.
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
+        self.k.slice_set(&k, 2, self.seq_len)?;
+        self.v.slice_set(&v, 2, self.seq_len)?;
+        self.seq_len += l;
+        Ok((
+            self.k.narrow(2, 0, self.seq_len)?,
+            self.v.narrow(2, 0, self.seq_len)?,
+        ))
+    }
+
+    pub fn seq_len(&self) -> usize {
+        self.seq_len
+    }
+
+    pub fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+
+    pub fn reset(&mut self) {
+        self.seq_len = 0;
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct RotatingCache {

@@ -19,9 +19,13 @@ use candle::quantized::gguf_file;
 use candle::quantized::QTensor;
 use candle::D;
 use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle_nn::kv_cache::PreallocKvCache;
 use candle_nn::{Embedding, Module};
 
 pub const MAX_SEQ_LEN: usize = 131072; // Gemma 3 supports 128K context window
+/// Maximum number of cached positions in the pre-allocated KV cache;
+/// generation fails with a clear error past this limit.
+pub const MAX_KV_CACHE_LEN: usize = 8192;
 pub const DEFAULT_SLIDING_WINDOW_TYPE: usize = 6;
 pub const DEFAULT_ROPE_FREQUENCY: f32 = 1_000_000.;
 pub const DEFAULT_ROPE_FREQUENCY_SLIDING: f32 = 10_000.;
@@ -132,8 +136,8 @@ struct LayerWeights {
     rotary_embedding: RotaryEmbedding,
     neg_inf: Tensor,
 
-    // Cache
-    kv_cache: Option<(Tensor, Tensor)>,
+    // Cache (pre-allocated; both backends)
+    kv_cache: PreallocKvCache,
 
     // Tracing
     span_attn: tracing::Span,
@@ -207,19 +211,10 @@ impl LayerWeights {
             .rotary_embedding
             .apply_rotary_emb_qkv(&q, &k, index_pos)?;
 
-        let (k, v) = match &self.kv_cache {
-            None => (k, v),
-            Some((k_cache, v_cache)) => {
-                if index_pos == 0 {
-                    (k, v)
-                } else {
-                    let k = Tensor::cat(&[k_cache, &k], 2)?; // concat on seq dim
-                    let v = Tensor::cat(&[v_cache, &v], 2)?;
-                    (k, v)
-                }
-            }
-        };
-        self.kv_cache = Some((k.clone(), v.clone())); // update cache
+        // Pre-allocated KV cache: in-place row append (a one-row copy
+        // during decode) and strided views of the accumulated k/v; no
+        // per-token cat or reallocation.
+        let (k, v) = self.kv_cache.append(&k, &v)?;
 
         // Repeat KV for GQA
         let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
@@ -416,7 +411,14 @@ impl ModelWeights {
                 sliding_window_size,
                 rotary_embedding,
                 neg_inf: neg_inf.clone(),
-                kv_cache: None,
+                kv_cache: PreallocKvCache::new(
+                    1,
+                    head_count_kv,
+                    MAX_KV_CACHE_LEN,
+                    key_length,
+                    DType::F32,
+                    device,
+                )?,
                 span_attn,
                 span_mlp,
             })

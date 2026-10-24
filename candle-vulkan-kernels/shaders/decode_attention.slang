@@ -5,7 +5,10 @@
 //   where g = h * num_kv_heads / num_heads (GQA head -> kv-head group).
 //
 // Q: [num_heads, head_dim], K: [num_kv_heads, kv_len, head_dim],
-// V: [num_kv_heads, kv_len, head_dim] (all contiguous F32).
+// V: [num_kv_heads, kv_len, head_dim] (all F32). K and V rows are
+// contiguous (stride head_dim); consecutive heads are `kv_stride`
+// elements apart (kv_stride >= kv_len * head_dim; equal for a
+// fully contiguous cache, larger for a pre-allocated one).
 //
 // Pass 1 (`main`): the kv_len dimension is split into chunks of CHUNK
 // positions (one workgroup per (head, chunk), dispatched along Y and
@@ -44,6 +47,7 @@ struct Params
     uint64_t num_kv_heads;
     uint64_t head_dim;
     uint64_t kv_len;
+    uint64_t kv_stride;
     float scale;
 };
 layout(push_constant) Params g_Params;
@@ -81,6 +85,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
         return;
     }
     uint kv_len = uint(g_Params.kv_len);
+    uint kv_stride = uint(g_Params.kv_stride);
     uint num_chunks = (kv_len + CHUNK - 1u) / CHUNK;
     if (c >= num_chunks)
     {
@@ -95,7 +100,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
     uint j0 = c * CHUNK;
     uint jend = min(kv_len, j0 + CHUNK);
     uint qbase = h * D;
-    uint khead = g * kv_len * D;
+    uint khead = g * kv_stride;
 
     // This lane's positions: j = j0 + tid + 32*slot (4 slots per lane,
     // CHUNK = 128 = 32 lanes x 4 slots). Each lane computes the full

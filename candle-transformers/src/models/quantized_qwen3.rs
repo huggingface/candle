@@ -12,11 +12,14 @@ use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Storage, Tensor};
 use candle_nn::attention::cpu_flash::causal::causal_decode_f32_interleaved;
 use candle_nn::attention::{flash_attn, AttnMask};
-use candle_nn::kv_cache::{ConcatKvCache, InterleavedKvCache, RawInterleavedKvCache};
+use candle_nn::kv_cache::{InterleavedKvCache, PreallocKvCache, RawInterleavedKvCache};
 use candle_nn::{Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
+/// Maximum number of cached positions in the GPU (pre-allocated) KV
+/// cache; decode fails with a clear error past this limit.
+pub const MAX_KV_CACHE_LEN: usize = 8192;
 pub struct Gguf<R: Read + Seek> {
     ct: gguf_file::Content,
     reader: R,
@@ -165,7 +168,7 @@ struct AttentionWeights {
     head_dim: usize,
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: Option<ConcatKvCache>,
+    kv_cache: Option<PreallocKvCache>,
     interleaved_cache: Option<InterleavedKvCache>,
     raw_cache: Option<RawInterleavedKvCache>,
     span_attn: tracing::Span,
@@ -194,13 +197,23 @@ impl AttentionWeights {
         let q_norm = gg.rms_norm(&format!("{prefix}.attn_q_norm.weight"), rms_norm_eps)?;
         let k_norm = gg.rms_norm(&format!("{prefix}.attn_k_norm.weight"), rms_norm_eps)?;
 
-        // CPU: use interleaved + raw caches for flash attention
-        // GPU: use standard concat KV cache (fallback path)
+        // CPU: interleaved + raw caches for the fused decode kernel.
+        // GPU: KV cache pre-allocated for up to MAX_KV_CACHE_LEN rows;
+        // decode appends one row per token in place (no per-token cat or
+        // reallocation), and the Vulkan decode kernel reads the strided
+        // cache directly via its kv_stride parameter.
         let on_cpu = device.is_cpu();
         let kv_cache = if on_cpu {
             None
         } else {
-            Some(ConcatKvCache::new(2))
+            Some(PreallocKvCache::new(
+                1,
+                num_kv_heads,
+                MAX_KV_CACHE_LEN,
+                head_dim,
+                DType::F32,
+                device,
+            )?)
         };
         let interleaved_cache = if on_cpu {
             Some(InterleavedKvCache::new(head_dim))
@@ -362,15 +375,13 @@ impl AttentionWeights {
             // block grouping as repeat_kv (query head h -> kv head
             // h * num_kv_heads / num_heads). Falls back to the decomposed path
             // when the shapes/dtype don't match the kernel's contract.
-            if b == 1 && l == 1 && attn_mask.is_none() && q.dtype() == DType::F32 && kv_len <= 4096
-            {
+            if b == 1 && l == 1 && attn_mask.is_none() && q.dtype() == DType::F32 {
                 let q2 = q.reshape((self.num_heads, self.head_dim))?.contiguous()?;
-                let k2 = k
-                    .reshape((self.num_kv_heads, kv_len, self.head_dim))?
-                    .contiguous()?;
-                let v2 = v
-                    .reshape((self.num_kv_heads, kv_len, self.head_dim))?
-                    .contiguous()?;
+                // k2/v2 keep the pre-allocated cache's row stride
+                // (MAX_KV_CACHE_LEN * head_dim); the kernel consumes it via
+                // its kv_stride parameter.
+                let k2 = k.reshape((self.num_kv_heads, kv_len, self.head_dim))?;
+                let v2 = v.reshape((self.num_kv_heads, kv_len, self.head_dim))?;
                 let scale = (1.0 / (self.head_dim as f64).sqrt()) as f32;
                 let ctx = q2.fused_decode_attention(&k2, &v2, scale, self.num_kv_heads)?;
                 let reshaped_ctx = ctx.reshape((b, l, self.hidden_size))?;

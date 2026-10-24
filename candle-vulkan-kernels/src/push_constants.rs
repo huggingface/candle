@@ -93,7 +93,7 @@ pub struct UpsampleParams {
 
 /// `decode_attention` shader:
 /// `Params { uint64_t num_heads; uint64_t num_kv_heads; uint64_t head_dim;
-/// uint64_t kv_len; float scale; }`.
+/// uint64_t kv_len; uint64_t kv_stride; float scale; }`.
 #[repr(C)]
 #[derive(Clone, Copy, AnyBitPattern)]
 pub struct DecodeAttentionParams {
@@ -105,6 +105,9 @@ pub struct DecodeAttentionParams {
     pub head_dim: u64,
     /// Number of cached key/value positions.
     pub kv_len: u64,
+    /// Element stride between consecutive kv heads (`>= kv_len *
+    /// head_dim`; equal for a contiguous cache).
+    pub kv_stride: u64,
     /// Attention scale (`1 / sqrt(head_dim)`).
     pub scale: f32,
 }

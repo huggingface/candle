@@ -73,10 +73,7 @@ pub fn call_decode_attention_slang(
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
 
     // Pass 2: merge the per-head partials into `dst`.
-    let entry = kernels.load_entry(
-        Source::DecodeAttention,
-        KernelName::DecodeAttentionCombine,
-    )?;
+    let entry = kernels.load_entry(Source::DecodeAttention, KernelName::DecodeAttentionCombine)?;
     let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
         .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())

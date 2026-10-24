@@ -1461,8 +1461,10 @@ impl Tensor {
 
     /// Fused single-query decode attention (Vulkan backend only): `self` is q
     /// `(num_heads, head_dim)` f32, `k`/`v` are `(num_kv_heads, kv_len,
-    /// head_dim)` f32, all contiguous. Returns the `(num_heads, head_dim)` f32
-    /// attention output. The GQA group for query head `h` is
+    /// head_dim)` f32 with contiguous rows (strides `(kv_stride, head_dim, 1)`,
+    /// `kv_stride >= kv_len * head_dim`; fully contiguous tensors qualify),
+    /// and matching layouts for `k` and `v`. Returns the `(num_heads,
+    /// head_dim)` f32 attention output. The GQA group for query head `h` is
     /// `h * num_kv_heads / num_heads` (matching `repeat_kv`). Two dispatches:
     /// a per-(head, KV-chunk) flash-decode pass over a partials scratch buffer,
     /// then a small per-head reduction, so any `kv_len` is supported
@@ -1490,12 +1492,30 @@ impl Tensor {
                 v.dims()
             );
         }
+        let (ks, kl) = k.storage_and_layout();
+        let (vs, vl) = v.storage_and_layout();
+        let k_strides = kl.stride();
+        let v_strides = vl.stride();
+        let kv_stride = *k_strides.first().unwrap_or(&0);
+        if k_strides.len() != 3
+            || v_strides.len() != 3
+            || k_strides[2] != 1
+            || v_strides[2] != 1
+            || k_strides[1] != head_dim
+            || v_strides[1] != head_dim
+            || v_strides[0] != kv_stride
+            || kv_stride < kv_len * head_dim
+        {
+            bail!(
+                "fused_decode_attention: k/v must have contiguous rows \
+                 (strides (kv_stride, head_dim, 1)): k strides {k_strides:?}, \
+                 v strides {v_strides:?}"
+            );
+        }
+        let (qs, ql) = self.storage_and_layout();
         if head_dim > 512 {
             bail!("fused_decode_attention: head_dim {head_dim} exceeds the kernel limit of 512");
         }
-        let (qs, ql) = self.storage_and_layout();
-        let (ks, kl) = k.storage_and_layout();
-        let (vs, vl) = v.storage_and_layout();
         let out = match (&*qs, &*ks, &*vs) {
             (Storage::Vulkan(qv), Storage::Vulkan(kv), Storage::Vulkan(vv)) => qv
                 .fused_decode_attention(
@@ -1509,8 +1529,9 @@ impl Tensor {
                     num_kv_heads,
                     head_dim,
                     kv_len,
+                    kv_stride,
                 )?,
-            _ => bail!("fused_decode_attention: requires contiguous f32 Vulkan tensors"),
+            _ => bail!("fused_decode_attention: requires f32 Vulkan tensors"),
         };
         Ok(from_storage(
             Storage::Vulkan(out),
