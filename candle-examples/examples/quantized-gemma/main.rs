@@ -150,6 +150,12 @@ fn main() -> anyhow::Result<()> {
         tracing_subscriber::registry().with(chrome_layer).init();
         Some(guard)
     } else {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
         None
     };
 
