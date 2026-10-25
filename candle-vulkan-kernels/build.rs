@@ -10,6 +10,12 @@ fn main() {
     // appears): `rerun-if-changed` on individual files only tracks files
     // that existed at the last build.
     println!("cargo:rerun-if-changed={}", src_dir.display());
+    // The slangc optimization flag depends on these environment
+    // variables (see `slang_opt_flag`); re-run the build script when
+    // any of them changes.
+    println!("cargo:rerun-if-env-changed=PROFILE");
+    println!("cargo:rerun-if-env-changed=CANDLE_VULKAN_SLANG_OPT");
+    println!("cargo:rerun-if-env-changed=CANDLE_VULKAN_SLANG_NO_OPT");
     for entry in fs::read_dir(src_dir).expect("failed to read shaders dir") {
         let entry = entry.expect("failed to read shaders dir entry");
         let path = entry.path();
@@ -154,6 +160,40 @@ fn coopmat_flags(name: &str) -> &'static [&'static str] {
     }
 }
 
+/// slangc optimization flag for this build, or `None` for the slangc
+/// default.
+///
+/// - `CANDLE_VULKAN_SLANG_OPT`: explicit override. A non-empty value is
+///   passed to slangc as-is (e.g. `-O2`, `-O1`); `none`
+///   (case-insensitive) or an empty value disables the flag. Takes
+///   precedence over everything else.
+/// - `CANDLE_VULKAN_SLANG_NO_OPT`: set to any value other than `0` or
+///   empty to disable the flag, even when the default below would add
+///   one.
+/// - Otherwise, when cargo builds the release profile (the `PROFILE`
+///   environment variable is `release`), use `-O3`.
+/// - Otherwise: no flag (slangc default).
+fn slang_opt_flag() -> Option<String> {
+    if let Ok(value) = std::env::var("CANDLE_VULKAN_SLANG_OPT") {
+        let value = value.trim();
+        return if value.is_empty() || value.eq_ignore_ascii_case("none") {
+            None
+        } else {
+            Some(value.to_string())
+        };
+    }
+    if let Ok(value) = std::env::var("CANDLE_VULKAN_SLANG_NO_OPT") {
+        let value = value.trim();
+        if !value.is_empty() && value != "0" {
+            return None;
+        }
+    }
+    if std::env::var("PROFILE").map(|p| p == "release").unwrap_or(false) {
+        return Some("-O3".to_string());
+    }
+    None
+}
+
 fn compile_slang(
     source_path: &Path,
     out_path: &Path,
@@ -190,6 +230,11 @@ fn compile_slang(
     // Preprocessor macros (e.g. `BF16_NATIVE=1` for the native bf16 pass).
     for define in defines {
         args.push(format!("-D{define}"));
+    }
+    // slangc optimization flag (see `slang_opt_flag`): `-O3` for cargo
+    // release builds unless overridden or disabled.
+    if let Some(flag) = slang_opt_flag() {
+        args.push(flag);
     }
     // Extra slangc flags from the SLANGCFLAGS environment variable.
     if let Ok(extra) = std::env::var("SLANGCFLAGS") {

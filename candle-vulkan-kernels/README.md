@@ -18,3 +18,23 @@ shared code in with `import`:
 `build.rs` never compiles a module file standalone; it compiles every other
 `.slang` file in `shaders/` and passes `shaders/` as an include path when
 compiling the test shaders in `shaders/test/`.
+
+## Build-time environment variables
+
+`build.rs` honors the following environment variables when invoking
+`slangc`:
+
+- `SLANGC`: path to the slangc executable to use (defaults to `slangc`
+  on the PATH).
+- `SLANGCFLAGS`: extra flags, space-separated, appended to every slangc
+  invocation.
+- `CANDLE_VULKAN_SLANG_OPT`: override for the slangc optimization flag.
+  The value is passed to slangc as-is (e.g. `-O2`); `none` (case
+  insensitive) or an empty value disables the flag. Takes precedence
+  over `CANDLE_VULKAN_SLANG_NO_OPT` and the `PROFILE` default below.
+- `CANDLE_VULKAN_SLANG_NO_OPT`: set to any value other than `0` to
+  disable the optimization flag even when the `PROFILE` default would
+  add one.
+- `PROFILE` (set by cargo): when it is `release` and neither override is
+  set, slangc is invoked with `-O3`; other profiles use the slangc
+  default.
