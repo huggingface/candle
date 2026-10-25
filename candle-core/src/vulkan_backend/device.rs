@@ -173,10 +173,11 @@ type Encode = Box<
         + Send,
 >;
 
-/// One slot of the fence ring: the command buffer of the last submission
-/// that used this slot (kept alive until the fence signals, because the
-/// command buffer allocator recycles dropped command buffers) and the
-/// fence the submission signals.
+/// One slot of the fence ring: the fence the last submission using this
+/// slot signals, plus (as a safety net only) a pin on that submission's
+/// command buffer while its wait is outstanding: the pin is cleared as
+/// soon as the wait succeeds, because holding it would keep every buffer
+/// of the batch alive for FENCE_RING_SIZE syncs.
 struct InFlight {
     cbb: Option<Arc<PrimaryAutoCommandBuffer>>,
     fence: Arc<Fence>,
@@ -1138,9 +1139,9 @@ impl VulkanDevice {
     }
 
     /// Records all pending encodes onto a single command buffer, submits it
-    /// (bounded by the fence ring, which also keeps the command buffer and
-    /// the buffers it uses alive until the work completes, since the
-    /// allocators recycle dropped resources), and waits for completion.
+    /// (bounded by the fence ring), and waits for completion. The command
+    /// buffer (and with it every buffer of the batch) is kept alive only
+    /// until the wait returns, then released.
     pub fn synchronize(&self) -> Result<()> {
         let mut pending = self
             .inner
@@ -1220,6 +1221,23 @@ impl VulkanDevice {
             fence
                 .wait(Some(std::time::Duration::from_secs(60)))
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            // The batch is done on the GPU: release the command buffer's
+            // pin on every buffer of the batch (the ring slot keeps it
+            // only as a safety net for a wait timeout, when the buffers
+            // are still in flight) so the pool and the allocator can
+            // recycle them for the next batch. Holding the pin for
+            // FENCE_RING_SIZE syncs would retain a whole batch of buffers
+            // per token and grow VRAM until the device fills.
+            {
+                let mut ring = self
+                    .inner
+                    .fence_ring
+                    .lock()
+                    .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                if let Some(slot) = ring.get_mut(idx) {
+                    slot.cbb = None;
+                }
+            }
             // The batch is done on the GPU: release the keep-alive refs so
             // the allocator can recycle the memory for the next batch.
             self.inner
