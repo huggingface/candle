@@ -369,7 +369,6 @@ impl AttentionWeights {
             // Standard matmul attention (no flash)
             let (k, v) = self.kv_cache.as_mut().unwrap().append(&k, &v)?;
 
-            let kv_len = k.dim(2)?;
             // Fused single-query decode attention (Vulkan): one kernel instead
             // of repeat_kv + matmul + softmax + matmul. GQA uses the same
             // block grouping as repeat_kv (query head h -> kv head
@@ -380,8 +379,8 @@ impl AttentionWeights {
                 // k2/v2 keep the pre-allocated cache's row stride
                 // (MAX_KV_CACHE_LEN * head_dim); the kernel consumes it via
                 // its kv_stride parameter.
-                let k2 = k.reshape((self.num_kv_heads, kv_len, self.head_dim))?;
-                let v2 = v.reshape((self.num_kv_heads, kv_len, self.head_dim))?;
+                let k2 = k.squeeze(0)?;
+                let v2 = v.squeeze(0)?;
                 let scale = (1.0 / (self.head_dim as f64).sqrt()) as f32;
                 let ctx = q2.fused_decode_attention(&k2, &v2, scale, self.num_kv_heads)?;
                 let reshaped_ctx = ctx.reshape((b, l, self.hidden_size))?;

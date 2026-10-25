@@ -277,7 +277,6 @@ impl LayerWeights {
         // during decode) and strided views of the accumulated k/v; no
         // per-token cat or reallocation.
         let (k, v) = self.kv_cache.append(&k, &v)?;
-        let kv_len = k.dim(2)?;
 
         // Single-query decode on Vulkan: fused GQA-native attention (one
         // kernel pair; no repeat_kv, no matmul chain).
@@ -288,8 +287,13 @@ impl LayerWeights {
             && matches!(q.device(), Device::Vulkan(_))
         {
             let q2 = q.contiguous()?.reshape((self.n_head, self.head_dim))?;
-            let k2 = k.reshape((self.n_kv_head, kv_len, self.head_dim))?;
-            let v2 = v.reshape((self.n_kv_head, kv_len, self.head_dim))?;
+            // squeeze(0) keeps the pre-allocated cache's row stride
+            // (MAX_KV_CACHE_LEN * head_dim) as a pure view; the kernel
+            // consumes it via its kv_stride parameter. A reshape would
+            // materialize the whole (kv_len, n_kv_head, head_dim) matrix
+            // every token (O(n^2) copy traffic).
+            let k2 = k.squeeze(0)?;
+            let v2 = v.squeeze(0)?;
             let scale = (1.0 / (self.head_dim as f64).sqrt()) as f32;
             let ctx = q2.fused_decode_attention(&k2, &v2, scale, self.n_kv_head)?;
             let ctx = ctx.reshape((b_sz, seq_len, self.q_dim))?;
