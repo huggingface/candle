@@ -1,6 +1,7 @@
 //! Slang tiled GEMM dispatch: `out[b, m, n] = lhs[b, m, k] @ rhs[b, k, n]`.
 use crate::err::VulkanKernelError;
 use crate::kernel::{KernelName, Kernels};
+use crate::push_constants::GemmParams;
 use crate::source::Source;
 use vulkano::buffer::Subbuffer;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
@@ -15,8 +16,8 @@ pub(super) fn buf_info<T>(buf: &Subbuffer<[T]>) -> DescriptorBufferInfo<'_> {
         ..Default::default()
     }
 }
-/// Records a tiled GEMM dispatch onto `cbb` for element type `T`. `params`
-/// (always f32) must hold `[batch, m, n, k, rhs_transposed]`; the dispatch is
+/// Records a tiled GEMM dispatch onto `cbb` for element type `T`. `params` is pushed
+/// through the pipeline's push constant block; the dispatch is
 /// `(ceil(m/16), ceil(n/16), batch)` workgroups of 16x16.
 pub fn call_gemm_slang<T>(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
@@ -26,7 +27,7 @@ pub fn call_gemm_slang<T>(
     lhs: &Subbuffer<[T]>,
     rhs: &Subbuffer<[T]>,
     output: &Subbuffer<[T]>,
-    params: &Subbuffer<[u64]>,
+    params: &GemmParams,
     batch: usize,
     m: usize,
     n: usize,
@@ -41,18 +42,19 @@ pub fn call_gemm_slang<T>(
     let info0 = buf_info(lhs);
     let info1 = buf_info(rhs);
     let info2 = buf_info(output);
-    let info3 = buf_info(params);
+    
     let writes = vec![
         WriteDescriptorSet::buffer(0, &info0),
         WriteDescriptorSet::buffer(1, &info1),
         WriteDescriptorSet::buffer(2, &info2),
-        WriteDescriptorSet::buffer(3, &info3),
     ];
     let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
         .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)
+        .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
+    cbb.push_constants(entry.layout.clone(), 0, *params)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     unsafe {
         cbb.dispatch([

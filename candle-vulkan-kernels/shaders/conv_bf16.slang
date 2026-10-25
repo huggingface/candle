@@ -17,26 +17,27 @@
 //   params: [0]=b, [1]=c_in, [2]=c_out, [3]=k_h, [4]=k_w, [5]=i_h, [6]=i_w,
 //           [7]=o_h, [8]=o_w, [9]=padding, [10]=stride, [11]=dilation
 import bf16_type;
+import common_conv;
 
 StructuredBuffer<BF16> g_In;
 StructuredBuffer<BF16> g_W;
 RWStructuredBuffer<BF16> g_Out;
-StructuredBuffer<uint64_t> g_Params;
+layout(push_constant) Params g_Params;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main_conv1d(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint o = dispatchThreadID.x;
-    uint64_t b = g_Params[0];
-    uint64_t c_in = g_Params[1];
-    uint64_t c_out = g_Params[2];
-    uint64_t k_size = g_Params[3];
-    uint64_t l_in = g_Params[4];
-    uint64_t l_out = g_Params[5];
-    int padding = int(g_Params[6]);
-    int stride = int(g_Params[7]);
-    int dilation = int(g_Params[8]);
+    uint64_t b = g_Params.b;
+    uint64_t c_in = g_Params.c_in;
+    uint64_t c_out = g_Params.c_out;
+    uint64_t k_size = g_Params.k1;
+    uint64_t l_in = g_Params.i1;
+    uint64_t l_out = g_Params.o1;
+    int padding = int(g_Params.padding);
+    int stride = int(g_Params.stride);
+    int dilation = int(g_Params.dilation);
     if (o >= b * c_out * l_out)
     {
         return;
@@ -67,18 +68,18 @@ void main_conv1d(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_conv2d(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint o = dispatchThreadID.x;
-    uint64_t b = g_Params[0];
-    uint64_t c_in = g_Params[1];
-    uint64_t c_out = g_Params[2];
-    uint64_t k_h = g_Params[3];
-    uint64_t k_w = g_Params[4];
-    uint64_t i_h = g_Params[5];
-    uint64_t i_w = g_Params[6];
-    uint64_t o_h = g_Params[7];
-    uint64_t o_w = g_Params[8];
-    int padding = int(g_Params[9]);
-    int stride = int(g_Params[10]);
-    int dilation = int(g_Params[11]);
+    uint64_t b = g_Params.b;
+    uint64_t c_in = g_Params.c_in;
+    uint64_t c_out = g_Params.c_out;
+    uint64_t k_h = g_Params.k1;
+    uint64_t k_w = g_Params.k2;
+    uint64_t i_h = g_Params.i1;
+    uint64_t i_w = g_Params.i2;
+    uint64_t o_h = g_Params.o1;
+    uint64_t o_w = g_Params.o2;
+    int padding = int(g_Params.padding);
+    int stride = int(g_Params.stride);
+    int dilation = int(g_Params.dilation);
     if (o >= b * c_out * o_h * o_w)
     {
         return;
@@ -125,15 +126,15 @@ void main_conv2d(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_conv_transpose1d(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint o = dispatchThreadID.x;
-    uint64_t b = g_Params[0];
-    uint64_t c_in = g_Params[1];
-    uint64_t c_out = g_Params[2];
-    uint64_t k_size = g_Params[3];
-    uint64_t l_in = g_Params[4];
-    uint64_t l_out = g_Params[5];
-    int padding = int(g_Params[6]);
-    int stride = int(g_Params[7]);
-    int dilation = int(g_Params[8]);
+    uint64_t b = g_Params.b;
+    uint64_t c_in = g_Params.c_in;
+    uint64_t c_out = g_Params.c_out;
+    uint64_t k_size = g_Params.k1;
+    uint64_t l_in = g_Params.i1;
+    uint64_t l_out = g_Params.o1;
+    int padding = int(g_Params.padding);
+    int stride = int(g_Params.stride);
+    int dilation = int(g_Params.dilation);
     if (o >= b * c_out * l_out)
     {
         return;
@@ -170,18 +171,18 @@ void main_conv_transpose1d(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_conv_transpose2d(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint o = dispatchThreadID.x;
-    uint64_t b = g_Params[0];
-    uint64_t c_in = g_Params[1];
-    uint64_t c_out = g_Params[2];
-    uint64_t k_h = g_Params[3];
-    uint64_t k_w = g_Params[4];
-    uint64_t i_h = g_Params[5];
-    uint64_t i_w = g_Params[6];
-    uint64_t o_h = g_Params[7];
-    uint64_t o_w = g_Params[8];
-    int padding = int(g_Params[9]);
-    int stride = int(g_Params[10]);
-    int dilation = int(g_Params[11]);
+    uint64_t b = g_Params.b;
+    uint64_t c_in = g_Params.c_in;
+    uint64_t c_out = g_Params.c_out;
+    uint64_t k_h = g_Params.k1;
+    uint64_t k_w = g_Params.k2;
+    uint64_t i_h = g_Params.i1;
+    uint64_t i_w = g_Params.i2;
+    uint64_t o_h = g_Params.o1;
+    uint64_t o_w = g_Params.o2;
+    int padding = int(g_Params.padding);
+    int stride = int(g_Params.stride);
+    int dilation = int(g_Params.dilation);
     if (o >= b * c_out * o_h * o_w)
     {
         return;

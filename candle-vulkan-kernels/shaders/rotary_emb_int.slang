@@ -8,22 +8,23 @@
 //
 // Params: [0]=b, [1]=h, [2]=t, [3]=d, [4]=unbatched (0 or 1)
 
+import common_rotary_emb_int;
 StructuredBuffer<float> g_Src;
 RWStructuredBuffer<float> g_Dst;
 StructuredBuffer<float> g_Cos;
 StructuredBuffer<float> g_Sin;
-StructuredBuffer<uint64_t> g_Params;
+layout(push_constant) Params g_Params;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
-    uint64_t b = g_Params[0];
-    uint64_t h = g_Params[1];
-    uint64_t t = g_Params[2];
-    uint64_t d = g_Params[3];
-    uint64_t unbatched = g_Params[4];
+    uint64_t b = g_Params.b;
+    uint64_t h = g_Params.h;
+    uint64_t t = g_Params.t;
+    uint64_t d = g_Params.d;
+    uint64_t unbatched = g_Params.unbatched;
 
     uint64_t el_count = b * h * t * d;
     if (i >= el_count)

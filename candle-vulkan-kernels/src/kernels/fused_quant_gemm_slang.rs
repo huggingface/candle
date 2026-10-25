@@ -13,6 +13,7 @@ use vulkano::pipeline::PipelineBindPoint;
 
 use crate::err::VulkanKernelError;
 use crate::kernel::{KernelName, Kernels};
+use crate::push_constants::FusedQuantGemmParams;
 use crate::source::Source;
 
 const TILE: usize = 32;
@@ -28,8 +29,8 @@ fn buf_info<T>(buf: &Subbuffer<[T]>) -> DescriptorBufferInfo<'_> {
 
 /// Records a fused dequant+GEMM dispatch onto `cbb` for an `m`-row lhs.
 /// `w` holds the raw quantized bytes of the `(n, k)` weight, `lhs` is the
-/// `(m, k)` f32 matrix, `output` is the `(m, n)` f32 result, and `params`
-/// holds `[m, n, k]`. Each 32-thread workgroup handles 32 output columns
+/// `(m, k)` f32 matrix, `output` is the `(m, n)` f32 result. `params`
+/// is pushed through the pipeline's push constant block. Each 32-thread workgroup handles 32 output columns
 /// (one thread per column for decode, one thread per output element for
 /// prefill; in-register dequantization, no shared memory); `k` must be a
 /// multiple of the quantized block size (32 for Q4_0/Q5_0/Q5_1/Q8_0/Q8_1,
@@ -42,7 +43,7 @@ pub fn call_fused_quant_gemm_slang(
     lhs: &Subbuffer<[f32]>,
     w: &Subbuffer<[u8]>,
     output: &Subbuffer<[f32]>,
-    params: &Subbuffer<[u64]>,
+    params: &FusedQuantGemmParams,
     m: usize,
     n: usize,
 ) -> Result<(), VulkanKernelError> {
@@ -50,18 +51,19 @@ pub fn call_fused_quant_gemm_slang(
     let info0 = buf_info(lhs);
     let info1 = buf_info(output);
     let info2 = buf_info(w);
-    let info3 = buf_info(params);
+    
     let writes = vec![
         WriteDescriptorSet::buffer(0, &info0),
         WriteDescriptorSet::buffer(1, &info1),
         WriteDescriptorSet::buffer(2, &info2),
-        WriteDescriptorSet::buffer(3, &info3),
     ];
     let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
         .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.bind_descriptor_sets(PipelineBindPoint::Compute, entry.layout.clone(), 0, set)
+        .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
+    cbb.push_constants(entry.layout.clone(), 0, *params)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     unsafe { cbb.dispatch([1, (n.div_ceil(TILE)) as u32, m as u32]) }
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;

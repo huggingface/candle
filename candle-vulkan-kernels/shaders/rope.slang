@@ -4,19 +4,20 @@
 // i_cs = i_t*(d/2) + i_d;
 //   dst[i1] = src[i1]*cos[i_cs] - src[i2]*sin[i_cs]
 //   dst[i2] = src[i1]*sin[i_cs] + src[i2]*cos[i_cs]
+import common_rope;
 StructuredBuffer<float> g_Src;
 StructuredBuffer<float> g_Cos;
 StructuredBuffer<float> g_Sin;
 RWStructuredBuffer<float> g_Dst;
-StructuredBuffer<uint64_t> g_Params; // [0]=b*h, [1]=t, [2]=d
+layout(push_constant) Params g_Params;
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    uint64_t bh = g_Params[0];
-    uint64_t t = g_Params[1];
-    uint64_t d = g_Params[2];
+    uint64_t bh = g_Params.bh;
+    uint64_t t = g_Params.t;
+    uint64_t d = g_Params.d;
     uint64_t half = d / 2u;
     uint64_t per_bh = t * half;
     if (idx >= bh * per_bh || half == 0u)

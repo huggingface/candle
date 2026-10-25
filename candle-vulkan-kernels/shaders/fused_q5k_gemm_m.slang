@@ -11,11 +11,12 @@
 //
 // Params: [0]=m, [1]=n, [2]=k.
 import dequant_helpers;
+import common_fused_gemm;
 
 StructuredBuffer<float> g_Lhs; // (m, k) f32
 RWStructuredBuffer<float> g_Out; // (m, n) f32
 StructuredBuffer<uint8_t> g_W; // raw Q5_K bytes, (n, k)
-StructuredBuffer<uint64_t> g_Params;
+layout(push_constant) Params g_Params;
 
 // Q4K/Q5K scale-min decoder (from candle quantized/utils.rs::get_scale_min_k4).
 // `off` is the block base offset in g_W; `soff` is the scale-array offset.
@@ -39,8 +40,8 @@ uint2 get_scale_min_k4(uint j, uint off, uint soff)
 [numthreads(32, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_GroupID)
 {
-    uint64_t n = g_Params[1];
-    uint64_t k = g_Params[2];
+    uint64_t n = g_Params.n;
+    uint64_t k = g_Params.k;
     uint col = groupID.y * 32u + dispatchThreadID.x;
     if (col >= n)
     {

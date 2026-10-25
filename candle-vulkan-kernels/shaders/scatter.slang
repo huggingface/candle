@@ -2,21 +2,22 @@
 // dst[left, idx, right] = src[left, i, right]
 // params: [0]=dst_dim_len, [1]=dst_right_len, [2]=ids_dim_len,
 //         [3]=ids_right_len, [4]=ids_left_len
+import common_scatter;
 StructuredBuffer<float> g_Src;
 RWStructuredBuffer<float> g_Dst;
 StructuredBuffer<uint> g_Ids;
-StructuredBuffer<uint64_t> g_Params;
+layout(push_constant) Params g_Params;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main_scatter(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint o = dispatchThreadID.x;
-    uint64_t dst_dim_len = g_Params[0];
-    uint64_t dst_right_len = g_Params[1];
-    uint64_t ids_dim_len = g_Params[2];
-    uint64_t ids_right_len = g_Params[3];
-    uint64_t ids_left_len = g_Params[4];
+    uint64_t dst_dim_len = g_Params.dst_dim_len;
+    uint64_t dst_right_len = g_Params.dst_right_len;
+    uint64_t ids_dim_len = g_Params.ids_dim_len;
+    uint64_t ids_right_len = g_Params.ids_right_len;
+    uint64_t ids_left_len = g_Params.ids_left_len;
     uint64_t inner = ids_dim_len * ids_right_len;
     if (inner == 0u || o >= ids_left_len * inner)
     {

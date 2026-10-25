@@ -5,15 +5,16 @@
 // buffer size.
 //
 // Params: [0] = byte length of g_Dst.
+import common_zero_fill;
 RWStructuredBuffer<uint8_t> g_Dst;
-StructuredBuffer<uint64_t> g_Params;
+layout(push_constant) Params g_Params;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint64_t i = dispatchThreadID.x;
-    if (i < g_Params[0])
+    if (i < g_Params.count)
     {
         g_Dst[uint(i)] = 0;
     }

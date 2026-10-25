@@ -1409,8 +1409,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::UpsampleNearest2dF16
         | KernelName::UpsampleNearest2dF32
         | KernelName::UpsampleNearest2dF64 => 2,
-        // zero_fill: dst + params.
-        KernelName::ZeroFill => 2,
+        // zero_fill: dst (params are push constants).
+        KernelName::ZeroFill => 1,
         // const_set: output (params are push constants).
         KernelName::ConstSetBf16 | KernelName::ConstSetF16 | KernelName::ConstSetF32 => 1,
         // row-norm kernels: src/alpha(/beta)/dst (params are push constants).
@@ -1435,7 +1435,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::TestFillF64 => 1,
         // 2 storage buffer(s).
         KernelName::TestPrintf => 2,
-        // 3 storage buffer(s).
+        // dequant: src/dst (params are push constants).
         KernelName::DequantF32
         | KernelName::DequantF16
         | KernelName::DequantBf16
@@ -1450,8 +1450,9 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::DequantQ4K
         | KernelName::DequantQ5K
         | KernelName::DequantQ6K
-        | KernelName::DequantQ8K
-        | KernelName::Sigmoid
+        | KernelName::DequantQ8K => 2,
+        // sigmoid/softmax/copy2d/pool2d: src/dst (params are push constants).
+        KernelName::Sigmoid
         | KernelName::Softmax
         | KernelName::Copy2dF32
         | KernelName::Copy2dF16
@@ -1459,14 +1460,21 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Copy2dBf16
         | KernelName::Copy2dU8
         | KernelName::Copy2dU32
-        | KernelName::Copy2dI64 => 3,
-        // 4 storage buffer(s).
+        | KernelName::Copy2dI64
+        | KernelName::AvgPool2dF32
+        | KernelName::MaxPool2dF32
+        | KernelName::AvgPool2dF16
+        | KernelName::MaxPool2dF16
+        | KernelName::AvgPool2dF64
+        | KernelName::MaxPool2dF64 => 2,
+        // gemm: lhs/rhs/out (params are push constants).
         KernelName::GemmF32
         | KernelName::GemmF16
         | KernelName::GemmF64
         | KernelName::GemmCoopMatF16
-        | KernelName::GemmCoopMatBf16
-        | KernelName::FusedQ40GemmF32
+        | KernelName::GemmCoopMatBf16 => 3,
+        // fused quant gemm: lhs/w/out (params are push constants).
+        KernelName::FusedQ40GemmF32
         | KernelName::FusedQ4kGemmF32
         | KernelName::FusedQ40GemmMF32
         | KernelName::FusedQ4kGemmMF32
@@ -1477,8 +1485,9 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::FusedQ5kGemmF32
         | KernelName::FusedQ8kGemmF32
         | KernelName::FusedQ5kGemmMF32
-        | KernelName::FusedQ8kGemmMF32
-        | KernelName::IndexAddF32U32
+        | KernelName::FusedQ8kGemmMF32 => 3,
+        // index_add: src/ids/out (params are push constants).
+        KernelName::IndexAddF32U32
         | KernelName::IndexAddF32I64
         | KernelName::IndexAddF32U8
         | KernelName::IndexAddF16U32
@@ -1486,67 +1495,38 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::IndexAddF16U8
         | KernelName::IndexAddF64U32
         | KernelName::IndexAddF64I64
-        | KernelName::IndexAddF64U8
-        | KernelName::BinaryMaximumF32
+        | KernelName::IndexAddF64U8 => 3,
+        // binary: input/rhs/output (params are push constants).
+        KernelName::BinaryMaximumF32
         | KernelName::BinaryMinimumF32
         | KernelName::BinaryAddF32
         | KernelName::BinarySubF32
         | KernelName::BinaryMulF32
         | KernelName::BinaryDivF32
-        | KernelName::CmpEqF32
-        | KernelName::CmpNeF32
-        | KernelName::CmpLtF32
-        | KernelName::CmpLeF32
-        | KernelName::CmpGtF32
-        | KernelName::CmpGeF32
         | KernelName::BinaryAddBf16
         | KernelName::BinarySubBf16
         | KernelName::BinaryMulBf16
         | KernelName::BinaryDivBf16
         | KernelName::BinaryMaximumBf16
         | KernelName::BinaryMinimumBf16
-        | KernelName::CmpEqBf16
-        | KernelName::CmpNeBf16
-        | KernelName::CmpLtBf16
-        | KernelName::CmpLeBf16
-        | KernelName::CmpGtBf16
-        | KernelName::CmpGeBf16
         | KernelName::BinaryAddF8e4m3
         | KernelName::BinarySubF8e4m3
         | KernelName::BinaryMulF8e4m3
         | KernelName::BinaryDivF8e4m3
         | KernelName::BinaryMaximumF8e4m3
         | KernelName::BinaryMinimumF8e4m3
-        | KernelName::CmpEqF8e4m3
-        | KernelName::CmpNeF8e4m3
-        | KernelName::CmpLtF8e4m3
-        | KernelName::CmpLeF8e4m3
-        | KernelName::CmpGtF8e4m3
-        | KernelName::CmpGeF8e4m3
         | KernelName::BinaryAddF16
         | KernelName::BinarySubF16
         | KernelName::BinaryMulF16
         | KernelName::BinaryDivF16
         | KernelName::BinaryMaximumF16
         | KernelName::BinaryMinimumF16
-        | KernelName::CmpEqF16
-        | KernelName::CmpNeF16
-        | KernelName::CmpLtF16
-        | KernelName::CmpLeF16
-        | KernelName::CmpGtF16
-        | KernelName::CmpGeF16
         | KernelName::BinaryAddF64
         | KernelName::BinarySubF64
         | KernelName::BinaryMulF64
         | KernelName::BinaryDivF64
         | KernelName::BinaryMaximumF64
         | KernelName::BinaryMinimumF64
-        | KernelName::CmpEqF64
-        | KernelName::CmpNeF64
-        | KernelName::CmpLtF64
-        | KernelName::CmpLeF64
-        | KernelName::CmpGtF64
-        | KernelName::CmpGeF64
         | KernelName::BinaryAddU8
         | KernelName::BinarySubU8
         | KernelName::BinaryMulU8
@@ -1576,7 +1556,38 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::BinaryMulI64
         | KernelName::BinaryDivI64
         | KernelName::BinaryMaximumI64
-        | KernelName::BinaryMinimumI64
+        | KernelName::BinaryMinimumI64 => 3,
+        // cmp: in/rhs/out (params are push constants).
+        KernelName::CmpEqF32
+        | KernelName::CmpNeF32
+        | KernelName::CmpLtF32
+        | KernelName::CmpLeF32
+        | KernelName::CmpGtF32
+        | KernelName::CmpGeF32
+        | KernelName::CmpEqBf16
+        | KernelName::CmpNeBf16
+        | KernelName::CmpLtBf16
+        | KernelName::CmpLeBf16
+        | KernelName::CmpGtBf16
+        | KernelName::CmpGeBf16
+        | KernelName::CmpEqF8e4m3
+        | KernelName::CmpNeF8e4m3
+        | KernelName::CmpLtF8e4m3
+        | KernelName::CmpLeF8e4m3
+        | KernelName::CmpGtF8e4m3
+        | KernelName::CmpGeF8e4m3
+        | KernelName::CmpEqF16
+        | KernelName::CmpNeF16
+        | KernelName::CmpLtF16
+        | KernelName::CmpLeF16
+        | KernelName::CmpGtF16
+        | KernelName::CmpGeF16
+        | KernelName::CmpEqF64
+        | KernelName::CmpNeF64
+        | KernelName::CmpLtF64
+        | KernelName::CmpLeF64
+        | KernelName::CmpGtF64
+        | KernelName::CmpGeF64
         | KernelName::CmpEqU8
         | KernelName::CmpNeU8
         | KernelName::CmpLtU8
@@ -1606,8 +1617,10 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::CmpLtI64
         | KernelName::CmpLeI64
         | KernelName::CmpGtI64
-        | KernelName::CmpGeI64
-        | KernelName::GatherIdxF32
+        | KernelName::CmpGeI64 => 3,
+        // gather/row-gather/index-select: src/dst/ids (params are push
+        // constants).
+        KernelName::GatherIdxF32
         | KernelName::GatherRowsF32
         | KernelName::IndexSelectF32
         | KernelName::GatherIdxF16
@@ -1619,8 +1632,9 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::GatherIdxU32
         | KernelName::GatherIdxI64
         | KernelName::GatherRowsF64
-        | KernelName::IndexSelectF64
-        | KernelName::ReduceMinF32
+        | KernelName::IndexSelectF64 => 3,
+        // reduce: in/out-f?/out-i? (params are push constants).
+        KernelName::ReduceMinF32
         | KernelName::ReduceArgMinF32
         | KernelName::ReduceArgMaxF32
         | KernelName::ReduceSumF32
@@ -1639,14 +1653,9 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::ReduceMaxBf16
         | KernelName::ReduceMinBf16
         | KernelName::ReduceArgMinBf16
-        | KernelName::ReduceArgMaxBf16
-        | KernelName::AvgPool2dF32
-        | KernelName::MaxPool2dF32
-        | KernelName::AvgPool2dF16
-        | KernelName::MaxPool2dF16
-        | KernelName::AvgPool2dF64
-        | KernelName::MaxPool2dF64
-        | KernelName::Conv1dF32
+        | KernelName::ReduceArgMaxBf16 => 3,
+        // conv: in/w/out (params are push constants).
+        KernelName::Conv1dF32
         | KernelName::Conv2dF32
         | KernelName::ConvTranspose1dF32
         | KernelName::ConvTranspose2dF32
@@ -1658,21 +1667,24 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::Conv2dF64
         | KernelName::ConvTranspose1dF64
         | KernelName::ConvTranspose2dF64
-        | KernelName::ConvTranspose2dBf16
-        | KernelName::ScatterF32
-        | KernelName::ScatterF16
-        | KernelName::ScatterF64 => 4,
-        // 5 storage buffer(s).
-        KernelName::Rope
-        | KernelName::RotaryEmbInt
-        | KernelName::WhereF32
+        | KernelName::ConvTranspose2dBf16 => 3,
+        // scatter: src/dst/ids (params are push constants).
+        KernelName::ScatterF32 | KernelName::ScatterF16 | KernelName::ScatterF64 => 3,
+        // where: pred/true/false/out (params are push constants).
+        KernelName::WhereF32
         | KernelName::WhereBf16
         | KernelName::WhereF8e4m3
         | KernelName::WhereF16
-        | KernelName::WhereF64
-        | KernelName::AffineCoopMatF16
-        | KernelName::AffineCoopMatBf16
-        | KernelName::DecodeAttention
+        | KernelName::WhereF64 => 4,
+        // rope: src/cos/sin/dst (params are push constants).
+        KernelName::Rope => 4,
+        // rotary_emb_int: src/dst/cos/sin (params are push constants).
+        KernelName::RotaryEmbInt => 4,
+        // affine coopmat: lhs/rhs/bias/out (params are push constants).
+        KernelName::AffineCoopMatF16 | KernelName::AffineCoopMatBf16 => 4,
+        // decode attention: q/k/v; combine: q/scratch/out (params are push
+        // constants).
+        KernelName::DecodeAttention
         | KernelName::DecodeAttentionCombine => 5,
     }
 }

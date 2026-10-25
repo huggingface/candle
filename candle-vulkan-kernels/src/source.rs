@@ -891,6 +891,258 @@ impl Source {
             // uint64_t num_kv_heads; uint64_t head_dim; uint64_t kv_len;
             // uint64_t kv_stride; float scale;` (48 bytes).
             KernelName::DecodeAttention | KernelName::DecodeAttentionCombine => 48,
+            // `zero_fill`: `uint64_t count`.
+            KernelName::ZeroFill => 8,
+            // `dequant`/`sigmoid`: `uint64_t count`.
+            KernelName::DequantF32
+            | KernelName::DequantF16
+            | KernelName::DequantBf16
+            | KernelName::DequantQ40
+            | KernelName::DequantQ41
+            | KernelName::DequantQ50
+            | KernelName::DequantQ51
+            | KernelName::DequantQ80
+            | KernelName::DequantQ81
+            | KernelName::DequantQ2K
+            | KernelName::DequantQ3K
+            | KernelName::DequantQ4K
+            | KernelName::DequantQ5K
+            | KernelName::DequantQ6K
+            | KernelName::DequantQ8K
+            | KernelName::Sigmoid => 8,
+            // `softmax`: `uint64_t n_rows; uint64_t n`.
+            KernelName::Softmax => 16,
+            // `copy2d`: six `uint64_t` fields.
+            KernelName::Copy2dF32
+            | KernelName::Copy2dF16
+            | KernelName::Copy2dF64
+            | KernelName::Copy2dBf16
+            | KernelName::Copy2dU8
+            | KernelName::Copy2dU32
+            | KernelName::Copy2dI64 => 48,
+            // `pool2d`: nine `uint64_t` fields.
+            KernelName::AvgPool2dF32
+            | KernelName::MaxPool2dF32
+            | KernelName::AvgPool2dF16
+            | KernelName::MaxPool2dF16
+            | KernelName::AvgPool2dF64
+            | KernelName::MaxPool2dF64 => 72,
+            // `conv`: twelve `uint64_t` fields.
+            KernelName::Conv1dF32
+            | KernelName::Conv2dF32
+            | KernelName::ConvTranspose1dF32
+            | KernelName::ConvTranspose2dF32
+            | KernelName::Conv1dF16
+            | KernelName::Conv2dF16
+            | KernelName::ConvTranspose1dF16
+            | KernelName::ConvTranspose2dF16
+            | KernelName::Conv1dF64
+            | KernelName::Conv2dF64
+            | KernelName::ConvTranspose1dF64
+            | KernelName::ConvTranspose2dF64
+            | KernelName::ConvTranspose2dBf16 => 96,
+            // `scatter`: five `uint64_t` fields.
+            KernelName::ScatterF32
+            | KernelName::ScatterF16
+            | KernelName::ScatterF64 => 40,
+            // `rope`: `uint64_t bh; uint64_t t; uint64_t d`.
+            KernelName::Rope => 24,
+            // `rotary_emb_int`: five `uint64_t` fields.
+            KernelName::RotaryEmbInt => 40,
+            // `index_add`: four `uint64_t` fields.
+            KernelName::IndexAddF32U32
+            | KernelName::IndexAddF32I64
+            | KernelName::IndexAddF32U8
+            | KernelName::IndexAddF16U32
+            | KernelName::IndexAddF16I64
+            | KernelName::IndexAddF16U8
+            | KernelName::IndexAddF64U32
+            | KernelName::IndexAddF64I64
+            | KernelName::IndexAddF64U8 => 32,
+            // `gather_idx`: four `uint64_t` fields.
+            KernelName::GatherIdxF32
+            | KernelName::GatherRowsF32
+            | KernelName::IndexSelectF32
+            | KernelName::GatherIdxF16
+            | KernelName::GatherRowsF16
+            | KernelName::IndexSelectF16
+            | KernelName::GatherIdxF64
+            | KernelName::GatherIdxBf16
+            | KernelName::GatherIdxU8
+            | KernelName::GatherIdxU32
+            | KernelName::GatherIdxI64
+            | KernelName::GatherRowsF64
+            | KernelName::IndexSelectF64 => 32,
+            // `reduce_ops`: `uint64_t rows; uint64_t cols`.
+            KernelName::ReduceMinF32
+            | KernelName::ReduceArgMinF32
+            | KernelName::ReduceArgMaxF32
+            | KernelName::ReduceSumF32
+            | KernelName::ReduceMaxF32
+            | KernelName::ReduceSumF16
+            | KernelName::ReduceMaxF16
+            | KernelName::ReduceMinF16
+            | KernelName::ReduceArgMinF16
+            | KernelName::ReduceArgMaxF16
+            | KernelName::ReduceSumF64
+            | KernelName::ReduceMaxF64
+            | KernelName::ReduceMinF64
+            | KernelName::ReduceArgMinF64
+            | KernelName::ReduceArgMaxF64
+            | KernelName::ReduceSumBf16
+            | KernelName::ReduceMaxBf16
+            | KernelName::ReduceMinBf16
+            | KernelName::ReduceArgMinBf16
+            | KernelName::ReduceArgMaxBf16 => 16,
+            // `cmp`: three scalars + two `uint64_t[4]` arrays.
+            KernelName::CmpEqF32
+            | KernelName::CmpNeF32
+            | KernelName::CmpLtF32
+            | KernelName::CmpLeF32
+            | KernelName::CmpGtF32
+            | KernelName::CmpGeF32
+            | KernelName::CmpEqBf16
+            | KernelName::CmpNeBf16
+            | KernelName::CmpLtBf16
+            | KernelName::CmpLeBf16
+            | KernelName::CmpGtBf16
+            | KernelName::CmpGeBf16
+            | KernelName::CmpEqF8e4m3
+            | KernelName::CmpNeF8e4m3
+            | KernelName::CmpLtF8e4m3
+            | KernelName::CmpLeF8e4m3
+            | KernelName::CmpGtF8e4m3
+            | KernelName::CmpGeF8e4m3
+            | KernelName::CmpEqF16
+            | KernelName::CmpNeF16
+            | KernelName::CmpLtF16
+            | KernelName::CmpLeF16
+            | KernelName::CmpGtF16
+            | KernelName::CmpGeF16
+            | KernelName::CmpEqF64
+            | KernelName::CmpNeF64
+            | KernelName::CmpLtF64
+            | KernelName::CmpLeF64
+            | KernelName::CmpGtF64
+            | KernelName::CmpGeF64
+            | KernelName::CmpEqU8
+            | KernelName::CmpNeU8
+            | KernelName::CmpLtU8
+            | KernelName::CmpLeU8
+            | KernelName::CmpGtU8
+            | KernelName::CmpGeU8
+            | KernelName::CmpEqU32
+            | KernelName::CmpNeU32
+            | KernelName::CmpLtU32
+            | KernelName::CmpLeU32
+            | KernelName::CmpGtU32
+            | KernelName::CmpGeU32
+            | KernelName::CmpEqI16
+            | KernelName::CmpNeI16
+            | KernelName::CmpLtI16
+            | KernelName::CmpLeI16
+            | KernelName::CmpGtI16
+            | KernelName::CmpGeI16
+            | KernelName::CmpEqI32
+            | KernelName::CmpNeI32
+            | KernelName::CmpLtI32
+            | KernelName::CmpLeI32
+            | KernelName::CmpGtI32
+            | KernelName::CmpGeI32
+            | KernelName::CmpEqI64
+            | KernelName::CmpNeI64
+            | KernelName::CmpLtI64
+            | KernelName::CmpLeI64
+            | KernelName::CmpGtI64
+            | KernelName::CmpGeI64 => 88,
+            // `where`: two scalars + three `uint64_t[4]` arrays.
+            KernelName::WhereF32
+            | KernelName::WhereBf16
+            | KernelName::WhereF8e4m3
+            | KernelName::WhereF16
+            | KernelName::WhereF64 => 112,
+            // `binary`: four scalars + three `uint64_t[8]` arrays.
+            KernelName::BinaryMaximumF32
+            | KernelName::BinaryMinimumF32
+            | KernelName::BinaryAddF32
+            | KernelName::BinarySubF32
+            | KernelName::BinaryMulF32
+            | KernelName::BinaryDivF32
+            | KernelName::BinaryAddBf16
+            | KernelName::BinarySubBf16
+            | KernelName::BinaryMulBf16
+            | KernelName::BinaryDivBf16
+            | KernelName::BinaryMaximumBf16
+            | KernelName::BinaryMinimumBf16
+            | KernelName::BinaryAddF8e4m3
+            | KernelName::BinarySubF8e4m3
+            | KernelName::BinaryMulF8e4m3
+            | KernelName::BinaryDivF8e4m3
+            | KernelName::BinaryMaximumF8e4m3
+            | KernelName::BinaryMinimumF8e4m3
+            | KernelName::BinaryAddF16
+            | KernelName::BinarySubF16
+            | KernelName::BinaryMulF16
+            | KernelName::BinaryDivF16
+            | KernelName::BinaryMaximumF16
+            | KernelName::BinaryMinimumF16
+            | KernelName::BinaryAddF64
+            | KernelName::BinarySubF64
+            | KernelName::BinaryMulF64
+            | KernelName::BinaryDivF64
+            | KernelName::BinaryMaximumF64
+            | KernelName::BinaryMinimumF64
+            | KernelName::BinaryAddU8
+            | KernelName::BinarySubU8
+            | KernelName::BinaryMulU8
+            | KernelName::BinaryDivU8
+            | KernelName::BinaryMaximumU8
+            | KernelName::BinaryMinimumU8
+            | KernelName::BinaryAddU32
+            | KernelName::BinarySubU32
+            | KernelName::BinaryMulU32
+            | KernelName::BinaryDivU32
+            | KernelName::BinaryMaximumU32
+            | KernelName::BinaryMinimumU32
+            | KernelName::BinaryAddI16
+            | KernelName::BinarySubI16
+            | KernelName::BinaryMulI16
+            | KernelName::BinaryDivI16
+            | KernelName::BinaryMaximumI16
+            | KernelName::BinaryMinimumI16
+            | KernelName::BinaryAddI32
+            | KernelName::BinarySubI32
+            | KernelName::BinaryMulI32
+            | KernelName::BinaryDivI32
+            | KernelName::BinaryMaximumI32
+            | KernelName::BinaryMinimumI32
+            | KernelName::BinaryAddI64
+            | KernelName::BinarySubI64
+            | KernelName::BinaryMulI64
+            | KernelName::BinaryDivI64
+            | KernelName::BinaryMaximumI64
+            | KernelName::BinaryMinimumI64 => 224,
+            // `gemm`: seven `uint64_t` fields.
+            KernelName::GemmF32
+            | KernelName::GemmF16
+            | KernelName::GemmF64
+            | KernelName::GemmCoopMatF16
+            | KernelName::GemmCoopMatBf16
+            | KernelName::AffineCoopMatF16
+            | KernelName::AffineCoopMatBf16 => 56,
+            // fused quant GEMM: three `uint64_t` fields.
+            KernelName::FusedQ40GemmF32
+            | KernelName::FusedQ4kGemmF32
+            | KernelName::FusedQ40GemmMF32
+            | KernelName::FusedQ4kGemmMF32
+            | KernelName::FusedQ50GemmF32
+            | KernelName::FusedQ51GemmF32
+            | KernelName::FusedQ80GemmF32
+            | KernelName::FusedQ81GemmF32
+            | KernelName::FusedQ5kGemmF32
+            | KernelName::FusedQ8kGemmF32
+            | KernelName::FusedQ5kGemmMF32
+            | KernelName::FusedQ8kGemmMF32 => 24,
             _ => 0,
         }
     }

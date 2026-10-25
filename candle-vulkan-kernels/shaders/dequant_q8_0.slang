@@ -1,16 +1,17 @@
 // dequantize _q8_0
+import common_dequant;
 import dequant_helpers;
 
 StructuredBuffer<uint8_t> g_Src;
 RWStructuredBuffer<float> g_Dst;
-StructuredBuffer<uint64_t> g_Params; // [0]=num_blocks
+layout(push_constant) Params g_Params;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint b = dispatchThreadID.x;
-    if (b >= g_Params[0])
+    if (b >= g_Params.num_blocks)
     {
         return;
     }

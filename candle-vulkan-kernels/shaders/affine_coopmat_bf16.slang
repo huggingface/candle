@@ -30,6 +30,7 @@
 // once before using it).
 //
 // Params: [0]=batch, [1]=m, [2]=n, [3]=k, [4]=rhs_transposed (0/1)
+import common_gemm;
 typealias MatA_t =
     linalg.CoopMat<BFloat16, MemoryScope.Subgroup, 16, 16,
                    linalg.CoopMatMatrixUse.MatrixA>;
@@ -44,7 +45,7 @@ StructuredBuffer<BFloat16> g_Lhs;
 StructuredBuffer<BFloat16> g_Rhs;
 StructuredBuffer<BFloat16> g_Bias;
 RWStructuredBuffer<BFloat16> g_Out;
-StructuredBuffer<uint64_t> g_Params;
+layout(push_constant) Params g_Params;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -53,12 +54,12 @@ void main_affine(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : S
     uint batch = groupID.z;
     uint row = groupID.x * 16u;
     uint col = groupID.y * 16u;
-    uint m = (uint)g_Params[1];
-    uint n = (uint)g_Params[2];
-    uint k = (uint)g_Params[3];
-    uint rt = (uint)g_Params[4];
-    uint sk = (uint)g_Params[5];
-    uint sn = (uint)g_Params[6];
+    uint m = (uint)g_Params.m;
+    uint n = (uint)g_Params.n;
+    uint k = (uint)g_Params.k;
+    uint rt = (uint)g_Params.rhs_transposed;
+    uint sk = (uint)g_Params.sk;
+    uint sn = (uint)g_Params.sn;
 
     // Zero row-stride load: bias[col..col+16] replicated across all
     // 16 rows of the tile.

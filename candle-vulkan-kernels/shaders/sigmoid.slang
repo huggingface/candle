@@ -1,13 +1,14 @@
 // Sigmoid: out[i] = 1 / (1 + exp(-x[i]))
+import common_sigmoid;
 StructuredBuffer<float> g_Src;
 RWStructuredBuffer<float> g_Dst;
-StructuredBuffer<uint64_t> g_Params; // [0] = element count
+layout(push_constant) Params g_Params;
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;
-    uint64_t count = g_Params[0];
+    uint64_t count = g_Params.count;
     if (i >= count)
     {
         return;

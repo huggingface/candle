@@ -5,19 +5,20 @@
 // out[row] = argmin_c in[row*cols + c]                   (main_reduce_argmin)
 // out[row] = argmax_c in[row*cols + c]                   (main_reduce_argmax)
 import bf16_type;
+import common_reduce;
 
 StructuredBuffer<BF16> g_In;
 RWStructuredBuffer<BF16> g_OutF;
 RWStructuredBuffer<uint> g_OutI;
-StructuredBuffer<uint64_t> g_Params; // [0]=rows, [1]=cols
+layout(push_constant) Params g_Params;
 
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main_reduce_min(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint row = dispatchThreadID.x;
-    uint64_t rows = g_Params[0];
-    uint64_t cols = g_Params[1];
+    uint64_t rows = g_Params.rows;
+    uint64_t cols = g_Params.cols;
     if (row >= rows || cols == 0u)
     {
         return;
@@ -39,8 +40,8 @@ void main_reduce_min(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_reduce_argmin(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint row = dispatchThreadID.x;
-    uint64_t rows = g_Params[0];
-    uint64_t cols = g_Params[1];
+    uint64_t rows = g_Params.rows;
+    uint64_t cols = g_Params.cols;
     if (row >= rows || cols == 0u)
     {
         return;
@@ -64,8 +65,8 @@ void main_reduce_argmin(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_reduce_argmax(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint row = dispatchThreadID.x;
-    uint64_t rows = g_Params[0];
-    uint64_t cols = g_Params[1];
+    uint64_t rows = g_Params.rows;
+    uint64_t cols = g_Params.cols;
     if (row >= rows || cols == 0u)
     {
         return;
@@ -88,8 +89,8 @@ void main_reduce_argmax(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_reduce_sum(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint row = dispatchThreadID.x;
-    uint64_t rows = g_Params[0];
-    uint64_t cols = g_Params[1];
+    uint64_t rows = g_Params.rows;
+    uint64_t cols = g_Params.cols;
     if (row >= rows || cols == 0u)
     {
         return;
@@ -106,8 +107,8 @@ void main_reduce_sum(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_reduce_max(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint row = dispatchThreadID.x;
-    uint64_t rows = g_Params[0];
-    uint64_t cols = g_Params[1];
+    uint64_t rows = g_Params.rows;
+    uint64_t cols = g_Params.cols;
     if (row >= rows || cols == 0u)
     {
         return;

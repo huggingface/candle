@@ -701,24 +701,17 @@ impl VulkanDevice {
             ) => (a.clone(), b.clone(), o.clone()),
             _ => return false,
         };
-        let params = match Buffer::from_iter(
-            &self.inner.mem_alloc,
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![1u64, 16, 16, 16, 0, 16, 16],
-        ) {
-            Ok(b) => b,
-            Err(_) => return false,
+        let params = candle_vulkan_kernels::push_constants::GemmParams {
+            batch: 1,
+            m: 16,
+            n: 16,
+            k: 16,
+            rhs_transposed: 0,
+            sk: 16,
+            sn: 16,
         };
         let kernels = self.kernels();
-        let (a_b, b_b, out_b, params) = (a_b.clone(), b_b.clone(), out_b.clone(), params.clone());
+        let (a_b, b_b, out_b) = (a_b.clone(), b_b.clone(), out_b.clone());
         if self
             .execute(move |cbb| {
                 candle_vulkan_kernels::call_gemm_slang::<f16>(
@@ -776,24 +769,17 @@ impl VulkanDevice {
             ) => (a.clone(), b.clone(), o.clone()),
             _ => return false,
         };
-        let params = match Buffer::from_iter(
-            &self.inner.mem_alloc,
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![1u64, 16, 16, 16, 0, 16, 16],
-        ) {
-            Ok(b) => b,
-            Err(_) => return false,
+        let params = candle_vulkan_kernels::push_constants::GemmParams {
+            batch: 1,
+            m: 16,
+            n: 16,
+            k: 16,
+            rhs_transposed: 0,
+            sk: 16,
+            sn: 16,
         };
         let kernels = self.kernels();
-        let (a_b, b_b, out_b, params) = (a_b.clone(), b_b.clone(), out_b.clone(), params.clone());
+        let (a_b, b_b, out_b) = (a_b.clone(), b_b.clone(), out_b.clone());
         if self
             .execute(move |cbb| {
                 candle_vulkan_kernels::call_gemm_slang::<half::bf16>(
@@ -869,30 +855,17 @@ impl VulkanDevice {
                 ) => (a.clone(), b.clone(), c.clone(), d.clone()),
                 _ => return false,
             };
-        let params = match Buffer::from_iter(
-            &self.inner.mem_alloc,
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![1u64, 16, 16, 16, 0, 16, 16],
-        ) {
-            Ok(b) => b,
-            Err(_) => return false,
+        let params = candle_vulkan_kernels::push_constants::GemmParams {
+            batch: 1,
+            m: 16,
+            n: 16,
+            k: 16,
+            rhs_transposed: 0,
+            sk: 16,
+            sn: 16,
         };
         let kernels = self.kernels();
-        let (a_b, b_b, bias_b, out_b, params) = (
-            a_b.clone(),
-            b_b.clone(),
-            bias_b.clone(),
-            out_b.clone(),
-            params.clone(),
-        );
+        let (a_b, b_b, bias_b, out_b) = (a_b.clone(), b_b.clone(), bias_b.clone(), out_b.clone());
         if self
             .execute(move |cbb| {
                 candle_vulkan_kernels::call_affine_coopmat_slang::<half::f16>(
@@ -956,30 +929,17 @@ impl VulkanDevice {
                 ) => (a.clone(), b.clone(), c.clone(), d.clone()),
                 _ => return false,
             };
-        let params = match Buffer::from_iter(
-            &self.inner.mem_alloc,
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![1u64, 16, 16, 16, 0, 16, 16],
-        ) {
-            Ok(b) => b,
-            Err(_) => return false,
+        let params = candle_vulkan_kernels::push_constants::GemmParams {
+            batch: 1,
+            m: 16,
+            n: 16,
+            k: 16,
+            rhs_transposed: 0,
+            sk: 16,
+            sn: 16,
         };
         let kernels = self.kernels();
-        let (a_b, b_b, bias_b, out_b, params) = (
-            a_b.clone(),
-            b_b.clone(),
-            bias_b.clone(),
-            out_b.clone(),
-            params.clone(),
-        );
+        let (a_b, b_b, bias_b, out_b) = (a_b.clone(), b_b.clone(), bias_b.clone(), out_b.clone());
         if self
             .execute(move |cbb| {
                 candle_vulkan_kernels::call_affine_coopmat_slang::<half::bf16>(

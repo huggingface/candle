@@ -1,9 +1,10 @@
 // 2D pooling over NCHW data (b*c treated as planes):
 //   out[plane, ih, iw] = avg/max of src[plane, ih*s_h + m, iw*s_w + n]
 // over m in 0..k_h, n in 0..k_w.
+import common_pool2d;
 StructuredBuffer<half> g_Src;
 RWStructuredBuffer<half> g_Out;
-StructuredBuffer<uint64_t> g_Params;
+layout(push_constant) Params g_Params;
 // [0]=planes(b*c), [1]=h, [2]=w, [3]=k_h, [4]=k_w, [5]=s_h, [6]=s_w,
 // [7]=h_out, [8]=w_out
 
@@ -12,15 +13,15 @@ StructuredBuffer<uint64_t> g_Params;
 void main_avg_pool2d(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint o = dispatchThreadID.x;
-    uint64_t planes = g_Params[0];
-    uint64_t h = g_Params[1];
-    uint64_t w = g_Params[2];
-    uint64_t k_h = g_Params[3];
-    uint64_t k_w = g_Params[4];
-    uint64_t s_h = g_Params[5];
-    uint64_t s_w = g_Params[6];
-    uint64_t h_out = g_Params[7];
-    uint64_t w_out = g_Params[8];
+    uint64_t planes = g_Params.planes;
+    uint64_t h = g_Params.h;
+    uint64_t w = g_Params.w;
+    uint64_t k_h = g_Params.k_h;
+    uint64_t k_w = g_Params.k_w;
+    uint64_t s_h = g_Params.s_h;
+    uint64_t s_w = g_Params.s_w;
+    uint64_t h_out = g_Params.h_out;
+    uint64_t w_out = g_Params.w_out;
     if (o >= planes * h_out * w_out)
     {
         return;
@@ -48,15 +49,15 @@ void main_avg_pool2d(uint3 dispatchThreadID : SV_DispatchThreadID)
 void main_max_pool2d(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint o = dispatchThreadID.x;
-    uint64_t planes = g_Params[0];
-    uint64_t h = g_Params[1];
-    uint64_t w = g_Params[2];
-    uint64_t k_h = g_Params[3];
-    uint64_t k_w = g_Params[4];
-    uint64_t s_h = g_Params[5];
-    uint64_t s_w = g_Params[6];
-    uint64_t h_out = g_Params[7];
-    uint64_t w_out = g_Params[8];
+    uint64_t planes = g_Params.planes;
+    uint64_t h = g_Params.h;
+    uint64_t w = g_Params.w;
+    uint64_t k_h = g_Params.k_h;
+    uint64_t k_w = g_Params.k_w;
+    uint64_t s_h = g_Params.s_h;
+    uint64_t s_w = g_Params.s_w;
+    uint64_t h_out = g_Params.h_out;
+    uint64_t w_out = g_Params.w_out;
     if (o >= planes * h_out * w_out)
     {
         return;

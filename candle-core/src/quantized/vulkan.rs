@@ -11,8 +11,7 @@ use crate::{
     CpuStorage, DType, Layout, Result, Shape, VulkanDevice, VulkanStorage,
 };
 use candle_vulkan_kernels::{KernelName, Source};
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
+use vulkano::buffer::Subbuffer;
 
 pub struct QVulkanStorage {
     /// The raw quantized bytes (a `DType::U8` `VulkanStorage`).
@@ -225,22 +224,9 @@ impl QVulkanStorage {
             crate::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
             _ => crate::bail!("dequantize: out was created as F32"),
         };
-        // params[0] = num_blocks
-        let params_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![num_blocks as u64],
-        )
-        .map_err(|e| crate::Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[u64]> = params_buf;
+        let params = candle_vulkan_kernels::push_constants::DequantParams {
+            num_blocks: num_blocks as u64,
+        };
         let kernels = self.device.kernels();
         self.device.execute(move |cbb| {
             candle_vulkan_kernels::call_dequantize_slang(
@@ -438,22 +424,11 @@ impl QVulkanStorage {
             _ => crate::bail!("fused quant gemm: out was created as F32"),
         };
         let src = self.src_bytes();
-        // params = [m, n, k]
-        let params_buf = Buffer::from_iter(
-            self.device.mem_alloc(),
-            &BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            &AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            },
-            vec![m as u64, n as u64, k as u64],
-        )
-        .map_err(|e| crate::Error::Vulkan(e.to_string().into()))?;
-        let params: Subbuffer<[u64]> = params_buf;
+        let params = candle_vulkan_kernels::push_constants::FusedQuantGemmParams {
+            m: m as u64,
+            n: n as u64,
+            k: k as u64,
+        };
         let kernels = self.device.kernels();
         self.device.execute(move |cbb| {
             candle_vulkan_kernels::call_fused_quant_gemm_slang(

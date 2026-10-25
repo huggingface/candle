@@ -25,6 +25,7 @@
 // when the Stride operand is the same value as one feeding the k
 // loop condition: the stride is read from dedicated params slots
 // (params[5]=k, params[6]=n) so it is a distinct SSA value.
+import common_gemm;
 typealias MatA_t =
     linalg.CoopMat<half, MemoryScope.Subgroup, 16, 16, linalg.CoopMatMatrixUse.MatrixA>;
 typealias MatB_t =
@@ -36,7 +37,7 @@ typealias MatC_t =
 StructuredBuffer<half> g_Lhs;
 StructuredBuffer<half> g_Rhs;
 RWStructuredBuffer<half> g_Out;
-StructuredBuffer<uint64_t> g_Params;
+layout(push_constant) Params g_Params;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -45,12 +46,12 @@ void main_gemm(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_
     uint batch = groupID.z;
     uint row = groupID.x * 16u;
     uint col = groupID.y * 16u;
-    uint m = (uint)g_Params[1];
-    uint n = (uint)g_Params[2];
-    uint k = (uint)g_Params[3];
-    uint rt = (uint)g_Params[4];
-    uint sk = (uint)g_Params[5];
-    uint sn = (uint)g_Params[6];
+    uint m = (uint)g_Params.m;
+    uint n = (uint)g_Params.n;
+    uint k = (uint)g_Params.k;
+    uint rt = (uint)g_Params.rhs_transposed;
+    uint sk = (uint)g_Params.sk;
+    uint sn = (uint)g_Params.sn;
 
     MatC_t matC;
     matC.fill(0.0h);

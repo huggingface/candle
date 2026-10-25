@@ -1,9 +1,10 @@
 // dequantize _q2k
+import common_dequant;
 import dequant_helpers;
 
 StructuredBuffer<uint8_t> g_Src;
 RWStructuredBuffer<float> g_Dst;
-StructuredBuffer<uint64_t> g_Params; // [0]=num_blocks
+layout(push_constant) Params g_Params;
 
 // Q4K/Q5K scale-min decoder (from candle quantized/utils.rs::get_scale_min_k4).
 // `off` is the block base offset in g_Src; `soff` is the scale-array offset.
@@ -28,7 +29,7 @@ uint2 get_scale_min_k4(uint j, uint off, uint soff)
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint b = dispatchThreadID.x;
-    if (b >= g_Params[0])
+    if (b >= g_Params.num_blocks)
     {
         return;
     }
