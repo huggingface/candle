@@ -67,24 +67,14 @@ pub trait BackendStorage: Sized {
         crate::bail!("conv3d is not implemented for this backend")
     }
 
-    fn conv3d_backward_input(
+    fn conv_transpose3d(
         &self,
         _l: &Layout,
         _kernel: &Self,
         _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConv3D,
+        _params: &crate::conv::ParamsConvTranspose3D,
     ) -> Result<Self> {
-        crate::bail!("conv3d backward input is not implemented for this backend")
-    }
-
-    fn conv3d_backward_weight(
-        &self,
-        _l: &Layout,
-        _grad: &Self,
-        _grad_l: &Layout,
-        _params: &crate::conv::ParamsConv3D,
-    ) -> Result<Self> {
-        crate::bail!("conv3d backward weight is not implemented for this backend")
+        crate::bail!("conv_transpose3d is not implemented for this backend")
     }
 
     fn conv_transpose2d(

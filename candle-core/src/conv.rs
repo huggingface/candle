@@ -133,6 +133,13 @@ impl ParamsConv3D {
             Self::out_dim(i_h, k_h, padding[1], stride[1], dilation[1])?,
             Self::out_dim(i_w, k_w, padding[2], stride[2], dilation[2])?,
         ];
+        checked_conv3d_numel(&[
+            b_size,
+            c_out,
+            out_spatial[0],
+            out_spatial[1],
+            out_spatial[2],
+        ])?;
         Ok(Self {
             b_size,
             i_d,
@@ -208,6 +215,123 @@ impl ParamsConv3D {
     }
 }
 
+/// Parameters for one group of a 3D transposed convolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParamsConvTranspose3D {
+    pub(crate) b_size: usize,
+    pub(crate) c_in: usize,
+    pub(crate) c_out: usize,
+    pub(crate) i_d: usize,
+    pub(crate) i_h: usize,
+    pub(crate) i_w: usize,
+    pub(crate) k_d: usize,
+    pub(crate) k_h: usize,
+    pub(crate) k_w: usize,
+    pub(crate) padding: [usize; 3],
+    pub(crate) stride: [usize; 3],
+    pub(crate) dilation: [usize; 3],
+    out_spatial: [usize; 3],
+}
+
+impl ParamsConvTranspose3D {
+    pub(crate) fn new(
+        input_shape: [usize; 5],
+        kernel_shape: [usize; 5],
+        padding: [usize; 3],
+        output_padding: [usize; 3],
+        stride: [usize; 3],
+        dilation: [usize; 3],
+    ) -> Result<Self> {
+        let [b_size, c_in, i_d, i_h, i_w] = input_shape;
+        let [c_in_k, c_out, k_d, k_h, k_w] = kernel_shape;
+        if c_in != c_in_k {
+            crate::bail!(
+                "conv_transpose3d in_channel mismatch between input ({c_in}) and kernel ({c_in_k})"
+            )
+        }
+        if c_in == 0 || c_out == 0 {
+            crate::bail!("conv_transpose3d channels must be non-zero")
+        }
+        let mut out_spatial = [0; 3];
+        for axis in 0..3 {
+            let input = input_shape[axis + 2];
+            let kernel = kernel_shape[axis + 2];
+            if input == 0 || kernel == 0 || stride[axis] == 0 || dilation[axis] == 0 {
+                crate::bail!("conv_transpose3d input, kernel, stride, and dilation dimensions must be non-zero")
+            }
+            if output_padding[axis] >= stride[axis] && output_padding[axis] >= dilation[axis] {
+                crate::bail!("conv_transpose3d output padding must be smaller than stride or dilation on each axis")
+            }
+            // Add output padding before subtracting padding: the base size can
+            // be non-positive while the final output size is valid.
+            let size = (input - 1)
+                .checked_mul(stride[axis])
+                .and_then(|v| v.checked_add((kernel - 1).checked_mul(dilation[axis])?))
+                .and_then(|v| v.checked_add(1))
+                .and_then(|v| v.checked_add(output_padding[axis]))
+                .ok_or_else(|| Error::Msg("conv_transpose3d output size overflow".into()).bt())?;
+            let padding = padding[axis]
+                .checked_mul(2)
+                .ok_or_else(|| Error::Msg("conv_transpose3d padding overflow".into()).bt())?;
+            out_spatial[axis] = size
+                .checked_sub(padding)
+                .filter(|&v| v > 0)
+                .ok_or_else(|| {
+                    Error::Msg("conv_transpose3d output dimensions must be positive".into()).bt()
+                })?;
+        }
+        checked_conv3d_numel(&[
+            b_size,
+            c_out,
+            out_spatial[0],
+            out_spatial[1],
+            out_spatial[2],
+        ])?;
+        Ok(Self {
+            b_size,
+            c_in,
+            c_out,
+            i_d,
+            i_h,
+            i_w,
+            k_d,
+            k_h,
+            k_w,
+            padding,
+            stride,
+            dilation,
+            out_spatial,
+        })
+    }
+
+    pub(crate) fn out_d(&self) -> usize {
+        self.out_spatial[0]
+    }
+    pub(crate) fn out_h(&self) -> usize {
+        self.out_spatial[1]
+    }
+    pub(crate) fn out_w(&self) -> usize {
+        self.out_spatial[2]
+    }
+    pub(crate) fn out_dims(&self) -> Vec<usize> {
+        vec![
+            self.b_size,
+            self.c_out,
+            self.out_d(),
+            self.out_h(),
+            self.out_w(),
+        ]
+    }
+}
+
+// Validate products before they reach tensor layouts or backend allocations.
+pub(crate) fn checked_conv3d_numel(dims: &[usize]) -> Result<usize> {
+    dims.iter().rev().try_fold(1usize, |n, &dim| {
+        n.checked_mul(dim)
+            .ok_or_else(|| Error::Msg("3d convolution element count overflow".into()).bt())
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamsConvTranspose2D {
     pub(crate) b_size: usize,
@@ -237,6 +361,14 @@ impl ParamsConvTranspose2D {
     pub(crate) fn out_dims(&self) -> Vec<usize> {
         vec![self.b_size, self.c_out, self.out_h(), self.out_w()]
     }
+}
+
+fn check_conv3d_output(dims: &[usize], dtype: crate::DType) -> Result<()> {
+    let len = checked_conv3d_numel(dims)?;
+    if len > isize::MAX as usize / dtype.size_in_bytes() {
+        crate::bail!("3d convolution allocation size overflow")
+    }
+    Ok(())
 }
 
 impl Tensor {
@@ -498,6 +630,16 @@ impl Tensor {
             stride,
             dilation,
         )?;
+        check_conv3d_output(
+            &[
+                b_size,
+                c_out,
+                params.out_d(),
+                params.out_h(),
+                params.out_w(),
+            ],
+            self.dtype(),
+        )?;
         if groups == 1 {
             self.conv3d_single_group(kernel, &params)
         } else {
@@ -512,54 +654,92 @@ impl Tensor {
         }
     }
 
-    pub(crate) fn conv3d_backward_input(
+    /// Applies a CPU 3D transposed convolution to an `[N, C_in, D, H, W]` tensor.
+    ///
+    /// Weights have shape `[C_in, C_out / groups, K_D, K_H, K_W]`. Spatial
+    /// arguments are in depth/height/width order. Each output dimension is
+    /// `(input - 1) * stride - 2 * padding + dilation * (kernel - 1) + output_padding + 1`.
+    /// Output padding must be smaller than stride or
+    /// dilation on each axis; it selects the output shape rather than adding
+    /// zero padding to the input. CUDA and Metal are not implemented.
+    pub fn conv_transpose3d(
         &self,
         kernel: &Self,
-        params: &ParamsConv3D,
+        padding: [usize; 3],
+        output_padding: [usize; 3],
+        stride: [usize; 3],
+        dilation: [usize; 3],
+        groups: usize,
     ) -> Result<Self> {
-        let storage = self.storage().conv3d_backward_input(
+        if groups == 0 {
+            crate::bail!("conv_transpose3d groups must be non-zero")
+        }
+        let (b_size, c_in, i_d, i_h, i_w) = self.dims5()?;
+        let (c_in_k, c_out, k_d, k_h, k_w) = kernel.dims5()?;
+        if c_in != c_in_k || c_in % groups != 0 {
+            crate::bail!("conv_transpose3d input channels ({c_in}) must match the kernel ({c_in_k}) and be divisible by groups ({groups})")
+        }
+        let params = ParamsConvTranspose3D::new(
+            [b_size, c_in / groups, i_d, i_h, i_w],
+            [c_in_k / groups, c_out, k_d, k_h, k_w],
+            padding,
+            output_padding,
+            stride,
+            dilation,
+        )?;
+        let total_c_out = c_out
+            .checked_mul(groups)
+            .ok_or_else(|| Error::Msg("conv_transpose3d channel count overflow".into()).bt())?;
+        check_conv3d_output(
+            &[
+                b_size,
+                total_c_out,
+                params.out_d(),
+                params.out_h(),
+                params.out_w(),
+            ],
+            self.dtype(),
+        )?;
+        if groups == 1 {
+            self.conv_transpose3d_single_group(kernel, &params, output_padding)
+        } else {
+            let blocks = self.chunk(groups, 1)?;
+            let kernels = kernel.chunk(groups, 0)?;
+            let outputs = blocks
+                .iter()
+                .zip(&kernels)
+                .map(|(block, kernel)| {
+                    block.conv_transpose3d_single_group(kernel, &params, output_padding)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Tensor::cat(&outputs, 1)
+        }
+    }
+
+    fn conv_transpose3d_single_group(
+        &self,
+        kernel: &Self,
+        params: &ParamsConvTranspose3D,
+        output_padding: [usize; 3],
+    ) -> Result<Self> {
+        let storage = self.storage().conv_transpose3d(
             self.layout(),
             &kernel.storage(),
             kernel.layout(),
             params,
         )?;
-        let dims = vec![
-            params.b_size,
-            params.c_in,
-            params.i_d,
-            params.i_h,
-            params.i_w,
-        ];
+        let op = BackpropOp::new2(self, kernel, |arg, kernel| Op::ConvTranspose3D {
+            arg,
+            kernel,
+            padding: params.padding,
+            output_padding,
+            stride: params.stride,
+            dilation: params.dilation,
+        });
         Ok(crate::tensor::from_storage(
             storage,
-            dims,
-            BackpropOp::none(),
-            false,
-        ))
-    }
-
-    pub(crate) fn conv3d_backward_weight(
-        &self,
-        grad: &Self,
-        params: &ParamsConv3D,
-    ) -> Result<Self> {
-        let storage = self.storage().conv3d_backward_weight(
-            self.layout(),
-            &grad.storage(),
-            grad.layout(),
-            params,
-        )?;
-        let dims = vec![
-            params.c_out,
-            params.c_in,
-            params.k_d,
-            params.k_h,
-            params.k_w,
-        ];
-        Ok(crate::tensor::from_storage(
-            storage,
-            dims,
-            BackpropOp::none(),
+            params.out_dims(),
+            op,
             false,
         ))
     }

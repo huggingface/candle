@@ -134,6 +134,15 @@ pub enum Op {
         dilation: usize,
     },
 
+    ConvTranspose3D {
+        arg: Tensor,
+        kernel: Tensor,
+        padding: [usize; 3],
+        output_padding: [usize; 3],
+        stride: [usize; 3],
+        dilation: [usize; 3],
+    },
+
     AvgPool2D {
         arg: Tensor,
         kernel_size: (usize, usize),

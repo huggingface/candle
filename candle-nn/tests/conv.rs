@@ -23,6 +23,10 @@ fn assert_close_tensors(
     let mut max_diff = 0f32;
     let mut max_idx = 0usize;
     for (idx, (got, expected)) in got.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            got.is_finite() && expected.is_finite(),
+            "{label}: nonfinite value at {idx}"
+        );
         let diff = (got - expected).abs();
         if diff > max_diff {
             max_diff = diff;
@@ -196,4 +200,121 @@ fn conv3d_module_low_precision_case(dtype: DType, tolerance: f32) -> Result<()> 
 fn conv3d_module_f16_bf16_cpu() -> Result<()> {
     conv3d_module_low_precision_case(DType::F16, 2e-2)?;
     conv3d_module_low_precision_case(DType::BF16, 1e-1)
+}
+
+#[test]
+fn conv_transpose3d_module_cpu() -> Result<()> {
+    use candle_nn::{
+        conv_transpose3d, conv_transpose3d_no_bias, ConvTranspose3dConfig, VarBuilder,
+    };
+    let dev = &Device::Cpu;
+    let cfg = ConvTranspose3dConfig {
+        stride: [2, 1, 1],
+        output_padding: [1, 0, 0],
+        groups: 2,
+        ..Default::default()
+    };
+    // PyTorch: F.conv_transpose3d(x, w, b, stride=(2,1,1),
+    // output_padding=(1,0,0), groups=2), followed by y.sum().backward().
+    for dtype in [DType::F64, DType::F32, DType::F16, DType::BF16] {
+        let x = var_from_vec_dtype(vec![1., 2., 3., 4.], (1, 2, 2, 1, 1), dtype, dev)?;
+        let w = var_from_vec_dtype(vec![2., 3.], (2, 1, 1, 1, 1), dtype, dev)?;
+        let b = var_from_vec_dtype(vec![0.5, -0.5], 2, dtype, dev)?;
+        let tensors = std::collections::HashMap::from([
+            ("proj.weight".to_string(), w.as_tensor().clone()),
+            ("proj.bias".to_string(), b.as_tensor().clone()),
+        ]);
+        let vb = VarBuilder::from_tensors(tensors, dtype, dev).pp("proj");
+        let layer = conv_transpose3d(2, 2, [1; 3], cfg, vb.clone())?;
+        assert_eq!(layer.config(), &cfg);
+        assert_eq!(layer.weight().dims(), [2, 1, 1, 1, 1]);
+        assert_eq!(layer.bias().unwrap().dims(), [2]);
+        let y = layer.forward(&x)?;
+        assert_eq!(y.dims(), [1, 2, 4, 1, 1]);
+        let expected = Tensor::from_slice(&[2.5f32, 0.5, 4.5, 0.5, 8.5, -0.5, 11.5, -0.5], 8, dev)?;
+        assert_close_tensors(&y, &expected, 0., "transpose module output")?;
+        let grads = y.sum_all()?.backward()?;
+        for (got, expected) in [
+            (grads.get(&x).unwrap(), vec![2f32, 2., 3., 3.]),
+            (grads.get(&w).unwrap(), vec![3f32, 7.]),
+            (grads.get(&b).unwrap(), vec![4f32, 4.]),
+        ] {
+            assert_eq!(got.dtype(), dtype);
+            assert_close_tensors(
+                got,
+                &Tensor::from_slice(&expected, expected.len(), dev)?,
+                0.,
+                "transpose module gradient",
+            )?;
+        }
+        let no_bias = conv_transpose3d_no_bias(2, 2, [1; 3], cfg, vb)?;
+        assert!(no_bias.bias().is_none());
+        let y_no_bias = no_bias.forward(&x)?;
+        assert_close_tensors(
+            &y_no_bias.broadcast_add(&b.reshape((1, 2, 1, 1, 1))?)?,
+            &y,
+            0.,
+            "transpose no bias",
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn conv_transpose3d_builder_validation_cpu() -> Result<()> {
+    use candle_nn::{
+        conv_transpose3d, conv_transpose3d_no_bias, ConvTranspose3dConfig, VarBuilder, VarMap,
+    };
+    let dev = &Device::Cpu;
+    let cfg = ConvTranspose3dConfig {
+        groups: 2,
+        ..Default::default()
+    };
+    let vars = VarMap::new();
+    let layer = conv_transpose3d(
+        4,
+        6,
+        [2, 1, 3],
+        cfg,
+        VarBuilder::from_varmap(&vars, DType::F32, dev),
+    )?;
+    assert_eq!(layer.weight().dims(), [4, 3, 2, 1, 3]);
+    assert_eq!(layer.bias().unwrap().dims(), [6]);
+    let bound = 1f32 / 18f32.sqrt();
+    for t in [layer.weight(), layer.bias().unwrap()] {
+        assert!(t
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .iter()
+            .all(|&v| v.is_finite() && v.abs() <= bound));
+    }
+    let vb = VarBuilder::zeros(DType::F32, dev);
+    for (input, output, groups, kernel) in [
+        (3, 6, 2, [1; 3]),
+        (4, 5, 2, [1; 3]),
+        (0, 2, 1, [1; 3]),
+        (2, 0, 1, [1; 3]),
+        (2, 2, 0, [1; 3]),
+        (2, 2, 1, [1, 0, 1]),
+        (2, 2, 1, [usize::MAX, 2, 1]),
+    ] {
+        let cfg = ConvTranspose3dConfig {
+            groups,
+            ..Default::default()
+        };
+        assert!(conv_transpose3d(input, output, kernel, cfg, vb.clone()).is_err());
+        assert!(conv_transpose3d_no_bias(input, output, kernel, cfg, vb.clone()).is_err());
+    }
+    for axis in 0..3 {
+        let mut cfg = ConvTranspose3dConfig::default();
+        cfg.stride[axis] = 0;
+        assert!(conv_transpose3d(2, 2, [1; 3], cfg, vb.clone()).is_err());
+        cfg = ConvTranspose3dConfig::default();
+        cfg.dilation[axis] = 0;
+        assert!(conv_transpose3d_no_bias(2, 2, [1; 3], cfg, vb.clone()).is_err());
+        cfg = ConvTranspose3dConfig::default();
+        cfg.output_padding[axis] = 1;
+        assert!(conv_transpose3d(2, 2, [1; 3], cfg, vb.clone()).is_err());
+    }
+    Ok(())
 }

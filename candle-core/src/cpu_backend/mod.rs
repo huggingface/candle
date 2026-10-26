@@ -14,7 +14,7 @@ pub use utils::{
 mod conv2d;
 use conv2d::Conv2D;
 mod conv3d;
-use conv3d::{Conv3D, Conv3DBackwardInput, Conv3DBackwardWeight};
+use conv3d::{Conv3D, ConvTranspose3D};
 
 const USE_IM2COL_CONV1D: bool = true;
 const USE_COL2IM_CONV1D_TR: bool = true;
@@ -2951,24 +2951,14 @@ impl BackendStorage for CpuStorage {
         Conv3D(params).map(self, l, kernel, kernel_l)
     }
 
-    fn conv3d_backward_input(
+    fn conv_transpose3d(
         &self,
         l: &Layout,
         kernel: &Self,
         kernel_l: &Layout,
-        params: &crate::conv::ParamsConv3D,
+        params: &crate::conv::ParamsConvTranspose3D,
     ) -> Result<Self> {
-        Conv3DBackwardInput(params).map(self, l, kernel, kernel_l)
-    }
-
-    fn conv3d_backward_weight(
-        &self,
-        l: &Layout,
-        grad: &Self,
-        grad_l: &Layout,
-        params: &crate::conv::ParamsConv3D,
-    ) -> Result<Self> {
-        Conv3DBackwardWeight(params).map(self, l, grad, grad_l)
+        ConvTranspose3D(params).map(self, l, kernel, kernel_l)
     }
 
     fn conv_transpose2d(
