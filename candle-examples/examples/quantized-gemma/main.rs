@@ -292,30 +292,91 @@ fn main() -> anyhow::Result<()> {
 
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;
-        for index in 0..to_sample {
-            let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
-            let logits = model.forward(&input, prompt_tokens.len() + index)?;
-            let logits = logits.squeeze(0)?;
-            let logits = if args.repeat_penalty == 1. {
-                logits
-            } else {
-                let start_at = all_tokens.len().saturating_sub(args.repeat_last_n);
-                candle_transformers::utils::apply_repeat_penalty(
-                    &logits,
-                    args.repeat_penalty,
-                    &all_tokens[start_at..],
-                )?
-            };
-            next_token = logits_processor.sample(&logits)?;
-            all_tokens.push(next_token);
-            if let Some(t) = tos.next_token(next_token)? {
-                print!("{t}");
-                std::io::stdout().flush()?;
+        // Greedy decoding on the Vulkan backend pipelines the per-token
+        // readback: the argmax runs on the GPU, its result stays in a
+        // device buffer as the next step's embedding index, and the CPU
+        // reads the sampled id back one step behind, while the GPU is
+        // already running the next forward. Non-greedy sampling and
+        // repeat penalties need the logits on the CPU and use the
+        // blocking path below.
+        let pipelined = args.temperature <= 0.
+            && args.repeat_penalty == 1.
+            && std::env::var("CANDLE_VULKAN_PIPELINE")
+                .map(|v| v != "0")
+                .unwrap_or(true)
+            && matches!(&device, candle::Device::Vulkan(_));
+        if pipelined {
+            if let candle::Device::Vulkan(vd) = &device {
+                let mut input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
+                let mut pending: Option<candle::PipedId> = None;
+                for index in 0..to_sample {
+                    let logits = model.forward(&input, prompt_tokens.len() + index)?;
+                    let id = logits.squeeze(0)?.argmax(candle::D::Minus1)?;
+                    let (id_storage_ref, _) = id.storage_and_layout();
+                    let id_storage = match &*id_storage_ref {
+                        candle::Storage::Vulkan(s) => s,
+                        _ => unreachable!("vulkan logits on non-vulkan storage"),
+                    };
+                    input = id.unsqueeze(0)?.unsqueeze(0)?;
+                    // Submit this step first, then read the previous step's
+                    // id back: while the CPU recorded this step, the GPU was
+                    // already running the previous one, so the wait is
+                    // usually instant and the GPU does not idle between
+                    // tokens.
+                    let p = vd.submit_id_readback(id_storage)?;
+                    if let Some(prev) = pending.take() {
+                        next_token = prev.wait()?;
+                        all_tokens.push(next_token);
+                        if let Some(t) = tos.next_token(next_token)? {
+                            print!("{t}");
+                            std::io::stdout().flush()?;
+                        }
+                        sampled += 1;
+                        if next_token == eos_token {
+                            // One step is still in flight (submitted above);
+                            // let it finish so the batch is not abandoned.
+                            p.wait()?;
+                            break;
+                        }
+                    }
+                    pending = Some(p);
+                }
+                if let Some(p) = pending {
+                    next_token = p.wait()?;
+                    all_tokens.push(next_token);
+                    if let Some(t) = tos.next_token(next_token)? {
+                        print!("{t}");
+                        std::io::stdout().flush()?;
+                    }
+                    sampled += 1;
+                }
             }
-            sampled += 1;
-            if next_token == eos_token {
-                break;
-            };
+        } else {
+            for index in 0..to_sample {
+                let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
+                let logits = model.forward(&input, prompt_tokens.len() + index)?;
+                let logits = logits.squeeze(0)?;
+                let logits = if args.repeat_penalty == 1. {
+                    logits
+                } else {
+                    let start_at = all_tokens.len().saturating_sub(args.repeat_last_n);
+                    candle_transformers::utils::apply_repeat_penalty(
+                        &logits,
+                        args.repeat_penalty,
+                        &all_tokens[start_at..],
+                    )?
+                };
+                next_token = logits_processor.sample(&logits)?;
+                all_tokens.push(next_token);
+                if let Some(t) = tos.next_token(next_token)? {
+                    print!("{t}");
+                    std::io::stdout().flush()?;
+                }
+                sampled += 1;
+                if next_token == eos_token {
+                    break;
+                };
+            }
         }
         if let Some(rest) = tos.decode_rest().map_err(candle::Error::msg)? {
             print!("{rest}");

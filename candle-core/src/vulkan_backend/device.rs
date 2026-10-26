@@ -20,7 +20,7 @@ use vulkano::device::{
 };
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::memory::allocator::{
-    AllocationCreateInfo, GenericMemoryAllocatorCreateInfo, MemoryTypeFilter,
+    AllocationCreateInfo, DeviceLayout, GenericMemoryAllocatorCreateInfo, MemoryTypeFilter,
     StandardMemoryAllocator,
 };
 use vulkano::sync::fence::{Fence, FenceCreateInfo};
@@ -28,6 +28,7 @@ use vulkano::VulkanLibrary;
 
 use candle_vulkan_kernels::Kernels;
 
+use super::{VulkanStorage, VulkanStorageBuffer};
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::{DType, Error, Result};
 
@@ -120,6 +121,12 @@ struct DeviceInner {
     /// demand (never shrinks): a fresh allocation per readback would page
     /// in a new host mapping every time.
     readback: std::sync::Mutex<Option<Arc<Buffer>>>,
+    /// Pinned (host-visible) id-readback ring for the decode pipeline
+    /// (`submit_id_readback`): `ID_RING_SLOTS` slots of
+    /// `ID_RING_SLOT_BYTES`; the GPU copies each sampled token id into the
+    /// next slot and the CPU reads it back one step behind.
+    id_ring: std::sync::Mutex<Option<Arc<Buffer>>>,
+    id_ring_next: AtomicUsize,
     /// Per-width atomic float add support (SPV_EXT_shader_atomic_float_add),
     /// as enabled at device creation: F32/F64 via VK_EXT_shader_atomic_float,
     /// F16 via VK_EXT_shader_atomic_float2.
@@ -183,9 +190,37 @@ struct InFlight {
     fence: Arc<Fence>,
 }
 
+/// A sampled token id that the GPU is copying (or has copied) into the
+/// pinned id-readback ring. `wait` blocks until the owning batch's fence
+/// signals - in the decode pipeline the GPU is typically already running
+/// the next step by then - performs the batch's post-wait cleanup, and
+/// returns the id.
+pub struct PipedId {
+    device: VulkanDevice,
+    fence: Arc<Fence>,
+    ring_idx: usize,
+    slot: usize,
+}
+
+impl PipedId {
+    /// Blocks until the id is available and returns it. Consumes the
+    /// handle.
+    pub fn wait(self) -> Result<u32> {
+        self.device
+            .read_id_slot(&self.fence, self.ring_idx, self.slot)
+    }
+}
+
 /// Number of in-flight submissions allowed before `execute` waits for the
 /// GPU to catch up.
 const FENCE_RING_SIZE: usize = 128;
+
+/// Slots in the pinned id-readback ring (see
+/// `VulkanDevice::submit_id_readback`): the decode pipeline keeps at most
+/// two batches in flight, so two slots would suffice; four leaves headroom.
+const ID_RING_SLOTS: usize = 4;
+/// Bytes per id-readback slot (only the first 4 hold the u32 id).
+const ID_RING_SLOT_BYTES: u64 = 64;
 
 /// Minimum size in bytes for a buffer to enter the pool: smaller
 /// allocations are cheap and the pool bookkeeping is not worth it.
@@ -417,6 +452,8 @@ impl VulkanDevice {
                 pool_pending: std::sync::Mutex::new(Vec::new()),
                 buffer_instances: std::sync::Mutex::new(std::collections::HashMap::new()),
                 readback: std::sync::Mutex::new(None),
+                id_ring: std::sync::Mutex::new(None),
+                id_ring_next: AtomicUsize::new(0),
                 pending: std::sync::Mutex::new(Vec::new()),
                 atomic_f32,
                 atomic_f64,
@@ -1103,6 +1140,19 @@ impl VulkanDevice {
     /// buffer (and with it every buffer of the batch) is kept alive only
     /// until the wait returns, then released.
     pub fn synchronize(&self) -> Result<()> {
+        match self.submit_batch()? {
+            Some((fence, ring_idx)) => self.finish_batch(&fence, ring_idx),
+            None => Ok(()),
+        }
+    }
+
+    /// Records all pending encodes onto a single command buffer and
+    /// submits it (bounded by the fence ring) without waiting. Returns the
+    /// batch's fence and fence-ring index, or `None` when there were no
+    /// pending encodes. The command buffer (and with it every buffer of the
+    /// batch) stays pinned in the ring slot until `finish_batch` releases
+    /// it, so in-flight batches keep their buffers alive.
+    pub fn submit_batch(&self) -> Result<Option<(Arc<Fence>, usize)>> {
         let mut pending = self
             .inner
             .pending
@@ -1123,124 +1173,223 @@ impl VulkanDevice {
             );
             let _ = total;
         }
-        if !encodes.is_empty() {
-            let n_encodes = encodes.len();
-            let t0 = std::time::Instant::now();
-            let mut cbb = AutoCommandBufferBuilder::primary(
-                self.inner.cbb_alloc.clone(),
-                self.inner.queue.queue_family_index(),
-                CommandBufferUsage::OneTimeSubmit,
-            )
-            .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-            for encode in encodes {
-                encode(&mut cbb).map_err(|e| Error::Vulkan(e.into()))?;
-            }
-            let t_build = t0.elapsed();
-            let cbb = cbb
-                .build()
-                .map_err(|e| Error::Vulkan(format!("command buffer build: {e}").into()))?;
-            let idx = self
+        if encodes.is_empty() {
+            return Ok(None);
+        }
+        let n_encodes = encodes.len();
+        let t0 = std::time::Instant::now();
+        let mut cbb = AutoCommandBufferBuilder::primary(
+            self.inner.cbb_alloc.clone(),
+            self.inner.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        for encode in encodes {
+            encode(&mut cbb).map_err(|e| Error::Vulkan(e.into()))?;
+        }
+        let t_build = t0.elapsed();
+        let cbb = cbb
+            .build()
+            .map_err(|e| Error::Vulkan(format!("command buffer build: {e}").into()))?;
+        let idx = self
+            .inner
+            .fence_next
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % FENCE_RING_SIZE;
+        let cbb_submit = cbb.clone();
+        let fence = {
+            let mut ring = self
                 .inner
-                .fence_next
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                % FENCE_RING_SIZE;
-            let cbb_submit = cbb.clone();
-            let fence = {
-                let mut ring = self
-                    .inner
-                    .fence_ring
-                    .lock()
-                    .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                let slot = ring.get_mut(idx).ok_or_else(|| {
-                    Error::Vulkan("fence ring index out of range".to_string().into())
-                })?;
-                if slot.cbb.is_some() {
-                    slot.fence
-                        .wait(None)
-                        .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                }
-                unsafe { slot.fence.reset() }.map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                slot.cbb = Some(cbb);
-                slot.fence.clone()
-            };
-            self.inner
-                .queue
-                .with(|mut q| unsafe {
-                    q.submit(
-                        &[SubmitInfo {
-                            wait_semaphores: &[],
-                            command_buffers: &[CommandBufferSubmitInfo::new(cbb_submit.as_raw())],
-                            signal_semaphores: &[],
-                            ..Default::default()
-                        }],
-                        Some(&fence),
-                    )
-                })
-                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-            let t_wait = std::time::Instant::now();
-            fence
-                .wait(Some(std::time::Duration::from_secs(60)))
-                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-            // The batch is done on the GPU: release the command buffer's
-            // pin on every buffer of the batch (the ring slot keeps it
-            // only as a safety net for a wait timeout, when the buffers
-            // are still in flight) so the pool and the allocator can
-            // recycle them for the next batch. Holding the pin for
-            // FENCE_RING_SIZE syncs would retain a whole batch of buffers
-            // per token and grow VRAM until the device fills.
-            {
-                let mut ring = self
-                    .inner
-                    .fence_ring
-                    .lock()
-                    .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                if let Some(slot) = ring.get_mut(idx) {
-                    slot.cbb = None;
-                }
-            }
-            // The batch is done on the GPU: release the keep-alive refs so
-            // the allocator can recycle the memory for the next batch.
-            self.inner
-                .keepalive_f32
+                .fence_ring
                 .lock()
-                .map_err(|e| Error::Vulkan(e.to_string().into()))?
-                .clear();
-            self.inner
-                .keepalive_u32
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            let slot = ring
+                .get_mut(idx)
+                .ok_or_else(|| Error::Vulkan("fence ring index out of range".to_string().into()))?;
+            if slot.cbb.is_some() {
+                slot.fence
+                    .wait(None)
+                    .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            }
+            unsafe { slot.fence.reset() }.map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            slot.cbb = Some(cbb);
+            slot.fence.clone()
+        };
+        self.inner
+            .queue
+            .with(|mut q| unsafe {
+                q.submit(
+                    &[SubmitInfo {
+                        wait_semaphores: &[],
+                        command_buffers: &[CommandBufferSubmitInfo::new(cbb_submit.as_raw())],
+                        signal_semaphores: &[],
+                        ..Default::default()
+                    }],
+                    Some(&fence),
+                )
+            })
+            .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        if std::env::var("CANDLE_VULKAN_PROFILE").is_ok() {
+            tracing::debug!(
+                "vulkan profile: {} encodes, encode+build {:?}",
+                n_encodes,
+                t_build
+            );
+        }
+        Ok(Some((fence, idx)))
+    }
+
+    /// Waits for a batch submitted by `submit_batch` and releases everything
+    /// the batch was pinning: the command buffer's pin on every buffer of
+    /// the batch (the ring slot keeps it only as a safety net for a wait
+    /// timeout, when the buffers are still in flight), the keepalive lists
+    /// (so the allocator can recycle the memory), and the promotion of the
+    /// pooled buffers that were returned during the batch.
+    pub fn finish_batch(&self, fence: &Arc<Fence>, ring_idx: usize) -> Result<()> {
+        let t_wait = std::time::Instant::now();
+        fence
+            .wait(Some(std::time::Duration::from_secs(60)))
+            .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        {
+            let mut ring = self
+                .inner
+                .fence_ring
                 .lock()
-                .map_err(|e| Error::Vulkan(e.to_string().into()))?
-                .clear();
-            // The batch is done on the GPU: promote the pooled buffers
-            // that were returned during it.
-            let drained = {
-                let mut pending = self
-                    .inner
-                    .pool_pending
-                    .lock()
-                    .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                std::mem::take(&mut *pending)
-            };
-            if !drained.is_empty() {
-                let mut free = self
-                    .inner
-                    .pool_free
-                    .lock()
-                    .map_err(|e| Error::Vulkan(e.to_string().into()))?;
-                for (dtype, buf) in drained {
-                    Self::pool_insert(&mut free, dtype, buf);
-                }
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            if let Some(slot) = ring.get_mut(ring_idx) {
+                slot.cbb = None;
             }
-            if std::env::var("CANDLE_VULKAN_PROFILE").is_ok() {
-                tracing::debug!(
-                    "vulkan profile: {} encodes, encode+build {:?}, submit+wait {:?}",
-                    n_encodes,
-                    t_build,
-                    t_wait.elapsed()
-                );
+        }
+        self.inner
+            .keepalive_f32
+            .lock()
+            .map_err(|e| Error::Vulkan(e.to_string().into()))?
+            .clear();
+        self.inner
+            .keepalive_u32
+            .lock()
+            .map_err(|e| Error::Vulkan(e.to_string().into()))?
+            .clear();
+        let drained = {
+            let mut pending = self
+                .inner
+                .pool_pending
+                .lock()
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            std::mem::take(&mut *pending)
+        };
+        if !drained.is_empty() {
+            let mut free = self
+                .inner
+                .pool_free
+                .lock()
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            for (dtype, buf) in drained {
+                Self::pool_insert(&mut free, dtype, buf);
             }
-            return Ok(());
+        }
+        if std::env::var("CANDLE_VULKAN_PROFILE").is_ok() {
+            tracing::debug!("vulkan profile: submit+wait {:?}", t_wait.elapsed());
         }
         Ok(())
+    }
+
+    /// Lazily creates the pinned id-readback ring: `ID_RING_SLOTS`
+    /// host-visible slots of `ID_RING_SLOT_BYTES` that `submit_id_readback`
+    /// copies sampled token ids into.
+    fn id_ring_buffer(&self) -> Result<Subbuffer<[u8]>> {
+        let bytes = ID_RING_SLOTS as u64 * ID_RING_SLOT_BYTES;
+        let mut ring = self
+            .inner
+            .id_ring
+            .lock()
+            .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        if let Some(b) = ring.as_ref() {
+            return Ok(Subbuffer::from(b.clone()).slice(0..bytes));
+        }
+        let buffer = Buffer::new(
+            self.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            DeviceLayout::from_size_alignment(bytes, 1).ok_or_else(|| {
+                Error::Vulkan("id readback ring: invalid device layout".to_string().into())
+            })?,
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create host id-readback buffer: {error:?}").into())
+        })?;
+        *ring = Some(buffer.clone());
+        Ok(Subbuffer::from(buffer).slice(0..bytes))
+    }
+
+    /// Records a 4-byte copy of the one-element U32 storage `id` into the
+    /// next slot of the pinned id-readback ring, then submits the pending
+    /// batch without waiting: the decode pipeline keeps the GPU running the
+    /// next step while the caller reads this id back one step behind via
+    /// `PipedId::wait`.
+    pub fn submit_id_readback(&self, id: &VulkanStorage) -> Result<PipedId> {
+        let src: Subbuffer<[u8]> = match id.buffer() {
+            VulkanStorageBuffer::U32(sub) if sub.len() == 1 && sub.offset() == 0 => {
+                // Below the pool minimum, so the subbuffer is the whole
+                // (freshly allocated) buffer: the byte view is exact.
+                id.buffer().as_u8().slice(0..4)
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    "submit_id_readback: id must be a one-element U32 storage"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let ring = self.id_ring_buffer()?;
+        let slot = self
+            .inner
+            .id_ring_next
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % ID_RING_SLOTS;
+        let offset = slot as u64 * ID_RING_SLOT_BYTES;
+        let dst = ring.slice(offset..offset + 4);
+        self.execute(move |cbb| {
+            cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+        let (fence, ring_idx) = self.submit_batch()?.ok_or_else(|| {
+            Error::Vulkan(
+                "submit_id_readback: no batch was submitted"
+                    .to_string()
+                    .into(),
+            )
+        })?;
+        Ok(PipedId {
+            device: self.clone(),
+            fence,
+            ring_idx,
+            slot,
+        })
+    }
+
+    /// Waits for the batch that copied `slot` into the pinned id-readback
+    /// ring, performs the batch's post-wait cleanup, and reads the id.
+    fn read_id_slot(&self, fence: &Arc<Fence>, ring_idx: usize, slot: usize) -> Result<u32> {
+        self.finish_batch(fence, ring_idx)?;
+        let ring = self.id_ring_buffer()?;
+        let offset = slot as u64 * ID_RING_SLOT_BYTES;
+        let slot_buf = ring.slice(offset..offset + 4);
+        let bytes = slot_buf.read().map_err(|e| {
+            Error::Vulkan(
+                format!("Unable to acquire read lock on id-readback buffer: {e:?}").into(),
+            )
+        })?;
+        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
     /// Copies a device f32 buffer (VRAM) back to the host via a

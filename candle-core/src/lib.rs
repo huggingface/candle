@@ -128,10 +128,10 @@ pub use metal_backend::{MetalDevice, MetalError, MetalStorage};
 pub use dummy_metal_backend::{MetalDevice, MetalError, MetalStorage};
 
 #[cfg(feature = "vulkan")]
-pub use vulkan_backend::{VulkanDevice, VulkanError, VulkanStorage};
+pub use vulkan_backend::{PipedId, VulkanDevice, VulkanError, VulkanStorage};
 
 #[cfg(not(feature = "vulkan"))]
-pub use dummy_vulkan_backend::{VulkanDevice, VulkanError, VulkanStorage};
+pub use dummy_vulkan_backend::{PipedId, VulkanDevice, VulkanError, VulkanStorage};
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;

@@ -7,7 +7,7 @@ use vulkano::command_buffer::{
 use vulkano::memory::allocator::{AllocationCreateInfo, DeviceLayout, MemoryTypeFilter};
 use vulkano::sync::GpuFuture;
 
-pub use crate::vulkan_backend::device::{VBuf, VulkanDevice};
+pub use crate::vulkan_backend::device::{PipedId, VBuf, VulkanDevice};
 
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};

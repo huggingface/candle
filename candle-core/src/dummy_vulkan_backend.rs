@@ -10,6 +10,16 @@ pub struct VulkanDevice;
 #[derive(Debug)]
 pub struct VulkanStorage;
 
+/// Placeholder for the Vulkan backend's pipelined id-readback handle
+/// (see the real implementation when the `vulkan` feature is enabled).
+pub struct PipedId;
+
+impl PipedId {
+    pub fn wait(self) -> Result<u32> {
+        Err(Error::NotCompiledWithVulkanSupport)
+    }
+}
+
 impl VulkanStorage {
     pub fn transfer_to_device(&self, _dst: &VulkanDevice) -> Result<Self> {
         Err(Error::NotCompiledWithVulkanSupport)
@@ -284,6 +294,14 @@ impl crate::backend::BackendStorage for VulkanStorage {
         _: Option<f64>,
         _: Option<f64>,
     ) -> Result<Self> {
+        Err(Error::NotCompiledWithVulkanSupport)
+    }
+}
+
+impl VulkanDevice {
+    /// Records a 4-byte id readback and submits the batch without waiting
+    /// (Vulkan only; the dummy backend has no queue).
+    pub fn submit_id_readback(&self, _id: &VulkanStorage) -> Result<PipedId> {
         Err(Error::NotCompiledWithVulkanSupport)
     }
 }
