@@ -1,11 +1,13 @@
 // decode_attention.slang
-// Two-pass flash-decode single-query decode attention (f32).
+// Two-pass flash-decode single-query decode attention (Q f32, K/V f16,
+// f32 arithmetic).
 //
 // out[h, :] = softmax( (Q[h, :] @ K[g, :].T) * scale ) @ V[g, :]
 //   where g = h * num_kv_heads / num_heads (GQA head -> kv-head group).
 //
 // Q: [num_heads, head_dim], K: [num_kv_heads, kv_len, head_dim],
-// V: [num_kv_heads, kv_len, head_dim] (all F32). K and V rows are
+// V: [num_kv_heads, kv_len, head_dim] (K and V are F16, converted to
+// F32 on load; Q is F32). K and V rows are
 // contiguous (stride head_dim); consecutive heads are `kv_stride`
 // elements apart (kv_stride >= kv_len * head_dim; equal for a
 // fully contiguous cache, larger for a pre-allocated one).
@@ -56,8 +58,8 @@ layout(push_constant) Params g_Params;
 // point, and the two passes reference different subsets of the
 // globals (pass 1: q/k/v/scratch, pass 2: scratch/out).
 [[vk::binding(0)]] StructuredBuffer<float> g_Q;
-[[vk::binding(1)]] StructuredBuffer<float> g_K;
-[[vk::binding(2)]] StructuredBuffer<float> g_V;
+[[vk::binding(1)]] StructuredBuffer<half> g_K;
+[[vk::binding(2)]] StructuredBuffer<half> g_V;
 [[vk::binding(3)]] RWStructuredBuffer<float> g_Scratch;
 [[vk::binding(4)]] RWStructuredBuffer<float> g_Out;
 
@@ -117,7 +119,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
             float dot = 0.0f;
             for (uint d = 0u; d < D; ++d)
             {
-                dot += g_Q[qbase + d] * g_K[base + d];
+                dot += g_Q[qbase + d] * (float)g_K[base + d];
             }
             s = dot * scale;
         }
@@ -184,7 +186,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
                 {
                     if (d0 + i < D)
                     {
-                        acc[i] += g_V[vbase + d0 + i] * w;
+                        acc[i] += (float)g_V[vbase + d0 + i] * w;
                     }
                 }
             }

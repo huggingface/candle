@@ -353,6 +353,19 @@ impl LayerWeights {
         }
 
         // Prefill path: repeat KV for GQA, then the matmul chain.
+        // Prefill runs the matmul chain in the activation dtype;
+        // the cache is f16 on Vulkan, so convert the views back if
+        // needed.
+        let k = if k.dtype() != q.dtype() {
+            k.to_dtype(q.dtype())?
+        } else {
+            k
+        };
+        let v = if v.dtype() != q.dtype() {
+            v.to_dtype(q.dtype())?
+        } else {
+            v
+        };
         let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
         // Scaled Dot-Product Attention
@@ -614,7 +627,14 @@ impl ModelWeights {
                     head_count_kv,
                     MAX_KV_CACHE_LEN,
                     key_length,
-                    DType::F32,
+                    // f16 on Vulkan: halves the per-token KV read
+                    // bandwidth of the fused decode (the kernel
+                    // loads f16, accumulates in f32).
+                    if device.is_vulkan() {
+                        DType::F16
+                    } else {
+                        DType::F32
+                    },
                     device,
                 )?,
                 raw_cache: (device.is_cpu()).then(|| {

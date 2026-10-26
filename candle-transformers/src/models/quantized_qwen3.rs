@@ -313,7 +313,13 @@ impl AttentionWeights {
                 num_kv_heads,
                 MAX_KV_CACHE_LEN,
                 head_dim,
-                DType::F32,
+                // f16 on Vulkan: halves the per-token KV read bandwidth of
+                // the fused decode (the kernel loads f16, accumulates in f32).
+                if device.is_vulkan() {
+                    DType::F16
+                } else {
+                    DType::F32
+                },
                 device,
             )?)
         };
@@ -487,6 +493,18 @@ impl AttentionWeights {
                 let reshaped_ctx = ctx.reshape((b, l, self.hidden_size))?;
                 return self.o_proj.forward(&reshaped_ctx);
             }
+            // Prefill runs the matmul chain in the activation dtype; the
+            // cache is f16 on Vulkan, so convert the views back if needed.
+            let k = if k.dtype() != q.dtype() {
+                k.to_dtype(q.dtype())?
+            } else {
+                k
+            };
+            let v = if v.dtype() != q.dtype() {
+                v.to_dtype(q.dtype())?
+            } else {
+                v
+            };
             let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
             let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 

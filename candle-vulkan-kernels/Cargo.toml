@@ -16,6 +16,7 @@ default = []
 [dependencies]
 thiserror = "2"
 bytemuck = "1"
+half = "2.5.0"
 vulkano = { git = "https://github.com/amejia1/vulkano.git", branch = "master" }
 parking_lot = "0.12"
 

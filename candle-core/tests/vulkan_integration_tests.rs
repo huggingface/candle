@@ -5822,7 +5822,8 @@ fn assert_printf_lines(captured: &str) {
 
 /// Fused single-query decode attention must match a decomposed
 /// (q @ k^T * scale -> softmax -> @ v) reference computed in f32 on the
-/// host, including the GQA block grouping (query head h -> kv head
+/// host from the f16-rounded K/V values (the cache dtype on Vulkan),
+/// including the GQA block grouping (query head h -> kv head
 /// h * num_kv_heads / num_heads, matching `repeat_kv`).
 #[test]
 fn test_vulkan_fused_decode_attention() {
@@ -5868,19 +5869,26 @@ fn check_fused_decode_attention(
         .collect();
 
     let q = candle_core::Tensor::from_vec(q_data.clone(), (num_heads, head_dim), dev).unwrap();
+    // The Vulkan decode cache is f16: the kernel loads K/V as f16 and
+    // accumulates in f32. The tensors are f16, and the reference below
+    // uses the same f16-rounded values.
+    let k_data_f16: Vec<half::f16> = k_data.iter().map(|&x| half::f16::from_f32(x)).collect();
+    let v_data_f16: Vec<half::f16> = v_data.iter().map(|&x| half::f16::from_f32(x)).collect();
+    let k_ref: Vec<f32> = k_data_f16.iter().map(|&x| x.to_f32()).collect();
+    let v_ref: Vec<f32> = v_data_f16.iter().map(|&x| x.to_f32()).collect();
     // With a pre-allocated cache the k/v rows are strided: allocate
     // (num_kv_heads, max_kv, head_dim) and take a narrow view of the
     // first kv_len rows (the tail padding must never be read).
     let (k, v) = match max_kv {
         None => {
             let k = candle_core::Tensor::from_vec(
-                k_data.clone(),
+                k_data_f16.clone(),
                 (num_kv_heads, kv_len, head_dim),
                 dev,
             )
             .unwrap();
             let v = candle_core::Tensor::from_vec(
-                v_data.clone(),
+                v_data_f16.clone(),
                 (num_kv_heads, kv_len, head_dim),
                 dev,
             )
@@ -5888,10 +5896,10 @@ fn check_fused_decode_attention(
             (k, v)
         }
         Some(max_kv) => {
-            let mut k_full = k_data.clone();
-            let mut v_full = v_data.clone();
-            k_full.resize(num_kv_heads * max_kv * head_dim, 0.0);
-            v_full.resize(num_kv_heads * max_kv * head_dim, 0.0);
+            let mut k_full = k_data_f16.clone();
+            let mut v_full = v_data_f16.clone();
+            k_full.resize(num_kv_heads * max_kv * head_dim, half::f16::from_f32(0.0));
+            v_full.resize(num_kv_heads * max_kv * head_dim, half::f16::from_f32(0.0));
             let k = candle_core::Tensor::from_vec(k_full, (num_kv_heads, max_kv, head_dim), dev)
                 .unwrap()
                 .narrow(1, 0, kv_len)
@@ -5921,7 +5929,7 @@ fn check_fused_decode_attention(
         for j in 0..kv_len {
             let mut s = 0.0f32;
             for d in 0..head_dim {
-                s += q_data[h * head_dim + d] * k_data[g * kv_len * head_dim + j * head_dim + d];
+                s += q_data[h * head_dim + d] * k_ref[g * kv_len * head_dim + j * head_dim + d];
             }
             scores[j] = s * scale;
         }
@@ -5932,7 +5940,7 @@ fn check_fused_decode_attention(
         for d in 0..head_dim {
             let mut acc = 0.0f32;
             for j in 0..kv_len {
-                acc += probs[j] * v_data[g * kv_len * head_dim + j * head_dim + d];
+                acc += probs[j] * v_ref[g * kv_len * head_dim + j * head_dim + d];
             }
             ref_out[h * head_dim + d] = acc;
         }

@@ -31,8 +31,8 @@ pub fn call_kv_row_copy_slang(
     name: KernelName,
     src_k: &Subbuffer<[f32]>,
     src_v: &Subbuffer<[f32]>,
-    dst_k: &Subbuffer<[f32]>,
-    dst_v: &Subbuffer<[f32]>,
+    dst_k: &Subbuffer<[half::f16]>,
+    dst_v: &Subbuffer<[half::f16]>,
     params: &KvRowCopyParams,
     total: usize,
 ) -> Result<(), VulkanKernelError> {

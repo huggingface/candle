@@ -215,8 +215,13 @@ impl PreallocKvCache {
         } else {
             let k = k.contiguous()?;
             let v = v.contiguous()?;
-            self.k.slice_set(&k, 2, self.seq_len)?;
-            self.v.slice_set(&v, 2, self.seq_len)?;
+            // The cache may be f16 while the activations are f32 (Vulkan):
+            // convert before the in-place copy (to_dtype is a no-op clone
+            // when the dtypes already match).
+            self.k
+                .slice_set(&k.to_dtype(self.k.dtype())?, 2, self.seq_len)?;
+            self.v
+                .slice_set(&v.to_dtype(self.v.dtype())?, 2, self.seq_len)?;
         }
 
         self.seq_len += l;

@@ -11551,15 +11551,15 @@ impl VulkanStorage {
     /// `[start_offset, start_offset + (heads - 1) * kv_stride + rows *
     /// cols)`; the kernel re-derives the row offsets from `kv_stride`,
     /// so the tail padding of a pre-allocated cache is never read.
-    fn f32_head_rows_view(
+    fn f16_head_rows_view(
         &self,
         s: &VulkanStorage,
         l: &Layout,
         kv_stride: usize,
-    ) -> Result<Subbuffer<[f32]>> {
-        if s.dtype != DType::F32 {
+    ) -> Result<Subbuffer<[half::f16]>> {
+        if s.dtype != DType::F16 {
             return Err(Error::Vulkan(
-                "fused_decode_attention: k/v must be f32".to_string().into(),
+                "fused_decode_attention: k/v must be f16".to_string().into(),
             ));
         }
         let dims = l.dims();
@@ -11585,8 +11585,8 @@ impl VulkanStorage {
         let start = l.start_offset();
         let len = heads.saturating_sub(1) * kv_stride + rows * cols;
         match &s.buffer {
-            VulkanStorageBuffer::F32(b) => Ok(b.clone().slice(start as u64..(start + len) as u64)),
-            _ => Err(Error::Vulkan("dtype is F32".to_string().into())),
+            VulkanStorageBuffer::F16(b) => Ok(b.clone().slice(start as u64..(start + len) as u64)),
+            _ => Err(Error::Vulkan("dtype is F16".to_string().into())),
         }
     }
 
@@ -11822,7 +11822,8 @@ impl VulkanStorage {
 
     /// Fused KV cache row append: copies `(num_kv_heads * head_dim)` f32
     /// elements from `self` (keys) and `h` (values) into row `row` of the
-    /// pre-allocated caches `dst_k`/`dst_v`; each dst is
+    /// pre-allocated f16 caches `dst_k`/`dst_v`; the src rows are f32
+    /// activations, converted on store. each dst is
     /// `(num_kv_heads, max_len, head_dim)` with contiguous rows (strides
     /// `(stride, head_dim, 1)`, `stride >= max_len * head_dim`), and the
     /// row is written at `dst[head * stride + row * head_dim + col]`.
@@ -11891,8 +11892,8 @@ impl VulkanStorage {
         }
         let (src_k, keep_k) = self.f32_view(self, l)?;
         let (src_v, keep_v) = h.f32_view(h, h_l)?;
-        let dst_k_buf = dst_k.f32_head_rows_view(dst_k, dst_k_l, stride)?;
-        let dst_v_buf = dst_v.f32_head_rows_view(dst_v, dst_v_l, stride)?;
+        let dst_k_buf = dst_k.f16_head_rows_view(dst_k, dst_k_l, stride)?;
+        let dst_v_buf = dst_v.f16_head_rows_view(dst_v, dst_v_l, stride)?;
         let params = KvRowCopyParams {
             heads: n_kv as u64,
             head_dim: head_dim as u64,
@@ -11922,7 +11923,7 @@ impl VulkanStorage {
     }
 
     /// Fused single-query decode attention: `self` is q `(num_heads, head_dim)`
-    /// f32, `k`/`v` are `(num_kv_heads, kv_len, head_dim)` f32 with
+    /// f32, `k`/`v` are `(num_kv_heads, kv_len, head_dim)` f16 with
     /// contiguous rows (strides `(kv_stride, head_dim, 1)`, `kv_stride >=
     /// kv_len * head_dim`). Returns the `(num_heads, head_dim)` f32
     /// attention output. The GQA group for query head `h` is
@@ -11969,8 +11970,8 @@ impl VulkanStorage {
             }
         };
         let (q_buf, q_keep) = self.f32_view(self, l)?;
-        let k_buf = self.f32_head_rows_view(k, k_l, kv_stride)?;
-        let v_buf = self.f32_head_rows_view(v, v_l, kv_stride)?;
+        let k_buf = self.f16_head_rows_view(k, k_l, kv_stride)?;
+        let v_buf = self.f16_head_rows_view(v, v_l, kv_stride)?;
         let params = DecodeAttentionParams {
             scale,
             num_heads: num_heads as u64,
