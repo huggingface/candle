@@ -111,9 +111,45 @@ pub struct ParamsConv3D {
     pub(crate) padding: [usize; 3],
     pub(crate) stride: [usize; 3],
     pub(crate) dilation: [usize; 3],
+    out_spatial: [usize; 3],
 }
 
 impl ParamsConv3D {
+    /// Validates one group's parameters and computes its output dimensions once.
+    pub(crate) fn new(
+        input_shape: [usize; 5],
+        kernel_shape: [usize; 5],
+        padding: [usize; 3],
+        stride: [usize; 3],
+        dilation: [usize; 3],
+    ) -> Result<Self> {
+        let [b_size, c_in, i_d, i_h, i_w] = input_shape;
+        let [c_out, c_in_k, k_d, k_h, k_w] = kernel_shape;
+        if c_in != c_in_k {
+            crate::bail!("conv3d in_channel mismatch between input ({c_in}) and kernel ({c_in_k})")
+        }
+        let out_spatial = [
+            Self::out_dim(i_d, k_d, padding[0], stride[0], dilation[0])?,
+            Self::out_dim(i_h, k_h, padding[1], stride[1], dilation[1])?,
+            Self::out_dim(i_w, k_w, padding[2], stride[2], dilation[2])?,
+        ];
+        Ok(Self {
+            b_size,
+            i_d,
+            i_h,
+            i_w,
+            k_d,
+            k_h,
+            k_w,
+            c_out,
+            c_in,
+            padding,
+            stride,
+            dilation,
+            out_spatial,
+        })
+    }
+
     fn out_dim(
         input: usize,
         kernel: usize,
@@ -149,44 +185,26 @@ impl ParamsConv3D {
         Ok((padded - effective_kernel) / stride + 1)
     }
 
-    pub(crate) fn out_d(&self) -> Result<usize> {
-        Self::out_dim(
-            self.i_d,
-            self.k_d,
-            self.padding[0],
-            self.stride[0],
-            self.dilation[0],
-        )
+    pub(crate) fn out_d(&self) -> usize {
+        self.out_spatial[0]
     }
 
-    pub(crate) fn out_h(&self) -> Result<usize> {
-        Self::out_dim(
-            self.i_h,
-            self.k_h,
-            self.padding[1],
-            self.stride[1],
-            self.dilation[1],
-        )
+    pub(crate) fn out_h(&self) -> usize {
+        self.out_spatial[1]
     }
 
-    pub(crate) fn out_w(&self) -> Result<usize> {
-        Self::out_dim(
-            self.i_w,
-            self.k_w,
-            self.padding[2],
-            self.stride[2],
-            self.dilation[2],
-        )
+    pub(crate) fn out_w(&self) -> usize {
+        self.out_spatial[2]
     }
 
-    pub(crate) fn out_dims(&self) -> Result<Vec<usize>> {
-        Ok(vec![
+    pub(crate) fn out_dims(&self) -> Vec<usize> {
+        vec![
             self.b_size,
             self.c_out,
-            self.out_d()?,
-            self.out_h()?,
-            self.out_w()?,
-        ])
+            self.out_d(),
+            self.out_h(),
+            self.out_w(),
+        ]
     }
 }
 
@@ -444,7 +462,7 @@ impl Tensor {
             stride: params.stride,
             dilation: params.dilation,
         });
-        let out_dims = params.out_dims()?;
+        let out_dims = params.out_dims();
         Ok(crate::tensor::from_storage(storage, out_dims, op, false))
     }
 
@@ -473,21 +491,13 @@ impl Tensor {
         if c_out % groups != 0 {
             crate::bail!("out_channel {c_out} is not divisible by the number of groups {groups}")
         }
-        let params = ParamsConv3D {
-            b_size,
-            i_d,
-            i_h,
-            i_w,
-            k_d,
-            k_h,
-            k_w,
-            c_out: c_out / groups,
-            c_in: c_in / groups,
+        let params = ParamsConv3D::new(
+            [b_size, c_in / groups, i_d, i_h, i_w],
+            [c_out / groups, c_in_k, k_d, k_h, k_w],
             padding,
             stride,
             dilation,
-        };
-        params.out_dims()?;
+        )?;
         if groups == 1 {
             self.conv3d_single_group(kernel, &params)
         } else {

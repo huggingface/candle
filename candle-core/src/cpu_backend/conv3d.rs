@@ -149,7 +149,7 @@ fn conv3d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
     let (inp_s0, inp_s1, inp_s2, inp_s3, inp_s4) = dims5(inp_l.stride())?;
     let k = &k[k_l.start_offset()..];
     let (k_s0, k_s1, k_s2, k_s3, k_s4) = dims5(k_l.stride())?;
-    let (out_d, out_h, out_w) = (p.out_d()?, p.out_h()?, p.out_w()?);
+    let (out_d, out_h, out_w) = (p.out_d(), p.out_h(), p.out_w());
 
     let dst = vec![T::zero(); p.b_size * p.c_out * out_d * out_h * out_w];
 
@@ -288,7 +288,7 @@ fn conv3d_direct<T: WithDType + num_traits::Num + Copy + 'static>(
     let k = &k[k_l.start_offset()..];
     let (inp_s0, inp_s1, inp_s2, inp_s3, inp_s4) = dims5(inp_l.stride())?;
     let (k_s0, k_s1, k_s2, k_s3, k_s4) = dims5(k_l.stride())?;
-    let (out_d, out_h, out_w) = (p.out_d()?, p.out_h()?, p.out_w()?);
+    let (out_d, out_h, out_w) = (p.out_d(), p.out_h(), p.out_w());
 
     let mut dst = vec![T::zero(); p.b_size * p.c_out * out_d * out_h * out_w];
     for b_idx in 0..p.b_size {
@@ -376,7 +376,7 @@ impl Map2 for Conv3DBackwardInput<'_> {
         let k = &k[k_l.start_offset()..];
         let (grad_s0, grad_s1, grad_s2, grad_s3, grad_s4) = dims5(grad_l.stride())?;
         let (k_s0, k_s1, k_s2, k_s3, k_s4) = dims5(k_l.stride())?;
-        let (out_d, out_h, out_w) = (p.out_d()?, p.out_h()?, p.out_w()?);
+        let (out_d, out_h, out_w) = (p.out_d(), p.out_h(), p.out_w());
 
         let mut dst = vec![T::zero(); p.b_size * p.c_in * p.i_d * p.i_h * p.i_w];
         for b_idx in 0..p.b_size {
@@ -481,7 +481,7 @@ fn conv3d_backward_weight_tiled<T: WithDType + num_traits::Num + Copy + 'static>
     let grad = &grad[grad_l.start_offset()..];
     let (inp_s0, inp_s1, inp_s2, inp_s3, inp_s4) = dims5(inp_l.stride())?;
     let (grad_s0, grad_s1, grad_s2, grad_s3, grad_s4) = dims5(grad_l.stride())?;
-    let (out_d, out_h, out_w) = (p.out_d()?, p.out_h()?, p.out_w()?);
+    let (out_d, out_h, out_w) = (p.out_d(), p.out_h(), p.out_w());
     let total_out_pixels = out_d * out_h * out_w;
     let k_size = p.c_in * p.k_d * p.k_h * p.k_w;
 
@@ -622,7 +622,7 @@ fn conv3d_backward_weight_direct<T: WithDType>(
     let grad = &grad[grad_l.start_offset()..];
     let (inp_s0, inp_s1, inp_s2, inp_s3, inp_s4) = dims5(inp_l.stride())?;
     let (grad_s0, grad_s1, grad_s2, grad_s3, grad_s4) = dims5(grad_l.stride())?;
-    let (out_d, out_h, out_w) = (p.out_d()?, p.out_h()?, p.out_w()?);
+    let (out_d, out_h, out_w) = (p.out_d(), p.out_h(), p.out_w());
 
     let mut dst = vec![T::zero(); p.c_out * p.c_in * p.k_d * p.k_h * p.k_w];
     for dst_c_idx in 0..p.c_out {

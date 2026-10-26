@@ -59,6 +59,7 @@ fn tensor_from_vec_dtype<S: Into<candle::Shape>>(
 
 /* This test is based on the following script.
 import torch
+torch.manual_seed(0)
 torch.set_printoptions(precision=6, sci_mode=False)
 
 x = torch.arange(1 * 1 * 2 * 2 * 3, dtype=torch.float32).reshape(1, 1, 2, 2, 3) / 4 - 1

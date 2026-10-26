@@ -989,6 +989,8 @@ fn conv2d_c_eq_h_eq_w(dev: &Device) -> Result<()> {
 
 /* This test is based on the following script.
 import torch
+# Seed any future random inputs; this does not guarantee backend determinism.
+torch.manual_seed(0)
 torch.set_printoptions(precision=6, sci_mode=False)
 
 x = torch.arange(2 * 2 * 2 * 3 * 4, dtype=torch.float32).reshape(2, 2, 2, 3, 4) / 10 - 3
@@ -1028,6 +1030,8 @@ fn conv3d_forward_cpu() -> Result<()> {
 
 /* This test is based on the following script.
 import torch
+# Seed any future random inputs; this does not guarantee backend determinism.
+torch.manual_seed(0)
 torch.set_printoptions(precision=6, sci_mode=False)
 
 x = torch.arange(1 * 4 * 2 * 3 * 4, dtype=torch.float32).reshape(1, 4, 2, 3, 4) / 5 - 4
@@ -1065,6 +1069,8 @@ fn conv3d_grouped_cpu() -> Result<()> {
 
 /* This test is based on the following script.
 import torch
+# Seed any future random inputs; this does not guarantee backend determinism.
+torch.manual_seed(0)
 torch.set_printoptions(precision=6, sci_mode=False)
 
 x = torch.arange(1 * 2 * 3 * 3 * 4, dtype=torch.float32).reshape(1, 2, 3, 3, 4) / 11 - 2
@@ -1254,6 +1260,48 @@ fn conv3d_invalid_args_cpu() -> Result<()> {
     assert!(xs
         .conv3d(&too_large, [0, 0, 0], [1, 1, 1], [1, 1, 1], 1)
         .is_err());
+    Ok(())
+}
+
+#[test]
+fn conv3d_spatial_validation_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    let xs = Tensor::zeros((1, 2, 2, 2, 2), DType::F32, dev)?;
+    // Validate every axis, including the grouped path, before kernel dispatch.
+    for groups in [1, 2] {
+        let ws = Tensor::zeros((2, 2 / groups, 2, 2, 2), DType::F32, dev)?;
+        for axis in 0..3 {
+            let mut zero_axis = [1; 3];
+            zero_axis[axis] = 0;
+            assert!(xs.conv3d(&ws, [0; 3], zero_axis, [1; 3], groups).is_err());
+            assert!(xs.conv3d(&ws, [0; 3], [1; 3], zero_axis, groups).is_err());
+
+            // Both doubling the padding and adding it to the input can overflow.
+            for padding_value in [usize::MAX, usize::MAX / 2] {
+                let mut padding = [0; 3];
+                padding[axis] = padding_value;
+                let err = xs.conv3d(&ws, padding, [1; 3], [1; 3], groups).unwrap_err();
+                assert!(err.to_string().contains("overflow"), "{err}");
+            }
+
+            let mut dilation = [1; 3];
+            dilation[axis] = usize::MAX;
+            let err = xs
+                .conv3d(&ws, [0; 3], [1; 3], dilation, groups)
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("effective kernel size overflow"),
+                "{err}"
+            );
+
+            for kernel_size in [0, 3] {
+                let mut kernel_shape = [2, 2 / groups, 2, 2, 2];
+                kernel_shape[axis + 2] = kernel_size;
+                let kernel = Tensor::zeros(&kernel_shape, DType::F32, dev)?;
+                assert!(xs.conv3d(&kernel, [0; 3], [1; 3], [1; 3], groups).is_err());
+            }
+        }
+    }
     Ok(())
 }
 
