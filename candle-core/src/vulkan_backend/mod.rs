@@ -10210,7 +10210,12 @@ impl BackendStorage for VulkanStorage {
         } else {
             crate::Layout::contiguous_with_offset(&[bsz, m, n], 0)
         };
-        out.binary_impl::<crate::op::Add>(bias, &out_l, bias_l)
+        // The bias layout must be broadcast to the output shape before
+        // the storage-level binary op (the tensor-level broadcast ops do
+        // this; a raw (n,) layout would be sliced with the output's
+        // element count and run past the bias buffer).
+        let bias_l = bias_l.broadcast_as(out_l.shape())?;
+        out.binary_impl::<crate::op::Add>(bias, &out_l, &bias_l)
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
