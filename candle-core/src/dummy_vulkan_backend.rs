@@ -44,6 +44,32 @@ impl VulkanStorage {
     ) -> Result<(Self, Self)> {
         Err(Error::NotCompiledWithVulkanSupport)
     }
+
+    pub fn fused_post_norm_add(
+        &self,
+        _l: &Layout,
+        _h: &VulkanStorage,
+        _h_l: &Layout,
+        _alpha: &VulkanStorage,
+        _alpha_l: &Layout,
+        _eps: f64,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithVulkanSupport)
+    }
+
+    pub fn kv_cache_append_rows(
+        &self,
+        _l: &Layout,
+        _h: &VulkanStorage,
+        _h_l: &Layout,
+        _dst_k: &VulkanStorage,
+        _dst_k_l: &Layout,
+        _dst_v: &VulkanStorage,
+        _dst_v_l: &Layout,
+        _row: usize,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithVulkanSupport)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -204,10 +204,21 @@ impl PreallocKvCache {
         }
         // slice_set copies the rows into the cache in place (a one-row
         // copy during decode) and requires contiguous operands.
-        let k = k.contiguous()?;
-        let v = v.contiguous()?;
-        self.k.slice_set(&k, 2, self.seq_len)?;
-        self.v.slice_set(&v, 2, self.seq_len)?;
+        if l == 1 && k.dim(0)? == 1 && k.dtype() == DType::F32 && k.device().is_vulkan() {
+            // Single fused dispatch for both cache rows (Vulkan decode)
+            // instead of two slice_set copies.
+            let k_row = k.squeeze(0)?.squeeze(1)?;
+            let v_row = v.squeeze(0)?.squeeze(1)?;
+            let dst_k = self.k.squeeze(0)?;
+            let dst_v = self.v.squeeze(0)?;
+            k_row.kv_cache_append_rows(&v_row, &dst_k, &dst_v, self.seq_len)?;
+        } else {
+            let k = k.contiguous()?;
+            let v = v.contiguous()?;
+            self.k.slice_set(&k, 2, self.seq_len)?;
+            self.v.slice_set(&v, 2, self.seq_len)?;
+        }
+
         self.seq_len += l;
         Ok((
             self.k.narrow(2, 0, self.seq_len)?,

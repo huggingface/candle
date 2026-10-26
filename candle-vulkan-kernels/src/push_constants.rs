@@ -66,6 +66,21 @@ pub struct NormParams {
     pub eps: f64,
 }
 
+/// `kv_row_copy` shader: layout `Params { uint64_t heads; uint64_t head_dim;
+/// uint64_t row; uint64_t stride; }`.
+#[repr(C)]
+#[derive(Clone, Copy, AnyBitPattern)]
+pub struct KvRowCopyParams {
+    /// Number of KV heads.
+    pub heads: u64,
+    /// Dimension of each head.
+    pub head_dim: u64,
+    /// Row index the new k/v rows are written to.
+    pub row: u64,
+    /// Head stride of the pre-allocated caches (in elements).
+    pub stride: u64,
+}
+
 /// `upsample` shader:
 /// `Params { uint64_t planes; uint64_t d0..d3; double scale_h; double scale_w;
 /// uint64_t align; }`. The `dN` fields hold the src/dst extents; the

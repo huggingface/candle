@@ -490,6 +490,8 @@ pub enum KernelName {
     DequantQ8K,
     RmsNorm,
     AddRmsNorm,
+    PostRmsNormAdd,
+    KvRowCopy,
     LayerNorm,
     Sigmoid,
     Softmax,
@@ -964,6 +966,8 @@ impl AsRef<str> for KernelName {
             Self::DequantQ8K => "main",
             Self::RmsNorm => "main",
             Self::AddRmsNorm => "main",
+            Self::PostRmsNormAdd => "main",
+            Self::KvRowCopy => "main",
             Self::LayerNorm => "main",
             Self::Sigmoid => "main",
             Self::Softmax => "main",
@@ -1416,6 +1420,10 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         // row-norm kernels: src/alpha(/beta)/dst (params are push constants).
         KernelName::RmsNorm => 3,
         KernelName::AddRmsNorm => 5,
+        // post_rms_norm_add: x/h/alpha/out (params are push constants).
+        KernelName::PostRmsNormAdd => 4,
+        // kv_row_copy: src_k/src_v/dst_k/dst_v (params are push constants).
+        KernelName::KvRowCopy => 4,
         KernelName::LayerNorm => 4,
         // 1 storage buffer(s).
         KernelName::TestFillF16

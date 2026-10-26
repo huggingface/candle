@@ -7,7 +7,10 @@
 //! - [Qwen3 Models](https://huggingface.co/Qwen/Qwen3-0.6B) (architecture based on official implementations)
 //!
 use super::with_tracing::QMatMul;
-use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
+use crate::{
+    quantized_nn::{cat_quantized_weights, RmsNorm},
+    utils::repeat_kv,
+};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Storage, Tensor};
 use candle_nn::attention::cpu_flash::causal::causal_decode_f32_interleaved;
@@ -50,10 +53,65 @@ impl<R: Read + Seek> Gguf<R> {
     }
 }
 
+/// The Q/K/V projections: either one fused matmul over the concatenated
+/// weight rows (one dispatch per token instead of three) or three
+/// separate matmuls when the weights cannot be fused at load time.
+#[derive(Debug, Clone)]
+enum QkvProj {
+    Fused(QMatMul),
+    Separate(QMatMul, QMatMul, QMatMul),
+}
+
+impl QkvProj {
+    fn forward(&self, x: &Tensor, q_dim: usize, kv_dim: usize) -> Result<(Tensor, Tensor, Tensor)> {
+        match self {
+            Self::Fused(w) => {
+                let out = w.forward(x)?;
+                // The fused output's rows are strided (stride q+2kv); the
+                // Vulkan binary/unary op kernels only index dense or
+                // broadcast layouts, so make each projection's view
+                // contiguous (no-op at decode, one small copy at prefill).
+                Ok((
+                    out.narrow(2, 0, q_dim)?.contiguous()?,
+                    out.narrow(2, q_dim, kv_dim)?.contiguous()?,
+                    out.narrow(2, q_dim + kv_dim, kv_dim)?.contiguous()?,
+                ))
+            }
+            Self::Separate(q, k, v) => Ok((q.forward(x)?, k.forward(x)?, v.forward(x)?)),
+        }
+    }
+}
+
+/// The MLP gate/up projections: either one fused matmul over the
+/// concatenated weight rows (one dispatch per token instead of two) or
+/// two separate matmuls.
+#[derive(Debug, Clone)]
+enum GateUpProj {
+    Fused(QMatMul, usize),
+    Separate(QMatMul, QMatMul),
+}
+
+impl GateUpProj {
+    fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
+        match self {
+            Self::Fused(w, inter) => {
+                let out = w.forward(x)?;
+                // Make the strided narrow views contiguous: the Vulkan
+                // binary-op kernel (silu, mul, ...) only indexes dense or
+                // broadcast layouts, so gappy views must be materialized.
+                Ok((
+                    out.narrow(2, 0, *inter)?.contiguous()?,
+                    out.narrow(2, *inter, *inter)?.contiguous()?,
+                ))
+            }
+            Self::Separate(gate, up) => Ok((gate.forward(x)?, up.forward(x)?)),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct MlpWeights {
-    gate_proj: QMatMul,
-    up_proj: QMatMul,
+    gate_up_proj: GateUpProj,
     down_proj: QMatMul,
     act_fn: Activation,
     span: tracing::Span,
@@ -61,14 +119,31 @@ struct MlpWeights {
 
 impl MlpWeights {
     fn new<R: Read + Seek>(gg: &mut Gguf<R>, prefix: &str) -> Result<Self> {
-        let gate_proj = gg.qmatmul(&format!("{prefix}.ffn_gate.weight"))?;
-        let up_proj = gg.qmatmul(&format!("{prefix}.ffn_up.weight"))?;
+        let gate_up_proj = match cat_quantized_weights(
+            &gg.ct,
+            &mut gg.reader,
+            &[
+                format!("{prefix}.ffn_gate.weight"),
+                format!("{prefix}.ffn_up.weight"),
+            ],
+            &gg.device,
+        )? {
+            Some((w, ns)) => {
+                if ns.len() != 2 || ns[0] != ns[1] {
+                    candle::bail!("ffn gate/up weights {:?} have mismatched dims", ns);
+                }
+                GateUpProj::Fused(QMatMul::from_weights(w.into())?, ns[0])
+            }
+            None => GateUpProj::Separate(
+                gg.qmatmul(&format!("{prefix}.ffn_gate.weight"))?,
+                gg.qmatmul(&format!("{prefix}.ffn_up.weight"))?,
+            ),
+        };
         let down_proj = gg.qmatmul(&format!("{prefix}.ffn_down.weight"))?;
         let act_fn = Activation::Silu;
         let span = tracing::span!(tracing::Level::TRACE, "mlp");
         Ok(Self {
-            gate_proj,
-            up_proj,
+            gate_up_proj,
             down_proj,
             act_fn,
             span,
@@ -79,8 +154,8 @@ impl MlpWeights {
 impl Module for MlpWeights {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let gate = self.gate_proj.forward(x)?.apply(&self.act_fn)?;
-        let up = self.up_proj.forward(x)?;
+        let (gate, up) = self.gate_up_proj.forward(x)?;
+        let gate = gate.apply(&self.act_fn)?;
         let gated = (gate * up)?;
         self.down_proj.forward(&gated)
     }
@@ -156,9 +231,7 @@ impl RotaryEmbedding {
 
 #[derive(Debug, Clone)]
 struct AttentionWeights {
-    q_proj: QMatMul,
-    k_proj: QMatMul,
-    v_proj: QMatMul,
+    qkv_proj: QkvProj,
     o_proj: QMatMul,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
@@ -189,9 +262,38 @@ impl AttentionWeights {
         let num_kv_groups = num_heads / num_kv_heads;
         let hidden_size = num_heads * head_dim;
 
-        let q_proj = gg.qmatmul(&format!("{prefix}.attn_q.weight"))?;
-        let k_proj = gg.qmatmul(&format!("{prefix}.attn_k.weight"))?;
-        let v_proj = gg.qmatmul(&format!("{prefix}.attn_v.weight"))?;
+        // Fused qkv: one weight matrix -> one matmul per token (fewer
+        // dispatches); falls back to three separate matmuls when the
+        // weights cannot be concatenated.
+        let qkv_proj = match cat_quantized_weights(
+            &gg.ct,
+            &mut gg.reader,
+            &[
+                format!("{prefix}.attn_q.weight"),
+                format!("{prefix}.attn_k.weight"),
+                format!("{prefix}.attn_v.weight"),
+            ],
+            &gg.device,
+        )? {
+            Some((w, ns)) => {
+                let kv_dim = num_kv_heads * head_dim;
+                if ns != vec![hidden_size, kv_dim, kv_dim] {
+                    candle::bail!(
+                        "attn qkv weights {:?} do not match the expected dims ({}, {}, {})",
+                        ns,
+                        hidden_size,
+                        kv_dim,
+                        kv_dim
+                    );
+                }
+                QkvProj::Fused(QMatMul::from_weights(w.into())?)
+            }
+            None => QkvProj::Separate(
+                gg.qmatmul(&format!("{prefix}.attn_q.weight"))?,
+                gg.qmatmul(&format!("{prefix}.attn_k.weight"))?,
+                gg.qmatmul(&format!("{prefix}.attn_v.weight"))?,
+            ),
+        };
         let o_proj = gg.qmatmul(&format!("{prefix}.attn_output.weight"))?;
 
         let q_norm = gg.rms_norm(&format!("{prefix}.attn_q_norm.weight"), rms_norm_eps)?;
@@ -229,9 +331,7 @@ impl AttentionWeights {
         let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
 
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
+            qkv_proj,
             o_proj,
             q_norm,
             k_norm,
@@ -252,10 +352,11 @@ impl AttentionWeights {
         let _enter = self.span_attn.enter();
         let (b, l, _) = x.dims3()?;
 
-        // QKV projections
-        let q = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
+        // QKV projections (fused into one matmul when the weights were
+        // concatenated at load time).
+        let (q, k, v) =
+            self.qkv_proj
+                .forward(x, self.hidden_size, self.num_kv_heads * self.head_dim)?;
 
         let q = q
             .reshape((b, l, self.num_heads, self.head_dim))?
@@ -674,6 +775,7 @@ impl ModelWeights {
                 hv.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
             );
         }
+
         self.lm_head.forward(&last_hidden)?.squeeze(1)
     }
 

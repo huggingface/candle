@@ -11,7 +11,8 @@ pub use kernels::{
     call_cmp_slang, call_const_set_bf16, call_const_set_f16, call_const_set_f32, call_conv_slang,
     call_copy2d_slang, call_decode_attention_slang, call_dequantize_slang,
     call_fused_quant_gemm_slang, call_gather_idx_slang, call_gemm_slang, call_index_add_slang,
-    call_layer_norm_slang, call_pool2d_slang, call_reduce_slang, call_rms_norm_slang,
+    call_kv_row_copy_slang, call_layer_norm_slang, call_pool2d_slang,
+    call_post_rms_norm_add_slang, call_reduce_slang, call_rms_norm_slang,
     call_rope_slang, call_rotary_emb_int_slang, call_scatter_slang, call_sigmoid_slang,
     call_softmax_slang, call_test_fill_bf16_emulated, call_test_fill_bf16_native,
     call_test_fill_f16, call_test_fill_f32, call_test_fill_f4, call_test_fill_f64,
@@ -21,7 +22,7 @@ pub use kernels::{
     call_upsample_slang, call_where_slang, call_zero_fill, DECODE_ATTENTION_CHUNK,
 };
 pub use push_constants::{
-    AffineParams, ConstSetParams, DecodeAttentionParams, NormParams, ToDtypeParams, UnaryParams,
-    UpsampleParams,
+    AffineParams, ConstSetParams, DecodeAttentionParams, KvRowCopyParams, NormParams,
+    ToDtypeParams, UnaryParams, UpsampleParams,
 };
 pub use source::Source;

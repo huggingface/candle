@@ -6,7 +6,7 @@
 
 use crate::models::with_tracing::QMatMul;
 use crate::quantized_var_builder::VarBuilder;
-use candle::quantized::QTensor;
+use candle::quantized::{gguf_file, GgmlDType, QStorage, QTensor};
 use candle::{Module, Result, Tensor};
 
 #[derive(Debug, Clone)]
@@ -129,6 +129,20 @@ impl RmsNorm {
         let x_norm = candle_nn::ops::rms_norm(&x_new, &self.weight, self.eps as f32)?;
         Ok((x_new, x_norm))
     }
+
+    /// Fused post-norm + residual add: computes `x + RMSNorm(h) * weight`
+    /// (Gemma-3 style: the sublayer output `h` is normalized first and then
+    /// added to the residual `x`). On the Vulkan backend with f32 inputs
+    /// this is a single fused dispatch; otherwise it falls back to the
+    /// decomposed RMSNorm + add.
+    pub fn post_add_forward(&self, x: &Tensor, h: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        if x.device().is_vulkan() && x.dtype() == candle::DType::F32 {
+            return x.fused_post_norm_add(h, &self.weight, self.eps as f32);
+        }
+        let h_norm = candle_nn::ops::rms_norm(h, &self.weight, self.eps as f32)?;
+        x + &h_norm
+    }
 }
 
 impl Module for RmsNorm {
@@ -136,4 +150,46 @@ impl Module for RmsNorm {
         let _enter = self.span.enter();
         candle_nn::ops::rms_norm(x, &self.weight, self.eps as f32)
     }
+}
+/// Concatenates the rows (dim 0) of the quantized weight tensors named
+/// `names` into a single QTensor so that one matmul computes every
+/// projection (fused qkv / gate+up): the byte layout of a row-major
+/// quantized `(n, k)` matrix is a plain concatenation of row blocks, so
+/// the concatenation is valid when all tensors share the quantization
+/// dtype and the shared (last) dim is a multiple of the dtype's block
+/// size. Returns `Ok(None)` when the tensors cannot be fused; the caller
+/// then loads them separately.
+pub fn cat_quantized_weights<R: std::io::Seek + std::io::Read>(
+    ct: &gguf_file::Content,
+    reader: &mut R,
+    names: &[String],
+    device: &candle::Device,
+) -> Result<Option<(QTensor, Vec<usize>)>> {
+    let mut parts: Vec<(Vec<u8>, GgmlDType, candle::Shape)> = Vec::with_capacity(names.len());
+    for name in names {
+        parts.push(ct.tensor_raw(reader, name)?);
+    }
+    let (dtype, dims_shape) = (parts[0].1, parts[0].2.clone());
+    let dims: Vec<usize> = dims_shape.dims().to_vec();
+    let k = *dims
+        .last()
+        .ok_or_else(|| candle::Error::Msg("cat_quantized_weights: empty dims".to_string()))?;
+    if !k.is_multiple_of(dtype.block_size()) {
+        return Ok(None);
+    }
+    for p in &parts[1..] {
+        if p.1 != dtype || p.2.dims().to_vec() != dims {
+            return Ok(None);
+        }
+    }
+    let ns: Vec<usize> = parts.iter().map(|p| p.2.dims()[0]).collect();
+    let mut bytes = Vec::with_capacity(parts.iter().map(|p| p.0.len()).sum());
+    for p in &parts {
+        bytes.extend_from_slice(&p.0);
+    }
+    let mut shape = dims;
+    shape[0] = ns.iter().sum();
+    let storage = QStorage::from_data(bytes.into(), device, dtype)?;
+    let qt = QTensor::new(storage, shape)?;
+    Ok(Some((qt, ns)))
 }

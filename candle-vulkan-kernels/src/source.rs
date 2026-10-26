@@ -32,6 +32,10 @@ const FUSED_Q8K_GEMM_M_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8k_gemm_m.spv"));
 const DECODE_ATTENTION_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/decode_attention.spv"));
+const POST_RMS_NORM_ADD_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/post_rms_norm_add.spv"));
+const KV_ROW_COPY_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/kv_row_copy.spv"));
 const ZERO_FILL_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zero_fill.spv"));
 const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
 const CONST_SET_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f16.spv"));
@@ -658,6 +662,8 @@ pub enum Source {
     DequantQ8K,
     RmsNorm,
     AddRmsNorm,
+    PostRmsNormAdd,
+    KvRowCopy,
     LayerNorm,
     Sigmoid,
     Softmax,
@@ -877,6 +883,10 @@ impl Source {
             KernelName::ConstSetBf16 | KernelName::ConstSetF16 | KernelName::ConstSetF32 => 16,
             // `rms_norm`/`layer_norm`: `uint64_t n_rows; uint64_t n; double eps;`
             KernelName::LayerNorm | KernelName::RmsNorm | KernelName::AddRmsNorm => 24,
+            // `post_rms_norm_add`: same `Params` layout as `rms_norm`.
+            KernelName::PostRmsNormAdd => 24,
+            // `kv_row_copy`: 4 x `uint64_t`.
+            KernelName::KvRowCopy => 32,
             // `upsample`: 5 x `uint64_t` extents, 2 x `double` scales, `uint64_t` align.
             KernelName::UpsampleBilinear2dF16
             | KernelName::UpsampleBilinear2dF32
@@ -1373,6 +1383,8 @@ impl Source {
             Self::DequantQ8K => DEQUANT_Q8K_SPV,
             Self::RmsNorm => RMS_NORM_SPV,
             Self::AddRmsNorm => ADD_RMS_NORM_SPV,
+            Self::PostRmsNormAdd => POST_RMS_NORM_ADD_SPV,
+            Self::KvRowCopy => KV_ROW_COPY_SPV,
             Self::LayerNorm => LAYER_NORM_SPV,
             Self::Sigmoid => SIGMOID_SPV,
             Self::Softmax => SOFTMAX_SPV,
@@ -1680,6 +1692,8 @@ impl AsRef<str> for Source {
             Self::DequantQ8K => "dequant_q8k",
             Self::RmsNorm => "rms_norm",
             Self::AddRmsNorm => "add_rms_norm",
+            Self::PostRmsNormAdd => "post_rms_norm_add",
+            Self::KvRowCopy => "kv_row_copy",
             Self::LayerNorm => "layer_norm",
             Self::Sigmoid => "sigmoid",
             Self::Softmax => "softmax",

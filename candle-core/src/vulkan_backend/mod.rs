@@ -6400,6 +6400,22 @@ impl BackendStorage for VulkanStorage {
             0
         };
         let len = lhs_l.shape().elem_count();
+        let rhs_contiguous = matches!(
+            rhs_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        );
+        let rhs_start = if rhs_contiguous {
+            match rhs_l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, .. } => start_offset,
+                _ => {
+                    return Err(Error::Vulkan(
+                        "rhs_contiguous checked above".to_string().into(),
+                    ));
+                }
+            }
+        } else {
+            0
+        };
         let out = self.device.zeros_impl(lhs_l.shape(), dtype)?;
         if len == 0 {
             return Ok(out);
@@ -6467,7 +6483,13 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs_ref.buffer {
-                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    VulkanStorageBuffer::F32(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -6531,7 +6553,13 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs_ref.buffer {
-                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    VulkanStorageBuffer::BF16(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -6595,7 +6623,13 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs_ref.buffer {
-                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    VulkanStorageBuffer::F8E4M3(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -6659,7 +6693,13 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs_ref.buffer {
-                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    VulkanStorageBuffer::F16(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -6725,7 +6765,13 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs_ref.buffer {
-                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    VulkanStorageBuffer::F64(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -6791,7 +6837,13 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs_ref.buffer {
-                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    VulkanStorageBuffer::U8(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -6858,7 +6910,13 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs_ref.buffer {
-                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    VulkanStorageBuffer::U32(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -6925,7 +6983,13 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs_ref.buffer {
-                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    VulkanStorageBuffer::I16(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -6992,7 +7056,13 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs_ref.buffer {
-                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    VulkanStorageBuffer::I32(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -7059,7 +7129,13 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs_ref.buffer {
-                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    VulkanStorageBuffer::I64(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -11669,6 +11745,180 @@ impl VulkanStorage {
         })?;
         drop((keep_x, keep_h, keep_alpha));
         Ok((residual, norm))
+    }
+
+    /// Fused RMSNorm + residual add over the last dim:
+    /// `out[i][j] = x[i][j] + h[i][j] / m[i] * alpha[j]` with
+    /// `m[i] = sqrt(sum_j(h[i][j]^2) / n + eps)`.
+    pub fn fused_post_norm_add(
+        &self,
+        l: &Layout,
+        h: &VulkanStorage,
+        h_l: &Layout,
+        alpha: &VulkanStorage,
+        alpha_l: &Layout,
+        eps: f64,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() < 2 {
+            return Err(Error::Vulkan(
+                "fused_post_norm_add: needs >= 2 dims".to_string().into(),
+            ));
+        }
+        let n = *dims
+            .last()
+            .ok_or_else(|| Error::Vulkan("fused_post_norm_add: empty tensor".to_string().into()))?;
+        let n_rows: usize = dims[..dims.len() - 1].iter().product();
+        if n_rows == 0 || n == 0 {
+            return Err(Error::Vulkan(
+                "fused_post_norm_add: empty tensor".to_string().into(),
+            ));
+        }
+        if l.shape().elem_count() != n_rows * n {
+            return Err(Error::Vulkan(
+                "fused_post_norm_add: layout length mismatch"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (x, keep_x) = self.f32_view(self, l)?;
+        let (h_buf, keep_h) = self.f32_view(h, h_l)?;
+        let (alpha_buf, keep_alpha) = self.f32_view(alpha, alpha_l)?;
+        let out = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let params = candle_vulkan_kernels::push_constants::NormParams {
+            n_rows: n_rows as u64,
+            n: n as u64,
+            eps,
+        };
+        let kernels = self.device.kernels();
+        let (x, h_buf, alpha_buf, out_buf) = (x, h_buf, alpha_buf, out_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_post_rms_norm_add_slang(
+                cbb,
+                &kernels,
+                Source::PostRmsNormAdd,
+                KernelName::PostRmsNormAdd,
+                &x,
+                &h_buf,
+                &alpha_buf,
+                &out_buf,
+                &params,
+                n_rows,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_x, keep_h, keep_alpha));
+        Ok(out)
+    }
+
+    /// Fused KV cache row append: copies `(num_kv_heads * head_dim)` f32
+    /// elements from `self` (keys) and `h` (values) into row `row` of the
+    /// pre-allocated caches `dst_k`/`dst_v`; each dst is
+    /// `(num_kv_heads, max_len, head_dim)` with contiguous rows (strides
+    /// `(stride, head_dim, 1)`, `stride >= max_len * head_dim`), and the
+    /// row is written at `dst[head * stride + row * head_dim + col]`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn kv_cache_append_rows(
+        &self,
+        l: &Layout,
+        h: &VulkanStorage,
+        h_l: &Layout,
+        dst_k: &VulkanStorage,
+        dst_k_l: &Layout,
+        dst_v: &VulkanStorage,
+        dst_v_l: &Layout,
+        row: usize,
+    ) -> Result<()> {
+        use candle_vulkan_kernels::{KernelName, KvRowCopyParams, Source};
+        let dims = l.dims();
+        if dims.len() != 2 {
+            return Err(Error::Vulkan(
+                "kv_cache_append_rows: src must be 2-d (n_kv, d)"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (n_kv, head_dim) = (dims[0], dims[1]);
+        if n_kv == 0 || head_dim == 0 || l.shape().elem_count() != n_kv * head_dim {
+            return Err(Error::Vulkan(
+                "kv_cache_append_rows: src must be a contiguous (n_kv, d)"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // Both dsts: (n_kv, max_len, d), strides (stride, d, 1), matching.
+        let (dst_k_dims, dst_k_strides) = (dst_k_l.dims(), dst_k_l.stride());
+        let (dst_v_dims, dst_v_strides) = (dst_v_l.dims(), dst_v_l.stride());
+        if dst_k_dims.len() != 3 || dst_v_dims.len() != 3 {
+            return Err(Error::Vulkan(
+                "kv_cache_append_rows: dsts must be 3-d (n_kv, max_len, d)"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (dst_heads, max_len, dst_d) = (dst_k_dims[0], dst_k_dims[1], dst_k_dims[2]);
+        let stride = dst_k_strides[0];
+        if dst_k_strides[1] != dst_d
+            || dst_k_strides[2] != 1
+            || stride < max_len * dst_d
+            || dst_heads != n_kv
+            || dst_d != head_dim
+            || dst_v_dims != dst_k_dims
+            || dst_v_strides[0] != stride
+            || dst_v_strides[1] != dst_d
+            || dst_v_strides[2] != 1
+        {
+            return Err(Error::Vulkan(
+                "kv_cache_append_rows: dsts must match with contiguous rows \
+                 (strides (stride, d, 1), stride >= max_len * d)"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        if row >= max_len {
+            return Err(Error::Vulkan(
+                "kv_cache_append_rows: row out of range".to_string().into(),
+            ));
+        }
+        let (src_k, keep_k) = self.f32_view(self, l)?;
+        let (src_v, keep_v) = h.f32_view(h, h_l)?;
+        let dst_k_buf = dst_k.f32_head_rows_view(dst_k, dst_k_l, stride)?;
+        let dst_v_buf = dst_v.f32_head_rows_view(dst_v, dst_v_l, stride)?;
+        let params = KvRowCopyParams {
+            heads: n_kv as u64,
+            head_dim: head_dim as u64,
+            row: row as u64,
+            stride: stride as u64,
+        };
+        let kernels = self.device.kernels();
+        let total = 2 * n_kv * head_dim;
+        let (src_k, src_v, dst_k_buf, dst_v_buf) = (src_k, src_v, dst_k_buf, dst_v_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_kv_row_copy_slang(
+                cbb,
+                &kernels,
+                Source::KvRowCopy,
+                KernelName::KvRowCopy,
+                &src_k,
+                &src_v,
+                &dst_k_buf,
+                &dst_v_buf,
+                &params,
+                total,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_k, keep_v));
+        Ok(())
     }
 
     /// Fused single-query decode attention: `self` is q `(num_heads, head_dim)`

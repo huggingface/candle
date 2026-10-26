@@ -1574,6 +1574,64 @@ impl Tensor {
         Ok((residual_t, norm_t))
     }
 
+    /// Fused RMSNorm + residual add over the last dim (Vulkan only). `self`
+    /// is the residual `x`, `h` is the sublayer output (same shape as `x`),
+    /// and `alpha` is the RMSNorm weight (`x`'s last dim). Returns
+    /// `x + RMSNorm(h) * alpha`: this fuses the post-sublayer RMSNorm
+    /// (Gemma-3 style) and the residual add into a single dispatch.
+    pub fn fused_post_norm_add(&self, h: &Self, alpha: &Self, eps: f32) -> Result<Self> {
+        let shape = self.shape().clone();
+        if shape.elem_count() != h.shape().elem_count() {
+            bail!(
+                "fused_post_norm_add: shape mismatch: self {:?}, h {:?}",
+                self.dims(),
+                h.dims()
+            );
+        }
+        let (xs, xl) = self.storage_and_layout();
+        let (hs, hl) = h.storage_and_layout();
+        let (as_, al) = alpha.storage_and_layout();
+        let out = match (&*xs, &*hs, &*as_) {
+            (Storage::Vulkan(xv), Storage::Vulkan(hv), Storage::Vulkan(av)) => {
+                xv.fused_post_norm_add(xl, hv, hl, av, al, eps as f64)?
+            }
+            _ => bail!("fused_post_norm_add: requires f32 Vulkan tensors"),
+        };
+        Ok(from_storage(
+            Storage::Vulkan(out),
+            shape,
+            BackpropOp::none(),
+            false,
+        ))
+    }
+
+    /// Fused KV cache row append (Vulkan only): copies the
+    /// `(num_kv_heads, head_dim)` f32 rows `self` (keys) and `v` (values)
+    /// into row `row` of the pre-allocated `(num_kv_heads, max_len,
+    /// head_dim)` caches `dst_k`/`dst_v` (head stride `>= max_len *
+    /// head_dim`, contiguous rows) in a single dispatch.
+    pub fn kv_cache_append_rows(
+        &self,
+        v: &Self,
+        dst_k: &Self,
+        dst_v: &Self,
+        row: usize,
+    ) -> Result<()> {
+        let (ks, kl) = self.storage_and_layout();
+        let (vs, vl) = v.storage_and_layout();
+        let (dks, dkl) = dst_k.storage_and_layout();
+        let (dvs, dvl) = dst_v.storage_and_layout();
+        match (&*ks, &*vs, &*dks, &*dvs) {
+            (
+                Storage::Vulkan(kx),
+                Storage::Vulkan(vx),
+                Storage::Vulkan(kdx),
+                Storage::Vulkan(vdx),
+            ) => kx.kv_cache_append_rows(kl, vx, vl, kdx, dkl, vdx, dvl, row),
+            _ => bail!("kv_cache_append_rows: requires f32 Vulkan tensors"),
+        }
+    }
+
     /// Performs strict matrix-vector multiplication (`[m, n] * [n] = [m]`).
     ///
     /// - If `self` is a matrix (`[m, n]`) and `rhs` is a vector (`[n]`), returns a vector (`[m]`).
