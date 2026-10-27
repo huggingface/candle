@@ -861,8 +861,12 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let vb_m = vb.pp("model");
+        Self::new_with_vbs(cfg, vb.pp("model"), vb.pp("lm_head"))
+    }
 
+    /// Loads the backbone from `vb_m` and the untied LM head from `vb_lm_head`, for checkpoints
+    /// that nest the text model under another prefix (e.g. `model.language_model` in LFM2-VL).
+    pub fn new_with_vbs(cfg: &Config, vb_m: VarBuilder, vb_lm_head: VarBuilder) -> Result<Self> {
         let embed_tokens =
             Embedding::new(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
 
@@ -879,7 +883,7 @@ impl Model {
         let lm_head = if cfg.tie_embedding {
             Linear::from_weights(embed_tokens.embeddings().clone(), None)
         } else {
-            linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
+            linear(cfg.hidden_size, cfg.vocab_size, vb_lm_head)?
         };
 
         Ok(Self {
@@ -887,7 +891,7 @@ impl Model {
             layers,
             embedding_norm,
             lm_head,
-            dtype: vb.dtype(),
+            dtype: vb_m.dtype(),
         })
     }
 
@@ -897,8 +901,24 @@ impl Model {
         index_pos: usize,
         cache: &mut Cache,
     ) -> Result<Tensor> {
-        let (_, seq_len) = input_ids.dims2()?;
-        let mut hidden_states = self.embed_tokens.forward(input_ids)?;
+        self.forward_embeds(&self.embed_tokens(input_ids)?, index_pos, cache)
+    }
+
+    /// Token embeddings of shape `(batch, seq_len, hidden_size)`.
+    pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
+        self.embed_tokens.forward(input_ids)
+    }
+
+    /// Runs the decoder on precomputed embeddings `(batch, seq_len, hidden_size)`, e.g. text
+    /// embeddings with image features spliced in, and returns the last position's logits.
+    pub fn forward_embeds(
+        &self,
+        input_embeds: &Tensor,
+        index_pos: usize,
+        cache: &mut Cache,
+    ) -> Result<Tensor> {
+        let (_, seq_len, _) = input_embeds.dims3()?;
+        let mut hidden_states = input_embeds.clone();
 
         for (block_idx, layer) in self.layers.iter().enumerate() {
             hidden_states = layer.forward(&hidden_states, index_pos, block_idx, cache)?;
