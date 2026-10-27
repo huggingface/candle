@@ -67,6 +67,7 @@ impl VulkanStorage {
         Err(Error::NotCompiledWithVulkanSupport)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn kv_cache_append_rows(
         &self,
         _l: &Layout,
