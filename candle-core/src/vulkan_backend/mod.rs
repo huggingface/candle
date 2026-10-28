@@ -9422,19 +9422,19 @@ impl BackendStorage for VulkanStorage {
     }
 
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
-        // Convert source to F32 if needed.
-        let self_f32;
-        let self_ref: &VulkanStorage = if self.dtype == DType::F32 {
-            self
-        } else {
-            self_f32 = self.to_dtype(l, DType::F32)?;
-            &self_f32
-        };
-        if self_ref.dtype != DType::F32 {
+        // The gather kernel is compiled per dtype: run the lookup in the
+        // source dtype. A full-table F32 conversion would allocate a
+        // weight-sized scratch buffer on every embedding lookup.
+        if !matches!(
+            self.dtype,
+            DType::F32 | DType::F16 | DType::BF16 | DType::F64
+        ) {
             return Err(Error::Vulkan(
-                "index_select: only F32 supported on the Vulkan backend"
-                    .to_string()
-                    .into(),
+                format!(
+                    "index_select: unsupported dtype {:?} on the Vulkan backend",
+                    self.dtype
+                )
+                .into(),
             ));
         }
         if dim != 0 {
@@ -9514,31 +9514,7 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         }
-        let src_buf = match &self_ref.buffer {
-            VulkanStorageBuffer::F32(b) => b
-                .clone()
-                .slice(src_start as u64..(src_start + src_len) as u64),
-            _ => {
-                return Err(Error::Vulkan(
-                    format!("dtype checked above (dtype={:?})", self.dtype)
-                        .to_string()
-                        .into(),
-                ))
-            }
-        };
         let ids_buf = ids_u32.slice(ids_start as u64..(ids_start + ids_len) as u64);
-        let out = VulkanStorage::new(&self.device, n_ids * dim_len, DType::F32)?;
-        let out_buf = match &out.buffer {
-            VulkanStorageBuffer::F32(b) => b.clone(),
-            _ => {
-                return Err(Error::Vulkan(
-                    "unexpected state on the Vulkan backend".to_string().into(),
-                ))
-            }
-        };
-        if n_ids == 0 {
-            return Ok(out);
-        }
         let kernels = self.device.kernels();
         let params = candle_vulkan_kernels::push_constants::GatherIdxParams {
             count: (n_ids * dim_len) as u64,
@@ -9546,24 +9522,71 @@ impl BackendStorage for VulkanStorage {
             emb_h: dim_len as u64,
             dst_offset: 0,
         };
-        let src_buf = src_buf.clone();
-        let ids_buf = ids_buf.clone();
-        let out_buf = out_buf.clone();
-        self.device.execute(move |cbb| {
-            candle_vulkan_kernels::call_gather_idx_slang::<f32>(
-                cbb,
-                &kernels,
-                candle_vulkan_kernels::Source::GatherIdxSlang,
-                candle_vulkan_kernels::KernelName::IndexSelectF32,
-                &src_buf,
-                &out_buf,
-                &ids_buf,
-                &params,
-                n_ids * dim_len,
-            )
-            .map_err(|e| e.to_string())
-        })?;
-        Ok(out)
+        macro_rules! run_index_select {
+            ($t:ty, $buf:ident, $source:ident, $kernel:ident, $dtype:expr) => {{
+                let src_buf = match &self.buffer {
+                    VulkanStorageBuffer::$buf(b) => b
+                        .clone()
+                        .slice(src_start as u64..(src_start + src_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out = VulkanStorage::new(&self.device, n_ids * dim_len, $dtype)?;
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::$buf(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                if n_ids == 0 {
+                    return Ok(out);
+                }
+                let src_buf = src_buf.clone();
+                let ids_buf = ids_buf.clone();
+                let out_buf = out_buf.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_gather_idx_slang::<$t>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::$source,
+                        candle_vulkan_kernels::KernelName::$kernel,
+                        &src_buf,
+                        &out_buf,
+                        &ids_buf,
+                        &params,
+                        n_ids * dim_len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }};
+        }
+        match self.dtype {
+            DType::F32 => {
+                run_index_select!(f32, F32, GatherIdxSlang, IndexSelectF32, DType::F32)
+            }
+            DType::F16 => {
+                run_index_select!(half::f16, F16, GatherIdxF16, IndexSelectF16, DType::F16)
+            }
+            DType::BF16 => {
+                run_index_select!(
+                    half::bf16,
+                    BF16,
+                    GatherIdxBf16,
+                    IndexSelectBf16,
+                    DType::BF16
+                )
+            }
+            DType::F64 => {
+                run_index_select!(f64, F64, GatherIdxF64, IndexSelectF64, DType::F64)
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn index_add(

@@ -13,6 +13,7 @@ use crate::op::BackpropOp;
 use crate::storage::Storage;
 use crate::tensor::from_storage;
 use crate::{DType, Device, Error, Result, Tensor, WithDType};
+use half::{bf16, f16};
 use safetensors::tensor as st;
 use safetensors::tensor::SafeTensors;
 use std::borrow::Cow;
@@ -193,6 +194,77 @@ fn convert_back_<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {
     // Every T is larger than u8, so there is no issue regarding alignment.
     // This re-interpret the Vec<T> as a Vec<u8>.
     unsafe { Vec::from_raw_parts(ptr, length, capacity) }
+}
+
+/// Convert a stream of little-endian 16-bit floats using a 2^16-entry
+/// lookup table.
+fn convert_stream_u16(src: &[u8], table: &[u16; 65536]) -> Vec<u8> {
+    let mut out = vec![0u8; src.len()];
+    for (o, s) in out
+        .as_chunks_mut::<2>()
+        .0
+        .iter_mut()
+        .zip(src.as_chunks::<2>().0.iter())
+    {
+        let v = table[(s[0] as u16 | (s[1] as u16) << 8) as usize];
+        o[0] = v as u8;
+        o[1] = (v >> 8) as u8;
+    }
+    out
+}
+
+/// Convert a stream of little-endian 16-bit floats to a stream of f32.
+fn convert_stream_u16_f32(src: &[u8], f: impl Fn(u16) -> f32) -> Vec<u8> {
+    let mut out = vec![0u8; src.len() * 2];
+    for (o, s) in out
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(src.as_chunks::<2>().0.iter())
+    {
+        let v = f(s[0] as u16 | (s[1] as u16) << 8);
+        o.copy_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+/// Convert a stream of little-endian f32 to a stream of 16-bit floats.
+fn convert_stream_f32(src: &[u8], f: impl Fn(f32) -> u16) -> Vec<u8> {
+    let mut out = vec![0u8; src.len() / 2];
+    for (o, s) in out
+        .as_chunks_mut::<2>()
+        .0
+        .iter_mut()
+        .zip(src.as_chunks::<4>().0.iter())
+    {
+        let x = f32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+        let v = f(x);
+        o[0] = v as u8;
+        o[1] = (v >> 8) as u8;
+    }
+    out
+}
+
+fn bf16_to_f16_table() -> &'static [u16; 65536] {
+    static T: std::sync::OnceLock<[u16; 65536]> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let mut t = [0u16; 65536];
+        for (i, slot) in t.iter_mut().enumerate() {
+            *slot = f16::from_f32(bf16::from_bits(i as u16).to_f32()).to_bits();
+        }
+        t
+    })
+}
+
+fn f16_to_bf16_table() -> &'static [u16; 65536] {
+    static T: std::sync::OnceLock<[u16; 65536]> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let mut t = [0u16; 65536];
+        for (i, slot) in t.iter_mut().enumerate() {
+            *slot = bf16::from_f32(f16::from_bits(i as u16).to_f32()).to_bits();
+        }
+        t
+    })
 }
 
 pub trait Load {
@@ -555,6 +627,64 @@ impl MmapedSafetensors {
 
     pub fn load(&self, name: &str, dev: &Device) -> Result<Tensor> {
         self.get(name)?.load(dev)
+    }
+
+    /// Load a tensor as `dtype`, converting on the CPU first when the file
+    /// dtype differs from `dtype` and the target is a Vulkan device.
+    ///
+    /// On the Vulkan backend a device-side `to_dtype` is recorded in the
+    /// deferred batch, and the source-dtype buffer stays alive until the
+    /// next synchronize. Loading a bf16 checkpoint as f16 that way would
+    /// hold roughly twice the weights in VRAM at the same time, which
+    /// overflows a 32 GB GPU with an 8B model and loses the GPU context.
+    /// Converting on the CPU first costs a few seconds and keeps the peak
+    /// VRAM at one copy of the weights.
+    pub fn load_dtype(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        let view = self.get(name)?;
+        if !matches!(dev, Device::Vulkan(_)) || view.dtype() == dtype.into() {
+            return convert(&view, dev)?.to_dtype(dtype);
+        }
+        let shape = view.shape().to_vec();
+        let data = view.data();
+        match (view.dtype(), dtype) {
+            (st::Dtype::BF16, DType::F16) => Tensor::from_raw_buffer(
+                &convert_stream_u16(data, bf16_to_f16_table()),
+                DType::F16,
+                &shape,
+                dev,
+            ),
+            (st::Dtype::F16, DType::BF16) => Tensor::from_raw_buffer(
+                &convert_stream_u16(data, f16_to_bf16_table()),
+                DType::BF16,
+                &shape,
+                dev,
+            ),
+            (st::Dtype::BF16, DType::F32) => Tensor::from_raw_buffer(
+                &convert_stream_u16_f32(data, |b| bf16::from_bits(b).to_f32()),
+                DType::F32,
+                &shape,
+                dev,
+            ),
+            (st::Dtype::F16, DType::F32) => Tensor::from_raw_buffer(
+                &convert_stream_u16_f32(data, |b| f16::from_bits(b).to_f32()),
+                DType::F32,
+                &shape,
+                dev,
+            ),
+            (st::Dtype::F32, DType::F16) => Tensor::from_raw_buffer(
+                &convert_stream_f32(data, |x| f16::from_f32(x).to_bits()),
+                DType::F16,
+                &shape,
+                dev,
+            ),
+            (st::Dtype::F32, DType::BF16) => Tensor::from_raw_buffer(
+                &convert_stream_f32(data, |x| bf16::from_f32(x).to_bits()),
+                DType::BF16,
+                &shape,
+                dev,
+            ),
+            _ => convert(&view, dev)?.to_dtype(dtype),
+        }
     }
 
     pub fn tensors(&self) -> Vec<(String, st::TensorView<'_>)> {

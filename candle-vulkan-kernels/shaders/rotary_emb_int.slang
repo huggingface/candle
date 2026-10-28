@@ -4,7 +4,7 @@
 //   dst[i+1] = src[i]   * sin[rope_i] + src[i+1] * cos[rope_i]
 //
 // Tensor layout: (b, h, t, d) where d is the head dimension.
-// cos/sin layout: (t, d/2) or (b, t, d/2) depending on unbatched_rope.
+// cos/sin layout: (t, d/2), or (b, t, d/2) when unbatched.
 //
 // Params: [0]=b, [1]=h, [2]=t, [3]=d, [4]=unbatched (0 or 1)
 
@@ -46,15 +46,17 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint64_t h_idx = rem2 % h;
     uint64_t b_idx = rem2 / h;
 
-    // Compute the rope index
+    // Compute the rope index into the (t, d/2) or (b, t, d/2) tables:
+    // each position t_idx has its own (d/2) slice of cos/sin.
+    uint64_t half = d / 2u;
     uint64_t rope_i;
     if (unbatched != 0u)
     {
-        rope_i = d_idx / 2u + b_idx * (d / 2u);
+        rope_i = (b_idx * t + t_idx) * half + d_idx / 2u;
     }
     else
     {
-        rope_i = d_idx / 2u;
+        rope_i = t_idx * half + d_idx / 2u;
     }
 
     float cos_val = g_Cos[rope_i];

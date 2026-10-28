@@ -545,19 +545,52 @@ impl VulkanDevice {
     /// the buffer is held in `pool_pending` until that batch's fence
     /// signals (the GPU may still be using it); otherwise it goes
     /// straight to the free pool. Buffers that would exceed the
-    /// per-class, per-entry or total caps are dropped.
+    /// per-class, per-entry or total caps are dropped. The pending list
+    /// is bounded by the same total byte budget: when adding `buf`
+    /// would exceed it, the batch is submitted and waited on first, so
+    /// the list is flushed through the caps and the excess is actually
+    /// freed (holding it longer is impossible — the GPU owns it, and
+    /// freeing it early would release memory the GPU is still using).
     pub(crate) fn pool_return(&self, dtype: DType, buf: Arc<Buffer>) {
         let pending_batch = match self.inner.pending.lock().ok() {
             Some(p) => !p.is_empty(),
             None => true,
         };
         if pending_batch {
-            let mut pending = match self.inner.pool_pending.lock().ok() {
-                Some(p) => p,
-                None => return,
+            let over_cap = {
+                let pending = match self.inner.pool_pending.lock().ok() {
+                    Some(p) => p,
+                    None => return,
+                };
+                let held: usize = pending.iter().map(|(_, b)| b.size() as usize).sum();
+                held + buf.size() as usize > POOL_MAX_BYTES
             };
-            pending.push((dtype, buf));
-            return;
+            if !over_cap {
+                let mut pending = match self.inner.pool_pending.lock().ok() {
+                    Some(p) => p,
+                    None => return,
+                };
+                pending.push((dtype, buf));
+                return;
+            }
+            // The pending list would exceed the pool's byte budget and
+            // the GPU still owns every held buffer, so the excess can
+            // only be released after the batch completes: submit and
+            // wait, which flushes the list through the caps (excess is
+            // freed) and leaves the GPU idle.
+            if self.synchronize().is_err() {
+                // A sync failure means the device is already broken;
+                // keep holding the buffer (the old behavior) rather than
+                // freeing one the GPU may still reference.
+                let mut pending = match self.inner.pool_pending.lock().ok() {
+                    Some(p) => p,
+                    None => return,
+                };
+                pending.push((dtype, buf));
+                return;
+            }
+            // Fall through: the GPU is idle on `buf`; pool it (the caps
+            // apply) or drop it if it exceeds them.
         }
         let mut free = match self.inner.pool_free.lock().ok() {
             Some(f) => f,

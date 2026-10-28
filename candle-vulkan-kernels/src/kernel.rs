@@ -302,6 +302,7 @@ pub enum KernelName {
     GatherIdxF16,
     GatherRowsF16,
     IndexSelectF16,
+    IndexSelectBf16,
     GatherIdxF64,
     GatherIdxBf16,
     GatherIdxU8,
@@ -777,6 +778,7 @@ impl AsRef<str> for KernelName {
             Self::GatherIdxF16 => "main",
             Self::GatherRowsF16 => "main_gather_rows",
             Self::IndexSelectF16 => "main_index_select",
+            Self::IndexSelectBf16 => "main_index_select",
             Self::GatherIdxF64 => "main",
             Self::GatherIdxBf16 => "main",
             Self::GatherIdxU8 => "main",
@@ -1634,6 +1636,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::GatherIdxF16
         | KernelName::GatherRowsF16
         | KernelName::IndexSelectF16
+        | KernelName::IndexSelectBf16
         | KernelName::GatherIdxF64
         | KernelName::GatherIdxBf16
         | KernelName::GatherIdxU8

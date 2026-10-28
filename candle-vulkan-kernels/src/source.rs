@@ -976,6 +976,7 @@ impl Source {
             | KernelName::GatherIdxF16
             | KernelName::GatherRowsF16
             | KernelName::IndexSelectF16
+            | KernelName::IndexSelectBf16
             | KernelName::GatherIdxF64
             | KernelName::GatherIdxBf16
             | KernelName::GatherIdxU8
