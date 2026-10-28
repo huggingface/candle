@@ -670,7 +670,11 @@ static __device__ void mmvq_core_impl(
     for (int j = 0; j < ncols_dst; ++j) {
 #pragma unroll
       for (int i = 0; i < rows_per_cuda_block; ++i) {
-        const int row = row0 + i;
+        // The tile is a fixed `rows_per_cuda_block` tall, so the last block
+        // of an odd `nrows_x` dots a row that does not exist. Its result is
+        // dropped by the store guard below, but the load still has to stay
+        // inside the weights.
+        const int row = row0 + i < nrows_x ? row0 + i : 0;
         const int weight_kbx = row * blocks_per_row_x + kbx;
         tmp[j][i] +=
             vec_dot_q_cuda(vx, &y[j * stride_col_y + kby], weight_kbx, kqs);
