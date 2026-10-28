@@ -2100,6 +2100,27 @@ fn log_sum_exp() -> Result<()> {
         input.to_vec3::<f64>()?
     );
 
+    // Slices whose max is infinite give -inf / inf like torch.logsumexp, not NaN.
+    let (ninf, inf) = (f32::NEG_INFINITY, f32::INFINITY);
+    let input = Tensor::new(
+        &[
+            [ninf, ninf, ninf],
+            [ninf, 0., ninf],
+            [inf, 1., 2.],
+            [inf, ninf, 0.],
+        ],
+        &Device::Cpu,
+    )?;
+    assert_eq!(
+        input.log_sum_exp(1)?.to_vec1::<f32>()?,
+        [ninf, 0., inf, inf]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(&input.log_sum_exp(0)?, 4)?,
+        [inf, 1.3133, 2.1269]
+    );
+    assert_eq!(input.log_sum_exp((0, 1))?.to_vec0::<f32>()?, inf);
+
     Ok(())
 }
 

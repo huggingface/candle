@@ -2924,6 +2924,12 @@ impl Tensor {
             .try_fold(self.max_keepdim(sum_dims[0])?, |max, &dim| {
                 max.max_keepdim(dim)
             })?;
+        // Shifting by an infinite max would compute `inf - inf = NaN` (e.g. for a slice that
+        // is all -inf), so shift by zero there instead, as torch.logsumexp does.
+        let max = max
+            .abs()?
+            .eq(f64::INFINITY)?
+            .where_cond(&max.zeros_like()?, &max)?;
         let exp = self.broadcast_sub(&max)?.exp()?;
         let sum = exp.sum(sum_dims.clone())?;
 
