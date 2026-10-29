@@ -30,12 +30,14 @@ const FUSED_Q5K_GEMM_M_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5k_gemm_m.spv"));
 const FUSED_Q8K_GEMM_M_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8k_gemm_m.spv"));
+const FUSED_Q6K_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q6k_gemm.spv"));
+const FUSED_Q6K_GEMM_M_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q6k_gemm_m.spv"));
 const DECODE_ATTENTION_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/decode_attention.spv"));
 const POST_RMS_NORM_ADD_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/post_rms_norm_add.spv"));
-const KV_ROW_COPY_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/kv_row_copy.spv"));
+const KV_ROW_COPY_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kv_row_copy.spv"));
 const ZERO_FILL_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zero_fill.spv"));
 const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
 const CONST_SET_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f16.spv"));
@@ -459,6 +461,8 @@ pub enum Source {
     FusedQ8kGemm,
     FusedQ5kGemmM,
     FusedQ8kGemmM,
+    FusedQ6kGemm,
+    FusedQ6kGemmM,
     DecodeAttention,
     ZeroFill,
     ConstSet,
@@ -952,9 +956,7 @@ impl Source {
             | KernelName::ConvTranspose2dF64
             | KernelName::ConvTranspose2dBf16 => 96,
             // `scatter`: five `uint64_t` fields.
-            KernelName::ScatterF32
-            | KernelName::ScatterF16
-            | KernelName::ScatterF64 => 40,
+            KernelName::ScatterF32 | KernelName::ScatterF16 | KernelName::ScatterF64 => 40,
             // `rope`: `uint64_t bh; uint64_t t; uint64_t d`.
             KernelName::Rope => 24,
             // `rotary_emb_int`: five `uint64_t` fields.
@@ -1153,7 +1155,9 @@ impl Source {
             | KernelName::FusedQ5kGemmF32
             | KernelName::FusedQ8kGemmF32
             | KernelName::FusedQ5kGemmMF32
-            | KernelName::FusedQ8kGemmMF32 => 24,
+            | KernelName::FusedQ8kGemmMF32
+            | KernelName::FusedQ6kGemmF32
+            | KernelName::FusedQ6kGemmMF32 => 24,
             _ => 0,
         }
     }
@@ -1181,6 +1185,8 @@ impl Source {
             Self::FusedQ8kGemm => FUSED_Q8K_GEMM_SPV,
             Self::FusedQ5kGemmM => FUSED_Q5K_GEMM_M_SPV,
             Self::FusedQ8kGemmM => FUSED_Q8K_GEMM_M_SPV,
+            Self::FusedQ6kGemm => FUSED_Q6K_GEMM_SPV,
+            Self::FusedQ6kGemmM => FUSED_Q6K_GEMM_M_SPV,
             Self::DecodeAttention => DECODE_ATTENTION_SPV,
             Self::ZeroFill => ZERO_FILL_SPV,
             Self::ConstSet => CONST_SET_SPV,
@@ -1489,6 +1495,8 @@ impl AsRef<str> for Source {
             Self::FusedQ8kGemm => "fused_q8k_gemm",
             Self::FusedQ5kGemmM => "fused_q5k_gemm_m",
             Self::FusedQ8kGemmM => "fused_q8k_gemm_m",
+            Self::FusedQ6kGemm => "fused_q6k_gemm",
+            Self::FusedQ6kGemmM => "fused_q6k_gemm_m",
             Self::DecodeAttention => "decode_attention",
             Self::ZeroFill => "zero_fill",
             Self::ConstSet => "const_set",

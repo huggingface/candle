@@ -48,6 +48,8 @@ pub enum KernelName {
     FusedQ8kGemmF32,
     FusedQ5kGemmMF32,
     FusedQ8kGemmMF32,
+    FusedQ6kGemmF32,
+    FusedQ6kGemmMF32,
     DecodeAttention,
     DecodeAttentionCombine,
     ZeroFill,
@@ -523,6 +525,8 @@ impl AsRef<str> for KernelName {
             Self::FusedQ5kGemmF32 => "main",
             Self::FusedQ8kGemmF32 => "main",
             Self::FusedQ5kGemmMF32 => "main",
+            Self::FusedQ6kGemmF32 => "main",
+            Self::FusedQ6kGemmMF32 => "main",
             Self::FusedQ8kGemmMF32 => "main",
             Self::DecodeAttention => "main",
             Self::DecodeAttentionCombine => "decode_attention_combine",
@@ -1495,7 +1499,9 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::FusedQ5kGemmF32
         | KernelName::FusedQ8kGemmF32
         | KernelName::FusedQ5kGemmMF32
-        | KernelName::FusedQ8kGemmMF32 => 3,
+        | KernelName::FusedQ8kGemmMF32
+        | KernelName::FusedQ6kGemmF32
+        | KernelName::FusedQ6kGemmMF32 => 3,
         // index_add: src/ids/out (params are push constants).
         KernelName::IndexAddF32U32
         | KernelName::IndexAddF32I64
@@ -1695,8 +1701,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         KernelName::AffineCoopMatF16 | KernelName::AffineCoopMatBf16 => 4,
         // decode attention: q/k/v; combine: q/scratch/out (params are push
         // constants).
-        KernelName::DecodeAttention
-        | KernelName::DecodeAttentionCombine => 5,
+        KernelName::DecodeAttention | KernelName::DecodeAttentionCombine => 5,
     }
 }
 

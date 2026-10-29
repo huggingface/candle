@@ -368,6 +368,12 @@ impl QVulkanStorage {
             (GgmlDType::Q5K, false) if k.is_multiple_of(256) => {
                 Some((Source::FusedQ5kGemmM, KernelName::FusedQ5kGemmMF32))
             }
+            (GgmlDType::Q6K, true) if k.is_multiple_of(256) => {
+                Some((Source::FusedQ6kGemm, KernelName::FusedQ6kGemmF32))
+            }
+            (GgmlDType::Q6K, false) if k.is_multiple_of(256) => {
+                Some((Source::FusedQ6kGemmM, KernelName::FusedQ6kGemmMF32))
+            }
             (GgmlDType::Q8K, false) if k.is_multiple_of(256) => {
                 Some((Source::FusedQ8kGemmM, KernelName::FusedQ8kGemmMF32))
             }
@@ -430,12 +436,31 @@ impl QVulkanStorage {
             k: k as u64,
         };
         let kernels = self.device.kernels();
+        // The fused Q6_K dispatches must run in their own command buffer:
+        // on the R9700 (radv), a buffer transfer recorded in the same or a
+        // following command buffer after these dispatches misreads buffers
+        // written by the batch (stale readback contents, or a hard-recovery
+        // device loss) — the same class of ordering bug
+        // `Kernels::prime_coopmat_output` works around for
+        // cooperative-matrix dispatches. Draining before and after keeps
+        // every Q6_K dispatch isolated from buffer transfers.
+        let isolated = matches!(
+            name,
+            candle_vulkan_kernels::KernelName::FusedQ6kGemmF32
+                | candle_vulkan_kernels::KernelName::FusedQ6kGemmMF32
+        );
+        if isolated {
+            self.device.synchronize()?;
+        }
         self.device.execute(move |cbb| {
             candle_vulkan_kernels::call_fused_quant_gemm_slang(
                 cbb, &kernels, source, name, &lhs_buf, &src, &dst, &params, m, n,
             )
             .map_err(|e| e.to_string())
         })?;
+        if isolated {
+            self.device.synchronize()?;
+        }
         Ok(out)
     }
 }
