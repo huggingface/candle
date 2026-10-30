@@ -318,6 +318,9 @@ pub enum KernelName {
     GatherIdxI64,
     GatherRowsF64,
     IndexSelectF64,
+    GatherDim1F32,
+    GatherDim1F16,
+    GatherDim1F64,
     ReduceMinF32,
     ReduceArgMinF32,
     ReduceArgMaxF32,
@@ -802,6 +805,9 @@ impl AsRef<str> for KernelName {
             Self::GatherIdxI64 => "main",
             Self::GatherRowsF64 => "main_gather_rows",
             Self::IndexSelectF64 => "main_index_select",
+            Self::GatherDim1F32 => "main_gather_dim1",
+            Self::GatherDim1F16 => "main_gather_dim1",
+            Self::GatherDim1F64 => "main_gather_dim1",
             Self::ReduceMinF32 => "main_reduce_min",
             Self::ReduceArgMinF32 => "main_reduce_argmin",
             Self::ReduceArgMaxF32 => "main_reduce_argmax",
@@ -1668,7 +1674,10 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::GatherIdxU32
         | KernelName::GatherIdxI64
         | KernelName::GatherRowsF64
-        | KernelName::IndexSelectF64 => 3,
+        | KernelName::IndexSelectF64
+        | KernelName::GatherDim1F32
+        | KernelName::GatherDim1F16
+        | KernelName::GatherDim1F64 => 3,
         // reduce: in/out-f?/out-i? (params are push constants).
         KernelName::ReduceMinF32
         | KernelName::ReduceArgMinF32

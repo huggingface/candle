@@ -9146,9 +9146,9 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         }
-        if dim != 0 {
+        if dim > 1 {
             return Err(Error::Vulkan(
-                "gather: only dim 0 supported on the Vulkan backend"
+                "gather: only dim 0 or 1 supported on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -9208,9 +9208,17 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         }
-        if ids_dims[1] > dim_len {
+        if dim == 0 {
+            if ids_dims[1] > dim_len {
+                return Err(Error::Vulkan(
+                    "gather: ids inner dim larger than the embedding dim on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ));
+            }
+        } else if ids_dims[0] != rows {
             return Err(Error::Vulkan(
-                "gather: ids inner dim larger than the embedding dim on the Vulkan backend"
+                "gather: dim-1 ids rows must match the embedding rows on the Vulkan backend"
                     .to_string()
                     .into(),
             ));
@@ -9234,6 +9242,15 @@ impl BackendStorage for VulkanStorage {
             block_len: inner as u64,
             emb_h: dim_len as u64,
             dst_offset: 0,
+        };
+        let gather_name = match (dim, self.dtype) {
+            (0, DType::F32) => candle_vulkan_kernels::KernelName::GatherRowsF32,
+            (1, DType::F32) => candle_vulkan_kernels::KernelName::GatherDim1F32,
+            (0, DType::F16) => candle_vulkan_kernels::KernelName::GatherRowsF16,
+            (1, DType::F16) => candle_vulkan_kernels::KernelName::GatherDim1F16,
+            (0, DType::F64) => candle_vulkan_kernels::KernelName::GatherRowsF64,
+            (1, DType::F64) => candle_vulkan_kernels::KernelName::GatherDim1F64,
+            _ => unreachable!("dtype checked above"),
         };
         match self.dtype {
             DType::F32 => {
@@ -9263,7 +9280,7 @@ impl BackendStorage for VulkanStorage {
                         cbb,
                         &kernels,
                         candle_vulkan_kernels::Source::GatherIdxSlang,
-                        candle_vulkan_kernels::KernelName::GatherRowsF32,
+                        gather_name,
                         &emb_buf,
                         &out_buf,
                         &ids_buf,
@@ -9300,7 +9317,7 @@ impl BackendStorage for VulkanStorage {
                         cbb,
                         &kernels,
                         candle_vulkan_kernels::Source::GatherIdxF16,
-                        candle_vulkan_kernels::KernelName::GatherRowsF16,
+                        gather_name,
                         &emb_buf,
                         &out_buf,
                         &ids_buf,
@@ -9337,7 +9354,7 @@ impl BackendStorage for VulkanStorage {
                         cbb,
                         &kernels,
                         candle_vulkan_kernels::Source::GatherIdxF64,
-                        candle_vulkan_kernels::KernelName::GatherRowsF64,
+                        gather_name,
                         &emb_buf,
                         &out_buf,
                         &ids_buf,

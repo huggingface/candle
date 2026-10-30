@@ -1003,7 +1003,10 @@ impl Source {
             | KernelName::GatherIdxU32
             | KernelName::GatherIdxI64
             | KernelName::GatherRowsF64
-            | KernelName::IndexSelectF64 => 32,
+            | KernelName::IndexSelectF64
+            | KernelName::GatherDim1F32
+            | KernelName::GatherDim1F16
+            | KernelName::GatherDim1F64 => 32,
             // `reduce_ops`: `uint64_t rows; uint64_t cols`.
             KernelName::ReduceMinF32
             | KernelName::ReduceArgMinF32

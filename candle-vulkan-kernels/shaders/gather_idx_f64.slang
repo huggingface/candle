@@ -58,3 +58,31 @@ void main_index_select(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint64_t i = o / inner;
     g_Dst[o + g_Params.dst_offset] = g_Src[g_Idx[i] * emb_h + j];
 }
+
+// Column gather (dim 1): out[o] = src[(o / inner) * emb_h + idx[o]],
+// o = i * inner + k. `inner` is the number of ids columns, `emb_h` the
+// number of embedding columns (the stride between rows).
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_gather_dim1(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint o = dispatchThreadID.x;
+    uint64_t total = g_Params.count;
+    uint64_t inner = max(g_Params.block_len, 1u);
+    uint64_t emb_h = max(g_Params.emb_h, 1u);
+    if (o >= total)
+    {
+        return;
+    }
+    uint64_t i = o / inner;
+    uint64_t src_idx = i * emb_h + (uint64_t)g_Idx[o];
+    uint64_t rows = total / inner;
+    if (src_idx >= rows * emb_h)
+    {
+        g_Dst[o + g_Params.dst_offset] = 0;
+    }
+    else
+    {
+        g_Dst[o + g_Params.dst_offset] = g_Src[src_idx];
+    }
+}
