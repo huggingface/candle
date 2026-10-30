@@ -264,9 +264,15 @@ fn qmm_batch(dev: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal);
-test_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal);
-test_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal);
+test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal, qmm_vulkan);
+test_device!(
+    quantized_matmul_neg,
+    qmm_n_cpu,
+    qmm_n_cuda,
+    qmm_n_metal,
+    qmm_n_vulkan
+);
+test_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal, qmm_b_vulkan);
 
 fn embedding_weight(device: &Device) -> Result<Tensor> {
     let values = (0..(8 * 256))
@@ -1041,61 +1047,71 @@ test_device!(
     quantize_q4_0,
     quantize_q4_0_cpu,
     quantize_q4_0_cuda,
-    quantize_q4_0_metal
+    quantize_q4_0_metal,
+    quantize_q4_0_vulkan
 );
 test_device!(
     quantize_q4_1,
     quantize_q4_1_cpu,
     quantize_q4_1_cuda,
-    quantize_q4_1_metal
+    quantize_q4_1_metal,
+    quantize_q4_1_vulkan
 );
 test_device!(
     quantize_q5_0,
     quantize_q5_0_cpu,
     quantize_q5_0_cuda,
-    quantize_q5_0_metal
+    quantize_q5_0_metal,
+    quantize_q5_0_vulkan
 );
 test_device!(
     quantize_q5_1,
     quantize_q5_1_cpu,
     quantize_q5_1_cuda,
-    quantize_q5_1_metal
+    quantize_q5_1_metal,
+    quantize_q5_1_vulkan
 );
 test_device!(
     quantize_q2k,
     quantize_q2k_cpu,
     quantize_q2k_cuda,
-    quantize_q2k_metal
+    quantize_q2k_metal,
+    quantize_q2k_vulkan
 );
 test_device!(
     quantize_q3k,
     quantize_q3k_cpu,
     quantize_q3k_cuda,
-    quantize_q3k_metal
+    quantize_q3k_metal,
+    quantize_q3k_vulkan
 );
 test_device!(
     quantize_q4k,
     quantize_q4k_cpu,
     quantize_q4k_cuda,
-    quantize_q4k_metal
+    quantize_q4k_metal,
+    quantize_q4k_vulkan
 );
 test_device!(
     quantize_q5k,
     quantize_q5k_cpu,
     quantize_q5k_cuda,
-    quantize_q5k_metal
+    quantize_q5k_metal,
+    quantize_q5k_vulkan
 );
 test_device!(
     quantize_q6k,
     quantize_q6k_cpu,
     quantize_q6k_cuda,
-    quantize_q6k_metal
+    quantize_q6k_metal,
+    quantize_q6k_vulkan
 );
 test_device!(
     quantize_q8k,
     quantize_q8k_cpu,
     quantize_q8k_cuda,
-    quantize_q8k_metal
+    quantize_q8k_metal,
+    quantize_q8k_vulkan
 );
 
 /// Very simple dot product implementation
@@ -1237,13 +1253,19 @@ fn get_random_tensors(
 macro_rules! quantized_matmul {
     // TODO: Switch to generating the two last arguments automatically once concat_idents is
     // stable. https://github.com/rust-lang/rust/issues/29599
-    ($fn_name: ident, $fn_name_cpu: ident, $fn_name_cuda: ident, $fn_name_metal: ident, $dtype: expr) => {
+    ($fn_name: ident, $fn_name_cpu: ident, $fn_name_cuda: ident, $fn_name_metal: ident, $fn_name_vulkan: ident, $dtype: expr) => {
         fn $fn_name(device: &Device) -> Result<()> {
             test_matmul(device, (1, 3, 4, 256), $dtype)?;
             Ok(())
         }
 
-        test_device!($fn_name, $fn_name_cpu, $fn_name_cuda, $fn_name_metal);
+        test_device!(
+            $fn_name,
+            $fn_name_cpu,
+            $fn_name_cuda,
+            $fn_name_metal,
+            $fn_name_vulkan
+        );
     };
 }
 
@@ -1252,6 +1274,7 @@ quantized_matmul!(
     quantized_matmul_q4_0_cpu,
     quantized_matmul_q4_0_cuda,
     quantized_matmul_q4_0_metal,
+    quantized_matmul_q4_0_vulkan,
     GgmlDType::Q4_0
 );
 quantized_matmul!(
@@ -1259,6 +1282,7 @@ quantized_matmul!(
     quantized_matmul_q4_1_cpu,
     quantized_matmul_q4_1_cuda,
     quantized_matmul_q4_1_metal,
+    quantized_matmul_q4_1_vulkan,
     GgmlDType::Q4_1
 );
 quantized_matmul!(
@@ -1266,6 +1290,7 @@ quantized_matmul!(
     quantized_matmul_q5_0_cpu,
     quantized_matmul_q5_0_cuda,
     quantized_matmul_q5_0_metal,
+    quantized_matmul_q5_0_vulkan,
     GgmlDType::Q5_0
 );
 quantized_matmul!(
@@ -1273,6 +1298,7 @@ quantized_matmul!(
     quantized_matmul_q5_1_cpu,
     quantized_matmul_q5_1_cuda,
     quantized_matmul_q5_1_metal,
+    quantized_matmul_q5_1_vulkan,
     GgmlDType::Q5_1
 );
 quantized_matmul!(
@@ -1280,6 +1306,7 @@ quantized_matmul!(
     quantized_matmul_q8_0_cpu,
     quantized_matmul_q8_0_cuda,
     quantized_matmul_q8_0_metal,
+    quantized_matmul_q8_0_vulkan,
     GgmlDType::Q8_0
 );
 
@@ -1343,6 +1370,7 @@ quantized_matmul!(
     quantized_matmul_q8_1_cpu,
     quantized_matmul_q8_1_cuda,
     quantized_matmul_q8_1_metal,
+    quantized_matmul_q8_1_vulkan,
     GgmlDType::Q8_1
 );
 quantized_matmul!(
@@ -1350,6 +1378,7 @@ quantized_matmul!(
     quantized_matmul_q2k_cpu,
     quantized_matmul_q2k_cuda,
     quantized_matmul_q2k_metal,
+    quantized_matmul_q2k_vulkan,
     GgmlDType::Q2K
 );
 quantized_matmul!(
@@ -1357,6 +1386,7 @@ quantized_matmul!(
     quantized_matmul_q3k_cpu,
     quantized_matmul_q3k_cuda,
     quantized_matmul_q3k_metal,
+    quantized_matmul_q3k_vulkan,
     GgmlDType::Q3K
 );
 quantized_matmul!(
@@ -1364,6 +1394,7 @@ quantized_matmul!(
     quantized_matmul_q4k_cpu,
     quantized_matmul_q4k_cuda,
     quantized_matmul_q4k_metal,
+    quantized_matmul_q4k_vulkan,
     GgmlDType::Q4K
 );
 quantized_matmul!(
@@ -1371,6 +1402,7 @@ quantized_matmul!(
     quantized_matmul_q5k_cpu,
     quantized_matmul_q5k_cuda,
     quantized_matmul_q5k_metal,
+    quantized_matmul_q5k_vulkan,
     GgmlDType::Q5K
 );
 quantized_matmul!(
@@ -1378,6 +1410,7 @@ quantized_matmul!(
     quantized_matmul_q6k_cpu,
     quantized_matmul_q6k_cuda,
     quantized_matmul_q6k_metal,
+    quantized_matmul_q6k_vulkan,
     GgmlDType::Q6K
 );
 // Not implemented on metal
@@ -1386,6 +1419,7 @@ quantized_matmul!(
     quantized_matmul_q8k_cpu,
     quantized_matmul_q8k_cuda,
     quantized_matmul_q8k_metal,
+    quantized_matmul_q8k_vulkan,
     GgmlDType::Q8K
 );
 
@@ -1573,7 +1607,8 @@ test_device!(
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned,
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cpu,
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cuda,
-    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_vulkan
 );
 
 // Repacked aarch64 kernels must agree with the dequantized reference across the m tiers

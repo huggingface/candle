@@ -42,6 +42,7 @@ const ZERO_FILL_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zero_fill
 const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
 const CONST_SET_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f16.spv"));
 const CONST_SET_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_bf16.spv"));
+const CONST_FILL_BYTES_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_fill_bytes.spv"));
 const UNARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary.spv"));
 const BINARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary.spv"));
 const CMP_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp.spv"));
@@ -468,6 +469,7 @@ pub enum Source {
     ConstSet,
     ConstSetF16,
     ConstSetBf16,
+    ConstFillBytes,
     UnarySlang,
     BinarySlang,
     CmpSlang,
@@ -885,6 +887,7 @@ impl Source {
             | KernelName::UnaryTanhF8e4m3 => 16,
             // `const_set`: `uint64_t count; float value;`
             KernelName::ConstSetBf16 | KernelName::ConstSetF16 | KernelName::ConstSetF32 => 16,
+            KernelName::ConstFillBytes => 16,
             // `rms_norm`/`layer_norm`: `uint64_t n_rows; uint64_t n; double eps;`
             KernelName::LayerNorm | KernelName::RmsNorm | KernelName::AddRmsNorm => 24,
             // `post_rms_norm_add`: same `Params` layout as `rms_norm`.
@@ -1192,6 +1195,7 @@ impl Source {
             Self::ConstSet => CONST_SET_SPV,
             Self::ConstSetF16 => CONST_SET_F16_SPV,
             Self::ConstSetBf16 => CONST_SET_BF16_SPV,
+            Self::ConstFillBytes => CONST_FILL_BYTES_SPV,
             Self::UnarySlang => UNARY_SLANG_SPV,
             Self::BinarySlang => BINARY_SLANG_SPV,
             Self::CmpSlang => CMP_SLANG_SPV,
@@ -1502,6 +1506,7 @@ impl AsRef<str> for Source {
             Self::ConstSet => "const_set",
             Self::ConstSetF16 => "const_set_f16",
             Self::ConstSetBf16 => "const_set_bf16",
+            Self::ConstFillBytes => "const_fill_bytes",
             Self::UnarySlang => "unary",
             Self::BinarySlang => "binary",
             Self::CmpSlang => "cmp",

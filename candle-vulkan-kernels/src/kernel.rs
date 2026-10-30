@@ -56,6 +56,7 @@ pub enum KernelName {
     ConstSetF32,
     ConstSetF16,
     ConstSetBf16,
+    ConstFillBytes,
     UnaryLogF32,
     UnaryAbsF32,
     UnaryRecipF32,
@@ -534,6 +535,7 @@ impl AsRef<str> for KernelName {
             Self::ConstSetF32 => "main",
             Self::ConstSetF16 => "main",
             Self::ConstSetBf16 => "main",
+            Self::ConstFillBytes => "main",
             Self::UnaryLogF32 => "main_log",
             Self::UnaryAbsF32 => "main_abs",
             Self::UnaryRecipF32 => "main_recip",
@@ -1423,6 +1425,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         KernelName::ZeroFill => 1,
         // const_set: output (params are push constants).
         KernelName::ConstSetBf16 | KernelName::ConstSetF16 | KernelName::ConstSetF32 => 1,
+        // const_fill_bytes: dst (params are push constants).
+        KernelName::ConstFillBytes => 1,
         // row-norm kernels: src/alpha(/beta)/dst (params are push constants).
         KernelName::RmsNorm => 3,
         KernelName::AddRmsNorm => 5,

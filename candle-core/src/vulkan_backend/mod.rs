@@ -180,6 +180,10 @@ impl BackendDevice for VulkanDevice {
             .seed_atomic()
             .load(std::sync::atomic::Ordering::Relaxed);
         let mut rng = StdRng::seed_from_u64(seed);
+        // Advance the device seed so consecutive draws produce different
+        // sequences (the host-side StdRng is a snapshot of the seed).
+        self.seed_atomic()
+            .fetch_add(elem_count as u64, std::sync::atomic::Ordering::Relaxed);
         let cpu = match dtype {
             DType::U8
             | DType::U32
@@ -243,6 +247,10 @@ impl BackendDevice for VulkanDevice {
             .seed_atomic()
             .load(std::sync::atomic::Ordering::Relaxed);
         let mut rng = StdRng::seed_from_u64(seed);
+        // Advance the device seed so consecutive draws produce different
+        // sequences (the host-side StdRng is a snapshot of the seed).
+        self.seed_atomic()
+            .fetch_add(elem_count as u64, std::sync::atomic::Ordering::Relaxed);
         let cpu = match dtype {
             DType::U8
             | DType::U32
@@ -2535,7 +2543,15 @@ impl BackendStorage for VulkanStorage {
     fn reduce_op(&self, op: ReduceOp, l: &Layout, reduce_dims: &[usize]) -> Result<Self> {
         if !matches!(
             self.dtype,
-            DType::F32 | DType::F16 | DType::F64 | DType::BF16 | DType::U32 | DType::I32
+            DType::F32
+                | DType::F16
+                | DType::F64
+                | DType::BF16
+                | DType::U8
+                | DType::U32
+                | DType::I16
+                | DType::I32
+                | DType::I64
         ) {
             return Err(Error::Vulkan(
                 "reduce_op: unsupported dtype on the Vulkan backend"
@@ -2543,11 +2559,28 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         }
-        // Convert integer dtypes to F32 for reduction, then convert back
-        if self.dtype == DType::U32 || self.dtype == DType::I32 {
-            let f32 = self.to_dtype(l, DType::F32)?;
-            let result = f32.reduce_op(op, l, reduce_dims)?;
-            return result.to_dtype(l, self.dtype);
+        // Convert integer dtypes to F64 for the reduction (its 52-bit mantissa
+        // keeps the integer sums the tests exercise exact; F32 would round values
+        // above 2^24), then convert the reduced result back to the original dtype.
+        // The reduced result has the input shape with the reduced dims removed, so
+        // the final dtype conversion must use that reduced layout, not the input one.
+        if self.dtype.is_int() {
+            let f64 = self.to_dtype(l, DType::F64)?;
+            // to_dtype materializes a non-contiguous input to a fresh contiguous
+            // buffer, so the reduce must use a layout matching the (now contiguous)
+            // f64 storage, not the original layout l.
+            let f64_l = if matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+                l.clone()
+            } else {
+                crate::Layout::contiguous(l.shape())
+            };
+            let result = f64.reduce_op(op, &f64_l, reduce_dims)?;
+            let reduced_dims: Vec<usize> = (0..l.dims().len())
+                .filter(|&i| !reduce_dims.contains(&i))
+                .map(|i| l.dims()[i])
+                .collect();
+            let reduced_l = crate::Layout::contiguous(crate::Shape::from(reduced_dims));
+            return result.to_dtype(&reduced_l, self.dtype);
         }
         let dims = l.dims();
         let ndim = dims.len();
@@ -2557,6 +2590,24 @@ impl BackendStorage for VulkanStorage {
                     .to_string()
                     .into(),
             ));
+        }
+        // An empty input reduces to the identity value (zero) for each output row;
+        // materializing a zero-element buffer is not possible, so handle it here.
+        if l.shape().elem_count() == 0 {
+            let result_dims: Vec<usize> = (0..ndim)
+                .filter(|&i| !reduce_dims.contains(&i))
+                .map(|i| dims[i])
+                .collect();
+            let result_count = result_dims.iter().product();
+            if result_count > 0 {
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => self.dtype,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, result_count, out_dtype)?;
+                out.zero_fill()?;
+                return Ok(out);
+            }
         }
         // If the reduction axis is not the last one, permute the layout to
         // move it to the last position, materialize, reduce, then permute back.
@@ -2569,7 +2620,7 @@ impl BackendStorage for VulkanStorage {
             let perm_l = l.permute(&perm)?;
             let elem_count = perm_l.shape().elem_count();
             let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
-            self.copy_strided_src(&mut materialized, 0, l)?;
+            self.copy_strided_src(&mut materialized, 0, &perm_l)?;
             let mat_l = crate::Layout::contiguous_with_offset(perm_l.shape(), 0);
             let reduced = materialized.reduce_op(op, &mat_l, &[ndim - 1])?;
             // Build the result shape: original dims minus the reduced dim
@@ -10251,7 +10302,13 @@ impl BackendStorage for VulkanStorage {
         }
         if !matches!(
             self.dtype,
-            DType::F32 | DType::F16 | DType::BF16 | DType::U8 | DType::U32 | DType::I64
+            DType::F32
+                | DType::F16
+                | DType::BF16
+                | DType::F64
+                | DType::U8
+                | DType::U32
+                | DType::I64
         ) {
             return Err(Error::Vulkan(
                 format!(
@@ -10417,6 +10474,33 @@ impl BackendStorage for VulkanStorage {
                         };
                         let dst_sub = match &dst.buffer {
                             VulkanStorageBuffer::I64(b) => b
+                                .clone()
+                                .slice(dst_offset as u64..(dst_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
+                                .map_err(|e| e.to_string())?;
+                            Ok(())
+                        })?;
+                    }
+                    DType::F64 => {
+                        let src_sub = match &self.buffer {
+                            VulkanStorageBuffer::F64(b) => b
+                                .clone()
+                                .slice(start_offset as u64..(start_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_sub = match &dst.buffer {
+                            VulkanStorageBuffer::F64(b) => b
                                 .clone()
                                 .slice(dst_offset as u64..(dst_offset + len) as u64),
                             _ => {
@@ -10638,6 +10722,37 @@ impl BackendStorage for VulkanStorage {
                                 &kernels,
                                 candle_vulkan_kernels::Source::Copy2dI64,
                                 candle_vulkan_kernels::KernelName::Copy2dI64,
+                                &src_buf,
+                                &dst_buf,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::F64 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::F64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::F64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_copy2d_slang::<f64>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::Copy2dF64,
+                                candle_vulkan_kernels::KernelName::Copy2dF64,
                                 &src_buf,
                                 &dst_buf,
                                 &params,
@@ -10880,6 +10995,38 @@ impl BackendStorage for VulkanStorage {
                             .map_err(|e| e.to_string())
                         })?;
                     }
+                    DType::F64 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::F64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::F64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_gather_idx_slang::<f64>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::GatherIdxF64,
+                                candle_vulkan_kernels::KernelName::GatherIdxF64,
+                                &src_buf,
+                                &dst_buf,
+                                &idx,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -10905,10 +11052,22 @@ impl BackendStorage for VulkanStorage {
     ) -> Result<()> {
         if !matches!(
             self.dtype,
-            DType::F32 | DType::F16 | DType::F64 | DType::BF16 | DType::U8 | DType::U32
+            DType::F32
+                | DType::F16
+                | DType::F64
+                | DType::BF16
+                | DType::U8
+                | DType::U32
+                | DType::I64
         ) || !matches!(
             dst.dtype,
-            DType::F32 | DType::F16 | DType::F64 | DType::BF16 | DType::U8 | DType::U32
+            DType::F32
+                | DType::F16
+                | DType::F64
+                | DType::BF16
+                | DType::U8
+                | DType::U32
+                | DType::I64
         ) || self.dtype != dst.dtype
         {
             return Err(Error::Vulkan(
@@ -11137,6 +11296,41 @@ impl BackendStorage for VulkanStorage {
                     .map_err(|e| e.to_string())
                 })?;
             }
+            DType::I64 => {
+                let src_buf: Subbuffer<[i64]> = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_buf: Subbuffer<[i64]> = match &dst.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<i64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dSlang,
+                        candle_vulkan_kernels::KernelName::Copy2dI64,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+
             _ => {
                 return Err(Error::Vulkan(
                     format!("dtype checked above (dtype={:?})", self.dtype)

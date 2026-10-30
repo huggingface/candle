@@ -53,6 +53,16 @@ pub struct ConstSetParams {
     pub value: f32,
 }
 
+/// `const_fill_bytes` shader: `Params { uint64_t count; uint32_t pattern; }`.
+#[repr(C)]
+#[derive(Clone, Copy, AnyBitPattern)]
+pub struct ConstFillBytesParams {
+    /// Number of bytes to fill.
+    pub count: u64,
+    /// 4-byte pattern stamped byte-wise.
+    pub pattern: u32,
+}
+
 /// `rms_norm`/`layer_norm` shaders:
 /// `Params { uint64_t n_rows; uint64_t n; double eps; }`.
 #[repr(C)]

@@ -281,6 +281,41 @@ impl Tensor {
                         stride,
                         dilation,
                     } => {
+                        eprintln!(
+                            "DBG grad layout: {:?} dtype {:?}",
+                            grad.layout(),
+                            grad.dtype()
+                        );
+                        eprintln!(
+                            "DBG grad vals: {:?}",
+                            grad.flatten_all()?
+                                .to_vec1::<f32>()?
+                                .iter()
+                                .take(18)
+                                .collect::<Vec<_>>()
+                        );
+                        eprintln!(
+                            "DBG tvals: {:?}",
+                            arg.flatten_all()?
+                                .to_vec1::<f32>()?
+                                .iter()
+                                .take(6)
+                                .collect::<Vec<_>>()
+                        );
+                        eprintln!(
+                            "DBG wvals: {:?}",
+                            kernel
+                                .flatten_all()?
+                                .to_vec1::<f32>()?
+                                .iter()
+                                .take(6)
+                                .collect::<Vec<_>>()
+                        );
+                        eprintln!(
+                            "DBG arg layout: {:?} kernel layout: {:?}",
+                            arg.layout(),
+                            kernel.layout()
+                        );
                         // The output height for conv_transpose2d is:
                         // (i_h - 1) * stride - 2 * padding + dilation * (k_h - 1) + out_padding + 1
                         let grad_h = grad.dim(2)?;
@@ -298,10 +333,33 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
 
-                        let grad_kernel = arg
-                            .transpose(0, 1)?
-                            .conv2d(&grad.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
-                            .transpose(0, 1)?;
+                        let gk_mid = arg.transpose(0, 1)?.conv2d(
+                            &grad.transpose(0, 1)?,
+                            *padding,
+                            *dilation,
+                            *stride,
+                            1,
+                        )?;
+                        eprintln!(
+                            "DBG gk_mid layout: {:?} dims {:?}",
+                            gk_mid.layout(),
+                            gk_mid.dims()
+                        );
+                        eprintln!(
+                            "DBG gk_mid vals: {:?}",
+                            gk_mid
+                                .flatten_all()?
+                                .to_vec1::<f32>()?
+                                .iter()
+                                .take(18)
+                                .collect::<Vec<_>>()
+                        );
+                        let grad_kernel = gk_mid.transpose(0, 1)?;
+                        eprintln!(
+                            "DBG gk_mid full: {:?} {:?}",
+                            gk_mid.flatten_all()?.to_vec1::<f32>()?,
+                            grad_kernel.flatten_all()?.to_vec1::<f32>()?
+                        );
                         let sum_grad = grads.or_insert(kernel)?;
                         let (_, _, k0, k1) = kernel.dims4()?;
                         let (_, _, g_k0, g_k1) = grad_kernel.dims4()?;

@@ -69,7 +69,7 @@ void main_max_pool2d(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint64_t iw = r - ih * w_out;
     uint64_t base = plane * h * w;
     double best = g_Src[base + ih * s_h * w + iw * s_w];
-    for (uint m = 1u; m < k_h; m += 1u)
+    for (uint m = 0u; m < k_h; m += 1u)
     {
         uint64_t sr = ih * s_h + m;
         for (uint n = 0u; n < k_w; n += 1u)

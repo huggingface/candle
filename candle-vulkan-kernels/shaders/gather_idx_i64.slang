@@ -18,7 +18,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint64_t blen = max(g_Params.block_len, 1u);
     uint64_t k = i / blen;
     uint64_t j = i - k * blen;
-    g_Dst[i + g_Params.dst_offset] = g_Src[g_Idx[k] + j];
+    g_Dst[i + g_Params.emb_h] = g_Src[g_Idx[k] + j];
 }
 void main_index_select(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
