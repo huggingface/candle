@@ -52,7 +52,10 @@ pub use add_rms_norm_slang::call_add_rms_norm_slang;
 pub use binary_slang::call_binary_slang;
 pub use cmp_slang::call_cmp_slang;
 pub use const_fill_bytes::call_const_fill_bytes;
-pub use const_set::{call_const_set_bf16, call_const_set_f16, call_const_set_f32};
+pub use const_set::{
+    call_const_set_bf16, call_const_set_f16, call_const_set_f32, call_const_set_f64,
+    call_const_set_f8e4m3, call_const_set_i64, call_const_set_u32, call_const_set_u8,
+};
 pub use conv_slang::call_conv_slang;
 pub use copy2d_slang::call_copy2d_slang;
 pub use decode_attention_slang::{call_decode_attention_slang, DECODE_ATTENTION_CHUNK};

@@ -8,8 +8,8 @@ pub use err::VulkanKernelError;
 pub use kernel::{trace_counts, KernelName, Kernels};
 pub use kernels::{
     call_add_rms_norm_slang, call_affine_coopmat_slang, call_affine_slang, call_binary_slang,
-    call_cmp_slang, call_const_fill_bytes, call_const_set_bf16, call_const_set_f16,
-    call_const_set_f32, call_conv_slang,
+    call_cmp_slang, call_const_fill_bytes, call_const_set_bf16, call_const_set_f16, call_const_set_f32, call_const_set_f64,
+    call_const_set_f8e4m3, call_const_set_i64, call_const_set_u32, call_const_set_u8, call_conv_slang,
     call_copy2d_slang, call_decode_attention_slang, call_dequantize_slang,
     call_fused_quant_gemm_slang, call_gather_idx_slang, call_gemm_slang, call_index_add_slang,
     call_kv_row_copy_slang, call_layer_norm_slang, call_pool2d_slang,

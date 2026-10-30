@@ -42,6 +42,11 @@ const ZERO_FILL_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zero_fill
 const CONST_SET_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set.spv"));
 const CONST_SET_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f16.spv"));
 const CONST_SET_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_bf16.spv"));
+const CONST_SET_U32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_u32.spv"));
+const CONST_SET_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_i64.spv"));
+const CONST_SET_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_u8.spv"));
+const CONST_SET_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f64.spv"));
+const CONST_SET_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f8e4m3.spv"));
 const CONST_FILL_BYTES_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_fill_bytes.spv"));
 const UNARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary.spv"));
 const BINARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary.spv"));
@@ -469,6 +474,11 @@ pub enum Source {
     ConstSet,
     ConstSetF16,
     ConstSetBf16,
+    ConstSetU32,
+    ConstSetI64,
+    ConstSetU8,
+    ConstSetF64,
+    ConstSetF8E4M3,
     ConstFillBytes,
     UnarySlang,
     BinarySlang,
@@ -886,7 +896,12 @@ impl Source {
             | KernelName::UnaryTanhF64
             | KernelName::UnaryTanhF8e4m3 => 16,
             // `const_set`: `uint64_t count; float value;`
-            KernelName::ConstSetBf16 | KernelName::ConstSetF16 | KernelName::ConstSetF32 => 16,
+            KernelName::ConstSetBf16 | KernelName::ConstSetF16 | KernelName::ConstSetF32
+            | KernelName::ConstSetU32
+            | KernelName::ConstSetI64
+            | KernelName::ConstSetU8
+            | KernelName::ConstSetF64
+            | KernelName::ConstSetF8E4M3 => 16,
             KernelName::ConstFillBytes => 16,
             // `rms_norm`/`layer_norm`: `uint64_t n_rows; uint64_t n; double eps;`
             KernelName::LayerNorm | KernelName::RmsNorm | KernelName::AddRmsNorm => 24,
@@ -1195,6 +1210,11 @@ impl Source {
             Self::ConstSet => CONST_SET_SPV,
             Self::ConstSetF16 => CONST_SET_F16_SPV,
             Self::ConstSetBf16 => CONST_SET_BF16_SPV,
+            Self::ConstSetU32 => CONST_SET_U32_SPV,
+            Self::ConstSetI64 => CONST_SET_I64_SPV,
+            Self::ConstSetU8 => CONST_SET_U8_SPV,
+            Self::ConstSetF64 => CONST_SET_F64_SPV,
+            Self::ConstSetF8E4M3 => CONST_SET_F8E4M3_SPV,
             Self::ConstFillBytes => CONST_FILL_BYTES_SPV,
             Self::UnarySlang => UNARY_SLANG_SPV,
             Self::BinarySlang => BINARY_SLANG_SPV,
@@ -1506,6 +1526,11 @@ impl AsRef<str> for Source {
             Self::ConstSet => "const_set",
             Self::ConstSetF16 => "const_set_f16",
             Self::ConstSetBf16 => "const_set_bf16",
+            Self::ConstSetU32 => "const_set_u32",
+            Self::ConstSetI64 => "const_set_i64",
+            Self::ConstSetU8 => "const_set_u8",
+            Self::ConstSetF64 => "const_set_f64",
+            Self::ConstSetF8E4M3 => "const_set_f8e4m3",
             Self::ConstFillBytes => "const_fill_bytes",
             Self::UnarySlang => "unary",
             Self::BinarySlang => "binary",
