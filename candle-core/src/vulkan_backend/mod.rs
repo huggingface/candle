@@ -6467,6 +6467,33 @@ impl BackendStorage for VulkanStorage {
         } else {
             0
         };
+        // The binary kernels index operand data assuming row-major strides,
+        // which only holds for a contiguous (single-block) layout. Make any
+        // non-contiguous operand a fresh contiguous copy first.
+        let lhs_own = if !lhs_contiguous {
+            let mut c =
+                VulkanStorage::new(&self.device, lhs_l.shape().elem_count(), self_ref.dtype)?;
+            self_ref.copy_strided_src(&mut c, 0, lhs_l)?;
+            Some(c)
+        } else {
+            None
+        };
+        let rhs_own = if !rhs_contiguous {
+            let mut c =
+                VulkanStorage::new(&self.device, rhs_l.shape().elem_count(), rhs_ref.dtype)?;
+            rhs_ref.copy_strided_src(&mut c, 0, rhs_l)?;
+            Some(c)
+        } else {
+            None
+        };
+        let self_ref: &VulkanStorage = match &lhs_own {
+            Some(c) => c,
+            None => self_ref,
+        };
+        let rhs_ref: &VulkanStorage = match &rhs_own {
+            Some(c) => c,
+            None => rhs_ref,
+        };
         let out = self.device.zeros_impl(lhs_l.shape(), dtype)?;
         if len == 0 {
             return Ok(out);
