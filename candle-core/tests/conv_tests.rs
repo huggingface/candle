@@ -975,6 +975,30 @@ fn conv2d_grad_noncontiguous_kernel(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+/* Expected values are from the following script.
+import torch
+v = [((i * 7 + 3) % 11) * 0.25 - 1.25 for i in range(12)]
+t = torch.tensor(v).reshape(2, 2, 3)
+w = torch.tensor(v).reshape(2, 2, 3)
+print(torch.nn.functional.conv_transpose1d(t, w).flatten())
+*/
+fn conv_transpose1d_batch(dev: &Device) -> Result<()> {
+    let v: Vec<f32> = (0..12)
+        .map(|i| ((i * 7 + 3) % 11) as f32 * 0.25 - 1.25)
+        .collect();
+    let t = Tensor::from_slice(&v, (2, 2, 3), dev)?;
+    let w = Tensor::from_slice(&v, (2, 2, 3), dev)?;
+    let res = t.conv_transpose1d(&w, 0, 0, 1, 1, 1)?;
+    assert_eq!(
+        res.flatten_all()?.to_vec1::<f32>()?,
+        [
+            1.0, -2.8125, 2.25, 0.375, 0.0625, 1.3125, -3.0625, 1.9375, -0.25, 0.0, 1.75, -3.0625,
+            2.0, -0.625, 0.0625, 2.3125, -2.8125, 2.4375, -0.75, 0.25,
+        ]
+    );
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
@@ -1018,4 +1042,10 @@ test_device!(
     conv2d_grad_noncontiguous_kernel_cpu,
     conv2d_grad_noncontiguous_kernel_gpu,
     conv2d_grad_noncontiguous_kernel_metal
+);
+test_device!(
+    conv_transpose1d_batch,
+    conv_transpose1d_batch_cpu,
+    conv_transpose1d_batch_gpu,
+    conv_transpose1d_batch_metal
 );
