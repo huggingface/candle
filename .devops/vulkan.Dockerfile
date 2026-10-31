@@ -8,7 +8,8 @@
 # everything needed to build and run candle with the Vulkan backend:
 #   - libvulkan1:              Vulkan loader
 #   - vulkan-tools:            vulkaninfo and friends
-#   - mesa-vulkan-drivers:     AMD (radv) Vulkan ICD driver
+#   - mesa-vulkan-drivers:     Mesa Vulkan ICD drivers (AMD, Intel,
+#                              llvmpipe software; no NVIDIA)
 #   - vulkan-validationlayers: validation layers (incl. the printf layer)
 #   - Slang:                    the Slang shader compiler (slangc), built
 #                               from source (see step 3), used by
@@ -36,7 +37,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2-16 \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Vulkan loader, tools, AMD (radv) ICD driver and validation layers.
+# 2. Vulkan loader, tools, Mesa ICD drivers (AMD, Intel, software) and
+# validation layers.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libvulkan1 \
     vulkan-tools \
@@ -49,24 +51,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # shaders: the native FP8 kernels use the FloatE4M3 type, which only
 # exists in newer Slang versions. The pinned version should match the
 # host's slangc (`slangc -version`); bump SLANG_VERSION when it changes.
+# The source tree is cloned and built under /root (not /tmp) because the
+# checkout plus build tree need a few gigabytes and /tmp may be too
+# small (or a tmpfs) on some systems.
 ARG SLANG_VERSION=v2026.18.2
 # libx11-dev: slang-rhi's vulkan backend includes vulkan.h, which pulls in
 # the X11 surface headers.
 RUN apt-get update && apt-get install -y --no-install-recommends libx11-dev \
     && rm -rf /var/lib/apt/lists/* \
     && git clone --depth 1 --shallow-submodules --recurse-submodules \
-        --branch ${SLANG_VERSION} https://github.com/shader-slang/slang.git /tmp/slang \
-    && cmake -S /tmp/slang -B /tmp/slang/build \
+        --branch ${SLANG_VERSION} https://github.com/shader-slang/slang.git /root/slang \
+    && cmake -S /root/slang -B /root/slang/build \
         -DCMAKE_BUILD_TYPE=Release \
         -DSLANG_ENABLE_TESTS=OFF \
         -DSLANG_ENABLE_EXAMPLES=OFF \
-    && cmake --build /tmp/slang/build --config Release -j"$(nproc)" \
+    && cmake --build /root/slang/build --config Release -j"$(nproc)" \
     && mkdir -p /opt/slang/bin /opt/slang/lib \
-    && cp /tmp/slang/build/Release/bin/slangc /opt/slang/bin/slangc \
-    && cp /tmp/slang/build/Release/lib/libslang-compiler.so.0.* /opt/slang/lib/ \
-    && cp /tmp/slang/build/Release/lib/libslang-glsl*.so /opt/slang/lib/ \
+    && cp /root/slang/build/Release/bin/slangc /opt/slang/bin/slangc \
+    && cp /root/slang/build/Release/lib/libslang-compiler.so.0.* /opt/slang/lib/ \
+    && cp /root/slang/build/Release/lib/libslang-glsl*.so /opt/slang/lib/ \
     && ln -s /opt/slang/bin/slangc /usr/local/bin/slangc \
-    && rm -rf /tmp/slang
+    && rm -rf /root/slang
 
 # 4. Rust toolchain.
 ENV RUSTUP_HOME=/usr/local/rustup \

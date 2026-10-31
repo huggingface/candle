@@ -6,15 +6,15 @@
 #   .devops/run-vulkan-dev.sh -- cargo test ...   # run a command instead
 #
 # The host checkout ($HOME/workspace/candle, override with CANDLE_DIR) is
-# mounted at /mnt/workspace, /dev/dri is passed through for GPU access, and
-# the host's Hugging Face cache is mounted so models (and the HF token) do
-# not have to be re-downloaded inside the container.
+# mounted at /mnt/workspace, the host's GPU (/dev/dri) is passed through,
+# and the host's Hugging Face cache is mounted so models (and the HF
+# token) do not have to be re-downloaded inside the container.
 #
 # Environment variables set on the host are forwarded into the container:
 #   CANDLE_BACKEND          example backend selection (cpu, cuda, metal, vulkan)
-#   CANDLE_VULKAN_TEST_GPU  vulkan device index for the test suite (0/1)
+#   CANDLE_VULKAN_TEST_GPU  vulkan device index for the test suite
 #   CANDLE_VULKAN_SLANG_OPT slangc optimization override for shader builds
-#   MESA_VK_DEVICE_SELECT   pin the radv device by PCI id
+#   MESA_VK_DEVICE_SELECT   select the host GPU for Vulkan (PCI id or name)
 #   HF_TOKEN                Hugging Face access token
 set -eu
 
@@ -32,10 +32,11 @@ if [ "${1:-}" = "--" ]; then
     shift
 fi
 
-# MESA_VK_DEVICE_SELECT pins the device ordering (e.g. the R9700 first on
-# the arch machine). When the caller is not a login shell the variable may
-# be unset even though /etc/environment defines it; fall back to that value
-# so the container's device indices match the host's.
+# MESA_VK_DEVICE_SELECT selects the host GPU that Vulkan uses (vendor:
+# device PCI id or device name). When the caller is not a login shell the
+# variable may be unset even though /etc/environment defines it; fall
+# back to that value so the container's device ordering matches the
+# host's.
 if [ -z "${MESA_VK_DEVICE_SELECT:-}" ] && [ -r /etc/environment ]; then
     MESA_VK_DEVICE_SELECT=$(sed -n 's/^MESA_VK_DEVICE_SELECT=//p' /etc/environment | tail -n 1)
 fi
