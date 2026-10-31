@@ -88,6 +88,7 @@ const COPY2D_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_f
 const COPY2D_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_f64.spv"));
 const COPY2D_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_bf16.spv"));
 const COPY2D_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_u8.spv"));
+const COPY2D_U32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_u32.spv"));
 const GATHER_IDX_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx.spv"));
 const GATHER_IDX_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_f16.spv"));
 const GATHER_IDX_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_f64.spv"));
@@ -97,6 +98,7 @@ const GATHER_IDX_U32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gath
 const COPY2D_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_i64.spv"));
 const GATHER_IDX_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_i64.spv"));
 const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_ops.spv"));
+const ARGSORT_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/argsort.spv"));
 const REDUCE_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f16.spv"));
 const REDUCE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f64.spv"));
 const REDUCE_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_bf16.spv"));
@@ -533,6 +535,7 @@ pub enum Source {
     ReduceF16,
     ReduceF64,
     ReduceBf16,
+    ArgsortSlang,
     Pool2dSlang,
     Pool2dF16,
     Pool2dF64,
@@ -975,8 +978,9 @@ impl Source {
             | KernelName::ConvTranspose2dBf16 => 96,
             // `scatter`: five `uint64_t` fields.
             KernelName::ScatterF32 | KernelName::ScatterF16 | KernelName::ScatterF64 => 40,
-            // `rope`: `uint64_t bh; uint64_t t; uint64_t d`.
-            KernelName::Rope => 24,
+            // `rope`: `uint64_t bh; uint64_t t; uint64_t d; uint64_t h;
+            // uint64_t cs_stride`.
+            KernelName::Rope | KernelName::RopeBatched | KernelName::RopeThd => 40,
             // `rotary_emb_int`: five `uint64_t` fields.
             KernelName::RotaryEmbInt => 40,
             // `index_add`: four `uint64_t` fields.
@@ -1028,6 +1032,8 @@ impl Source {
             | KernelName::ReduceMinBf16
             | KernelName::ReduceArgMinBf16
             | KernelName::ReduceArgMaxBf16 => 16,
+            // `argsort`: `uint64_t rows; uint64_t cols`.
+            KernelName::ArgsortAscF32 | KernelName::ArgsortDescF32 => 16,
             // `cmp`: three scalars + two `uint64_t[4]` arrays.
             KernelName::CmpEqF32
             | KernelName::CmpNeF32
@@ -1258,7 +1264,7 @@ impl Source {
             Self::Copy2dF64 => COPY2D_F64_SPV,
             Self::Copy2dBf16 => COPY2D_BF16_SPV,
             Self::Copy2dU8 => COPY2D_U8_SPV,
-            Self::Copy2dU32 => COPY2D_SLANG_SPV,
+            Self::Copy2dU32 => COPY2D_U32_SPV,
             Self::Copy2dI64 => COPY2D_I64_SPV,
             Self::RotaryEmbInt => ROTARY_EMB_INT_SPV,
             Self::GatherIdxSlang => GATHER_IDX_SLANG_SPV,
@@ -1269,6 +1275,7 @@ impl Source {
             Self::GatherIdxU32 => GATHER_IDX_U32_SPV,
             Self::GatherIdxI64 => GATHER_IDX_I64_SPV,
             Self::ReduceSlang => REDUCE_SLANG_SPV,
+            Self::ArgsortSlang => ARGSORT_SPV,
             Self::ReduceF16 => REDUCE_F16_SPV,
             Self::ReduceF64 => REDUCE_F64_SPV,
             Self::ReduceBf16 => REDUCE_BF16_SPV,
@@ -1589,6 +1596,7 @@ impl AsRef<str> for Source {
             Self::ReduceF16 => "reduce_f16",
             Self::ReduceF64 => "reduce_f64",
             Self::ReduceBf16 => "reduce_bf16",
+            Self::ArgsortSlang => "argsort",
             Self::Pool2dSlang => "pool2d",
             Self::Pool2dF16 => "pool2d_f16",
             Self::Pool2dF64 => "pool2d_f64",

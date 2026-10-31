@@ -121,6 +121,11 @@ struct DeviceInner {
     /// demand (never shrinks): a fresh allocation per readback would page
     /// in a new host mapping every time.
     readback: std::sync::Mutex<Option<Arc<Buffer>>>,
+    /// Held across a full readback (copy + wait + host read) so
+    /// concurrent readbacks on different threads cannot overwrite the
+    /// shared host-visible readback buffer while another thread is
+    /// still reading it.
+    readback_lock: std::sync::Mutex<()>,
     /// Pinned (host-visible) id-readback ring for the decode pipeline
     /// (`submit_id_readback`): `ID_RING_SLOTS` slots of
     /// `ID_RING_SLOT_BYTES`; the GPU copies each sampled token id into the
@@ -452,6 +457,7 @@ impl VulkanDevice {
                 pool_pending: std::sync::Mutex::new(Vec::new()),
                 buffer_instances: std::sync::Mutex::new(std::collections::HashMap::new()),
                 readback: std::sync::Mutex::new(None),
+                readback_lock: std::sync::Mutex::new(()),
                 id_ring: std::sync::Mutex::new(None),
                 id_ring_next: AtomicUsize::new(0),
                 pending: std::sync::Mutex::new(Vec::new()),
@@ -508,6 +514,12 @@ impl VulkanDevice {
     /// `DeviceInner`).
     pub(crate) fn readback(&self) -> &std::sync::Mutex<Option<Arc<Buffer>>> {
         &self.inner.readback
+    }
+
+    /// The readback exclusion lock (see the `readback_lock` field on
+    /// `DeviceInner`).
+    pub(crate) fn readback_lock(&self) -> &std::sync::Mutex<()> {
+        &self.inner.readback_lock
     }
 
     /// Takes a pooled buffer of `dtype` that can hold `bytes` bytes, if

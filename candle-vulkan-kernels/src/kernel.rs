@@ -29,6 +29,8 @@ pub enum KernelName {
     AffineF32,
     ReduceSumF32,
     ReduceMaxF32,
+    ArgsortAscF32,
+    ArgsortDescF32,
     GemmF32,
     GemmF16,
     GemmF64,
@@ -508,6 +510,8 @@ pub enum KernelName {
     Sigmoid,
     Softmax,
     Rope,
+    RopeBatched,
+    RopeThd,
 }
 
 impl AsRef<str> for KernelName {
@@ -516,6 +520,8 @@ impl AsRef<str> for KernelName {
             Self::AffineF32 => "main",
             Self::ReduceSumF32 => "main_reduce_sum",
             Self::ReduceMaxF32 => "main_reduce_max",
+            Self::ArgsortAscF32 => "main_argsort_asc",
+            Self::ArgsortDescF32 => "main_argsort_desc",
             Self::GemmF32 => "main",
             Self::GemmF16 => "main",
             Self::GemmF64 => "main",
@@ -996,6 +1002,8 @@ impl AsRef<str> for KernelName {
             Self::Sigmoid => "main",
             Self::Softmax => "main",
             Self::Rope => "main",
+            Self::RopeBatched => "main_batched",
+            Self::RopeThd => "main_thd",
         }
     }
 }
@@ -1699,6 +1707,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::ReduceMinBf16
         | KernelName::ReduceArgMinBf16
         | KernelName::ReduceArgMaxBf16 => 3,
+        // argsort: in/out (params are push constants).
+        KernelName::ArgsortAscF32 | KernelName::ArgsortDescF32 => 2,
         // conv: in/w/out (params are push constants).
         KernelName::Conv1dF32
         | KernelName::Conv2dF32
@@ -1722,7 +1732,7 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::WhereF16
         | KernelName::WhereF64 => 4,
         // rope: src/cos/sin/dst (params are push constants).
-        KernelName::Rope => 4,
+        KernelName::Rope | KernelName::RopeBatched | KernelName::RopeThd => 4,
         // rotary_emb_int: src/dst/cos/sin (params are push constants).
         KernelName::RotaryEmbInt => 4,
         // affine coopmat: lhs/rhs/bias/out (params are push constants).

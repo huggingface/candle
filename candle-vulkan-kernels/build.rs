@@ -34,7 +34,9 @@ fn main() {
             .expect("slang shader without file stem")
             .to_string_lossy();
         let out_path = Path::new(&out_dir).join(format!("{name}.spv"));
-        compile_slang(&path, &out_path, None, &[], coopmat_flags(&name));
+        let mut extra_flags: Vec<&str> = coopmat_flags(&name).to_vec();
+        extra_flags.extend_from_slice(precise_fp_flags(&name));
+        compile_slang(&path, &out_path, None, &[], &extra_flags);
         println!("cargo:rerun-if-changed={}", path.display());
         // Native-variant pass: recompile the bf16/f8e4m3 kernels with
         // `-DBF16_NATIVE=1` and/or `-DFP8_NATIVE=1` so they use the
@@ -151,6 +153,24 @@ const COOPMAT_SHADERS: &[&str] = &[
     "affine_coopmat_f16",
     "affine_coopmat_bf16",
 ];
+
+/// Shaders whose bit-for-bit behavior matters: compiled with
+/// `-fp-mode precise` so slang does not contract `mul + add` pairs into
+/// FMA instructions. The default FP mode permits FMA contraction on the
+/// SPIR-V target, which changes the result of the fused norm kernels
+/// (e.g. `rms_norm` vs the `rms_norm_slow` reference: the fused kernel
+/// sums `v * v` in one loop, while the reference squares with the unary
+/// kernel and adds with the reduce kernel, each a separately rounded
+/// operation).
+const PRECISE_FP_SHADERS: &[&str] = &["rms_norm"];
+
+fn precise_fp_flags(name: &str) -> &'static [&'static str] {
+    if PRECISE_FP_SHADERS.iter().any(|s| *s == name) {
+        &["-fp-mode", "precise"]
+    } else {
+        &[]
+    }
+}
 
 fn coopmat_flags(name: &str) -> &'static [&'static str] {
     if COOPMAT_SHADERS.iter().any(|s| *s == name) {

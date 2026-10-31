@@ -269,16 +269,21 @@ pub struct ScatterParams {
     pub ids_left_len: u64,
 }
 
-/// `rope` shader: `Params { uint64_t bh; uint64_t t; uint64_t d; }`.
+/// `rope` shader: `Params { uint64_t bh; uint64_t t; uint64_t d;
+/// uint64_t h; uint64_t cs_stride; }`.
 #[repr(C)]
 #[derive(Clone, Copy, AnyBitPattern)]
 pub struct RopeParams {
-    /// Batch x heads.
+    /// Batch x heads (batch for the THD layout).
     pub bh: u64,
     /// Sequence length.
     pub t: u64,
     /// Head dimension.
     pub d: u64,
+    /// Number of heads (1 for the unbatched 2D entry).
+    pub h: u64,
+    /// Cos/sin batch stride (`t * d / 2` for batched cos/sin, else 0).
+    pub cs_stride: u64,
 }
 
 /// `rotary_emb_int` shader:
@@ -340,6 +345,16 @@ pub struct ReduceParams {
     /// Number of rows.
     pub rows: u64,
     /// Number of columns.
+    pub cols: u64,
+}
+
+/// `argsort` shader: `Params { uint64_t rows; uint64_t cols; }`.
+#[repr(C)]
+#[derive(Clone, Copy, AnyBitPattern)]
+pub struct ArgsortParams {
+    /// Number of rows.
+    pub rows: u64,
+    /// Row length (the sorted dim).
     pub cols: u64,
 }
 
