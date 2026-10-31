@@ -518,8 +518,8 @@ impl ModelWeights {
                 }
                 _ => (0..block_count).map(|il| il % 4 < 3).collect(),
             };
-        let logit_scale = md_get("muse-glimmer.logit_scale")?.to_f32()? as f32;
-        let logit_softcap = md_get("muse-glimmer.final_logit_softcapping")?.to_f32()? as f32;
+        let logit_scale = md_get("muse-glimmer.logit_scale")?.to_f32()?;
+        let logit_softcap = md_get("muse-glimmer.final_logit_softcapping")?.to_f32()?;
 
         let q_dim = n_head * head_dim;
 
@@ -542,9 +542,8 @@ impl ModelWeights {
         };
 
         let mut layers = Vec::with_capacity(block_count);
-        for i in 0..block_count {
+        for (i, &is_swa) in sliding_window_pattern.iter().enumerate() {
             let prefix = format!("blk.{i}");
-            let is_swa = sliding_window_pattern[i];
 
             let attention_norm = gg.rms_norm(&format!("{prefix}.attn_norm.weight"), rms_eps)?;
             let post_attention_norm = gg.rms_norm(
