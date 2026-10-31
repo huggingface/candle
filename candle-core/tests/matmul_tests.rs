@@ -249,6 +249,28 @@ fn mm_layout(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn matmul_transposed_lhs_broadcast_rhs(device: &Device) -> Result<()> {
+    let lhs = Tensor::arange(0f32, 12., device)?.reshape((2, 2, 3))?;
+    let rhs = Tensor::arange(0f32, 6., device)?.reshape((2, 3))?;
+    let lhs_t = lhs.transpose(1, 2)?;
+    let res = lhs_t.matmul(&rhs.broadcast_left(2)?)?;
+    let expected = Tensor::cat(
+        &[
+            lhs_t
+                .narrow(0, 0, 1)?
+                .contiguous()?
+                .matmul(&rhs.unsqueeze(0)?)?,
+            lhs_t
+                .narrow(0, 1, 1)?
+                .contiguous()?
+                .matmul(&rhs.unsqueeze(0)?)?,
+        ],
+        0,
+    )?;
+    assert_eq!(res.to_vec3::<f32>()?, expected.to_vec3::<f32>()?);
+    Ok(())
+}
+
 test_device!(matmul, matmul_cpu, matmul_gpu, matmul_metal);
 test_device!(
     matmul_bf16,
@@ -294,3 +316,9 @@ test_device!(
 );
 test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal);
 test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal);
+test_device!(
+    matmul_transposed_lhs_broadcast_rhs,
+    matmul_transposed_lhs_broadcast_rhs_cpu,
+    matmul_transposed_lhs_broadcast_rhs_gpu,
+    matmul_transposed_lhs_broadcast_rhs_metal
+);
