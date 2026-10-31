@@ -37,7 +37,7 @@ pub fn iou<D>(b1: &Bbox<D>, b2: &Bbox<D>) -> f32 {
 pub fn non_maximum_suppression<D>(bboxes: &mut [Vec<Bbox<D>>], threshold: f32) {
     // Perform non-maximum suppression.
     for bboxes_for_class in bboxes.iter_mut() {
-        bboxes_for_class.sort_by(|b1, b2| b2.confidence.partial_cmp(&b1.confidence).unwrap());
+        bboxes_for_class.sort_by(|b1, b2| b2.confidence.total_cmp(&b1.confidence));
         let mut current_index = 0;
         for index in 0..bboxes_for_class.len() {
             let mut drop = false;
@@ -93,7 +93,7 @@ pub fn soft_non_maximum_suppression<D>(
 
     for bboxes_for_class in bboxes.iter_mut() {
         // Sort boxes by confidence in descending order
-        bboxes_for_class.sort_by(|b1, b2| b2.confidence.partial_cmp(&b1.confidence).unwrap());
+        bboxes_for_class.sort_by(|b1, b2| b2.confidence.total_cmp(&b1.confidence));
         let mut updated_confidences = bboxes_for_class
             .iter()
             .map(|bbox| bbox.confidence)
