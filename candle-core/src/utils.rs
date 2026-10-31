@@ -401,11 +401,14 @@ fn default_num_threads() -> usize {
 }
 
 fn rayon_num_threads() -> usize {
-    std::env::var("RAYON_NUM_THREADS")
-        .ok()
-        .and_then(|s| usize::from_str(&s).ok())
-        .filter(|nt| nt > &0)
-        .unwrap_or_else(default_num_threads)
+    static NUM_THREADS: OnceLock<usize> = OnceLock::new();
+    *NUM_THREADS.get_or_init(|| {
+        std::env::var("RAYON_NUM_THREADS")
+            .ok()
+            .and_then(|s| usize::from_str(&s).ok())
+            .filter(|nt| nt > &0)
+            .unwrap_or_else(default_num_threads)
+    })
 }
 
 fn candle_num_threads() -> usize {
