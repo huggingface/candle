@@ -22,8 +22,8 @@ Base: `ubuntu:latest` (26.04 "resolute" at the time of writing).
 
 | Package | Provides |
 | --- | --- |
-| `build-essential`, `cmake`, `pkg-config`, `git`, `curl`, `wget`, `ca-certificates`, `libtinfo6`, `libxml2-16` | Core build tools (`libxml2-16` is the versioned runtime name of `libxml2` on 26.04). |
-| `libvulkan1` | Vulkan loader. |
+| `build-essential`, `cmake`, `pkg-config`, `git`, `curl`, `wget`, `ca-certificates`, `libncurses-dev`, `libxml2-dev` | Core build tools. The `-dev` packages pull in the runtime libraries (`libncurses-dev` → `libtinfo6`, `libxml2-dev` → `libxml2-16` on 26.04), so the image does not depend on the exact versioned runtime package names. |
+| `libvulkan-dev` | Vulkan loader (installs `libvulkan1`) and development headers. |
 | `vulkan-tools` | `vulkaninfo` and friends. |
 | `mesa-vulkan-drivers` | Mesa Vulkan ICD drivers: AMD (radv), Intel (ANV/HASVK), and the llvmpipe software driver. NVIDIA GPUs are not covered by these drivers. |
 | `vulkan-validationlayers` | Validation layers, including the printf layer used by the `test_vulkan_shader_printf` test. |

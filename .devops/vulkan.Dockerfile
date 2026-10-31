@@ -6,7 +6,8 @@
 # (packages.lunarg.com/vulkan/ubuntu) is no longer available (its URLs
 # return 404), so this image uses Ubuntu's own packages, which provide
 # everything needed to build and run candle with the Vulkan backend:
-#   - libvulkan1:              Vulkan loader
+#   - libvulkan-dev:           Vulkan loader (installs libvulkan1) and
+#                              development headers
 #   - vulkan-tools:            vulkaninfo and friends
 #   - mesa-vulkan-drivers:     Mesa Vulkan ICD drivers (AMD, Intel,
 #                              llvmpipe software; no NVIDIA)
@@ -23,7 +24,10 @@ FROM ubuntu:latest
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 1. Core build tools.
-# (libxml2-16 is the versioned runtime name of libxml2 on 26.04.)
+# The -dev packages are used instead of the versioned runtime libraries
+# (libncurses-dev pulls in the libtinfo6 runtime, libxml2-dev pulls in
+# libxml2-16 on 26.04) so the image does not depend on the exact
+# versioned runtime package names.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
@@ -33,14 +37,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     wget \
     python3 \
-    libtinfo6 \
-    libxml2-16 \
+    libncurses-dev \
+    libxml2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Vulkan loader, tools, Mesa ICD drivers (AMD, Intel, software) and
-# validation layers.
+# validation layers. (libvulkan-dev pulls in the libvulkan1 loader.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libvulkan1 \
+    libvulkan-dev \
     vulkan-tools \
     mesa-vulkan-drivers \
     vulkan-validationlayers \
