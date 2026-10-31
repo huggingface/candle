@@ -1,9 +1,10 @@
+use super::lfm2::{causal_conv1d, sparse_moe_forward};
 use crate::quantized_nn::RmsNorm;
 use crate::utils::repeat_kv;
 use candle::quantized::gguf_file;
 use candle::quantized::QMatMul;
 use candle::{bail, DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{Conv1d, Conv1dConfig, Embedding, Module};
+use candle_nn::{Embedding, Module};
 use std::collections::HashMap;
 
 fn get_qtensor<R: std::io::Seek + std::io::Read>(
@@ -41,6 +42,70 @@ impl Module for Mlp {
         let w1 = self.w1.forward(xs)?;
         let w3 = self.w3.forward(xs)?;
         self.w2.forward(&(candle_nn::ops::silu(&w1)? * w3)?)
+    }
+}
+
+/// Reads a stacked `[n_expert, n, k]` GGUF tensor as one tensor per expert.
+fn get_experts<R: std::io::Seek + std::io::Read>(
+    ct: &gguf_file::Content,
+    reader: &mut R,
+    device: &Device,
+    name: &str,
+) -> Result<Vec<QMatMul>> {
+    let info = match ct.tensor_infos.get(name) {
+        Some(info) => info,
+        None => bail!("cannot find tensor info for {name}"),
+    };
+    let (n_expert, n, k) = info.shape.dims3()?;
+    let dtype = info.ggml_dtype;
+    let expert_bytes = n * k / dtype.block_size() * dtype.type_size();
+    (0..n_expert)
+        .map(|e| {
+            let expert = gguf_file::TensorInfo {
+                ggml_dtype: dtype,
+                shape: (n, k).into(),
+                offset: info.offset + (e * expert_bytes) as u64,
+            };
+            QMatMul::from_qtensor(expert.read(reader, ct.tensor_data_offset, device)?)
+        })
+        .collect()
+}
+
+/// Sparse MoE block used by `lfm2moe`, see `lfm2::sparse_moe_forward`.
+#[derive(Debug, Clone)]
+struct SparseMoe {
+    gate: QMatMul,
+    experts: Vec<Mlp>,
+    expert_bias: Vec<f32>,
+    n_expert_used: usize,
+}
+
+impl Module for SparseMoe {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        sparse_moe_forward(
+            xs,
+            &self.gate,
+            &self.experts,
+            Some(&self.expert_bias),
+            self.n_expert_used,
+            true,
+            1.0,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+enum FeedForward {
+    Dense(Mlp),
+    Moe(SparseMoe),
+}
+
+impl Module for FeedForward {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Dense(mlp) => mlp.forward(xs),
+            Self::Moe(moe) => moe.forward(xs),
+        }
     }
 }
 
@@ -83,7 +148,7 @@ enum LayerKind {
 struct LayerWeights {
     operator_norm: RmsNorm,
     ffn_norm: RmsNorm,
-    mlp: Mlp,
+    feed_forward: FeedForward,
     kind: LayerKind,
     span_mlp: tracing::Span,
 }
@@ -218,19 +283,7 @@ impl ShortConvLayer {
                 .sum_keepdim(2)?
                 .contiguous()?
         } else {
-            let conv = Conv1d::new(
-                conv_weight
-                    .reshape((hidden, 1, self.l_cache))?
-                    .contiguous()?,
-                None,
-                Conv1dConfig {
-                    padding: self.l_cache.saturating_sub(1),
-                    groups: hidden,
-                    ..Default::default()
-                },
-            );
-            let mut out = conv.forward(&bx.contiguous()?)?;
-            out = out.narrow(2, 0, seq_len)?;
+            let out = causal_conv1d(&bx, &conv_weight)?;
 
             if self.l_cache > 0 {
                 let (_, _, cur_len) = bx.dims3()?;
@@ -317,16 +370,32 @@ impl ModelWeights {
             Some(v) => Ok(v),
         };
 
-        let head_count = md_get("lfm2.attention.head_count")?.to_u32()? as usize;
-        let head_count_kv_meta = md_get("lfm2.attention.head_count_kv")?;
-        let embedding_length = md_get("lfm2.embedding_length")?.to_u32()? as usize;
-        let context_length = md_get("lfm2.context_length")?.to_u32()? as usize;
-        let block_count = md_get("lfm2.block_count")?.to_u32()? as usize;
-        let rms_norm_eps = md_get("lfm2.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
-        let rope_freq_base = md_get("lfm2.rope.freq_base")
+        // `lfm2` for dense models, `lfm2moe` for the MoE ones (e.g. LFM2.5-8B-A1B).
+        let arch = match ct.metadata.get("general.architecture") {
+            Some(v) => v.to_string()?.clone(),
+            None => "lfm2".to_string(),
+        };
+        let md_get = |s: &str| md_get(&format!("{arch}.{s}"));
+
+        let head_count = md_get("attention.head_count")?.to_u32()? as usize;
+        let head_count_kv_meta = md_get("attention.head_count_kv")?;
+        let embedding_length = md_get("embedding_length")?.to_u32()? as usize;
+        let context_length = md_get("context_length")?.to_u32()? as usize;
+        let block_count = md_get("block_count")?.to_u32()? as usize;
+        let rms_norm_eps = md_get("attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
+        let rope_freq_base = md_get("rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(1_000_000f32);
-        let l_cache = md_get("lfm2.shortconv.l_cache")?.to_u32()? as usize;
+        let l_cache = md_get("shortconv.l_cache")?.to_u32()? as usize;
+        let expert_count = md_get("expert_count").map_or(Ok(0), |v| v.to_u32())? as usize;
+        let expert_used_count = if expert_count > 0 {
+            md_get("expert_used_count")?.to_u32()? as usize
+        } else {
+            0
+        };
+        let dense_block_count = md_get("leading_dense_block_count")
+            .map_or(Ok(block_count as u32), |v| v.to_u32())?
+            as usize;
 
         let head_count_kv = read_usize_list(head_count_kv_meta, block_count)?;
         let head_dim = embedding_length / head_count;
@@ -414,7 +483,56 @@ impl ModelWeights {
                     format!("{prefix}.ffn_norm"),
                 ],
             )?;
-            let mlp = {
+            let feed_forward = if expert_count > 0 && layer_idx >= dense_block_count {
+                let gate = get_qtensor(
+                    &ct,
+                    reader,
+                    device,
+                    &[format!("{prefix}.ffn_gate_inp.weight")],
+                )?;
+                let expert_bias =
+                    get_dequantized(&ct, reader, device, &[format!("{prefix}.exp_probs_b.bias")])?
+                        .to_vec1::<f32>()?;
+                let gates = get_experts(
+                    &ct,
+                    reader,
+                    device,
+                    &format!("{prefix}.ffn_gate_exps.weight"),
+                )?;
+                let downs = get_experts(
+                    &ct,
+                    reader,
+                    device,
+                    &format!("{prefix}.ffn_down_exps.weight"),
+                )?;
+                let ups =
+                    get_experts(&ct, reader, device, &format!("{prefix}.ffn_up_exps.weight"))?;
+                let experts: Vec<_> = gates
+                    .into_iter()
+                    .zip(downs)
+                    .zip(ups)
+                    .map(|((w1, w2), w3)| Mlp { w1, w2, w3 })
+                    .collect();
+                let (n_expert, _) = gate.shape().dims2()?;
+                if experts.len() != n_expert
+                    || expert_bias.len() != n_expert
+                    || expert_used_count == 0
+                    || expert_used_count > n_expert
+                {
+                    bail!(
+                        "{prefix}: inconsistent MoE weights: {} router rows, {} experts, {} biases, top-{expert_used_count}",
+                        n_expert,
+                        experts.len(),
+                        expert_bias.len()
+                    )
+                }
+                FeedForward::Moe(SparseMoe {
+                    gate: QMatMul::from_qtensor(gate)?,
+                    experts,
+                    expert_bias,
+                    n_expert_used: expert_used_count,
+                })
+            } else {
                 let w1 = get_qtensor(
                     &ct,
                     reader,
@@ -445,11 +563,11 @@ impl ModelWeights {
                         format!("{prefix}.mlp.up_proj.weight"),
                     ],
                 )?;
-                Mlp {
+                FeedForward::Dense(Mlp {
                     w1: QMatMul::from_qtensor(w1)?,
                     w2: QMatMul::from_qtensor(w2)?,
                     w3: QMatMul::from_qtensor(w3)?,
-                }
+                })
             };
 
             let kind = if is_attention {
@@ -569,7 +687,7 @@ impl ModelWeights {
             layers.push(LayerWeights {
                 operator_norm: RmsNorm::from_qtensor(operator_norm, rms_norm_eps)?,
                 ffn_norm: RmsNorm::from_qtensor(ffn_norm, rms_norm_eps)?,
-                mlp,
+                feed_forward,
                 kind,
                 span_mlp: tracing::span!(tracing::Level::TRACE, "ffn"),
             });
@@ -619,7 +737,7 @@ impl ModelWeights {
             let residual = hidden.clone();
             let ff = layer.ffn_norm.forward(&hidden)?;
             let _enter = layer.span_mlp.enter();
-            let ff = layer.mlp.forward(&ff)?;
+            let ff = layer.feed_forward.forward(&ff)?;
             hidden = (ff + residual)?;
         }
         let hidden = self.norm.forward(&hidden)?;
