@@ -57,6 +57,26 @@ pub trait BackendStorage: Sized {
         _params: &crate::conv::ParamsConv2D,
     ) -> Result<Self>;
 
+    fn conv3d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConv3D,
+    ) -> Result<Self> {
+        crate::bail!("conv3d is not implemented for this backend")
+    }
+
+    fn conv_transpose3d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConvTranspose3D,
+    ) -> Result<Self> {
+        crate::bail!("conv_transpose3d is not implemented for this backend")
+    }
+
     fn conv_transpose2d(
         &self,
         _l: &Layout,

@@ -1,5 +1,64 @@
 use anyhow::Result;
-use candle_core::{test_device, test_utils, Device, IndexOp, Tensor};
+use candle_core::{test_device, test_utils, DType, Device, IndexOp, Tensor, Var};
+
+fn assert_close_tensors(
+    got: &Tensor,
+    expected: &Tensor,
+    tolerance: f32,
+    label: &str,
+) -> Result<()> {
+    let got = got.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+    let expected = expected
+        .to_dtype(DType::F32)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+    assert_eq!(
+        got.len(),
+        expected.len(),
+        "{label}: length mismatch, got {}, expected {}",
+        got.len(),
+        expected.len()
+    );
+    let mut max_diff = 0f32;
+    let mut max_idx = 0usize;
+    for (idx, (got, expected)) in got.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            got.is_finite() && expected.is_finite(),
+            "{label}: nonfinite value at {idx}"
+        );
+        let diff = (got - expected).abs();
+        if diff > max_diff {
+            max_diff = diff;
+            max_idx = idx;
+        }
+    }
+    assert!(
+        max_diff <= tolerance,
+        "{label}: max diff {max_diff} at {max_idx}, got {}, expected {}, tolerance {tolerance}",
+        got[max_idx],
+        expected[max_idx]
+    );
+    Ok(())
+}
+
+fn var_from_vec_dtype<S: Into<candle_core::Shape>>(
+    data: Vec<f32>,
+    shape: S,
+    dtype: DType,
+    dev: &Device,
+) -> Result<Var> {
+    let tensor = Tensor::from_vec(data, shape, dev)?.to_dtype(dtype)?;
+    Ok(Var::from_tensor(&tensor)?)
+}
+
+fn tensor_from_vec_dtype<S: Into<candle_core::Shape>>(
+    data: Vec<f32>,
+    shape: S,
+    dtype: DType,
+    dev: &Device,
+) -> Result<Tensor> {
+    Ok(Tensor::from_vec(data, shape, dev)?.to_dtype(dtype)?)
+}
 
 /* This test is based on the following script.
 import torch
@@ -932,6 +991,324 @@ fn conv2d_c_eq_h_eq_w(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+/* This test is based on the following script.
+import torch
+# Seed any future random inputs; this does not guarantee backend determinism.
+torch.manual_seed(0)
+torch.set_printoptions(precision=6, sci_mode=False)
+
+x = torch.arange(2 * 2 * 2 * 3 * 4, dtype=torch.float32).reshape(2, 2, 2, 3, 4) / 10 - 3
+w = torch.arange(2 * 2 * 2 * 1 * 3, dtype=torch.float32).reshape(2, 2, 2, 1, 3) / 7 - 2
+y = torch.nn.functional.conv3d(
+    x,
+    w,
+    stride=(1, 2, 1),
+    padding=(1, 0, 1),
+    dilation=(1, 1, 2),
+)
+print(y.shape)
+print(y.flatten())
+*/
+#[test]
+#[allow(clippy::excessive_precision)]
+fn conv3d_forward_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    let xs = (0..96).map(|v| v as f32 / 10. - 3.).collect::<Vec<_>>();
+    let xs = Tensor::from_vec(xs, (2, 2, 2, 3, 4), dev)?;
+    let ws = (0..24).map(|v| v as f32 / 7. - 2.).collect::<Vec<_>>();
+    let ws = Tensor::from_vec(ws, (2, 2, 2, 1, 3), dev)?;
+    let out = xs.conv3d(&ws, [1, 0, 1], [1, 2, 1], [1, 1, 2], 1)?;
+    assert_eq!(out.dims(), [2, 2, 3, 2, 2]);
+    assert_eq!(
+        test_utils::to_vec1_round(&out.flatten_all()?, 4)?,
+        [
+            8.0286, 9.3714, 5.0571, 5.9429, 14.3429, 16.5143, 7.0286, 8.2857, 4.2571, 5.0857,
+            -0.0857, 0.2857, -2.9429, -2.2857, -0.4286, -0.2286, 0.6286, 1.4286, 4.2857, 4.1714,
+            1.5143, 1.6571, 2.6571, 2.3429, -9.8, -11.2, -12.7714, -14.6286, -29.5429, -32.8571,
+            -36.8571, -41.0857, -21.8, -23.7143, -26.1429, -28.5143, 12.1429, 10.0571, 14.6571,
+            12.1143, 22.5714, 17.8857, 26.2286, 20.6286, 8.3714, 5.7714, 9.5143, 6.4571
+        ]
+    );
+    Ok(())
+}
+
+/* This test is based on the following script.
+import torch
+# Seed any future random inputs; this does not guarantee backend determinism.
+torch.manual_seed(0)
+torch.set_printoptions(precision=6, sci_mode=False)
+
+x = torch.arange(1 * 4 * 2 * 3 * 4, dtype=torch.float32).reshape(1, 4, 2, 3, 4) / 5 - 4
+w = torch.arange(4 * 2 * 2 * 2 * 2, dtype=torch.float32).reshape(4, 2, 2, 2, 2) / 6 - 1
+y = torch.nn.functional.conv3d(
+    x,
+    w,
+    stride=(1, 1, 2),
+    padding=(0, 1, 0),
+    groups=2,
+)
+print(y.shape)
+print(y.flatten())
+*/
+#[test]
+#[allow(clippy::excessive_precision)]
+fn conv3d_grouped_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    let xs = (0..96).map(|v| v as f32 / 5. - 4.).collect::<Vec<_>>();
+    let xs = Tensor::from_vec(xs, (1, 4, 2, 3, 4), dev)?;
+    let ws = (0..64).map(|v| v as f32 / 6. - 1.).collect::<Vec<_>>();
+    let ws = Tensor::from_vec(ws, (4, 2, 2, 2, 2), dev)?;
+    let out = xs.conv3d(&ws, [0, 1, 0], [1, 1, 2], [1, 1, 1], 2)?;
+    assert_eq!(out.dims(), [1, 4, 1, 4, 2]);
+    assert_eq!(
+        test_utils::to_vec1_round(&out.flatten_all()?, 3)?,
+        [
+            15.067, 16.4, 33.6, 35.2, 36.8, 38.4, 16.933, 17.2, 8.667, 18.533, 37.867, 56.533,
+            75.2, 93.867, 44.667, 53.467, 443.867, 462.267, 899.733, 935.467, 971.2, 1006.933,
+            488.4, 505.733, 642.267, 669.2, 1313.6, 1366.4, 1419.2, 1472., 720.933, 746.8
+        ]
+    );
+    Ok(())
+}
+
+/* This test is based on the following script.
+import torch
+# Seed any future random inputs; this does not guarantee backend determinism.
+torch.manual_seed(0)
+torch.set_printoptions(precision=6, sci_mode=False)
+
+x = torch.arange(1 * 2 * 3 * 3 * 4, dtype=torch.float32).reshape(1, 2, 3, 3, 4) / 11 - 2
+w = torch.arange(2 * 2 * 2 * 2 * 2, dtype=torch.float32).reshape(2, 2, 2, 2, 2) / 13 - 1
+x.requires_grad_(True)
+w.requires_grad_(True)
+y = torch.nn.functional.conv3d(
+    x,
+    w,
+    stride=(1, 1, 2),
+    padding=(1, 0, 1),
+)
+loss = (y * y).sum()
+loss.backward()
+print(y.shape)
+print(y.flatten())
+print(x.grad.shape)
+print(x.grad.flatten())
+print(w.grad.shape)
+print(w.grad.flatten())
+*/
+#[test]
+#[allow(clippy::excessive_precision)]
+fn conv3d_grad_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    let xs = (0..72).map(|v| v as f32 / 11. - 2.).collect::<Vec<_>>();
+    let xs = Var::from_vec(xs, (1, 2, 3, 3, 4), dev)?;
+    let ws = (0..32).map(|v| v as f32 / 13. - 1.).collect::<Vec<_>>();
+    let ws = Var::from_vec(ws, (2, 2, 2, 2, 2), dev)?;
+    let out = xs.conv3d(&ws, [1, 0, 1], [1, 1, 2], [1, 1, 1], 1)?;
+    assert_eq!(out.dims(), [1, 2, 4, 2, 3]);
+    assert_eq!(
+        test_utils::to_vec1_round(&out.flatten_all()?, 4)?,
+        [
+            2.2378, 4.2517, 1.958, 1.9021, 3.4685, 1.5105, 3.6923, 6.2657, 2.4615, 2.5734, 3.8042,
+            1.1189, 0.3357, -1.1189, -1.5664, -0.7832, -3.5804, -2.9091, -2.2378, -5.7063, -3.5245,
+            -3.021, -7.3846, -4.4196, 1.3427, 3.8042, 2.4056, 2.7972, 6.6014, 3.7483, 7.2727,
+            16.1119, 8.7273, 9.7343, 20.8112, 10.965, 14.6573, 30.2098, 15.4406, 17.1189, 34.9091,
+            17.6783, 7.6084, 15.3287, 7.6643, 8.6154, 17.2308, 8.5594
+        ]
+    );
+    let loss = out.sqr()?.sum_all()?;
+    let grads = loss.backward()?;
+    let grad_xs = grads.get(&xs).unwrap();
+    let grad_ws = grads.get(&ws).unwrap();
+    assert_eq!(grad_xs.dims(), [1, 2, 3, 3, 4]);
+    assert_eq!(grad_ws.dims(), [2, 2, 2, 2, 2]);
+    assert_eq!(
+        test_utils::to_vec1_round(&grad_xs.flatten_all()?, 2)?,
+        [
+            -3.44, -6.89, -2.2, -1.02, 3.37, 6.78, 16.8, 8.54, 7.57, 14.98, 20.31, 10.1, 12.81,
+            24.86, 32.77, 16.25, 41.59, 81.11, 97.64, 48.2, 29.61, 57.63, 66.24, 32.5, 26.44,
+            52.57, 58.53, 29.38, 65.62, 129.76, 142.05, 70.78, 39.66, 77.94, 84.28, 41.67, 14.46,
+            30.57, 35.25, 18.13, 42.21, 86.93, 96.95, 49.02, 28.51, 57.67, 63., 31.45, 44.76, 88.2,
+            96.12, 47.1, 108.79, 213.31, 229.84, 112.09, 64.86, 126.49, 135.09, 65.55, 51.5,
+            100.22, 106.17, 51.55, 117.67, 228.08, 240.37, 116.23, 66.65, 128.62, 134.95, 64.95
+        ]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(&grad_ws.flatten_all()?, 2)?,
+        [
+            -61.52, -71.57, -73.56, -76.78, -66.64, -68.88, -55.25, -52.12, -169.91, -118.44,
+            -181.95, -123.65, 35.89, 81.98, 47.28, 98.75, -245.1, -246.36, -97., -101.19, -11.96,
+            -13.22, 112.7, 107.05, 1087.8, 1060.17, 1235.9, 1205.34, 1110.01, 1069.2, 1234.68,
+            1189.47
+        ]
+    );
+    Ok(())
+}
+
+fn conv3d_low_precision_case(dtype: DType, tolerance: f32) -> Result<()> {
+    let dev = &Device::Cpu;
+    let input_shape = (2, 4, 4, 4, 5);
+    let weight_shape = (4, 2, 2, 2, 3);
+    let output_shape = (2, 4, 4, 2, 5);
+    let padding = [1, 0, 1];
+    let stride = [1, 2, 1];
+    let dilation = [2, 1, 1];
+    let groups = 2;
+
+    let xs = (0..(2 * 4 * 4 * 4 * 5))
+        .map(|v| (v % 17) as f32 * 0.015 - 0.12)
+        .collect::<Vec<_>>();
+    let ws = (0..(4 * 2 * 2 * 2 * 3))
+        .map(|v| (v % 13) as f32 * 0.012 - 0.072)
+        .collect::<Vec<_>>();
+    let bias = (0..4).map(|v| v as f32 * 0.01 - 0.015).collect::<Vec<_>>();
+    let grad_output = (0..(2 * 4 * 4 * 2 * 5))
+        .map(|v| (v % 11) as f32 * 0.017 - 0.085)
+        .collect::<Vec<_>>();
+
+    let xs_f32 = Var::from_vec(xs.clone(), input_shape, dev)?;
+    let ws_f32 = Var::from_vec(ws.clone(), weight_shape, dev)?;
+    let bias_f32 = Var::from_vec(bias.clone(), 4, dev)?;
+    let mut out_f32 = xs_f32.conv3d(&ws_f32, padding, stride, dilation, groups)?;
+    out_f32 = out_f32.broadcast_add(&bias_f32.reshape((1, 4, 1, 1, 1))?)?;
+    assert_eq!(out_f32.dims(), [2, 4, 4, 2, 5]);
+    let grad_output_f32 = Tensor::from_vec(grad_output.clone(), output_shape, dev)?;
+    let loss_f32 = out_f32.mul(&grad_output_f32)?.sum_all()?;
+    let grads_f32 = loss_f32.backward()?;
+
+    let xs_lp = var_from_vec_dtype(xs, input_shape, dtype, dev)?;
+    let ws_lp = var_from_vec_dtype(ws, weight_shape, dtype, dev)?;
+    let bias_lp = var_from_vec_dtype(bias, 4, dtype, dev)?;
+    let mut out_lp = xs_lp.conv3d(&ws_lp, padding, stride, dilation, groups)?;
+    out_lp = out_lp.broadcast_add(&bias_lp.reshape((1, 4, 1, 1, 1))?)?;
+    assert_eq!(out_lp.dims(), out_f32.dims());
+    assert_eq!(out_lp.dtype(), dtype);
+    assert_close_tensors(&out_lp, &out_f32, tolerance, "conv3d low precision output")?;
+
+    let grad_output_lp = tensor_from_vec_dtype(grad_output, output_shape, dtype, dev)?;
+    let loss_lp = out_lp.mul(&grad_output_lp)?.sum_all()?;
+    let grads_lp = loss_lp.backward()?;
+    let grad_xs_lp = grads_lp.get(&xs_lp).unwrap();
+    let grad_ws_lp = grads_lp.get(&ws_lp).unwrap();
+    let grad_bias_lp = grads_lp.get(&bias_lp).unwrap();
+    assert_eq!(grad_xs_lp.dtype(), dtype);
+    assert_eq!(grad_ws_lp.dtype(), dtype);
+    assert_eq!(grad_bias_lp.dtype(), dtype);
+    assert_close_tensors(
+        grad_xs_lp,
+        grads_f32.get(&xs_f32).unwrap(),
+        tolerance,
+        "conv3d low precision input grad",
+    )?;
+    assert_close_tensors(
+        grad_ws_lp,
+        grads_f32.get(&ws_f32).unwrap(),
+        tolerance,
+        "conv3d low precision weight grad",
+    )?;
+    assert_close_tensors(
+        grad_bias_lp,
+        grads_f32.get(&bias_f32).unwrap(),
+        tolerance,
+        "conv3d low precision bias grad",
+    )?;
+    Ok(())
+}
+
+#[test]
+fn conv3d_f16_bf16_cpu() -> Result<()> {
+    conv3d_low_precision_case(DType::F16, 2e-2)?;
+    conv3d_low_precision_case(DType::BF16, 1e-1)
+}
+
+#[test]
+fn conv3d_non_contiguous_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    let xs = (0..75).map(|v| v as f32 / 10.).collect::<Vec<_>>();
+    let xs = Tensor::from_vec(xs, (1, 1, 3, 5, 5), dev)?;
+    let xs = xs.i((.., .., .., 0..4, ..))?;
+    let ws = Tensor::ones((1, 1, 2, 2, 2), DType::F32, dev)?;
+    let out = xs.conv3d(&ws, [0, 0, 0], [1, 1, 1], [1, 1, 1], 1)?;
+    let out_contiguous = xs
+        .contiguous()?
+        .conv3d(&ws, [0, 0, 0], [1, 1, 1], [1, 1, 1], 1)?;
+    let max_diff = (out - out_contiguous)?
+        .abs()?
+        .flatten_all()?
+        .max(0)?
+        .to_scalar::<f32>()?;
+    assert!(max_diff < 1e-6, "non-contiguous conv3d diff {max_diff}");
+    Ok(())
+}
+
+#[test]
+fn conv3d_invalid_args_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    let xs = Tensor::zeros((1, 2, 2, 2, 2), DType::F32, dev)?;
+    let ws = Tensor::zeros((1, 2, 1, 1, 1), DType::F32, dev)?;
+    assert!(xs.conv3d(&ws, [0, 0, 0], [1, 1, 1], [1, 1, 1], 0).is_err());
+    assert!(xs.conv3d(&ws, [0, 0, 0], [0, 1, 1], [1, 1, 1], 1).is_err());
+    assert!(xs.conv3d(&ws, [0, 0, 0], [1, 1, 1], [0, 1, 1], 1).is_err());
+
+    let channel_mismatch = Tensor::zeros((1, 1, 1, 1, 1), DType::F32, dev)?;
+    assert!(xs
+        .conv3d(&channel_mismatch, [0, 0, 0], [1, 1, 1], [1, 1, 1], 1)
+        .is_err());
+
+    let output_channel_mismatch = Tensor::zeros((3, 1, 1, 1, 1), DType::F32, dev)?;
+    assert!(xs
+        .conv3d(&output_channel_mismatch, [0, 0, 0], [1, 1, 1], [1, 1, 1], 2)
+        .is_err());
+
+    let too_large = Tensor::zeros((1, 2, 3, 3, 3), DType::F32, dev)?;
+    assert!(xs
+        .conv3d(&too_large, [0, 0, 0], [1, 1, 1], [1, 1, 1], 1)
+        .is_err());
+    Ok(())
+}
+
+#[test]
+fn conv3d_spatial_validation_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    let xs = Tensor::zeros((1, 2, 2, 2, 2), DType::F32, dev)?;
+    // Validate every axis, including the grouped path, before kernel dispatch.
+    for groups in [1, 2] {
+        let ws = Tensor::zeros((2, 2 / groups, 2, 2, 2), DType::F32, dev)?;
+        for axis in 0..3 {
+            let mut zero_axis = [1; 3];
+            zero_axis[axis] = 0;
+            assert!(xs.conv3d(&ws, [0; 3], zero_axis, [1; 3], groups).is_err());
+            assert!(xs.conv3d(&ws, [0; 3], [1; 3], zero_axis, groups).is_err());
+
+            // Both doubling the padding and adding it to the input can overflow.
+            for padding_value in [usize::MAX, usize::MAX / 2] {
+                let mut padding = [0; 3];
+                padding[axis] = padding_value;
+                let err = xs.conv3d(&ws, padding, [1; 3], [1; 3], groups).unwrap_err();
+                assert!(err.to_string().contains("overflow"), "{err}");
+            }
+
+            let mut dilation = [1; 3];
+            dilation[axis] = usize::MAX;
+            let err = xs
+                .conv3d(&ws, [0; 3], [1; 3], dilation, groups)
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("effective kernel size overflow"),
+                "{err}"
+            );
+
+            for kernel_size in [0, 3] {
+                let mut kernel_shape = [2, 2 / groups, 2, 2, 2];
+                kernel_shape[axis + 2] = kernel_size;
+                let kernel = Tensor::zeros(&kernel_shape, DType::F32, dev)?;
+                assert!(xs.conv3d(&kernel, [0; 3], [1; 3], [1; 3], groups).is_err());
+            }
+        }
+    }
+    Ok(())
+}
+
 // Regression test for https://github.com/huggingface/candle/issues/3735: a non-contiguous
 // kernel and its contiguous copy must produce identical forward results and gradients.
 fn conv2d_grad_noncontiguous_kernel(dev: &Device) -> Result<()> {
@@ -1019,3 +1396,377 @@ test_device!(
     conv2d_grad_noncontiguous_kernel_gpu,
     conv2d_grad_noncontiguous_kernel_metal
 );
+
+/* PyTorch CPU reference:
+import torch
+torch.manual_seed(0)
+x = (torch.arange(32, dtype=torch.float64).reshape(1, 4, 2, 2, 2) / 32 - 0.5).requires_grad_()
+w = (torch.arange(16, dtype=torch.float64).reshape(4, 1, 2, 1, 2) / 16 - 0.5).requires_grad_()
+y = torch.nn.functional.conv_transpose3d(
+    x, w, stride=(2, 1, 2), padding=(1, 0, 1), output_padding=(1, 0, 1),
+    groups=2, dilation=(1, 2, 1),
+)
+g = torch.arange(y.numel(), dtype=torch.float64).reshape(y.shape) / 64 - 0.25
+(y * g).sum().backward()
+print(y.flatten())
+print(x.grad.flatten())
+print(w.grad.flatten())
+*/
+#[test]
+#[allow(clippy::excessive_precision)]
+fn conv_transpose3d_pytorch_cpu() -> Result<()> {
+    let expected_out: &[f32] = &[
+        0.17187500, 0.20312500, 0.16015625, 0.14843750, 0.17187500, 0.13671875, 0.18750000,
+        0.19531250, 0.16796875, 0.14843750, 0.14843750, 0.12890625, 0.12500000, 0.14062500,
+        0.11328125, 0.10156250, 0.10937500, 0.08984375, 0.10937500, 0.10937500, 0.12890625,
+        0.14843750, 0.14062500, 0.16796875, 0.12500000, 0.10156250, 0.13671875, 0.14843750,
+        0.11718750, 0.16015625, 0.18750000, 0.17187500, 0.20703125, 0.22656250, 0.20312500,
+        0.24609375,
+    ];
+    let expected_x_grad: &[f32] = &[
+        0.07812500, 0.15625000, 0.06347656, 0.12402344, 0.08789062, 0.15234375, 0.05273438,
+        0.07617188, 0.01562500, 0.04296875, 0.01269531, 0.03417969, 0.03320312, 0.06640625,
+        0.02148438, 0.03710938, 0.00585938, 0.01757812, 0.01464844, 0.03222656, 0.04882812,
+        0.08593750, 0.06054688, 0.10351562, 0.01367188, 0.04492188, 0.03417969, 0.08300781,
+        0.13476562, 0.28125000, 0.16992188, 0.34570312,
+    ];
+    let expected_w_grad: &[f32] = &[
+        0.07470703, 0.15771484, 0.20214844, 0.42089844, 0.01611328, 0.04052734, 0.08496094,
+        0.18652344, 0.06298828, 0.11669922, 0.10839844, 0.19824219, 0.14501953, 0.28076172,
+        0.27246094, 0.52636719,
+    ];
+
+    let dev = &Device::Cpu;
+    for (dtype, tolerance) in [
+        (DType::F64, 1e-7),
+        (DType::F32, 1e-7),
+        (DType::F16, 1e-3),
+        (DType::BF16, 1e-2),
+    ] {
+        let x = var_from_vec_dtype(
+            (0..32).map(|v| v as f32 / 32. - 0.5).collect(),
+            (1, 4, 2, 2, 2),
+            dtype,
+            dev,
+        )?;
+        let w = var_from_vec_dtype(
+            (0..16).map(|v| v as f32 / 16. - 0.5).collect(),
+            (4, 1, 2, 1, 2),
+            dtype,
+            dev,
+        )?;
+        let y = x.conv_transpose3d(&w, [1, 0, 1], [1, 0, 1], [2, 1, 2], [1, 2, 1], 2)?;
+        assert_eq!(y.dims(), [1, 2, 3, 2, 3]);
+        assert_eq!(y.dtype(), dtype);
+        let g = tensor_from_vec_dtype(
+            (0..36).map(|v| v as f32 / 64. - 0.25).collect(),
+            (1, 2, 3, 2, 3),
+            dtype,
+            dev,
+        )?;
+        let grads = y.mul(&g)?.sum_all()?.backward()?;
+        for (got, expected) in [
+            (&y, expected_out),
+            (grads.get(&x).unwrap(), expected_x_grad),
+            (grads.get(&w).unwrap(), expected_w_grad),
+        ] {
+            assert_eq!(got.dtype(), dtype);
+            let expected = Tensor::from_slice(expected, expected.len(), dev)?;
+            assert_close_tensors(got, &expected, tolerance, "PyTorch conv_transpose3d")?;
+        }
+        assert_eq!(grads.get(&x).unwrap().dims(), x.dims());
+        assert_eq!(grads.get(&w).unwrap().dims(), w.dims());
+    }
+    Ok(())
+}
+
+/* PyTorch permits output_padding >= stride when output_padding < dilation.
+import torch
+torch.manual_seed(0)
+x = torch.tensor([0.5], dtype=torch.float64).reshape(1, 1, 1, 1, 1).requires_grad_()
+w = (torch.arange(8, dtype=torch.float64).reshape(1, 1, 2, 2, 2) / 8 - 0.5).requires_grad_()
+y = torch.nn.functional.conv_transpose3d(
+    x, w, stride=(1, 2, 1), padding=(1, 1, 0), output_padding=(1, 2, 1),
+    dilation=(2, 3, 2),
+)
+g = torch.arange(y.numel(), dtype=torch.float64).reshape(y.shape) / 32 - 0.5
+(y * g).sum().backward()
+print(y.flatten())
+print(x.grad.flatten())
+print(w.grad.flatten())
+*/
+#[test]
+fn conv_transpose3d_output_padding_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    let x = Var::from_vec(vec![0.5f32], (1, 1, 1, 1, 1), dev)?;
+    let w = Var::from_vec(
+        (0..8).map(|v| v as f32 / 8. - 0.5).collect(),
+        (1, 1, 2, 2, 2),
+        dev,
+    )?;
+    let y = x.conv_transpose3d(&w, [1, 1, 0], [1, 2, 1], [1, 2, 1], [2, 3, 2], 1)?;
+    assert_eq!(y.dims(), [1, 1, 2, 4, 4]);
+    let mut expected = vec![0f32; 32];
+    expected[24] = 0.125;
+    expected[26] = 0.1875;
+    assert_eq!(y.flatten_all()?.to_vec1::<f32>()?, expected);
+    let g = Tensor::from_vec(
+        (0..32).map(|v| v as f32 / 32. - 0.5).collect(),
+        y.shape(),
+        dev,
+    )?;
+    let grads = y.mul(&g)?.sum_all()?.backward()?;
+    assert_eq!(grads.get(&x).unwrap().dims(), x.dims());
+    assert_eq!(
+        grads.get(&x).unwrap().flatten_all()?.to_vec1::<f32>()?,
+        [0.1796875]
+    );
+    assert_eq!(
+        grads.get(&w).unwrap().flatten_all()?.to_vec1::<f32>()?,
+        [0., 0., 0., 0., 0., 0., 0.125, 0.15625]
+    );
+    Ok(())
+}
+
+#[test]
+fn conv3d_transpose3d_non_contiguous_grad_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    for transpose in [false, true] {
+        let x_base = Var::from_vec(
+            (0..960).map(|v| (v % 17) as f32 / 32.).collect(),
+            (2, 4, 3, 4, 10),
+            dev,
+        )?;
+        let x = x_base
+            .narrow(0, 1, 1)?
+            .narrow(2, 1, 2)?
+            .narrow(3, 1, 2)?
+            .narrow(4, 1, 3)?
+            .transpose(2, 4)?;
+        let w_base = Var::from_vec(
+            (0..486).map(|v| (v % 13) as f32 / 32.).collect(),
+            (6, 3, 3, 3, 3),
+            dev,
+        )?;
+        let w = w_base
+            .narrow(0, 1, 4)?
+            .narrow(1, 1, 2)?
+            .narrow(2, 1, 2)?
+            .narrow(3, 1, 2)?
+            .narrow(4, 1, 2)?
+            .transpose(2, 4)?;
+        assert!(!x.is_contiguous());
+        assert!(!w.is_contiguous());
+        assert!(x.layout().start_offset() > 0);
+        assert!(w.layout().start_offset() > 0);
+        let xc = Var::from_tensor(&x.contiguous()?)?;
+        let wc = Var::from_tensor(&w.contiguous()?)?;
+        let run = |x: &Tensor, w: &Tensor| {
+            if transpose {
+                x.conv_transpose3d(w, [1, 0, 1], [1, 0, 1], [2, 1, 2], [1, 2, 1], 2)
+            } else {
+                x.conv3d(w, [1, 0, 1], [2, 1, 2], [1; 3], 2)
+            }
+        };
+        let y = run(&x, &w)?;
+        let yc = run(&xc, &wc)?;
+        assert_close_tensors(&y, &yc, 1e-5, "non-contiguous forward")?;
+        // Transpose in the loss so backward receives a strided upstream gradient.
+        let yt = y.transpose(2, 4)?;
+        let g = Tensor::arange(0f32, y.elem_count() as f32, dev)?.reshape(yt.shape())?;
+        let grads = yt.mul(&g)?.sum_all()?.backward()?;
+        let gc = yc.transpose(2, 4)?.mul(&g)?.sum_all()?.backward()?;
+        let gx = grads
+            .get(&x_base)
+            .unwrap()
+            .narrow(0, 1, 1)?
+            .narrow(2, 1, 2)?
+            .narrow(3, 1, 2)?
+            .narrow(4, 1, 3)?
+            .transpose(2, 4)?;
+        let gw = grads
+            .get(&w_base)
+            .unwrap()
+            .narrow(0, 1, 4)?
+            .narrow(1, 1, 2)?
+            .narrow(2, 1, 2)?
+            .narrow(3, 1, 2)?
+            .narrow(4, 1, 2)?
+            .transpose(2, 4)?;
+        assert_close_tensors(
+            &gx,
+            gc.get(&xc).unwrap(),
+            1e-4,
+            "non-contiguous input gradient",
+        )?;
+        assert_close_tensors(
+            &gw,
+            gc.get(&wc).unwrap(),
+            1e-4,
+            "non-contiguous weight gradient",
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn conv3d_transpose3d_empty_batch_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    for groups in [1, 2] {
+        let x = Var::zeros((0, 2, 2, 2, 2), DType::F32, dev)?;
+        let w = Var::ones((2, 2 / groups, 1, 1, 1), DType::F32, dev)?;
+        for transpose in [false, true] {
+            let y = if transpose {
+                x.conv_transpose3d(&w, [0; 3], [0; 3], [1; 3], [1; 3], groups)?
+            } else {
+                x.conv3d(&w, [0; 3], [1; 3], [1; 3], groups)?
+            };
+            assert_eq!(y.dims(), [0, 2, 2, 2, 2]);
+            let grads = y.sum_all()?.backward()?;
+            assert_eq!(grads.get(&x).unwrap().dims(), x.dims());
+            assert_eq!(
+                grads.get(&w).unwrap().flatten_all()?.to_vec1::<f32>()?,
+                vec![0.; w.elem_count()]
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn conv3d_large_padding_backward_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    let x = Var::ones((1, 1, 1, 1, 1), DType::F32, dev)?;
+    let w = Var::ones((1, 1, 1, 1, 1), DType::F32, dev)?;
+    // The transposed base output would be -1; output padding makes it 1.
+    let y = x.conv3d(&w, [1; 3], [3; 3], [1; 3], 1)?;
+    let grads = y.sum_all()?.backward()?;
+    assert_eq!(
+        grads.get(&x).unwrap().flatten_all()?.to_vec1::<f32>()?,
+        [0.]
+    );
+    assert_eq!(
+        grads.get(&w).unwrap().flatten_all()?.to_vec1::<f32>()?,
+        [0.]
+    );
+    Ok(())
+}
+
+#[test]
+fn conv3d_large_kernel_tiles_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    // Exercise reduced tile widths, then the direct fallback for oversized rows.
+    for (width, kernel) in [(1281, 1025), (262145, 262145)] {
+        let x = Tensor::ones((1, 1, 1, 1, width), DType::F32, dev)?;
+        let w = Tensor::ones((1, 1, 1, 1, kernel), DType::F32, dev)?;
+        let y = x.conv3d(&w, [0; 3], [1; 3], [1; 3], 1)?;
+        assert_eq!(
+            y.flatten_all()?.to_vec1::<f32>()?,
+            vec![kernel as f32; width - kernel + 1]
+        );
+    }
+    // In backward, the upstream volume becomes the kernel of the weight gradient.
+    let x = Var::ones((1, 1, 1, 1, 262145), DType::F32, dev)?;
+    let w = Var::ones((1, 1, 1, 1, 1), DType::F32, dev)?;
+    let grads = x
+        .conv3d(&w, [0; 3], [1; 3], [1; 3], 1)?
+        .sum_all()?
+        .backward()?;
+    assert_eq!(
+        grads.get(&w).unwrap().flatten_all()?.to_vec1::<f32>()?,
+        [262145.]
+    );
+    assert_eq!(
+        grads.get(&x).unwrap().flatten_all()?.to_vec1::<f32>()?,
+        vec![1.; 262145]
+    );
+    Ok(())
+}
+
+#[test]
+fn conv_transpose3d_invalid_args_cpu() -> Result<()> {
+    let dev = &Device::Cpu;
+    let x = Tensor::ones((1, 2, 2, 2, 2), DType::F32, dev)?;
+    let w = Tensor::ones((2, 1, 2, 2, 2), DType::F32, dev)?;
+    for groups in [0, 3] {
+        assert!(x
+            .conv_transpose3d(&w, [0; 3], [0; 3], [1; 3], [1; 3], groups)
+            .is_err());
+    }
+    for axis in 0..3 {
+        let mut zero = [1; 3];
+        zero[axis] = 0;
+        assert!(x
+            .conv_transpose3d(&w, [0; 3], [0; 3], zero, [1; 3], 1)
+            .is_err());
+        assert!(x
+            .conv_transpose3d(&w, [0; 3], [0; 3], [1; 3], zero, 1)
+            .is_err());
+        let mut op = [0; 3];
+        op[axis] = 1;
+        assert!(x
+            .conv_transpose3d(&w, [0; 3], op, [1; 3], [1; 3], 1)
+            .is_err());
+        for amount in [2, usize::MAX] {
+            let mut padding = [0; 3];
+            padding[axis] = amount;
+            assert!(x
+                .conv_transpose3d(&w, padding, [0; 3], [1; 3], [1; 3], 1)
+                .is_err());
+        }
+        let mut large = [1; 3];
+        large[axis] = usize::MAX;
+        assert!(x
+            .conv_transpose3d(&w, [0; 3], [0; 3], large, [1; 3], 1)
+            .is_err());
+        assert!(x
+            .conv_transpose3d(&w, [0; 3], [0; 3], [1; 3], large, 1)
+            .is_err());
+        let mut shape = [2, 1, 2, 2, 2];
+        shape[axis + 2] = 0;
+        let empty = Tensor::zeros(&shape, DType::F32, dev)?;
+        assert!(x
+            .conv_transpose3d(&empty, [0; 3], [0; 3], [1; 3], [1; 3], 1)
+            .is_err());
+        let mut shape = [1, 2, 2, 2, 2];
+        shape[axis + 2] = 0;
+        let empty = Tensor::zeros(&shape, DType::F32, dev)?;
+        assert!(empty
+            .conv_transpose3d(&w, [0; 3], [0; 3], [1; 3], [1; 3], 1)
+            .is_err());
+    }
+    let bad_channels = Tensor::ones((1, 1, 1, 1, 1), DType::F32, dev)?;
+    assert!(x
+        .conv_transpose3d(&bad_channels, [0; 3], [0; 3], [1; 3], [1; 3], 1)
+        .is_err());
+    assert!(x
+        .conv_transpose3d(&w.to_dtype(DType::F64)?, [0; 3], [0; 3], [1; 3], [1; 3], 1)
+        .is_err());
+    assert!(x
+        .flatten_all()?
+        .conv_transpose3d(&w, [0; 3], [0; 3], [1; 3], [1; 3], 1)
+        .is_err());
+    assert!(x
+        .conv_transpose3d(
+            &w,
+            [0; 3],
+            [0; 3],
+            [usize::MAX / 2, usize::MAX / 2, 1],
+            [1; 3],
+            1
+        )
+        .is_err());
+    let one = Tensor::ones((1, 1, 1, 1, 1), DType::F32, dev)?;
+    let too_many = isize::MAX as usize / 4 + 1;
+    assert!(one
+        .conv_transpose3d(
+            &one,
+            [0; 3],
+            [too_many, 0, 0],
+            [too_many + 1, 1, 1],
+            [1; 3],
+            1
+        )
+        .is_err());
+    Ok(())
+}
