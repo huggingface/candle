@@ -1,6 +1,22 @@
 use crate::{Result, Tensor};
 use rayon::prelude::*;
 
+/// Total order used by the CPU sort: NaN compares greater than every other value, so it
+/// ends up last in ascending order and first in descending order, as in PyTorch.
+/// `partial_cmp` alone is not a total order once NaN is involved, and handing such a
+/// comparator to `sort_by` leaves the whole row in an unspecified order.
+fn nan_last_cmp<T: crate::WithDType>(a: T, b: T) -> std::cmp::Ordering {
+    match a.partial_cmp(&b) {
+        Some(ord) => ord,
+        None => {
+            // A value that is not comparable with itself is NaN.
+            let a_is_nan = a.partial_cmp(&a).is_none();
+            let b_is_nan = b.partial_cmp(&b).is_none();
+            a_is_nan.cmp(&b_is_nan)
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ArgSort {
     asc: bool,
@@ -30,11 +46,7 @@ impl ArgSort {
                         .iter_mut()
                         .enumerate()
                         .for_each(|(i, v)| *v = i as u32);
-                    indexes.sort_by(|&i, &j| {
-                        vs[i as usize]
-                            .partial_cmp(&vs[j as usize])
-                            .unwrap_or(std::cmp::Ordering::Greater)
-                    })
+                    indexes.sort_by(|&i, &j| nan_last_cmp(vs[i as usize], vs[j as usize]))
                 });
         } else {
             sort_indexes
@@ -45,11 +57,7 @@ impl ArgSort {
                         .iter_mut()
                         .enumerate()
                         .for_each(|(i, v)| *v = i as u32);
-                    indexes.sort_by(|&j, &i| {
-                        vs[i as usize]
-                            .partial_cmp(&vs[j as usize])
-                            .unwrap_or(std::cmp::Ordering::Greater)
-                    })
+                    indexes.sort_by(|&j, &i| nan_last_cmp(vs[i as usize], vs[j as usize]))
                 });
         }
         Ok(sort_indexes)
