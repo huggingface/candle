@@ -25,7 +25,10 @@ macro_rules! test_device {
         #[cfg(feature = "vulkan")]
         #[test]
         fn $test_vulkan() -> Result<()> {
-            $fn_name(&Device::new_vulkan(0)?)
+            let gpu_id: usize = std::env::var("CANDLE_VULKAN_TEST_GPU")
+                .map(|value| value.parse().unwrap())
+                .unwrap_or_default();
+            $fn_name(&Device::new_vulkan(gpu_id)?)
         }
     };
 }
