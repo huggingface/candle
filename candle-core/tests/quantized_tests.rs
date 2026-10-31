@@ -184,12 +184,17 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
     let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
     let res = matmul.forward(&lhs)?;
     match device {
+        // `lhs` is (m=3, k=64), Q4_0 -- now routes through `fwd_mv`'s
+        // batched mat-vec dispatch instead of `mm_t` (the `use_mv`-style
+        // `batch <= 8` extension). Different accumulation order than
+        // `mm_t`, still correct -- these golden values were re-captured
+        // against the new path.
         Device::Metal(_) => assert_eq!(
             to_vec2_round(&res, 0)?,
             &[
-                [243659.0, -19716.0, -285444.0, -550439.0],
-                [23779.0, 21653.0, 19404.0, 18349.0],
-                [-196101.0, 63021.0, 324252.0, 587137.0]
+                [243666.0, -19714.0, -285433.0, -550453.0],
+                [23782.0, 21654.0, 19400.0, 18369.0],
+                [-196102.0, 63022.0, 324233.0, 587191.0]
             ]
         ),
         Device::Cuda(_) => assert_eq!(
@@ -261,6 +266,255 @@ fn qmm_batch(dev: &Device) -> Result<()> {
 test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal);
 test_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal);
 test_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal);
+
+/// `QTensor::fwd`'s own small-multi-token-batch dispatch (extends the
+/// existing `batch == 1` mat-vec fast path to `batch <= 8`, routing through
+/// `fwd_mv`'s single batched `call_quantized_matmul_mv_t` dispatch instead
+/// of `mm_t`): compares a real `batch`-row `QMatMul::forward` call against
+/// `batch` independent single-row calls on the same data, which must be
+/// bit-exact -- every row is computed identically either way (the kernel's
+/// own `src1 + r1*ne10 + ...` indexing, confirmed against the actual
+/// `quantized.metal` source for these dtypes, is per-row-independent by
+/// construction), so any difference is a real stride/offset bug in the
+/// batched dispatch's own plumbing, not an accumulation-order artifact.
+#[cfg(feature = "metal")]
+fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact(
+    dtype: GgmlDType,
+) -> Result<()> {
+    let device = Device::new_metal(0)?;
+    let (n, k) = (256usize, 512usize); // block-aligned for every dtype under test (min block size 256)
+
+    let weight: Vec<f32> = (0..n * k)
+        .map(|v| ((v * 37 + 11) % 997) as f32 * 0.001)
+        .collect();
+    let weight = Tensor::from_slice(&weight, (n, k), &device)?;
+    let qweight = quantized::QTensor::quantize(&weight, dtype)?;
+    let matmul = quantized::QMatMul::from_qtensor(qweight)?;
+
+    for batch in [2usize, 3, 4, 8] {
+        let x: Vec<f32> = (0..batch * k)
+            .map(|v| ((v * 13 + 5) % 991) as f32 * 0.001)
+            .collect();
+        let x = Tensor::from_slice(&x, (batch, k), &device)?;
+
+        let batched = matmul.forward(&x)?.to_vec2::<f32>()?;
+        let mut sequential = Vec::with_capacity(batch);
+        for row in 0..batch {
+            let x_row = x.narrow(0, row, 1)?;
+            let out_row = matmul.forward(&x_row)?.to_vec2::<f32>()?;
+            sequential.push(out_row[0].clone());
+        }
+
+        assert_eq!(
+            batched, sequential,
+            "dtype={dtype:?} batch={batch}: batched QMatMul::forward diverges from {batch} \
+             independent single-row calls on the same data -- must be bit-exact"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact_q4k() -> Result<()> {
+    qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact(GgmlDType::Q4K)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact_q6k() -> Result<()> {
+    qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact(GgmlDType::Q6K)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact_q4_0() -> Result<()> {
+    qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact(GgmlDType::Q4_0)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact_q5k() -> Result<()> {
+    qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact(GgmlDType::Q5K)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact_q3k() -> Result<()> {
+    qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact(GgmlDType::Q3K)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact_q4_1() -> Result<()> {
+    qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact(GgmlDType::Q4_1)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact_q5_0() -> Result<()> {
+    qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact(GgmlDType::Q5_0)
+}
+
+// Regression guard, not a "safe dtype" test: `Q5_1` is excluded from
+// `fwd()`'s own `m > 1` routing entirely (not just from `fwd_mv`'s internal
+// batched-dispatch dtype list) -- a real differential test found
+// `fwd_mv`'s pre-existing, unmodified per-row loop itself silently zeroes
+// row 0's output for this dtype at `m == 4` (rows 1..m unaffected, a
+// distinct failure shape from `Q2K`'s own scattered-zero pattern). So at
+// `m > 1`, `Q5_1` now always uses `mm_t` -- comparing that against `m`
+// independent `fwd_mv` (`mv_t`) calls is a genuine cross-kernel comparison
+// (different accumulation order), hence tolerance-based here, unlike the
+// bit-exact dtype tests above which compare the *same* kernel batched vs.
+// looped.
+#[cfg(feature = "metal")]
+#[test]
+fn qmatmul_mm_t_matches_sequential_single_row_mv_calls_within_tolerance_q5_1() -> Result<()> {
+    let device = Device::new_metal(0)?;
+    let (n, k) = (256usize, 512usize);
+    let weight: Vec<f32> = (0..n * k)
+        .map(|v| ((v * 37 + 11) % 997) as f32 * 0.001)
+        .collect();
+    let weight = Tensor::from_slice(&weight, (n, k), &device)?;
+    let qweight = quantized::QTensor::quantize(&weight, GgmlDType::Q5_1)?;
+    let matmul = quantized::QMatMul::from_qtensor(qweight)?;
+
+    for batch in [2usize, 4, 8] {
+        let x: Vec<f32> = (0..batch * k)
+            .map(|v| ((v * 13 + 5) % 991) as f32 * 0.001)
+            .collect();
+        let x = Tensor::from_slice(&x, (batch, k), &device)?;
+        let got = matmul.forward(&x)?.to_vec2::<f32>()?; // mm_t (batch > 1 always routes here for Q5_1)
+
+        let mut expected = Vec::with_capacity(batch);
+        for row in 0..batch {
+            let x_row = x.narrow(0, row, 1)?;
+            let out_row = matmul.forward(&x_row)?.to_vec2::<f32>()?; // fwd_mv (m == 1, always safe)
+            expected.push(out_row[0].clone());
+        }
+        for (r, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+            for (c, (gv, ev)) in g.iter().zip(e.iter()).enumerate() {
+                let diff = (gv - ev).abs();
+                assert!(
+                    diff <= 1e-3 + 1e-3 * ev.abs(),
+                    "batch={batch} row={r} col={c}: Q5_1 mm_t vs. sequential mv_t mismatch, \
+                     got={gv} expected={ev} (diff {diff})"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact_q8_0() -> Result<()> {
+    qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact(GgmlDType::Q8_0)
+}
+
+// No qmatmul_batched_..._q8_1 test: `kernel_mul_mv_q8_1_f32` does not exist
+// anywhere in the vendored `metal_src/quantized.metal` -- Q8_1's mat-vec
+// Metal path is completely non-functional today, independent of and
+// pre-dating this change (the identical kernel-load failure occurs at
+// `batch == 1` through the untouched loop path too, confirmed while
+// building this test). Not a regression this change introduces, not fixed
+// here.
+
+// Regression guard, not a "safe dtype" test: `Q2K` is excluded from
+// `fwd()`'s own `m > 1` routing entirely (not just `fwd_mv`'s internal
+// batched-dispatch dtype list) -- a real differential test found `Q2K`'s
+// batched `mv_t` dispatch produces scattered zeros/NaN/garbage at m == 2,
+// and separately that its pre-existing, unmodified per-row loop *also*
+// breaks at larger m (the pre-existing `qmm_batch` test, stacking up to
+// m == 12, failed once `Q2K` could reach `fwd_mv` for m > 1 at all). Root
+// cause not chased further. So at `m > 1`, `Q2K` now always uses `mm_t` --
+// comparing that against `m` independent `fwd_mv` (`mv_t`) calls is a
+// genuine cross-kernel comparison (different accumulation order), hence
+// tolerance-based here, same treatment as `Q5_1` above.
+#[cfg(feature = "metal")]
+#[test]
+fn qmatmul_mm_t_matches_sequential_single_row_mv_calls_within_tolerance_q2k() -> Result<()> {
+    let device = Device::new_metal(0)?;
+    let (n, k) = (256usize, 512usize);
+    let weight: Vec<f32> = (0..n * k)
+        .map(|v| ((v * 37 + 11) % 997) as f32 * 0.001)
+        .collect();
+    let weight = Tensor::from_slice(&weight, (n, k), &device)?;
+    let qweight = quantized::QTensor::quantize(&weight, GgmlDType::Q2K)?;
+    let matmul = quantized::QMatMul::from_qtensor(qweight)?;
+
+    for batch in [2usize, 4, 8] {
+        let x: Vec<f32> = (0..batch * k)
+            .map(|v| ((v * 13 + 5) % 991) as f32 * 0.001)
+            .collect();
+        let x = Tensor::from_slice(&x, (batch, k), &device)?;
+        let got = matmul.forward(&x)?.to_vec2::<f32>()?; // mm_t (batch > 1 always routes here for Q2K)
+
+        let mut expected = Vec::with_capacity(batch);
+        for row in 0..batch {
+            let x_row = x.narrow(0, row, 1)?;
+            let out_row = matmul.forward(&x_row)?.to_vec2::<f32>()?; // fwd_mv (m == 1, always safe)
+            expected.push(out_row[0].clone());
+        }
+        for (r, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+            for (c, (gv, ev)) in g.iter().zip(e.iter()).enumerate() {
+                let diff = (gv - ev).abs();
+                assert!(
+                    diff <= 1e-3 + 1e-3 * ev.abs(),
+                    "batch={batch} row={r} col={c}: Q2K mm_t vs. sequential mv_t mismatch, \
+                     got={gv} expected={ev} (diff {diff})"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Regression guard for the batch-size gate's own boundary: `batch == 9`
+/// must fall through to the unchanged `mm_t` path, not `fwd_mv` -- a real
+/// tolerance-based (not bit-exact, different accumulation order) check
+/// that the two dispatch choices still agree, at the exact boundary where
+/// a future threshold change is most likely to introduce an off-by-one.
+#[cfg(feature = "metal")]
+#[test]
+fn qmatmul_mv_and_mm_agree_at_the_batch_size_gate_boundary() -> Result<()> {
+    let device = Device::new_metal(0)?;
+    let (n, k) = (256usize, 512usize);
+    let weight: Vec<f32> = (0..n * k)
+        .map(|v| ((v * 37 + 11) % 997) as f32 * 0.001)
+        .collect();
+    let weight = Tensor::from_slice(&weight, (n, k), &device)?;
+    let qweight = quantized::QTensor::quantize(&weight, GgmlDType::Q4K)?;
+    let matmul = quantized::QMatMul::from_qtensor(qweight)?;
+
+    for batch in [8usize, 9] {
+        let x: Vec<f32> = (0..batch * k)
+            .map(|v| ((v * 13 + 5) % 991) as f32 * 0.001)
+            .collect();
+        let x = Tensor::from_slice(&x, (batch, k), &device)?;
+        let got = matmul.forward(&x)?.to_vec2::<f32>()?;
+
+        // Independent per-row reference, computed via the always-available
+        // batch=1 path (never routes through the new batched dispatch),
+        // so this is a genuine oracle at both sides of the boundary.
+        let mut expected = Vec::with_capacity(batch);
+        for row in 0..batch {
+            let x_row = x.narrow(0, row, 1)?;
+            let out_row = matmul.forward(&x_row)?.to_vec2::<f32>()?;
+            expected.push(out_row[0].clone());
+        }
+        for (r, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+            for (c, (gv, ev)) in g.iter().zip(e.iter()).enumerate() {
+                let diff = (gv - ev).abs();
+                assert!(
+                    diff <= 1e-3 + 1e-3 * ev.abs(),
+                    "batch={batch} row={r} col={c}: mismatch at gate boundary, got={gv} expected={ev} (diff {diff})"
+                );
+            }
+        }
+    }
+    Ok(())
+}
 
 fn embedding_weight(device: &Device) -> Result<Tensor> {
     let values = (0..(8 * 256))
