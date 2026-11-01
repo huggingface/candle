@@ -117,7 +117,7 @@ The SmolLM family of models represents cutting-edge work in efficient language m
 ### Resources
 - **Model Card**: https://huggingface.co/HuggingFaceTB/SmolLM3-3B
 - **Model Card (Base)**: https://huggingface.co/HuggingFaceTB/SmolLM3-3B-Base
-- **Collection**: https://huggingface.co/collections/HuggingFaceTB/smollm3-6723884a9c35673e4f9b74a2
+- **Collection**: https://huggingface.co/collections/HuggingFaceTB/smollm3-686d33c1fdffe8e635317e23
 - **Blog Post**: https://huggingface.co/blog/smollm3
 - **GitHub Repository**: https://github.com/huggingface/smollm
 - **License**: Apache 2.0

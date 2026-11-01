@@ -8,7 +8,7 @@ GLM-4-9B-0414 is a new architecture in the GLM-4 series developed by Zhipu AI. T
 
 ### Old GLM4 Arch:
 
-- [GitHub](https://github.com/THUDM/GLM4)
+- [GitHub](https://github.com/zai-org/GLM-4)
 - [GLM-4-9B Weight](https://huggingface.co/THUDM/glm-4-9b)
 
 ### Running with CUDA 
