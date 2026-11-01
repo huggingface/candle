@@ -975,6 +975,83 @@ fn conv2d_grad_noncontiguous_kernel(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+// Regression test for https://github.com/huggingface/candle/issues/4064: conv_transpose1d
+// gradients are checked against central finite differences of the forward pass. The loss is
+// linear in each argument so the finite differences are exact up to rounding.
+fn conv_transpose1d_grad(dev: &Device) -> Result<()> {
+    use candle_core::Var;
+    let (b_size, c_in, c_out, l_in, k_size) = (2, 4, 3, 5, 3);
+    let t_data: Vec<f32> = (0..b_size * c_in * l_in)
+        .map(|i| ((i * 7 % 11) as f32 - 5.0) / 4.0)
+        .collect();
+    let w_data: Vec<f32> = (0..c_in * c_out * k_size)
+        .map(|i| ((i * 5 % 13) as f32 - 6.0) / 5.0)
+        .collect();
+    // (padding, output_padding, stride, dilation, groups)
+    let configs = [
+        (1, 0, 1, 1, 1),
+        (0, 1, 2, 1, 1),
+        (1, 0, 2, 1, 1),
+        (2, 1, 2, 1, 1),
+        (1, 2, 3, 2, 1),
+        // output_padding >= stride, only valid because dilation > stride.
+        (0, 1, 1, 2, 1),
+        (1, 1, 2, 1, 2),
+    ];
+    for (padding, output_padding, stride, dilation, groups) in configs {
+        let fwd = |t: &Tensor, w: &Tensor| {
+            t.conv_transpose1d(w, padding, output_padding, stride, dilation, groups)
+        };
+        let t = Var::from_slice(&t_data, (b_size, c_in, l_in), dev)?;
+        let w = Var::from_slice(&w_data, (c_in, c_out, k_size), dev)?;
+        let res = fwd(&t, &w)?;
+        let r_data: Vec<f32> = (0..res.elem_count())
+            .map(|i| ((i * 3 % 11) as f32 - 5.0) / 3.0)
+            .collect();
+        let r = Tensor::from_vec(r_data, res.shape(), dev)?;
+        let loss_fn = |t: &Tensor, w: &Tensor| -> Result<f32> {
+            Ok(fwd(t, w)?.mul(&r)?.sum_all()?.to_scalar::<f32>()?)
+        };
+        let grads = res.mul(&r)?.sum_all()?.backward()?;
+        let grad_t = grads.get(&t).unwrap();
+        let grad_w = grads.get(&w).unwrap();
+        assert_eq!(grad_t.dims(), t.dims());
+        assert_eq!(grad_w.dims(), w.dims());
+
+        let h = 0.5;
+        let fd = |data: &[f32], shape: &[usize], is_kernel: bool| -> Result<Vec<f32>> {
+            let mut out = Vec::with_capacity(data.len());
+            for i in 0..data.len() {
+                let eval = |delta: f32| -> Result<f32> {
+                    let mut data = data.to_vec();
+                    data[i] += delta;
+                    let v = Tensor::from_vec(data, shape, dev)?;
+                    if is_kernel {
+                        loss_fn(&t, &v)
+                    } else {
+                        loss_fn(&v, &w)
+                    }
+                };
+                out.push((eval(h)? - eval(-h)?) / (2.0 * h));
+            }
+            Ok(out)
+        };
+        let fd_t = fd(&t_data, t.dims(), false)?;
+        let fd_w = fd(&w_data, w.dims(), true)?;
+        for (grad, fd) in [(grad_t, fd_t), (grad_w, fd_w)] {
+            let grad = grad.flatten_all()?.to_vec1::<f32>()?;
+            for (g, f) in grad.iter().zip(fd.iter()) {
+                assert!(
+                    (g - f).abs() < 1e-3,
+                    "padding {padding}, output_padding {output_padding}, stride {stride}, \
+                     dilation {dilation}, groups {groups}: grad {g} vs finite difference {f}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
@@ -1018,4 +1095,10 @@ test_device!(
     conv2d_grad_noncontiguous_kernel_cpu,
     conv2d_grad_noncontiguous_kernel_gpu,
     conv2d_grad_noncontiguous_kernel_metal
+);
+test_device!(
+    conv_transpose1d_grad,
+    conv_transpose1d_grad_cpu,
+    conv_transpose1d_grad_gpu,
+    conv_transpose1d_grad_metal
 );
