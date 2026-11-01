@@ -17,6 +17,24 @@ use candle::{DType, Device, Tensor};
 use candle_examples::hub::Api;
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
+
+/// Scope `vb` to the language-model weights.
+///
+/// Official Gemma 4 checkpoints (`Gemma4ForConditionalGeneration`) nest them at
+/// `model.language_model.*`. A text-only export may use `model.*` instead.
+fn language_model_vb(vb: VarBuilder) -> Result<VarBuilder> {
+    if vb.contains_tensor("model.language_model.embed_tokens.weight") {
+        Ok(vb.pp("model").pp("language_model"))
+    } else if vb.contains_tensor("model.embed_tokens.weight") {
+        Ok(vb.pp("model"))
+    } else {
+        anyhow::bail!(
+            "cannot find Gemma 4 token embeddings; \
+            expected model.language_model.embed_tokens.weight \
+            or model.embed_tokens.weight"
+        )
+    }
+}
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use tokenizers::Tokenizer;
 
@@ -83,6 +101,12 @@ impl TextGeneration {
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
+        // Gemma 4 always starts at `<bos>`. The tokenizer JSON does not add it.
+        if let Some(bos) = self.tokenizer.get_token("<bos>") {
+            if tokens.first() != Some(&bos) {
+                tokens.insert(0, bos);
+            }
+        }
         for &t in tokens.iter() {
             if let Some(t) = self.tokenizer.next_token(t)? {
                 print!("{t}")
@@ -91,10 +115,14 @@ impl TextGeneration {
         std::io::stdout().flush()?;
 
         let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_token("</s>") {
-            Some(token) => token,
-            None => anyhow::bail!("cannot find the </s> token"),
-        };
+        // generation_config.json: `<eos>` (1), `<turn|>` (106). `</s>` is leftover from Gemma 3.
+        let stop_tokens: Vec<u32> = ["<eos>", "<turn|>", "</s>"]
+            .into_iter()
+            .filter_map(|name| self.tokenizer.get_token(name))
+            .collect();
+        if stop_tokens.is_empty() {
+            anyhow::bail!("cannot find a Gemma 4 end token");
+        }
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
@@ -120,7 +148,7 @@ impl TextGeneration {
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             generated_tokens += 1;
-            if next_token == eos_token {
+            if stop_tokens.contains(&next_token) {
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
@@ -299,7 +327,7 @@ fn main() -> Result<()> {
             }
         };
         config.use_flash_attn = args.use_flash_attn;
-        let model = TextModel::new(&config, vb)?;
+        let model = TextModel::new(&config, language_model_vb(vb)?)?;
         ModelKind::TextOnly(model)
     };
 

@@ -76,10 +76,17 @@ pub struct Gemma4TextConfig {
     #[serde(default = "default_hidden_activation")]
     pub hidden_activation: Activation,
     pub hidden_size: usize,
+    /// Per-layer embedding width. `0` disables PLE (12B, 26B-A4B, 31B).
+    #[serde(default)]
+    pub hidden_size_per_layer_input: usize,
     pub intermediate_size: usize,
     #[serde(default = "default_num_attention_heads")]
     pub num_attention_heads: usize,
     pub num_hidden_layers: usize,
+    /// Trailing layers that reuse KV from the last non-shared layer of the same type.
+    /// E2B is 20, E4B is 18, larger Gemma 4 models use 0.
+    #[serde(default)]
+    pub num_kv_shared_layers: usize,
     #[serde(default = "default_num_key_value_heads")]
     pub num_key_value_heads: usize,
     #[serde(default = "default_rms_norm_eps")]
@@ -88,6 +95,9 @@ pub struct Gemma4TextConfig {
     pub rope_theta: f64,
     #[serde(default = "default_vocab_size")]
     pub vocab_size: usize,
+    /// Vocabulary size of `embed_tokens_per_layer`. Unused when PLE is disabled.
+    #[serde(default = "default_vocab_size")]
+    pub vocab_size_per_layer_input: usize,
     pub sliding_window: usize,
     pub final_logit_softcapping: Option<f64>,
     #[serde(default = "default_query_pre_attn_scalar")]
@@ -134,6 +144,35 @@ impl Gemma4TextConfig {
             .and_then(|rp| rp.sliding_attention.as_ref())
             .and_then(|sa| sa.rope_theta)
             .unwrap_or(10000.0)
+    }
+
+    pub fn uses_per_layer_embeddings(&self) -> bool {
+        self.hidden_size_per_layer_input > 0
+    }
+
+    pub fn first_kv_shared_layer(&self) -> usize {
+        self.num_hidden_layers.saturating_sub(self.num_kv_shared_layers)
+    }
+
+    pub fn is_kv_shared_layer(&self, layer_idx: usize) -> bool {
+        self.num_kv_shared_layers > 0 && layer_idx >= self.first_kv_shared_layer()
+    }
+
+    /// Last non-shared layer of each attention type keeps a full-length KV cache
+    /// so later shared layers can reuse it.
+    pub fn stores_full_length_kv(&self, layer_idx: usize) -> bool {
+        if !self.is_kv_shared_layer(layer_idx) && self.num_kv_shared_layers > 0 {
+            let first = self.first_kv_shared_layer();
+            let Some(layer_type) = self.layer_types.get(layer_idx) else {
+                return false;
+            };
+            let last = self.layer_types[..first]
+                .iter()
+                .rposition(|ty| ty == layer_type);
+            last == Some(layer_idx)
+        } else {
+            false
+        }
     }
 
     pub fn is_sliding(&self, layer_idx: usize) -> bool {
