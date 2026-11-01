@@ -217,6 +217,25 @@ impl QuantizedAttention {
 
         self.attention_wo.forward(&reshaped_ctx.to_dtype(in_dtype)?)
     }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.kv_cache.reset();
+    }
+
+    fn kv_cache_state(&self) -> Option<(Tensor, Tensor)> {
+        match (self.kv_cache.k(), self.kv_cache.v()) {
+            (Some(k), Some(v)) => Some((k.clone(), v.clone())),
+            _ => None,
+        }
+    }
+
+    fn set_kv_cache_state(&mut self, state: Option<(Tensor, Tensor)>) -> Result<()> {
+        self.kv_cache.reset();
+        if let Some((k, v)) = state {
+            self.kv_cache.append(&k, &v)?;
+        }
+        Ok(())
+    }
 }
 
 struct LayerWeights {
@@ -229,6 +248,18 @@ struct LayerWeights {
 impl LayerWeights {
     fn forward_attn(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         self.self_attn.forward(x, mask, offset)
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.self_attn.clear_kv_cache();
+    }
+
+    fn kv_cache_state(&self) -> Option<(Tensor, Tensor)> {
+        self.self_attn.kv_cache_state()
+    }
+
+    fn set_kv_cache_state(&mut self, state: Option<(Tensor, Tensor)>) -> Result<()> {
+        self.self_attn.set_kv_cache_state(state)
     }
 }
 
@@ -426,5 +457,29 @@ impl GGUFQWenMoE {
         let xs = xs.narrow(1, l - 1, 1)?;
         let xs = self.norm.forward(&xs)?;
         self.output.forward(&xs)?.to_dtype(DType::F32)?.squeeze(1)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.clear_kv_cache();
+        }
+    }
+
+    pub fn kv_cache_state(&self) -> Vec<Option<(Tensor, Tensor)>> {
+        self.layers.iter().map(|l| l.kv_cache_state()).collect()
+    }
+
+    pub fn set_kv_cache_state(&mut self, state: Vec<Option<(Tensor, Tensor)>>) -> Result<()> {
+        if state.len() != self.layers.len() {
+            candle::bail!(
+                "kv cache state has {} layers, model has {} -- refusing a partial restore",
+                state.len(),
+                self.layers.len()
+            );
+        }
+        for (layer, s) in self.layers.iter_mut().zip(state) {
+            layer.set_kv_cache_state(s)?;
+        }
+        Ok(())
     }
 }
