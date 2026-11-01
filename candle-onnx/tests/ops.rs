@@ -2359,6 +2359,33 @@ fn test_reduce_max() -> Result<()> {
     test(42., None, 0, None, 42., false)?;
     test(42., None, 1, None, 42., false)?;
 
+    // Explicitly empty `axes` reduces over all dimensions, like missing `axes`
+    // https://github.com/huggingface/candle/issues/4023
+    test(
+        &[[3., -2., 7.], [4., 6., 1.]],
+        Some(vec![]),
+        0,
+        None,
+        7.,
+        false,
+    )?;
+    test(
+        &[[3., -2., 7.], [4., 6., 1.]],
+        Some(vec![]),
+        1,
+        None,
+        &[[7.]],
+        false,
+    )?;
+    test(
+        &[[3., -2., 7.], [4., 6., 1.]],
+        Some(vec![]),
+        0,
+        None,
+        7.,
+        true,
+    )?;
+
     // Negative test - expect error
     // axes = np.array([-2, 0, 1], dtype=np.int64)
     // np.maximum.reduce(data, axis=tuple(axes), keepdims=True)
@@ -2877,6 +2904,33 @@ fn test_reduce_min() -> Result<()> {
     // Rank-0 tensors are also valid
     test(42., None, 0, None, 42., false)?;
     test(42., None, 1, None, 42., false)?;
+
+    // Explicitly empty `axes` reduces over all dimensions, like missing `axes`
+    // https://github.com/huggingface/candle/issues/4023
+    test(
+        &[[3., -2., 7.], [4., 6., 1.]],
+        Some(vec![]),
+        0,
+        None,
+        -2.,
+        false,
+    )?;
+    test(
+        &[[3., -2., 7.], [4., 6., 1.]],
+        Some(vec![]),
+        1,
+        None,
+        &[[-2.]],
+        false,
+    )?;
+    test(
+        &[[3., -2., 7.], [4., 6., 1.]],
+        Some(vec![]),
+        0,
+        None,
+        -2.,
+        true,
+    )?;
 
     // Negative test - expect error
     // axes = np.array([-2, 0, 1], dtype=np.int64)

@@ -1334,6 +1334,8 @@ fn simple_eval_(
                 } else {
                     None
                 };
+                // Explicitly empty `axes` behave like missing `axes`
+                let axes = axes.filter(|axes| !axes.is_empty());
 
                 let axes = if let Some(axes) = axes {
                     let rank = input.rank();
@@ -1443,6 +1445,8 @@ fn simple_eval_(
                 } else {
                     None
                 };
+                // Explicitly empty `axes` behave like missing `axes`
+                let axes = axes.filter(|axes| !axes.is_empty());
 
                 let axes = if let Some(axes) = axes {
                     let rank = input.rank();
