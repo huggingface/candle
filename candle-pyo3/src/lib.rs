@@ -1115,6 +1115,7 @@ impl PyTensor {
             "q6k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q6K),
             "q8_0" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q8_0),
             "q8_1" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q8_1),
+            "iq4_nl" => quantized::QTensor::quantize(self, quantized::GgmlDType::IQ4NL),
             "q8k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q8K),
             "f16" => quantized::QTensor::quantize(self, quantized::GgmlDType::F16),
             "f32" => quantized::QTensor::quantize(self, quantized::GgmlDType::F32),

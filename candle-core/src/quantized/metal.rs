@@ -91,6 +91,10 @@ impl QMetalStorage {
                 let vec: Vec<crate::quantized::BlockQ8_1> = read_to_vec(&buffer, block_len);
                 crate::quantized::BlockQ8_1::to_float(&vec, &mut out);
             }
+            GgmlDType::IQ4NL => {
+                let vec: Vec<crate::quantized::BlockIQ4NL> = read_to_vec(&buffer, block_len);
+                crate::quantized::BlockIQ4NL::to_float(&vec, &mut out);
+            }
             GgmlDType::Q2K => {
                 let vec: Vec<crate::quantized::BlockQ2K> = read_to_vec(&buffer, block_len);
                 crate::quantized::BlockQ2K::to_float(&vec, &mut out);
@@ -488,6 +492,7 @@ impl From<GgmlDType> for candle_metal_kernels::GgmlDType {
             GgmlDType::Q5_1 => candle_metal_kernels::GgmlDType::Q5_1,
             GgmlDType::Q8_0 => candle_metal_kernels::GgmlDType::Q8_0,
             GgmlDType::Q8_1 => candle_metal_kernels::GgmlDType::Q8_1,
+            GgmlDType::IQ4NL => unreachable!("iq4_nl has no metal kernel"),
             GgmlDType::Q2K => candle_metal_kernels::GgmlDType::Q2K,
             GgmlDType::Q3K => candle_metal_kernels::GgmlDType::Q3K,
             GgmlDType::Q4K => candle_metal_kernels::GgmlDType::Q4K,

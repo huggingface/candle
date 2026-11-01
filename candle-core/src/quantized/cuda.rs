@@ -111,6 +111,7 @@ fn dequantize_f32(
     let nb = elem_count.div_ceil(256);
     let (kernel_name, is_k, block_dim, num_blocks) = match dtype {
         GgmlDType::Q4_0 => ("dequantize_block_q4_0_f32", false, 32, nb),
+        GgmlDType::IQ4NL => ("dequantize_block_iq4_nl_f32", false, 32, nb),
         GgmlDType::Q4_1 => ("dequantize_block_q4_1_f32", false, 32, nb),
         GgmlDType::Q5_0 => (
             "dequantize_block_q5_0_f32",
@@ -171,6 +172,7 @@ fn dequantize_f16(
     let nb = elem_count.div_ceil(256);
     let (kernel_name, is_k, block_dim, num_blocks) = match dtype {
         GgmlDType::Q4_0 => ("dequantize_block_q4_0_f16", false, 32, nb),
+        GgmlDType::IQ4NL => ("dequantize_block_iq4_nl_f16", false, 32, nb),
         GgmlDType::Q4_1 => ("dequantize_block_q4_1_f16", false, 32, nb),
         GgmlDType::Q5_0 => (
             "dequantize_block_q5_0_f16",
@@ -248,6 +250,12 @@ fn get_rows(
             ceil_div(hidden, CUDA_GET_ROWS_BLOCK_SIZE),
             true,
         ),
+        GgmlDType::IQ4NL => (
+            "get_rows_iq4_nl",
+            CUDA_GET_ROWS_BLOCK_SIZE,
+            ceil_div(hidden, 2 * CUDA_GET_ROWS_BLOCK_SIZE),
+            true,
+        ),
         GgmlDType::Q4_0 => (
             "get_rows_q4_0",
             CUDA_GET_ROWS_BLOCK_SIZE,
@@ -315,6 +323,23 @@ fn get_rows(
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
+// Types the q8_1 matmul kernels below know.
+fn has_q8_1_kernel(dtype: GgmlDType) -> bool {
+    matches!(
+        dtype,
+        GgmlDType::Q4_0
+            | GgmlDType::Q4_1
+            | GgmlDType::Q5_0
+            | GgmlDType::Q5_1
+            | GgmlDType::Q8_0
+            | GgmlDType::Q2K
+            | GgmlDType::Q3K
+            | GgmlDType::Q4K
+            | GgmlDType::Q5K
+            | GgmlDType::Q6K
+    )
+}
+
 fn dequantize_mul_mat_vec(
     data: &PaddedCudaSlice,
     y: &CudaView<f32>,
@@ -332,6 +357,7 @@ fn dequantize_mul_mat_vec(
     }
     let kernel_name = match dtype {
         GgmlDType::Q4_0 => "dequantize_mul_mat_vec_q4_0_cuda",
+        GgmlDType::IQ4NL => "dequantize_mul_mat_vec_iq4_nl_cuda",
         GgmlDType::Q4_1 => "dequantize_mul_mat_vec_q4_1_cuda",
         GgmlDType::Q5_0 => "dequantize_mul_mat_vec_q5_0_cuda",
         GgmlDType::Q5_1 => "dequantize_mul_mat_vec_q5_1_cuda",
@@ -653,7 +679,8 @@ impl QCudaStorage {
 
         let fast_kernel = matches!(
             self.dtype,
-            GgmlDType::Q4_0
+            GgmlDType::IQ4NL
+                | GgmlDType::Q4_0
                 | GgmlDType::Q4_1
                 | GgmlDType::Q5_0
                 | GgmlDType::Q5_1
@@ -685,6 +712,7 @@ impl QCudaStorage {
             GgmlDType::Q5_1 => deq::<crate::quantized::BlockQ5_1>(&buffer, block_len, &mut out),
             GgmlDType::Q8_0 => deq::<crate::quantized::BlockQ8_0>(&buffer, block_len, &mut out),
             GgmlDType::Q8_1 => deq::<crate::quantized::BlockQ8_1>(&buffer, block_len, &mut out),
+            GgmlDType::IQ4NL => deq::<crate::quantized::BlockIQ4NL>(&buffer, block_len, &mut out),
             GgmlDType::Q2K => deq::<crate::quantized::BlockQ2K>(&buffer, block_len, &mut out),
             GgmlDType::Q3K => deq::<crate::quantized::BlockQ3K>(&buffer, block_len, &mut out),
             GgmlDType::Q4K => deq::<crate::quantized::BlockQ4K>(&buffer, block_len, &mut out),
@@ -905,6 +933,7 @@ impl QCudaStorage {
         rhs_l: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
         let (nrows, ncols) = self_shape.dims2()?;
+        let rhs_storage = rhs;
         let rhs = rhs.as_cuda_slice::<f32>()?;
         let rhs = match rhs_l.contiguous_offsets() {
             Some((o1, o2)) => rhs.slice(o1..o2),
@@ -920,6 +949,12 @@ impl QCudaStorage {
         }
 
         let out = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
+            dequantize_mul_mat_vec(&self.data, &rhs, self.dtype, ncols, nrows, self.device())?
+        } else if !has_q8_1_kernel(self.dtype) {
+            // No q8_1 kernel, and the DMMV kernel takes one row: a batch goes to the matrix path.
+            if b_size > 1 {
+                return self.dequantize_matmul(self_shape, rhs_storage, rhs_l);
+            }
             dequantize_mul_mat_vec(&self.data, &rhs, self.dtype, ncols, nrows, self.device())?
         } else {
             mul_mat_vec_via_q8_1(
@@ -955,7 +990,9 @@ impl QCudaStorage {
             crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", layout.shape())
         }
 
-        let out = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
+        let out = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed)
+            || !has_q8_1_kernel(self.dtype)
+        {
             let data_f32 = self.dequantize(n * k)?;
             let rhs_l = crate::Layout::new((k, n).into(), vec![1, k], 0).broadcast_as((b, k, n))?;
             storage.matmul(&data_f32, (b, m, n, k), layout, &rhs_l)?
@@ -1010,6 +1047,78 @@ pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::backend::BackendStorage;
+    use crate::quantized::{QMatMul, QTensor};
+    use crate::Module;
+    use crate::{Device, Tensor};
+    use std::borrow::Cow;
+
+    #[test]
+    fn cuda_dequantize_iq4_nl_matches_cpu() -> Result<()> {
+        let dev = CudaDevice::new(0)?;
+        let el = 32 * 16;
+        let data: Vec<f32> = (0..el)
+            .map(|i| ((i * 37) % 101) as f32 / 13.0 - 4.0)
+            .collect();
+        let qt = QTensor::quantize(
+            &Tensor::from_vec(data, el, &Device::Cpu)?,
+            GgmlDType::IQ4NL,
+        )?;
+        let cpu = qt.dequantize(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+        let bytes = qt.data()?;
+        let storage = QStorage::from_data(
+            Cow::Borrowed(&bytes),
+            &Device::Cuda(dev.clone()),
+            GgmlDType::IQ4NL,
+        )?;
+        let QStorage::Cuda(cuda) = storage else {
+            crate::bail!("expected a cuda storage")
+        };
+        let gpu = cuda
+            .dequantize(el)?
+            .to_cpu_storage()?
+            .as_slice::<f32>()?
+            .to_vec();
+        assert_eq!(gpu, cpu);
+        Ok(())
+    }
+
+    #[test]
+    fn cuda_qmatmul_iq4_nl_matches_cpu() -> Result<()> {
+        let dev = CudaDevice::new(0)?;
+        let (m, k, n) = (3usize, 64usize, 5usize);
+        let w: Vec<f32> = (0..n * k).map(|i| ((i * 29) % 67) as f32 / 9.0 - 3.0).collect();
+        let embed_cpu = QTensor::quantize(
+            &Tensor::from_vec(w, (n, k), &Device::Cpu)?,
+            GgmlDType::IQ4NL,
+        )?;
+        let bytes = embed_cpu.data()?;
+        let cuda_storage = QStorage::from_data(
+            Cow::Borrowed(&bytes),
+            &Device::Cuda(dev.clone()),
+            GgmlDType::IQ4NL,
+        )?;
+        let embed_cuda = QTensor::new(cuda_storage, (n, k))?;
+        let w_dequantized = embed_cpu.dequantize(&Device::Cpu)?;
+        let mm_cuda = QMatMul::from_qtensor(embed_cuda)?;
+        for (cols, label) in [(1usize, "mat-vec"), (m, "mat-mat")] {
+            let x: Vec<f32> = (0..cols * k)
+                .map(|i| ((i * 17) % 43) as f32 / 7.0 - 2.0)
+                .collect();
+            let xs = Tensor::from_vec(x, (cols, k), &Device::Cpu)?;
+            let expect = xs.matmul(&w_dequantized.t()?)?;
+            let got = mm_cuda
+                .forward(&xs.to_device(&Device::Cuda(dev.clone()))?)?
+                .to_device(&Device::Cpu)?;
+            let diff = (got - &expect)?.abs()?.flatten_all()?.max(0)?.to_scalar::<f32>()?;
+            let scale = expect.abs()?.flatten_all()?.max(0)?.to_scalar::<f32>()?;
+            assert!(
+                diff < 1e-4 * scale.max(1.0),
+                "{label}: max diff {diff}, scale {scale}"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn cuda_quantize_q8_1() -> Result<()> {

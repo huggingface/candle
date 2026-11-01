@@ -27,6 +27,10 @@ pub const QK5_0: usize = 32;
 pub const QK5_1: usize = 32;
 pub const QK8_0: usize = 32;
 pub const QK8_1: usize = 32;
+pub const QK4_NL: usize = 32;
+pub const KVALUES_IQ4NL: [i8; 16] = [
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
+];
 
 pub trait GgmlType: Sized + Clone + Send + Sync {
     const DTYPE: GgmlDType;
@@ -815,6 +819,7 @@ impl GgmlType for BlockQ8_1 {
         }
     }
 }
+
 
 impl GgmlType for BlockQ2K {
     const DTYPE: GgmlDType = GgmlDType::Q2K;
@@ -2710,6 +2715,145 @@ pub fn matmul_f16<T: GgmlType>(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockIQ4NL {
+    pub(crate) d: f16,
+    pub(crate) qs: [u8; QK4_NL / 2],
+}
+const _: () = assert!(std::mem::size_of::<BlockIQ4NL>() == 18);
+
+fn best_index_int8(val: &[i8; 16], x: f32) -> usize {
+    if x <= val[0] as f32 {
+        return 0;
+    }
+    if x >= val[15] as f32 {
+        return 15;
+    }
+    let (mut ml, mut mu) = (0usize, 15usize);
+    while mu - ml > 1 {
+        let mav = (ml + mu) / 2;
+        if x < val[mav] as f32 {
+            mu = mav;
+        } else {
+            ml = mav;
+        }
+    }
+    if x - (val[mu - 1] as f32) < (val[mu] as f32) - x {
+        mu - 1
+    } else {
+        mu
+    }
+}
+
+const IQ4NL_GROUP_MAX_EPS: f32 = 1e-15;
+
+impl GgmlType for BlockIQ4NL {
+    const DTYPE: GgmlDType = GgmlDType::IQ4NL;
+    const BLCK_SIZE: usize = QK4_NL;
+    type VecDotType = BlockQ8_0;
+
+    // https://github.com/ggerganov/llama.cpp/blob/master/ggml/src/ggml-quants.c (dequantize_row_iq4_nl)
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        let k = ys.len();
+        debug_assert!(
+            k.is_multiple_of(QK4_NL),
+            "dequantize_row_iq4_nl: {k} is not divisible by {QK4_NL}"
+        );
+
+        for (xb, yb) in xs.iter().zip(ys.chunks_exact_mut(QK4_NL)) {
+            let d = xb.d.to_f32();
+            for (j, q) in xb.qs.iter().enumerate() {
+                yb[j] = d * KVALUES_IQ4NL[(q & 0xf) as usize] as f32;
+                yb[j + QK4_NL / 2] = d * KVALUES_IQ4NL[(q >> 4) as usize] as f32;
+            }
+        }
+    }
+
+    // https://github.com/ggerganov/llama.cpp/blob/master/ggml/src/ggml-quants.c (quantize_row_iq4_nl_impl)
+    fn from_float(xs: &[f32], ys: &mut [Self]) {
+        assert!(
+            xs.len().is_multiple_of(QK4_NL),
+            "quantize_row_iq4_nl: {} is not a multiple of {QK4_NL}",
+            xs.len()
+        );
+        for (xb, yb) in xs.chunks_exact(QK4_NL).zip(ys.iter_mut()) {
+            let mut weight = [0f32; QK4_NL];
+            let mut amax = 0f32;
+            let mut max = 0f32;
+            for (j, &v) in xb.iter().enumerate() {
+                weight[j] = v * v;
+                if v.abs() > amax {
+                    amax = v.abs();
+                    max = v;
+                }
+            }
+            let mut scale = 0f32;
+            if amax >= IQ4NL_GROUP_MAX_EPS {
+                // ntry = 7: the first guess is the negated one, then `ntry` refinements.
+                let mut d = -max / KVALUES_IQ4NL[0] as f32;
+                let id = 1.0 / d;
+                let (mut sumqx, mut sumq2) = (0f32, 0f32);
+                for (j, &v) in xb.iter().enumerate() {
+                    let q = KVALUES_IQ4NL[best_index_int8(&KVALUES_IQ4NL, id * v)] as f32;
+                    sumqx += weight[j] * q * v;
+                    sumq2 += weight[j] * q * q;
+                }
+                d = if sumq2 > 0.0 { sumqx / sumq2 } else { 0.0 };
+                let mut best = d * sumqx;
+                for itry in -7i32..=7 {
+                    let id = (itry as f32 + KVALUES_IQ4NL[0] as f32) / max;
+                    sumqx = 0.0;
+                    sumq2 = 0.0;
+                    for (j, &v) in xb.iter().enumerate() {
+                        let q = KVALUES_IQ4NL[best_index_int8(&KVALUES_IQ4NL, id * v)] as f32;
+                        sumqx += weight[j] * q * v;
+                        sumq2 += weight[j] * q * q;
+                    }
+                    if sumq2 > 0.0 && sumqx * sumqx > best * sumq2 {
+                        d = sumqx / sumq2;
+                        best = d * sumqx;
+                    }
+                }
+                scale = d;
+            }
+            yb.d = f16::from_f32(scale);
+            let id = if scale != 0.0 { 1.0 / scale } else { 0.0 };
+            let mut l = [0u8; QK4_NL];
+            for (j, &v) in xb.iter().enumerate() {
+                l[j] = best_index_int8(&KVALUES_IQ4NL, id * v) as u8;
+            }
+            for j in 0..QK4_NL / 2 {
+                yb.qs[j] = l[j] | (l[j + QK4_NL / 2] << 4);
+            }
+        }
+    }
+
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        let qk = Self::BLCK_SIZE;
+        debug_assert!(
+            n.is_multiple_of(qk),
+            "vec_dot_iq4_nl_q8_0: {n} is not divisible by {qk}"
+        );
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(_n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        // https://github.com/ggerganov/llama.cpp/blob/master/ggml/src/ggml-quants.c (ggml_vec_dot_iq4_nl_q8_0_generic)
+        let mut sumf = 0f32;
+        for (xb, yb) in xs.iter().zip(ys.iter()) {
+            let d = xb.d.to_f32() * yb.d.to_f32();
+            let mut sumi = 0i32;
+            for (j, q) in xb.qs.iter().enumerate() {
+                sumi += KVALUES_IQ4NL[(q & 0xf) as usize] as i32 * yb.qs[j] as i32;
+                sumi += KVALUES_IQ4NL[(q >> 4) as usize] as i32 * yb.qs[j + QK4_NL / 2] as i32;
+            }
+            sumf += d * sumi as f32;
+        }
+        sumf
+    }
+}
+
 impl GgmlType for f32 {
     const DTYPE: GgmlDType = GgmlDType::F32;
     const BLCK_SIZE: usize = 1;
@@ -2864,3 +3008,145 @@ verify_block_sizes!(
     BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1, BlockQ2K, BlockQ3K, BlockQ4K,
     BlockQ5K, BlockQ6K, BlockQ8K, f32, f16, bf16
 );
+
+#[cfg(test)]
+mod iq4_nl_tests {
+    use super::*;
+
+    // Expected values produced by ggml itself, not by a second reading of the format.
+
+    /// A real model block, and ggml's dequantization of it.
+    const RAW: [u8; 18] = [
+        15, 140, 73, 151, 31, 197, 231, 29, 171, 248, 198, 157, 146, 125, 130, 100, 170, 44,
+    ];
+    const DEQUANTIZED: [f32; 32] = [
+        -0.0032203197, 0.002477169, -0.0279920101, 0.0086700916, 0.002477169, -0.0170924664,
+        -0.0094132423, -0.0002477169, 0.0054497719, -0.0170924664, 0.020560503, -0.0170924664,
+        0.020560503, 0.0121381283, -0.0061929226, -0.0131289959, 0.0121381283, -0.0032203197,
+        0.025762558, -0.0131289959, -0.0220468044, 0.025762558, -0.0061929226, -0.0279920101,
+        -0.0131289959, -0.0032203197, -0.0032203197, 0.002477169, -0.0002477169, 0.0054497719,
+        -0.0061929226, 0.020560503,
+    ];
+    /// An activation row, ggml's q8_0 quantization of it, and the dot product of the two.
+    const ACTIVATION: [f32; 32] = [
+        -6.58300018, 4.51262999, -8.55595016, -4.28428984, -0.89178997, -8.93249035, -7.56556988,
+        0.69768, 2.48580003, -4.13319016, -7.52686977, -8.94361973, 5.19541979, -9.60457993,
+        -8.31575966, 1.98149002, 2.84428, 6.23079014, 7.60040998, -8.51856995, 5.19073009,
+        -2.24289989, 3.9539299, 1.88703001, -4.14137983, 4.97049999, -8.84175014, 7.0609498,
+        3.88041997, -9.47614956, 5.01989985, -1.17377996,
+    ];
+    const ACTIVATION_Q8_0: [u8; 34] = [
+        215, 44, 169, 60, 143, 199, 244, 138, 156, 9, 33, 201, 156, 138, 69, 129, 146, 26, 38, 82,
+        100, 143, 69, 226, 52, 25, 201, 66, 139, 93, 51, 131, 66, 240,
+    ];
+    const DOT: f32 = 0.6010478734970093;
+    /// A row to quantize, and ggml's `quantize_row_iq4_nl_ref` output for it.
+    const QUANTIZE_INPUT: [f32; 32] = [
+        2.38764, -0.79374999, 8.7575798, 1.33361006, 9.40703011, 8.7332201, 7.1357398, 4.99259996,
+        -2.62188005, 7.59837008, 0.43296, -2.28004003, 4.20510006, 5.81708002, 6.0865202,
+        -6.88857985, 6.42193985, 8.58872032, 9.3308897, -1.92428005, -7.40225983, 4.28649998,
+        3.26169991, -5.7479701, 1.29269004, -1.29636002, 0.02013, 2.59200001, -5.27151012,
+        -4.80294991, 7.51274014, -9.15837955,
+    ];
+    const QUANTIZED: [u8; 18] = [
+        152, 172, 37, 9, 0, 166, 240, 48, 65, 227, 107, 145, 135, 91, 211, 210, 18, 254,
+    ];
+
+    fn block_from_bytes(bytes: &[u8; 18]) -> BlockIQ4NL {
+        let mut block = BlockIQ4NL {
+            d: f16::from_f32(0.),
+            qs: [0; QK4_NL / 2],
+        };
+        block.d = f16::from_bits(u16::from_le_bytes([bytes[0], bytes[1]]));
+        block.qs.copy_from_slice(&bytes[2..]);
+        block
+    }
+
+    fn block_to_bytes(block: &BlockIQ4NL) -> [u8; 18] {
+        let mut out = [0u8; 18];
+        out[..2].copy_from_slice(&block.d.to_bits().to_le_bytes());
+        out[2..].copy_from_slice(&block.qs);
+        out
+    }
+
+    #[test]
+    fn block_is_the_ggml_layout() {
+        assert_eq!(BlockIQ4NL::BLCK_SIZE, 32);
+        assert_eq!(std::mem::size_of::<BlockIQ4NL>(), 18);
+        assert_eq!(BlockIQ4NL::DTYPE.to_u32(), 20);
+    }
+
+    #[test]
+    fn dequantize_matches_ggml() {
+        let block = block_from_bytes(&RAW);
+        let mut out = [0f32; 32];
+        BlockIQ4NL::to_float(&[block], &mut out);
+        for (j, (got, want)) in out.iter().zip(DEQUANTIZED.iter()).enumerate() {
+            assert_eq!(got, want, "element {j}");
+        }
+    }
+
+    #[test]
+    fn vec_dot_matches_ggml() {
+        let weights = [block_from_bytes(&RAW)];
+        let mut activation = BlockQ8_0 {
+            d: f16::from_f32(0.),
+            qs: [0; QK8_0],
+        };
+        activation.d = f16::from_bits(u16::from_le_bytes([
+            ACTIVATION_Q8_0[0],
+            ACTIVATION_Q8_0[1],
+        ]));
+        for (j, q) in activation.qs.iter_mut().enumerate() {
+            *q = ACTIVATION_Q8_0[2 + j] as i8;
+        }
+        let got = BlockIQ4NL::vec_dot_unopt(32, &weights, &[activation]);
+        assert_eq!(got, DOT);
+    }
+
+    #[test]
+    fn quantize_matches_ggml() {
+        let mut blocks = [BlockIQ4NL {
+            d: f16::from_f32(0.),
+            qs: [0; QK4_NL / 2],
+        }];
+        BlockIQ4NL::from_float(&QUANTIZE_INPUT, &mut blocks);
+        assert_eq!(block_to_bytes(&blocks[0]), QUANTIZED);
+        // Decodes back within the block's range; an element past the top entry saturates there.
+        let mut back = [0f32; 32];
+        BlockIQ4NL::to_float(&blocks, &mut back);
+        let d = blocks[0].d.to_f32().abs();
+        let (min_kv, max_kv) = (KVALUES_IQ4NL[0] as f32, KVALUES_IQ4NL[15] as f32);
+        let err = back
+            .iter()
+            .zip(QUANTIZE_INPUT.iter())
+            .fold(0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(
+            err <= (max_kv - min_kv) * d * 1.001,
+            "max error {err} exceeds one codebook span ({})",
+            (max_kv - min_kv) * d
+        );
+    }
+
+    #[test]
+    fn q8_0_activation_is_the_ggml_one() {
+        // The dot test is only meaningful if the q8_0 side decodes back to ggml's activation.
+        let mut activation = BlockQ8_0 {
+            d: f16::from_f32(0.),
+            qs: [0; QK8_0],
+        };
+        activation.d = f16::from_bits(u16::from_le_bytes([
+            ACTIVATION_Q8_0[0],
+            ACTIVATION_Q8_0[1],
+        ]));
+        for (j, q) in activation.qs.iter_mut().enumerate() {
+            *q = ACTIVATION_Q8_0[2 + j] as i8;
+        }
+        let mut back = [0f32; 32];
+        BlockQ8_0::to_float(&[activation], &mut back);
+        let scale = ACTIVATION.iter().fold(0f32, |m, v| m.max(v.abs()));
+        for (j, (a, b)) in back.iter().zip(ACTIVATION.iter()).enumerate() {
+            assert!((a - b).abs() < 0.01 * scale, "element {j}: {a} vs {b}");
+        }
+    }
+}

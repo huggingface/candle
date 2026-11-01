@@ -45,6 +45,8 @@ enum Quantization {
     Q8_0,
     #[value(name = "q8_1")]
     Q8_1,
+    #[value(name = "iq4_nl")]
+    Iq4Nl,
     Q2k,
     Q3k,
     Q4k,
@@ -64,6 +66,7 @@ impl Quantization {
             Quantization::Q5_1 => GgmlDType::Q5_1,
             Quantization::Q8_0 => GgmlDType::Q8_0,
             Quantization::Q8_1 => GgmlDType::Q8_1,
+            Quantization::Iq4Nl => GgmlDType::IQ4NL,
             Quantization::Q2k => GgmlDType::Q2K,
             Quantization::Q3k => GgmlDType::Q3K,
             Quantization::Q4k => GgmlDType::Q4K,

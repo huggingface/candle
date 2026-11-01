@@ -303,6 +303,7 @@ fn quantized_embedding_cpu() -> Result<()> {
         GgmlDType::F32,
         GgmlDType::F16,
         GgmlDType::BF16,
+        GgmlDType::IQ4NL,
         GgmlDType::Q4_0,
         GgmlDType::Q4_1,
         GgmlDType::Q5_0,
@@ -1117,6 +1118,11 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
 
         // Not from the ggml repo.
         GgmlDType::Q8K => 0.00065,
+
+        // Not from the ggml repo.
+        GgmlDType::IQ4NL => {
+            crate::bail!("ggml's unit-test table has no iq4_nl matmul error")
+        }
     };
     Ok(err)
 }
