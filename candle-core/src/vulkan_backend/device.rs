@@ -156,6 +156,13 @@ struct DeviceInner {
     /// physical device. When true, the `linalg.CoopMat` Slang type (and
     /// the cooperative-matrix GEMM kernels) can be used in shaders.
     supports_coopmat: bool,
+    /// BFloat16 cooperative-matrix support, as enabled at device
+    /// creation: the `shaderBFloat16CooperativeMatrix` device feature
+    /// (the base `cooperativeMatrix` feature is not enough for the bf16
+    /// coop-mat GEMM/affine kernels, whose shaders declare the
+    /// BFloat16CooperativeMatrixKHR SPIR-V capability). When false the
+    /// classic tiled bf16 kernel is used instead.
+    coopmat_bf16: bool,
     /// The device's subgroup size; the compiled coop-mat GEMM shaders
     /// assume exactly one 64-thread subgroup per workgroup.
     subgroup_size: u32,
@@ -467,6 +474,7 @@ impl VulkanDevice {
                 supports_f8e4m3: fp8,
                 supports_bf16: bf16,
                 supports_coopmat: cm,
+                coopmat_bf16: cm_bf16,
                 subgroup_size,
                 vulkan_memory_model: vmm,
                 coopmat_gemm_f16: std::sync::OnceLock::new(),
@@ -720,6 +728,15 @@ impl VulkanDevice {
     /// the outcome; a failed probe keeps the classic tiled kernel.
     pub(crate) fn coopmat_gemm_available(&self, dtype: DType) -> bool {
         if !self.supports_coopmat_gemm() {
+            return false;
+        }
+        // The bf16 coop-mat kernels additionally require the
+        // shaderBFloat16CooperativeMatrix device feature; the base
+        // cooperativeMatrix feature is not enough for them. On devices
+        // that expose only the base feature (e.g. RDNA 3.5 iGPUs) the
+        // bf16 pipeline build would fail, so keep the classic tiled
+        // kernel.
+        if dtype == DType::BF16 && !self.inner.coopmat_bf16 {
             return false;
         }
         let lock = match dtype {
