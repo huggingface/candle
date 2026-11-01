@@ -94,6 +94,14 @@ fn conv1d(dev: &Device) -> Result<()> {
     }
     Ok(())
 }
+fn conv_transpose1d_l_in_one(dev: &Device) -> Result<()> {
+    let t = Tensor::new(&[1.0f32], dev)?.reshape((1, 1, 1))?;
+    let w = Tensor::new(&[1.0f32, 2.0, 3.0], dev)?.reshape((1, 1, 3))?;
+    // l_in=1, k=3, stride=2, padding=1, dilation=1, out_padding=1 -> l_out = 2
+    let res = t.conv_transpose1d(&w, 1, 1, 2, 1, 1)?;
+    assert_eq!(res.dims(), [1, 1, 2]);
+    Ok(())
+}
 
 fn conv1d_small(dev: &Device) -> Result<()> {
     let t = Tensor::new(&[0.4056f32, -0.8689, -0.0773, -1.5630], dev)?.reshape((1, 1, 4))?;
@@ -976,6 +984,13 @@ fn conv2d_grad_noncontiguous_kernel(dev: &Device) -> Result<()> {
 }
 
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
+test_device!(
+    conv_transpose1d_l_in_one,
+    conv_transpose1d_l_in_one_cpu,
+    conv_transpose1d_l_in_one_gpu,
+    conv_transpose1d_l_in_one_metal
+);
+
 test_device!(
     conv1d_small,
     conv1d_small_cpu,

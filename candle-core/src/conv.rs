@@ -43,10 +43,11 @@ pub struct ParamsConvTranspose1D {
 
 impl ParamsConvTranspose1D {
     pub(crate) fn l_out(&self) -> usize {
-        (self.l_in - 1) * self.stride - 2 * self.padding
+        (self.l_in - 1) * self.stride
             + self.dilation * (self.k_size - 1)
             + self.output_padding
             + 1
+            - 2 * self.padding
     }
 
     pub(crate) fn out_dims(&self) -> Vec<usize> {
