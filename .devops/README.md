@@ -15,6 +15,7 @@ docker runtime is provided by Podman.
 | `vulkan.Dockerfile` | Builds the `candle-vulkan-dev` image from `ubuntu:latest`. |
 | `build-vulkan-dev.sh` | Builds the image. |
 | `run-vulkan-dev.sh` | Runs the image with GPU access and the usual mounts. |
+| `build-install-slang.sh` | Builds the shader-slang programs (static) from a fresh clone and installs them; used by the Dockerfile (into `/usr/local/bin`) and directly on the host (into `$HOME/.local/bin`). |
 
 ## Image contents
 
@@ -27,7 +28,7 @@ Base: `ubuntu:latest` (26.04 "resolute" at the time of writing).
 | `vulkan-tools` | `vulkaninfo` and friends. |
 | `mesa-vulkan-drivers` | Mesa Vulkan ICD drivers: AMD (radv), Intel (ANV/HASVK), and the llvmpipe software driver. NVIDIA GPUs are not covered by these drivers. |
 | `vulkan-validationlayers` | Validation layers, including the printf layer used by the `test_vulkan_shader_printf` test. |
-| Slang (source build) | The Slang shader compiler (`/usr/local/bin/slangc`, installed under `/opt/slang`), used by `candle-vulkan-kernels/build.rs` to compile the `.slang` shaders to SPIR-V. Built from source pinned by the `SLANG_VERSION` Dockerfile ARG (currently `v2026.18.2`); the source tree is cloned and built under `/root/slang` because a full build needs a few gigabytes and `/tmp` may be too small on some systems. Ubuntu's `slang-compiler` package (2026.1.1) is too old: the native FP8 kernels use the `FloatE4M3` type, which only exists in newer Slang versions. Bump `SLANG_VERSION` to match the host's `slangc -version` when the host toolchain changes. |
+| Slang (source build) | The Slang shader compiler (`/usr/local/bin/slangc`), used by `candle-vulkan-kernels/build.rs` to compile the `.slang` shaders to SPIR-V. Built by `build-install-slang.sh` from a fresh clone pinned by the `SLANG_VERSION` Dockerfile ARG (currently `v2026.20`), with `-DSLANG_LIB_TYPE=STATIC` so the installed programs are mostly self-contained (only system libraries remain as dynamic dependencies). The script clones under `$HOME` (a few gigabytes; `/tmp` may be too small), builds, installs to `/usr/local/bin`, and cleans up the source/build trees. Ubuntu's `slang-compiler` package (2026.1.1) is too old: the native FP8 kernels use the `FloatE4M3` type, which only exists in newer Slang versions. Bump `SLANG_VERSION` to match the host's `slangc -version` when the host toolchain changes. |
 | Rust (rustup, stable) | Installed under `/usr/local/cargo` / `/usr/local/rustup`. |
 
 Note: LunarG's Ubuntu APT repository (`packages.lunarg.com/vulkan/ubuntu`)
@@ -100,8 +101,13 @@ vulkaninfo --summary
 
 From inside the container (working directory `/mnt/workspace`), the same
 checks as on the host apply. On a host with multiple vulkan devices, run
-the workspace test suite once per device; on a single-device host only
-the first test run is needed:
+the workspace test suite once per **real GPU** device; on a single-GPU host
+only the first test run is needed. Never target a
+`PHYSICAL_DEVICE_TYPE_CPU` device (llvmpipe): it is only a CPU fallback so
+the display keeps working when the GPU is unavailable, and anything that can
+run there runs faster on candle's own CPU backend. On the laptop, device 0
+(890M) is the only valid target (device 1 is llvmpipe); on the arch machine
+both device 0 (R9700) and device 1 (Granite Ridge iGPU) are real GPUs:
 
 ```sh
 cargo clippy --all-targets --features vulkan
