@@ -311,9 +311,35 @@ impl Tensor {
                         };
                         *sum_grad = sum_grad.add(&grad_kernel)?;
                     }
-                    Op::ConvTranspose1D { .. } => Err(Error::BackwardNotSupported {
-                        op: "conv-transpose1d",
-                    })?,
+                    Op::ConvTranspose1D {
+                        arg,
+                        kernel,
+                        padding,
+                        stride,
+                        dilation,
+                        output_padding: _output_padding,
+                    } => {
+                        // A large output_padding can make this longer than the input.
+                        let grad_arg = grad
+                            .conv1d(kernel, *padding, *stride, *dilation, 1)?
+                            .narrow(2, 0, arg.dim(2)?)?;
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&grad_arg)?;
+
+                        let grad_kernel = grad
+                            .transpose(0, 1)?
+                            .conv1d(
+                                &arg.transpose(0, 1)?.contiguous()?,
+                                *padding,
+                                *dilation,
+                                *stride,
+                                1,
+                            )?
+                            .transpose(0, 1)?
+                            .narrow(2, 0, kernel.dim(2)?)?;
+                        let sum_grad = grads.or_insert(kernel)?;
+                        *sum_grad = sum_grad.add(&grad_kernel)?;
+                    }
                     Op::ConvTranspose2D {
                         arg,
                         kernel,
