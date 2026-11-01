@@ -7,10 +7,11 @@ extern crate accelerate_src;
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
 use candle::quantized::gguf_file;
+use candle::quantized::tokenizer::TokenizerFromGguf;
 use candle::Tensor;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
@@ -21,18 +22,47 @@ const DEFAULT_PROMPT: &str = "Explain how Rotary Position Embeddings work in tra
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum Which {
-    /// 350M base model, Q4_K_M quantization.
-    #[value(name = "lfm2-350m-q4_k_m")]
-    Lfm2_350MQ4KM,
-    /// 350M base model, Q8_0 quantization.
-    #[value(name = "lfm2-350m-q8_0")]
-    Lfm2_350MQ8_0,
-    /// 2.6B model, Q4_K_M quantization.
-    #[value(name = "lfm2-2.6b-q4_k_m")]
-    Lfm2_2_6BQ4KM,
-    /// 2.6B model, Q8_0 quantization.
-    #[value(name = "lfm2-2.6b-q8_0")]
-    Lfm2_2_6BQ8_0,
+    #[value(name = "lfm2-350m")]
+    Lfm2_350M,
+    #[value(name = "lfm2-2.6b")]
+    Lfm2_2_6B,
+    #[value(name = "lfm2.5-230m")]
+    Lfm2_5_230M,
+    #[value(name = "lfm2.5-350m")]
+    Lfm2_5_350M,
+    #[value(name = "lfm2.5-1.2b-base")]
+    Lfm2_5_1_2BBase,
+    #[value(name = "lfm2.5-1.2b-instruct")]
+    Lfm2_5_1_2BInstruct,
+    #[value(name = "lfm2.5-1.2b-thinking")]
+    Lfm2_5_1_2BThinking,
+    #[value(name = "lfm2.5-1.2b-jp")]
+    Lfm2_5_1_2BJp,
+    #[value(name = "lfm2.5-1.2b-jp-202606")]
+    Lfm2_5_1_2BJp202606,
+    #[value(name = "lfm2.5-2.6b")]
+    Lfm2_5_2_6B,
+    #[value(name = "lfm2.5-8b-a1b")]
+    Lfm2_5_8BA1B,
+}
+
+impl Which {
+    /// The model name, `LiquidAI/<name>-GGUF` holds `<name>-<quant>.gguf`.
+    fn name(&self) -> &'static str {
+        match self {
+            Which::Lfm2_350M => "LFM2-350M",
+            Which::Lfm2_2_6B => "LFM2-2.6B",
+            Which::Lfm2_5_230M => "LFM2.5-230M",
+            Which::Lfm2_5_350M => "LFM2.5-350M",
+            Which::Lfm2_5_1_2BBase => "LFM2.5-1.2B-Base",
+            Which::Lfm2_5_1_2BInstruct => "LFM2.5-1.2B-Instruct",
+            Which::Lfm2_5_1_2BThinking => "LFM2.5-1.2B-Thinking",
+            Which::Lfm2_5_1_2BJp => "LFM2.5-1.2B-JP",
+            Which::Lfm2_5_1_2BJp202606 => "LFM2.5-1.2B-JP-202606",
+            Which::Lfm2_5_2_6B => "LFM2.5-2.6B",
+            Which::Lfm2_5_8BA1B => "LFM2.5-8B-A1B",
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -42,15 +72,19 @@ struct Args {
     #[arg(long)]
     model: Option<String>,
 
-    /// Hugging Face repo id (eg `user/model`) to download the weights from when --model is not set.
-    #[arg(long, default_value = "lfm2-2.6b-q4_k_m")]
+    /// The model to download from Hugging Face when --model is not set.
+    #[arg(long, default_value = "lfm2.5-1.2b-instruct")]
     which: Which,
+
+    /// The quantization to download, e.g. Q4_0, Q4_K_M, Q5_K_M, Q6_K, Q8_0 or F16.
+    #[arg(long, default_value = "Q4_K_M")]
+    quant: String,
 
     /// Repo revision to download from when using --which.
     #[arg(long, default_value = "main")]
     revision: String,
 
-    /// Path to tokenizer.json. Defaults to the same folder as the model or is fetched from Hugging Face.
+    /// Path to tokenizer.json. Defaults to the tokenizer stored in the GGUF file.
     #[arg(long)]
     tokenizer: Option<String>,
 
@@ -104,41 +138,22 @@ impl Args {
         if let Some(model) = &self.model {
             return Ok(PathBuf::from(model));
         }
-        let (repo, filename) = match self.which {
-            Which::Lfm2_350MQ4KM => ("LiquidAI/LFM2-350M-GGUF", "LFM2-350M-Q4_K_M.gguf"),
-            Which::Lfm2_350MQ8_0 => ("LiquidAI/LFM2-350M-GGUF", "LFM2-350M-Q8_0.gguf"),
-            Which::Lfm2_2_6BQ4KM => ("LiquidAI/LFM2-2.6B-GGUF", "LFM2-2.6B-Q4_K_M.gguf"),
-            Which::Lfm2_2_6BQ8_0 => ("LiquidAI/LFM2-2.6B-GGUF", "LFM2-2.6B-Q8_0.gguf"),
-        };
+        let name = self.which.name();
+        let repo = format!("LiquidAI/{name}-GGUF");
+        let filename = format!("{name}-{}.gguf", self.quant.to_uppercase());
         let api = candle_examples::hub::Api::new()?;
         api.model(repo)
             .with_revision(self.revision.clone())
-            .get(filename)
+            .get(&filename)
             .map_err(Into::into)
     }
 
-    fn tokenizer(&self, model_path: &Path) -> Result<Tokenizer> {
-        if let Some(path) = &self.tokenizer {
-            return Tokenizer::from_file(path).map_err(anyhow::Error::msg);
+    fn tokenizer(&self, gguf: &gguf_file::Content) -> Result<Tokenizer> {
+        match &self.tokenizer {
+            Some(path) => Tokenizer::from_file(path).map_err(anyhow::Error::msg),
+            // The GGUF file carries its own tokenizer, LFM2.5 models do not all share one.
+            None => Ok(Tokenizer::from_gguf(gguf)?),
         }
-
-        if let Some(dir) = model_path.parent() {
-            let candidate = dir.join("tokenizer.json");
-            if candidate.exists() {
-                return Tokenizer::from_file(candidate).map_err(anyhow::Error::msg);
-            }
-        }
-
-        let tokenizer_repo = match self.which {
-            Which::Lfm2_350MQ4KM | Which::Lfm2_350MQ8_0 => "LiquidAI/LFM2-350M",
-            Which::Lfm2_2_6BQ4KM | Which::Lfm2_2_6BQ8_0 => "LiquidAI/LFM2-2.6B",
-        };
-        let api = candle_examples::hub::Api::new()?;
-        let tokenizer_path = api
-            .model(tokenizer_repo)
-            .with_revision(self.revision.clone())
-            .get("tokenizer.json")?;
-        Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)
     }
 }
 
@@ -207,10 +222,14 @@ fn main() -> Result<()> {
             elem_count * tensor.ggml_dtype.type_size() / tensor.ggml_dtype.block_size();
     }
 
-    let context_length = gguf
-        .metadata
-        .get("lfm2.context_length")
-        .and_then(|v| v.to_u32().ok().map(|v| v as usize));
+    let md_u32 = |key: &str| gguf.metadata.get(key).and_then(|v| v.to_u32().ok());
+    let arch = match gguf.metadata.get("general.architecture") {
+        Some(v) => v.to_string()?.clone(),
+        None => "lfm2".to_string(),
+    };
+    let context_length = md_u32(&format!("{arch}.context_length")).map(|v| v as usize);
+    let bos_token = md_u32("tokenizer.ggml.bos_token_id");
+    let eos_token = md_u32("tokenizer.ggml.eos_token_id");
 
     println!(
         "loaded {:?} tensors ({}) in {:.2}s",
@@ -219,10 +238,10 @@ fn main() -> Result<()> {
         start.elapsed().as_secs_f32()
     );
 
+    let tokenizer = args.tokenizer(&gguf)?;
     let mut model = ModelWeights::from_gguf(gguf, &mut file, &device)?;
     println!("model ready");
 
-    let tokenizer = args.tokenizer(&model_path)?;
     let mut tos = TokenOutputStream::new(tokenizer);
     let mut tokens = tos
         .tokenizer()
@@ -230,6 +249,12 @@ fn main() -> Result<()> {
         .map_err(anyhow::Error::msg)?
         .get_ids()
         .to_vec();
+    // Some LFM2.5 tokenizers do not add the BOS token themselves.
+    if let Some(bos) = bos_token {
+        if tokens.first() != Some(&bos) {
+            tokens.insert(0, bos);
+        }
+    }
 
     if let Some(max_ctx) = context_length {
         if tokens.len() >= max_ctx {
@@ -288,7 +313,7 @@ fn main() -> Result<()> {
         std::io::stdout().flush()?;
     }
 
-    let eos_token = guess_eos_id(tos.tokenizer());
+    let eos_token = eos_token.or_else(|| guess_eos_id(tos.tokenizer()));
     let mut sampled = 0;
     let start_post_prompt = std::time::Instant::now();
     for (index_pos, _) in (index_pos_start..).zip(0..to_sample) {
