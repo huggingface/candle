@@ -105,9 +105,10 @@ the workspace test suite once per **real GPU** device; on a single-GPU host
 only the first test run is needed. Never target a
 `PHYSICAL_DEVICE_TYPE_CPU` device (llvmpipe): it is only a CPU fallback so
 the display keeps working when the GPU is unavailable, and anything that can
-run there runs faster on candle's own CPU backend. On the laptop, device 0
-(890M) is the only valid target (device 1 is llvmpipe); on the arch machine
-both device 0 (R9700) and device 1 (Granite Ridge iGPU) are real GPUs:
+run there runs faster on candle's own CPU backend. On a machine with an 890M
+GPU, device 0 is the only valid target (device 1 is llvmpipe); on a machine
+with an R9700 and a Granite Ridge iGPU, both device 0 (R9700) and device 1
+(iGPU) are real GPUs:
 
 ```sh
 cargo clippy --all-targets --features vulkan
