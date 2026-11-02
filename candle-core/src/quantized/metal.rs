@@ -4,6 +4,8 @@ use crate::{DType, Layout, MetalDevice, MetalStorage, Result, Shape, D};
 use candle_metal_kernels::metal::Buffer;
 use std::sync::Arc;
 
+mod moe;
+
 pub struct QMetalStorage {
     dtype: GgmlDType,
     device: MetalDevice,

@@ -1934,7 +1934,10 @@ impl Tensor {
 
     pub fn scatter_set<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<()> {
         if self.same_storage(source) {
-            crate::bail!("cannot use slice_set when self and src share their storage")
+            crate::bail!("cannot use scatter_set when self and src share their storage")
+        }
+        if self.same_storage(indexes) {
+            crate::bail!("cannot use scatter_set when self and indexes share their storage")
         }
         let dim = dim.to_index(self.shape(), "scatter-set")?;
         self.scatter_checks(indexes, source, dim)?;
@@ -1973,7 +1976,10 @@ impl Tensor {
 
     pub fn scatter_add_set<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<()> {
         if self.same_storage(source) {
-            crate::bail!("cannot use slice_set when self and src share their storage")
+            crate::bail!("cannot use scatter_add_set when self and src share their storage")
+        }
+        if self.same_storage(indexes) {
+            crate::bail!("cannot use scatter_add_set when self and indexes share their storage")
         }
         let dim = dim.to_index(self.shape(), "scatter-add-set")?;
         self.scatter_checks(indexes, source, dim)?;
