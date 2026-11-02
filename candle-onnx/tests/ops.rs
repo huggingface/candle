@@ -754,6 +754,26 @@ fn test_transpose_operation() -> Result<()> {
 
     assert_eq!(results, vec![vec![1.0, 3.0], vec![2.0, 4.0]]);
 
+    // Without perm, all the dimensions are reversed, not only the last two.
+    let x = Tensor::arange(0f32, 24f32, &Device::Cpu)?.reshape((2, 3, 4))?;
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), x);
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+
+    assert_eq!(z.dims(), &[4, 3, 2]);
+    assert_eq!(
+        z.to_vec3::<f32>()?,
+        vec![
+            vec![vec![0.0, 12.0], vec![4.0, 16.0], vec![8.0, 20.0]],
+            vec![vec![1.0, 13.0], vec![5.0, 17.0], vec![9.0, 21.0]],
+            vec![vec![2.0, 14.0], vec![6.0, 18.0], vec![10.0, 22.0]],
+            vec![vec![3.0, 15.0], vec![7.0, 19.0], vec![11.0, 23.0]],
+        ]
+    );
+
     Ok(())
 }
 
