@@ -38,6 +38,47 @@ fn sum_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn extrema_grad(device: &Device) -> Result<()> {
+    for is_max in [true, false] {
+        let x = Var::new(3f32, device)?;
+        let repeated = x.broadcast_as(4)?;
+        let y = if is_max {
+            repeated.max(0)?
+        } else {
+            repeated.min(0)?
+        };
+        let grads = y.backward()?;
+        assert_eq!(y.to_scalar::<f32>()?, 3.);
+        assert_eq!(
+            grads.get(&x).context("no grad for x")?.to_scalar::<f32>()?,
+            1.
+        );
+
+        let x = Var::new(&[[3f32, 3., -1., -1.], [2., 0., 0., 0.]], device)?;
+        let weights = Tensor::new(&[2f32, 6.], device)?;
+        for (input, dim) in [(x.as_tensor().clone(), 1), (x.t()?, 0)] {
+            for keepdim in [false, true] {
+                let y = match (is_max, keepdim) {
+                    (true, false) => input.max(dim)?,
+                    (true, true) => input.max_keepdim(dim)?,
+                    (false, false) => input.min(dim)?,
+                    (false, true) => input.min_keepdim(dim)?,
+                };
+                let loss = y.flatten_all()?.mul(&weights)?.sum_all()?;
+                let grads = loss.backward()?;
+                let grad_x = grads.get(&x).context("no grad for x")?;
+                let expected = if is_max {
+                    [[1., 1., 0., 0.], [6., 0., 0., 0.]]
+                } else {
+                    [[0., 0., 1., 1.], [0., 2., 2., 2.]]
+                };
+                assert_eq!(grad_x.to_vec2::<f32>()?, expected);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn expand_grad(device: &Device) -> Result<()> {
     // Computing the gradient sums over a middle dim of a 5D tensor, which
     // takes the strided-index fallback path in the Metal reduce kernels,
@@ -621,6 +662,12 @@ test_device!(
     simple_grad_metal
 );
 test_device!(sum_grad, sum_grad_cpu, sum_grad_gpu, sum_grad_metal);
+test_device!(
+    extrema_grad,
+    extrema_grad_cpu,
+    extrema_grad_gpu,
+    extrema_grad_metal
+);
 test_device!(
     expand_grad,
     expand_grad_cpu,
