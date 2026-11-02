@@ -246,16 +246,7 @@ impl FusedMoeGGUF {
             topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
         }
 
-        let ys = if xs.device().is_metal() {
-            let xs = xs.reshape((num_tokens, 1, hidden_dim))?.contiguous()?;
-            let gate = self.gate_experts.indexed_moe_forward(&xs, &topk_ids)?;
-            let up = self.up_experts.indexed_moe_forward(&xs, &topk_ids)?;
-            let down_inputs = (up * gate.apply(&self.act)?)?;
-            let down = self
-                .down_experts
-                .indexed_moe_forward(&down_inputs, &topk_ids)?;
-            down.broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
-        } else {
+        let ys = if xs.device().is_cuda() {
             let (expert_ids, sorted_token_ids) = topk_ids.flatten_all()?.sort_last_dim(true)?;
             let gate = moe::moe_gemm_gguf(
                 &xs,
@@ -289,6 +280,15 @@ impl FusedMoeGGUF {
                 is_prefill,
                 self.dtype,
             )?
+        } else {
+            let xs = xs.reshape((num_tokens, 1, hidden_dim))?.contiguous()?;
+            let gate = self.gate_experts.indexed_moe_forward(&xs, &topk_ids)?;
+            let up = self.up_experts.indexed_moe_forward(&xs, &topk_ids)?;
+            let down_inputs = (up * gate.apply(&self.act)?)?;
+            let down = self
+                .down_experts
+                .indexed_moe_forward(&down_inputs, &topk_ids)?;
+            down.broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
         };
         let mut ys = ys.reshape((num_tokens, (), hidden_dim))?.sum(D::Minus2)?;
         if ys.dtype() != original_dtype {

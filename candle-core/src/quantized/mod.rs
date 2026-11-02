@@ -861,10 +861,54 @@ impl QTensor {
                 }
                 _ => crate::bail!("Metal indexed MoE requires Metal input and expert ids"),
             },
+            QStorage::Cpu(_) | QStorage::Vulkan(_) => self.generic_indexed_moe_forward(x, ids),
             _ => {
-                panic!("indexed_moe_forward is not implemented in this platform!");
+                crate::bail!("indexed_moe_forward is not implemented on this backend");
             }
         }
+    }
+
+    /// Generic routed quantized MoE projection for the CPU and Vulkan
+    /// backends: dequantize the expert weights, gather the per-route expert,
+    /// and reduce the per-route products. `x` is `[tokens, slots, k]` (f32),
+    /// `ids` is `[tokens, topk]` (u32), the weights are `[experts, n, k]`,
+    /// and the result is `[tokens, topk, n]` with
+    /// `out[t, j, n] = sum_k x[t, slot(t, j), k] * dequant(w[ids[t, j], n, k])`.
+    fn generic_indexed_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+        let (experts, out_dim, in_dim) = self.shape().dims3()?;
+        let (tokens, slots, x_k) = x.dims3()?;
+        let (id_tokens, topk) = ids.dims2()?;
+        if x_k != in_dim {
+            crate::bail!("indexed_moe_forward: input width {x_k} != weight in-dim {in_dim}");
+        }
+        if tokens != id_tokens {
+            crate::bail!("indexed_moe_forward: token mismatch ({tokens} vs {id_tokens})");
+        }
+        if slots != 1 && slots != topk {
+            crate::bail!("indexed_moe_forward: slots {slots} must be 1 or match topk {topk}");
+        }
+        if !x.is_contiguous() || !ids.is_contiguous() {
+            crate::bail!("indexed_moe_forward: input and ids must be contiguous");
+        }
+        let x = if x.dtype() == DType::F32 {
+            x.to_owned()
+        } else {
+            x.to_dtype(DType::F32)?
+        };
+        let device = x.device();
+        // Dequantize the expert weights `[experts, out_dim, in_dim]` to f32.
+        let w = self.dequantize(&device)?;
+        // Gather the per-route expert along the expert dim (flattened route ids).
+        let n = out_dim * in_dim;
+        let ids_flat = ids.flatten_all()?;
+        let w_g = w.reshape((experts, n))?.index_select(&ids_flat, 0)?;
+        let w_g = w_g.reshape((tokens, topk, out_dim, in_dim))?;
+        // Per-route activations: insert a size-1 dim before in_dim so the
+        // activation broadcasts across the expert (topk) and output (out_dim)
+        // dims, then broadcast explicitly for an elementwise multiply.
+        let a = x.unsqueeze(2)?; // [tokens, slots, in_dim] -> [tokens, slots, 1, in_dim]
+        let a = a.broadcast_as((tokens, topk, out_dim, in_dim))?;
+        (a * w_g)?.sum(D::Minus1)
     }
 
     pub fn device_ptr(&self) -> Result<*const u8> {
