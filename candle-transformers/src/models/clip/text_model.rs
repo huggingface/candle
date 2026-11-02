@@ -12,31 +12,29 @@ use candle_nn::Module;
 
 use super::EncoderConfig;
 
-#[derive(Debug, Clone, Copy)]
-pub enum Activation {
-    QuickGelu,
-}
+// The CLIP models in the wild activate with `quick_gelu`; reusing the
+// shared candle-nn enum (which carries that variant plus the serde
+// support HF `hidden_act` strings need) instead of growing a local one.
+pub use candle_nn::Activation;
 
-impl Module for Activation {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        match self {
-            Activation::QuickGelu => xs * nn::ops::sigmoid(&(xs * 1.702f64)?)?,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct ClipTextConfig {
-    pub vocab_size: usize,
+    #[serde(rename = "hidden_size")]
     pub embed_dim: usize,
+    #[serde(rename = "hidden_act", default = "default_activation")]
     pub activation: Activation,
     pub intermediate_size: usize,
     pub max_position_embeddings: usize,
+    #[serde(default)]
     pub pad_with: Option<String>,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
-    #[allow(dead_code)]
     pub projection_dim: usize,
+    pub vocab_size: usize,
+}
+
+fn default_activation() -> Activation {
+    Activation::QuickGelu
 }
 
 impl ClipTextConfig {
