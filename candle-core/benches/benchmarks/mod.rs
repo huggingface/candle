@@ -3,6 +3,7 @@ pub(crate) mod binary;
 pub(crate) mod broadcast;
 pub(crate) mod cat;
 pub(crate) mod contiguous;
+pub(crate) mod conv_transpose1d;
 pub(crate) mod conv_transpose2d;
 pub(crate) mod copy;
 pub(crate) mod matmul;

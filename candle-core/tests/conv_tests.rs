@@ -1,6 +1,89 @@
 use anyhow::Result;
 use candle_core::{test_device, test_utils, Device, IndexOp, Tensor};
 
+#[test]
+fn conv_transpose1d_col2im_cpu() -> Result<()> {
+    use candle_core::DType;
+
+    for dtype in [DType::F32, DType::F64] {
+        for (batch, len, channels, groups) in
+            [(1, 1, 1, 1), (1, 7, 3, 1), (2, 19, 17, 1), (2, 5, 3, 2)]
+        {
+            for (kernel, stride) in [
+                (1, 1),
+                (1, 3),
+                (2, 1),
+                (2, 2),
+                (3, 2),
+                (3, 5),
+                (8, 4),
+                (10, 5),
+                (17, 1),
+            ] {
+                let c_in = 4;
+                let out_len = (len - 1) * stride + kernel;
+                let input: Vec<f32> = (0..(batch + 1) * c_in * (len + 2))
+                    .map(|i| (i % 5) as f32 - 2.)
+                    .collect();
+                let weights: Vec<f32> = (0..(c_in + 1) * channels * kernel)
+                    .map(|i| (i % 7) as f32 - 3.)
+                    .collect();
+                // Keep nonzero offsets and gaps between the input rows.
+                let input_tensor =
+                    Tensor::from_vec(input.clone(), (batch + 1, c_in, len + 2), &Device::Cpu)?
+                        .to_dtype(dtype)?
+                        .narrow(0, 1, batch)?
+                        .narrow(2, 1, len)?;
+                let weight_tensor =
+                    Tensor::from_vec(weights.clone(), (c_in + 1, channels, kernel), &Device::Cpu)?
+                        .to_dtype(dtype)?
+                        .narrow(0, 1, c_in)?;
+                let mut expected = vec![0f64; batch * groups * channels * out_len];
+                for b in 0..batch {
+                    for ci in 0..c_in {
+                        let group = ci / (c_in / groups);
+                        for x in 0..len {
+                            let value = input[((b + 1) * c_in + ci) * (len + 2) + x + 1] as f64;
+                            for co in 0..channels {
+                                for tap in 0..kernel {
+                                    let weight =
+                                        weights[((ci + 1) * channels + co) * kernel + tap] as f64;
+                                    let dst = ((b * groups + group) * channels + co) * out_len
+                                        + x * stride
+                                        + tap;
+                                    expected[dst] += value * weight;
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut inputs = vec![
+                    input_tensor.clone(),
+                    input_tensor
+                        .transpose(1, 2)?
+                        .contiguous()?
+                        .transpose(1, 2)?,
+                ];
+                // See #3758 for the separate MatMul stride issue with contiguous batches.
+                if batch == 1 {
+                    inputs.push(input_tensor.contiguous()?);
+                }
+                for input_tensor in inputs {
+                    let output =
+                        input_tensor.conv_transpose1d(&weight_tensor, 0, 0, stride, 1, groups)?;
+                    assert_eq!(output.dims(), [batch, groups * channels, out_len]);
+                    let output = output
+                        .to_dtype(DType::F64)?
+                        .flatten_all()?
+                        .to_vec1::<f64>()?;
+                    assert_eq!(output, expected, "{dtype:?}: b={batch}, l={len}, c={channels}, k={kernel}, s={stride}, g={groups}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /* This test is based on the following script.
 import torch
 torch.manual_seed(4242)
