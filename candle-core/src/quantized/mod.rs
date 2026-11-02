@@ -759,6 +759,10 @@ impl QTensor {
         self.storage.data()
     }
 
+    /// Applies weights `[experts, n, k]` to inputs `[tokens, slots, k]`, returning `[tokens, topk, n]`.
+    /// Ids have shape `[tokens, topk]`; slots is one or topk.
+    /// The caller applies routing weights and reduces across selected experts.
+    /// Metal requires contiguous F32 inputs, U32 ids, and k divisible by 32; invalid ids produce zero rows.
     pub fn indexed_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
         match &self.storage {
             QStorage::Cuda(s) => match (&*x.storage(), &*ids.storage()) {
@@ -780,6 +784,25 @@ impl QTensor {
                 _ => {
                     panic!("Non-cuda indexed_moe_forward is not implemented!");
                 }
+            },
+            #[cfg(feature = "metal")]
+            QStorage::Metal(s) => match (&*x.storage(), &*ids.storage()) {
+                (Storage::Metal(x_storage), Storage::Metal(ids_storage)) => {
+                    let (storage, out_shape) = s.indexed_moe_forward(
+                        self.shape(),
+                        x_storage,
+                        x.layout(),
+                        ids_storage,
+                        ids.layout(),
+                    )?;
+                    Ok(crate::tensor::from_storage(
+                        Storage::Metal(storage),
+                        out_shape,
+                        crate::op::BackpropOp::none(),
+                        false,
+                    ))
+                }
+                _ => crate::bail!("Metal indexed MoE requires Metal input and expert ids"),
             },
             _ => {
                 panic!("indexed_moe_forward is not implemented in this platform!");
