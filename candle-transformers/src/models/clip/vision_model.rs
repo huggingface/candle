@@ -16,18 +16,29 @@ use super::{
     EncoderConfig,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct ClipVisionConfig {
+    #[serde(rename = "hidden_size")]
     pub embed_dim: usize,
+    #[serde(rename = "hidden_act", default = "default_activation")]
     pub activation: Activation,
     pub intermediate_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     #[allow(dead_code)]
     pub projection_dim: usize,
+    #[serde(default = "default_num_channels")]
     pub num_channels: usize,
     pub image_size: usize,
     pub patch_size: usize,
+}
+
+fn default_activation() -> Activation {
+    Activation::QuickGelu
+}
+
+fn default_num_channels() -> usize {
+    3
 }
 
 impl ClipVisionConfig {

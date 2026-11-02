@@ -77,6 +77,34 @@ pub struct ClipConfig {
     pub image_size: usize,
 }
 
+/// Mirror of the HF `config.json` layout. HF keeps `image_size` inside
+/// `vision_config`; the struct-level field is filled from there so a
+/// default can never silently disagree with the vision weights.
+#[derive(serde::Deserialize)]
+struct ClipConfigHf {
+    text_config: text_model::ClipTextConfig,
+    vision_config: vision_model::ClipVisionConfig,
+    #[serde(default = "default_logit_scale")]
+    logit_scale_init_value: f32,
+}
+
+fn default_logit_scale() -> f32 {
+    2.6592
+}
+
+impl<'de> serde::Deserialize<'de> for ClipConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let hf = ClipConfigHf::deserialize(d)?;
+        let image_size = hf.vision_config.image_size;
+        Ok(Self {
+            text_config: hf.text_config,
+            vision_config: hf.vision_config,
+            logit_scale_init_value: hf.logit_scale_init_value,
+            image_size,
+        })
+    }
+}
+
 impl ClipConfig {
     // base image size is 224, model size is 600Mb
     pub fn vit_base_patch32() -> Self {
@@ -149,4 +177,112 @@ impl ClipModel {
 pub fn div_l2_norm(v: &Tensor) -> Result<Tensor> {
     let l2_norm = v.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?;
     v.broadcast_div(&l2_norm)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const B32: &str = r#"{
+        "logit_scale_init_value": 2.6592,
+        "text_config": {
+            "hidden_act": "quick_gelu",
+            "hidden_size": 512,
+            "intermediate_size": 2048,
+            "max_position_embeddings": 77,
+            "num_attention_heads": 8,
+            "num_hidden_layers": 12,
+            "projection_dim": 512,
+            "vocab_size": 49408
+        },
+        "vision_config": {
+            "hidden_act": "quick_gelu",
+            "hidden_size": 768,
+            "image_size": 224,
+            "intermediate_size": 3072,
+            "num_attention_heads": 12,
+            "num_channels": 3,
+            "num_hidden_layers": 12,
+            "patch_size": 32,
+            "projection_dim": 512
+        }
+    }"#;
+
+    #[test]
+    fn clip_config_parses_from_hf_json() {
+        let config: ClipConfig = serde_json::from_str(B32).unwrap();
+        assert_eq!(config.text_config.embed_dim, 512);
+        assert_eq!(config.text_config.vocab_size, 49408);
+        assert_eq!(config.vision_config.embed_dim, 768);
+        assert_eq!(config.vision_config.patch_size, 32);
+        assert_eq!(config.logit_scale_init_value, 2.6592);
+        // image_size mirrors vision_config, never a struct-level default.
+        assert_eq!(config.image_size, 224);
+        assert_eq!(
+            config.text_config.activation,
+            text_model::Activation::QuickGelu
+        );
+        // Both presets must stay identical to the parsed HF shape.
+        let preset = ClipConfig::vit_base_patch32();
+        assert_eq!(preset.image_size, config.image_size);
+        assert_eq!(preset.text_config.embed_dim, config.text_config.embed_dim);
+        assert_eq!(
+            preset.vision_config.embed_dim,
+            config.vision_config.embed_dim
+        );
+    }
+
+    #[test]
+    fn clip_config_image_size_follows_vision_config() {
+        let large: ClipConfig = serde_json::from_str(
+            &B32.replace("224", "336")
+                .replace("\"patch_size\": 32", "\"patch_size\": 14"),
+        )
+        .unwrap();
+        assert_eq!(large.image_size, 336);
+        assert_eq!(large.vision_config.patch_size, 14);
+    }
+
+    #[test]
+    fn clip_config_uses_defaults_where_hf_omits_fields() {
+        let trimmed = r#"{
+            "text_config": {
+                "hidden_size": 512, "intermediate_size": 2048,
+                "max_position_embeddings": 77, "num_attention_heads": 8,
+                "num_hidden_layers": 12, "projection_dim": 512, "vocab_size": 49408
+            },
+            "vision_config": {
+                "hidden_size": 768, "image_size": 224, "intermediate_size": 3072,
+                "num_attention_heads": 12, "num_hidden_layers": 12,
+                "patch_size": 32, "projection_dim": 512
+            }
+        }"#;
+        let config: ClipConfig = serde_json::from_str(trimmed).unwrap();
+        assert_eq!(config.logit_scale_init_value, 2.6592);
+        assert_eq!(config.vision_config.num_channels, 3);
+        assert_eq!(
+            config.vision_config.activation,
+            text_model::Activation::QuickGelu
+        );
+    }
+
+    #[test]
+    fn clip_config_rejects_unknown_activation() {
+        let bad = B32.replace("quick_gelu", "not_an_activation");
+        assert!(serde_json::from_str::<ClipConfig>(&bad).is_err());
+    }
+
+    #[test]
+    fn clip_config_accepts_both_quick_gelu_spellings() {
+        // HF checkpoints carry both the current `quick_gelu` and the
+        // legacy `quickgelu` spelling of the CLIP activation.
+        for spelling in ["quick_gelu", "quickgelu"] {
+            let json = B32.replace("quick_gelu", spelling);
+            let config: ClipConfig = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                config.text_config.activation,
+                text_model::Activation::QuickGelu
+            );
+        }
+    }
 }
