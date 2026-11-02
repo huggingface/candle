@@ -463,6 +463,70 @@ impl QVulkanStorage {
         }
         Ok(out)
     }
+
+    /// Fused routed-MoE quantized GEMM:
+    /// `out[route, n] = lhs[route, k] @ dequant(W[ids[route], n, k])`.
+    ///
+    /// `lhs` is the `(num_routes, k)` f32 per-route activations, `ids` the
+    /// `(num_routes,)` u32 selected expert ids, and the weight is the
+    /// `(experts, n, k)` quantized storage. The dequantization happens on
+    /// the fly in the kernel (no f32 materialization of the expert
+    /// weights). The result is the `(num_routes, n)` f32 matrix.
+    pub fn fused_moe_gemm(
+        &self,
+        lhs: &VulkanStorage,
+        ids: &VulkanStorage,
+        experts: usize,
+        n: usize,
+        k: usize,
+        num_routes: usize,
+    ) -> Result<VulkanStorage> {
+        let (source, name) = match self.dtype {
+            GgmlDType::Q2K => (Source::FusedQ2kMoeGemm, KernelName::FusedQ2kMoeGemmF32),
+            GgmlDType::Q3K => (Source::FusedQ3kMoeGemm, KernelName::FusedQ3kMoeGemmF32),
+            GgmlDType::Q4K => (Source::FusedQ4kMoeGemm, KernelName::FusedQ4kMoeGemmF32),
+            GgmlDType::Q6K => (Source::FusedQ6kMoeGemm, KernelName::FusedQ6kMoeGemmF32),
+            GgmlDType::Q8_0 => (Source::FusedQ80MoeGemm, KernelName::FusedQ80MoeGemmF32),
+            _ => crate::bail!("fused moe gemm: dtype {:?} not supported", self.dtype),
+        };
+        let lhs_buf = match lhs.buffer() {
+            crate::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => crate::bail!("fused moe gemm: lhs must be f32"),
+        };
+        let ids_buf = match ids.buffer() {
+            crate::vulkan_backend::VulkanStorageBuffer::U32(b) => b.clone(),
+            _ => crate::bail!("fused moe gemm: ids must be u32"),
+        };
+        let out = VulkanStorage::new(&self.device, num_routes * n, DType::F32)?;
+        let dst = match out.buffer() {
+            crate::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => crate::bail!("fused moe gemm: out was created as F32"),
+        };
+        let src = self.src_bytes();
+        let weight_expert_bytes = self.storage_size_in_bytes() / experts;
+        let params = candle_vulkan_kernels::push_constants::FusedMoeGemmParams {
+            n: n as u64,
+            k: k as u64,
+            weight_expert_bytes: weight_expert_bytes as u64,
+        };
+        let kernels = self.device.kernels();
+        // The fused Q6_K dispatches must run in their own command buffer
+        // (the same radv ordering bug `fused_quant_gemm` works around).
+        let isolated = matches!(name, KernelName::FusedQ6kMoeGemmF32);
+        if isolated {
+            self.device.synchronize()?;
+        }
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_fused_moe_gemm_slang(
+                cbb, &kernels, source, name, &lhs_buf, &dst, &src, &ids_buf, &params, n, num_routes,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        if isolated {
+            self.device.synchronize()?;
+        }
+        Ok(out)
+    }
 }
 
 /// Uploads raw quantized bytes to the Vulkan device.

@@ -861,7 +861,8 @@ impl QTensor {
                 }
                 _ => crate::bail!("Metal indexed MoE requires Metal input and expert ids"),
             },
-            QStorage::Cpu(_) | QStorage::Vulkan(_) => self.generic_indexed_moe_forward(x, ids),
+            QStorage::Cpu(_) => self.generic_indexed_moe_forward(x, ids),
+            QStorage::Vulkan(_) => self.vulkan_moe_forward(x, ids),
             _ => {
                 crate::bail!("indexed_moe_forward is not implemented on this backend");
             }
@@ -897,7 +898,7 @@ impl QTensor {
         };
         let device = x.device();
         // Dequantize the expert weights `[experts, out_dim, in_dim]` to f32.
-        let w = self.dequantize(&device)?;
+        let w = self.dequantize(device)?;
         // Gather the per-route expert along the expert dim (flattened route ids).
         let n = out_dim * in_dim;
         let ids_flat = ids.flatten_all()?;
@@ -909,6 +910,76 @@ impl QTensor {
         let a = x.unsqueeze(2)?; // [tokens, slots, in_dim] -> [tokens, slots, 1, in_dim]
         let a = a.broadcast_as((tokens, topk, out_dim, in_dim))?;
         (a * w_g)?.sum(D::Minus1)
+    }
+
+    /// Vulkan routed quantized MoE projection: for the quantized dtypes
+    /// that have a fused on-the-fly dequant+GEMM kernel (Q2_K, Q4_K,
+    /// Q6_K, Q8_0), run the fused kernel (no f32 materialization of the
+    /// expert weights); otherwise fall back to the generic
+    /// dequant+gather+matmul path. `x` is `[tokens, slots, k]`, `ids` is
+    /// `[tokens, topk]` (u32), the weights are `[experts, n, k]`, and the
+    /// result is `[tokens, topk, n]`.
+    fn vulkan_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+        let (experts, out_dim, in_dim) = self.shape().dims3()?;
+        let (tokens, slots, x_k) = x.dims3()?;
+        let (id_tokens, topk) = ids.dims2()?;
+        if x_k != in_dim {
+            crate::bail!("indexed_moe_forward: input width {x_k} != weight in-dim {in_dim}");
+        }
+        if tokens != id_tokens {
+            crate::bail!("indexed_moe_forward: token mismatch ({tokens} vs {id_tokens})");
+        }
+        if slots != 1 && slots != topk {
+            crate::bail!("indexed_moe_forward: slots {slots} must be 1 or match topk {topk}");
+        }
+        if !x.is_contiguous() || !ids.is_contiguous() {
+            crate::bail!("indexed_moe_forward: input and ids must be contiguous");
+        }
+        let s = match &self.storage {
+            QStorage::Vulkan(s) => s,
+            _ => return self.generic_indexed_moe_forward(x, ids),
+        };
+        if !in_dim.is_multiple_of(s.dtype().block_size()) {
+            return self.generic_indexed_moe_forward(x, ids);
+        }
+        let num_routes = tokens * topk;
+        // The fused kernel reads the lhs as `(num_routes, k)`: broadcast the
+        // slots==1 case (one input shared by all routes of a token) to a
+        // per-route row.
+        let lhs_t = if slots == 1 {
+            x.broadcast_as((tokens, topk, in_dim))?.contiguous()?
+        } else {
+            x.contiguous()?
+        };
+        let lhs = if lhs_t.dtype() == DType::F32 {
+            lhs_t.to_owned()
+        } else {
+            lhs_t.to_dtype(DType::F32)?
+        };
+        let ids_t = if ids.dtype() == DType::U32 {
+            ids.to_owned()
+        } else {
+            ids.to_dtype(DType::U32)?
+        };
+        let out_storage = match (&*lhs.storage(), &*ids_t.storage()) {
+            (Storage::Vulkan(lhs_storage), Storage::Vulkan(ids_storage)) => s.fused_moe_gemm(
+                lhs_storage,
+                ids_storage,
+                experts,
+                out_dim,
+                in_dim,
+                num_routes,
+            )?,
+            _ => {
+                crate::bail!("vulkan indexed_moe_forward: lhs and ids must be on the Vulkan device")
+            }
+        };
+        Ok(crate::tensor::from_storage(
+            Storage::Vulkan(out_storage),
+            (tokens, topk, out_dim),
+            crate::op::BackpropOp::none(),
+            false,
+        ))
     }
 
     pub fn device_ptr(&self) -> Result<*const u8> {

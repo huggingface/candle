@@ -450,3 +450,19 @@ pub struct FusedQuantGemmParams {
     /// Reduction extent.
     pub k: u64,
 }
+
+/// fused routed-MoE GEMM shaders
+/// (`Params { uint64_t n; uint64_t k; uint64_t weight_expert_bytes; }`):
+/// the per-expert output/input dims and the byte size of one expert
+/// (n, k) quantized slice, used to offset the weight buffer by the
+/// route selected expert.
+#[repr(C)]
+#[derive(Clone, Copy, AnyBitPattern)]
+pub struct FusedMoeGemmParams {
+    /// Per-expert output dim.
+    pub n: u64,
+    /// Per-expert input dim.
+    pub k: u64,
+    /// Byte size of one expert (n, k) quantized slice.
+    pub weight_expert_bytes: u64,
+}

@@ -33,6 +33,16 @@ const FUSED_Q8K_GEMM_M_SPV: &[u8] =
 const FUSED_Q6K_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q6k_gemm.spv"));
 const FUSED_Q6K_GEMM_M_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/fused_q6k_gemm_m.spv"));
+const FUSED_Q2K_MOE_GEMM_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q2k_moe_gemm.spv"));
+const FUSED_Q3K_MOE_GEMM_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q3k_moe_gemm.spv"));
+const FUSED_Q4K_MOE_GEMM_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q4k_moe_gemm.spv"));
+const FUSED_Q6K_MOE_GEMM_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q6k_moe_gemm.spv"));
+const FUSED_Q80_MOE_GEMM_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8_0_moe_gemm.spv"));
 const DECODE_ATTENTION_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/decode_attention.spv"));
 const POST_RMS_NORM_ADD_SPV: &[u8] =
@@ -471,6 +481,11 @@ pub enum Source {
     FusedQ8kGemmM,
     FusedQ6kGemm,
     FusedQ6kGemmM,
+    FusedQ2kMoeGemm,
+    FusedQ3kMoeGemm,
+    FusedQ4kMoeGemm,
+    FusedQ6kMoeGemm,
+    FusedQ80MoeGemm,
     DecodeAttention,
     ZeroFill,
     ConstSet,
@@ -1185,6 +1200,12 @@ impl Source {
             | KernelName::FusedQ8kGemmMF32
             | KernelName::FusedQ6kGemmF32
             | KernelName::FusedQ6kGemmMF32 => 24,
+            // fused routed-MoE GEMM: three `uint64_t` fields.
+            KernelName::FusedQ2kMoeGemmF32
+            | KernelName::FusedQ3kMoeGemmF32
+            | KernelName::FusedQ4kMoeGemmF32
+            | KernelName::FusedQ6kMoeGemmF32
+            | KernelName::FusedQ80MoeGemmF32 => 24,
             _ => 0,
         }
     }
@@ -1214,6 +1235,11 @@ impl Source {
             Self::FusedQ8kGemmM => FUSED_Q8K_GEMM_M_SPV,
             Self::FusedQ6kGemm => FUSED_Q6K_GEMM_SPV,
             Self::FusedQ6kGemmM => FUSED_Q6K_GEMM_M_SPV,
+            Self::FusedQ2kMoeGemm => FUSED_Q2K_MOE_GEMM_SPV,
+            Self::FusedQ3kMoeGemm => FUSED_Q3K_MOE_GEMM_SPV,
+            Self::FusedQ4kMoeGemm => FUSED_Q4K_MOE_GEMM_SPV,
+            Self::FusedQ6kMoeGemm => FUSED_Q6K_MOE_GEMM_SPV,
+            Self::FusedQ80MoeGemm => FUSED_Q80_MOE_GEMM_SPV,
             Self::DecodeAttention => DECODE_ATTENTION_SPV,
             Self::ZeroFill => ZERO_FILL_SPV,
             Self::ConstSet => CONST_SET_SPV,
@@ -1531,6 +1557,11 @@ impl AsRef<str> for Source {
             Self::FusedQ8kGemmM => "fused_q8k_gemm_m",
             Self::FusedQ6kGemm => "fused_q6k_gemm",
             Self::FusedQ6kGemmM => "fused_q6k_gemm_m",
+            Self::FusedQ2kMoeGemm => "fused_q2k_moe_gemm",
+            Self::FusedQ3kMoeGemm => "fused_q3k_moe_gemm",
+            Self::FusedQ4kMoeGemm => "fused_q4k_moe_gemm",
+            Self::FusedQ6kMoeGemm => "fused_q6k_moe_gemm",
+            Self::FusedQ80MoeGemm => "fused_q8_0_moe_gemm",
             Self::DecodeAttention => "decode_attention",
             Self::ZeroFill => "zero_fill",
             Self::ConstSet => "const_set",

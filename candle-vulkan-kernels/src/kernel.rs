@@ -52,6 +52,11 @@ pub enum KernelName {
     FusedQ8kGemmMF32,
     FusedQ6kGemmF32,
     FusedQ6kGemmMF32,
+    FusedQ2kMoeGemmF32,
+    FusedQ3kMoeGemmF32,
+    FusedQ4kMoeGemmF32,
+    FusedQ6kMoeGemmF32,
+    FusedQ80MoeGemmF32,
     DecodeAttention,
     DecodeAttentionCombine,
     ZeroFill,
@@ -543,6 +548,11 @@ impl AsRef<str> for KernelName {
             Self::FusedQ6kGemmF32 => "main",
             Self::FusedQ6kGemmMF32 => "main",
             Self::FusedQ8kGemmMF32 => "main",
+            Self::FusedQ2kMoeGemmF32 => "main",
+            Self::FusedQ3kMoeGemmF32 => "main",
+            Self::FusedQ4kMoeGemmF32 => "main",
+            Self::FusedQ6kMoeGemmF32 => "main",
+            Self::FusedQ80MoeGemmF32 => "main",
             Self::DecodeAttention => "main",
             Self::DecodeAttentionCombine => "decode_attention_combine",
             Self::ZeroFill => "main",
@@ -1535,6 +1545,12 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::FusedQ8kGemmMF32
         | KernelName::FusedQ6kGemmF32
         | KernelName::FusedQ6kGemmMF32 => 3,
+        // fused routed-MoE gemm: lhs/out/w/ids (params are push constants).
+        KernelName::FusedQ2kMoeGemmF32
+        | KernelName::FusedQ3kMoeGemmF32
+        | KernelName::FusedQ4kMoeGemmF32
+        | KernelName::FusedQ6kMoeGemmF32
+        | KernelName::FusedQ80MoeGemmF32 => 4,
         // index_add: src/ids/out (params are push constants).
         KernelName::IndexAddF32U32
         | KernelName::IndexAddF32I64

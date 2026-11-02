@@ -93,6 +93,18 @@ impl QVulkanStorage {
     ) -> Result<(VulkanStorage, crate::Shape)> {
         Err(Error::NotCompiledWithVulkanSupport)
     }
+
+    pub fn fused_moe_gemm(
+        &self,
+        _lhs: &VulkanStorage,
+        _ids: &VulkanStorage,
+        _experts: usize,
+        _out_dim: usize,
+        _in_dim: usize,
+        _num_routes: usize,
+    ) -> Result<VulkanStorage> {
+        Err(Error::NotCompiledWithVulkanSupport)
+    }
 }
 
 pub fn load_quantized<T: GgmlType + Send + Sync + 'static>(
