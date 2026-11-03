@@ -1314,9 +1314,18 @@ pub fn sdpa(
     scale: f32,
     softcapping: f32,
 ) -> Result<Tensor> {
+    // The fused Metal SDPA kernels assume contiguous q/k/v: they receive a single
+    // per-head stride and otherwise index by the packed head-dim, so a strided
+    // input (e.g. the `transpose(1, 2)` layout every caller produces) makes the
+    // kernel read the wrong memory and silently return incorrect results. Enforce
+    // the invariant here instead of relying on each call site. `contiguous` is a
+    // no-op when the tensor already is, so the common path pays nothing.
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let v = v.contiguous()?;
     q.apply_op3_no_bwd(
-        k,
-        v,
+        &k,
+        &v,
         &Sdpa {
             scale,
             softcapping,
