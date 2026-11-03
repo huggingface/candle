@@ -1,6 +1,9 @@
 // Adapted from: https://github.com/guoqingbao/vllm.rs/blob/main/src/models/layers/moe.rs
 use candle::Module;
-use candle::{quantized::QTensor, DType, Result, Tensor, D};
+use candle::{
+    quantized::{QStorage, QTensor},
+    DType, Result, Tensor, D,
+};
 use candle_nn::{linear_no_bias, moe, Activation, Linear, VarBuilder};
 use std::sync::Arc;
 
@@ -164,6 +167,10 @@ pub struct FusedMoeGGUF {
     pub gate: Linear,
     pub gate_experts: Arc<QTensor>,
     pub up_experts: Arc<QTensor>,
+    // Gate and up experts packed into `[experts, 2 * inter, hidden]` so the
+    // non-CUDA path issues one fused MoE GEMM instead of two.
+    pub gate_up_experts: Arc<QTensor>,
+    pub w_size_n: usize,
     pub down_experts: Arc<QTensor>,
     pub act: Activation,
     pub norm_topk_prob: bool,
@@ -205,10 +212,14 @@ impl FusedMoeGGUF {
             )
         };
 
+        let gate_up_experts = Arc::new(pack_gate_up_experts(&gate_experts, &up_experts)?);
+
         Ok(Self {
             gate,
             gate_experts,
             up_experts,
+            gate_up_experts,
+            w_size_n: cfg.moe_intermediate_size,
             down_experts,
             act: cfg.act,
             norm_topk_prob: cfg.norm_topk_prob,
@@ -282,8 +293,13 @@ impl FusedMoeGGUF {
             )?
         } else {
             let xs = xs.reshape((num_tokens, 1, hidden_dim))?.contiguous()?;
-            let gate = self.gate_experts.indexed_moe_forward(&xs, &topk_ids)?;
-            let up = self.up_experts.indexed_moe_forward(&xs, &topk_ids)?;
+            // One fused GEMM over the packed `[experts, 2 * inter, hidden]`
+            // weight, then split the output into the gate and up halves.
+            let gate_up = self.gate_up_experts.indexed_moe_forward(&xs, &topk_ids)?;
+            let gate = gate_up.narrow(D::Minus1, 0, self.w_size_n)?.contiguous()?;
+            let up = gate_up
+                .narrow(D::Minus1, self.w_size_n, self.w_size_n)?
+                .contiguous()?;
             let down_inputs = (up * gate.apply(&self.act)?)?;
             let down = self
                 .down_experts
@@ -296,4 +312,31 @@ impl FusedMoeGGUF {
         }
         ys.reshape((batch, seq_len, hidden_dim))
     }
+}
+
+/// Pack the gate and up MoE expert weights into a single quantized tensor
+/// `[experts, 2 * inter, hidden]` (gate rows followed by up rows within each
+/// expert) so the non-CUDA MoE path issues one fused GEMM instead of two. The
+/// quantized bytes are concatenated per expert, so no dequantization happens.
+pub(crate) fn pack_gate_up_experts(gate: &QTensor, up: &QTensor) -> Result<QTensor> {
+    let (experts, inter, hidden) = gate.shape().dims3()?;
+    let (experts_u, inter_u, hidden_u) = up.shape().dims3()?;
+    if (experts, inter, hidden) != (experts_u, inter_u, hidden_u) || gate.dtype() != up.dtype() {
+        candle::bail!("pack_gate_up_experts: gate/up shape or dtype mismatch");
+    }
+    let dtype = gate.dtype();
+    let block_bytes = dtype.type_size();
+    let row_bytes = hidden / dtype.block_size() * block_bytes;
+    let per_expert = inter * row_bytes;
+    let g = gate.data()?;
+    let u = up.data()?;
+    let mut packed = Vec::with_capacity(experts * 2 * per_expert);
+    for e in 0..experts {
+        let off = e * per_expert;
+        packed.extend_from_slice(&g[off..off + per_expert]);
+        packed.extend_from_slice(&u[off..off + per_expert]);
+    }
+    let device = gate.device();
+    let storage = QStorage::from_data(std::borrow::Cow::Owned(packed), &device, dtype)?;
+    QTensor::new(storage, (experts, 2 * inter, hidden))
 }
