@@ -123,9 +123,41 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
     dims: Vec<usize>,
     device: &Device,
 ) -> Result<super::QTensor> {
-    let raw_data_ptr = raw_data.as_ptr();
-    let n_blocks = size_in_bytes / std::mem::size_of::<T>();
-    let data = unsafe { std::slice::from_raw_parts(raw_data_ptr as *const T, n_blocks) };
+    let elem_size = std::mem::size_of::<T>();
+    let n_blocks = size_in_bytes / elem_size;
+    let n_bytes = n_blocks * elem_size;
+    // `qtensor_from_ggml` is public and safe, and `raw_data` is a byte slice whose
+    // length is unrelated to `size_in_bytes`, so a short buffer would make the
+    // `from_raw_parts` below read out of bounds.
+    if raw_data.len() < n_bytes {
+        crate::bail!(
+            "ggml tensor is truncated, {n_bytes} bytes are needed but only {} are available",
+            raw_data.len()
+        )
+    }
+    // A `&[u8]` only guarantees 1-byte alignment while `&[T]` needs
+    // `align_of::<T>()`, so the source cannot simply be reinterpreted. Note that
+    // this cannot be asserted away either: the alignment a `Vec<u8>` ends up with
+    // is up to the allocator, not the caller, so rejecting an unaligned buffer
+    // would reject valid data. Borrow when it happens to be aligned, copy when not.
+    let aligned: Vec<T>;
+    let data: &[T] = if n_blocks == 0 {
+        &[]
+    } else if (raw_data.as_ptr() as usize).is_multiple_of(std::mem::align_of::<T>()) {
+        // SAFETY: the pointer is aligned for `T` and `n_bytes` bytes are readable.
+        unsafe { std::slice::from_raw_parts(raw_data.as_ptr().cast::<T>(), n_blocks) }
+    } else {
+        let mut v = Vec::<T>::with_capacity(n_blocks);
+        // SAFETY: `Vec<T>` allocates with `align_of::<T>()` and room for `n_bytes`,
+        // the source has `n_bytes` readable bytes, and the ggml block types are
+        // plain data, which `GgmlType::zeros` already relies on.
+        unsafe {
+            std::ptr::copy_nonoverlapping(raw_data.as_ptr(), v.as_mut_ptr().cast::<u8>(), n_bytes);
+            v.set_len(n_blocks);
+        }
+        aligned = v;
+        &aligned
+    };
     let data: QStorage = match device {
         Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
         Device::Metal(metal) => super::metal::load_quantized(metal, data)?,
