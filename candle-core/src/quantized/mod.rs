@@ -584,6 +584,56 @@ fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
     Ok(())
 }
 
+/// Run the per-expert dequant-on-the-fly quantized GEMM for the CPU MoE
+/// projection. `x_rows` is the contiguous `[tokens, slots, in_dim]` f32
+/// activation; `by_expert[e]` holds the `(token, topk_index)` routes that
+/// select expert `e`; `data_ptr` points at the `[experts, n, k]` quantized
+/// weight stored as `T` blocks; the per-route outputs are written to `out`,
+/// laid out `[tokens, topk, out_dim]`.
+fn cpu_moe_matmul<T: k_quants::GgmlType>(
+    experts: usize,
+    out_dim: usize,
+    in_dim: usize,
+    slots: usize,
+    topk: usize,
+    x_rows: &[f32],
+    by_expert: &[Vec<(usize, usize)>],
+    data_ptr: *const u8,
+    out: &mut [f32],
+) -> Result<()> {
+    let k_in_blocks = in_dim / T::BLCK_SIZE;
+    let weight_blocks = out_dim * k_in_blocks;
+    let block_bytes = std::mem::size_of::<T>();
+    for (e, routes) in by_expert.iter().enumerate().take(experts) {
+        if routes.is_empty() {
+            continue;
+        }
+        let m = routes.len();
+        // Gather this expert's activation rows (each route uses one row of x).
+        let mut lhs = vec![0f32; m * in_dim];
+        for (i, (t, j)) in routes.iter().enumerate() {
+            let slot = if slots == 1 { 0 } else { *j };
+            let src = (t * slots + slot) * in_dim;
+            lhs[i * in_dim..(i + 1) * in_dim].copy_from_slice(&x_rows[src..src + in_dim]);
+        }
+        // SAFETY: `data_ptr` is the base of the CPU quantized storage (a
+        // `Vec<T>`), aligned to `T`. Each expert offset is a multiple of
+        // `size_of::<T>()` (hence of `align_of::<T>()`), and the buffer holds
+        // exactly `experts * weight_blocks` blocks, so every per-expert slice
+        // is within bounds and properly aligned.
+        let off = e * weight_blocks * block_bytes;
+        let rhs: &[T] =
+            unsafe { std::slice::from_raw_parts(data_ptr.add(off) as *const T, weight_blocks) };
+        let mut dst = vec![0f32; m * out_dim];
+        k_quants::matmul::<T>((m, in_dim, out_dim), &lhs, rhs, &mut dst)?;
+        for (i, (t, j)) in routes.iter().enumerate() {
+            let pos = (t * topk + j) * out_dim;
+            out[pos..pos + out_dim].copy_from_slice(&dst[i * out_dim..(i + 1) * out_dim]);
+        }
+    }
+    Ok(())
+}
+
 impl QTensor {
     pub fn new<S: Into<Shape>>(storage: QStorage, shape: S) -> Result<Self> {
         let shape = shape.into();
@@ -861,7 +911,7 @@ impl QTensor {
                 }
                 _ => crate::bail!("Metal indexed MoE requires Metal input and expert ids"),
             },
-            QStorage::Cpu(_) => self.generic_indexed_moe_forward(x, ids),
+            QStorage::Cpu(_) => self.cpu_indexed_moe_forward(x, ids),
             QStorage::Vulkan(_) => self.vulkan_moe_forward(x, ids),
             _ => {
                 crate::bail!("indexed_moe_forward is not implemented on this backend");
@@ -910,6 +960,134 @@ impl QTensor {
         let a = x.unsqueeze(2)?; // [tokens, slots, in_dim] -> [tokens, slots, 1, in_dim]
         let a = a.broadcast_as((tokens, topk, out_dim, in_dim))?;
         (a * w_g)?.sum(D::Minus1)
+    }
+
+    /// CPU routed quantized MoE projection: dequant-on-the-fly, with no f32
+    /// materialization of the expert weights. Unlike the generic path (which
+    /// dequantizes all `experts` to f32 on every call), group the routes by
+    /// the expert each one selects and run the SIMD quantized GEMM directly
+    /// on each used expert's quantized weight, so only the experts actually
+    /// selected are touched. `x` is `[tokens, slots, k]` (f32), `ids` is
+    /// `[tokens, topk]` (u32), the weights are `[experts, n, k]`, and the
+    /// result is `[tokens, topk, n]` with
+    /// `out[t, j, n] = sum_k x[t, slot(t, j), k] * dequant(w[ids[t, j], n, k])`.
+    fn cpu_indexed_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+        let (experts, out_dim, in_dim) = self.shape().dims3()?;
+        let (tokens, slots, x_k) = x.dims3()?;
+        let (id_tokens, topk) = ids.dims2()?;
+        if x_k != in_dim {
+            crate::bail!("indexed_moe_forward: input width {x_k} != weight in-dim {in_dim}");
+        }
+        if tokens != id_tokens {
+            crate::bail!("indexed_moe_forward: token mismatch ({tokens} vs {id_tokens})");
+        }
+        if slots != 1 && slots != topk {
+            crate::bail!("indexed_moe_forward: slots {slots} must be 1 or match topk {topk}");
+        }
+        if !x.is_contiguous() || !ids.is_contiguous() {
+            crate::bail!("indexed_moe_forward: input and ids must be contiguous");
+        }
+        let s = match &self.storage {
+            QStorage::Cpu(s) => s,
+            _ => return self.generic_indexed_moe_forward(x, ids),
+        };
+        let dtype = self.dtype();
+        if !in_dim.is_multiple_of(dtype.block_size()) {
+            return self.generic_indexed_moe_forward(x, ids);
+        }
+        let x = if x.dtype() == DType::F32 {
+            x.to_owned()
+        } else {
+            x.to_dtype(DType::F32)?
+        };
+        let x_rows: Vec<f32> = x.flatten_all()?.to_vec1()?;
+        let ids_t = if ids.dtype() == DType::U32 {
+            ids.to_owned()
+        } else {
+            ids.to_dtype(DType::U32)?
+        };
+        let ids_v: Vec<u32> = ids_t.flatten_all()?.to_vec1()?;
+        // Group the routes (token, topk slot) by the expert each one selects.
+        let num_routes = tokens * topk;
+        let mut by_expert: Vec<Vec<(usize, usize)>> = vec![Vec::new(); experts];
+        for t in 0..tokens {
+            for j in 0..topk {
+                let e = ids_v[t * topk + j] as usize;
+                by_expert[e].push((t, j));
+            }
+        }
+        let mut out = vec![0f32; num_routes * out_dim];
+        let data_ptr = s.as_ptr();
+        match dtype {
+            GgmlDType::Q4_0 => {
+                cpu_moe_matmul::<k_quants::BlockQ4_0>(
+                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q4_1 => {
+                cpu_moe_matmul::<k_quants::BlockQ4_1>(
+                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q5_0 => {
+                cpu_moe_matmul::<k_quants::BlockQ5_0>(
+                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q5_1 => {
+                cpu_moe_matmul::<k_quants::BlockQ5_1>(
+                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q8_0 => {
+                cpu_moe_matmul::<k_quants::BlockQ8_0>(
+                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q8_1 => {
+                cpu_moe_matmul::<k_quants::BlockQ8_1>(
+                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q2K => {
+                cpu_moe_matmul::<k_quants::BlockQ2K>(
+                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q3K => {
+                cpu_moe_matmul::<k_quants::BlockQ3K>(
+                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q4K => {
+                cpu_moe_matmul::<k_quants::BlockQ4K>(
+                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q5K => {
+                cpu_moe_matmul::<k_quants::BlockQ5K>(
+                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q6K => {
+                cpu_moe_matmul::<k_quants::BlockQ6K>(
+                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q8K => {
+                cpu_moe_matmul::<k_quants::BlockQ8K>(
+                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            _ => return self.generic_indexed_moe_forward(&x, ids),
+        }
+        let none = crate::op::BackpropOp::none();
+        Ok(crate::tensor::from_storage(
+            Storage::Cpu(CpuStorage::F32(out)),
+            (tokens, topk, out_dim),
+            none,
+            false,
+        ))
     }
 
     /// Vulkan routed quantized MoE projection: for the quantized dtypes
