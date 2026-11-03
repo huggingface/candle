@@ -584,6 +584,16 @@ fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
     Ok(())
 }
 
+/// Shape and routing parameters for the CPU MoE dequant-on-the-fly GEMM.
+#[derive(Clone, Copy)]
+struct CpuMoeShape {
+    experts: usize,
+    out_dim: usize,
+    in_dim: usize,
+    slots: usize,
+    topk: usize,
+}
+
 /// Run the per-expert dequant-on-the-fly quantized GEMM for the CPU MoE
 /// projection. `x_rows` is the contiguous `[tokens, slots, in_dim]` f32
 /// activation; `by_expert[e]` holds the `(token, topk_index)` routes that
@@ -591,16 +601,19 @@ fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
 /// weight stored as `T` blocks; the per-route outputs are written to `out`,
 /// laid out `[tokens, topk, out_dim]`.
 fn cpu_moe_matmul<T: k_quants::GgmlType>(
-    experts: usize,
-    out_dim: usize,
-    in_dim: usize,
-    slots: usize,
-    topk: usize,
+    shape: &CpuMoeShape,
     x_rows: &[f32],
     by_expert: &[Vec<(usize, usize)>],
     data_ptr: *const u8,
     out: &mut [f32],
 ) -> Result<()> {
+    let CpuMoeShape {
+        experts,
+        out_dim,
+        in_dim,
+        slots,
+        topk,
+    } = *shape;
     let k_in_blocks = in_dim / T::BLCK_SIZE;
     let weight_blocks = out_dim * k_in_blocks;
     let block_bytes = std::mem::size_of::<T>();
@@ -1018,65 +1031,72 @@ impl QTensor {
         }
         let mut out = vec![0f32; num_routes * out_dim];
         let data_ptr = s.as_ptr();
+        let cpu_shape = CpuMoeShape {
+            experts,
+            out_dim,
+            in_dim,
+            slots,
+            topk,
+        };
         match dtype {
             GgmlDType::Q4_0 => {
                 cpu_moe_matmul::<k_quants::BlockQ4_0>(
-                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
                 )?;
             }
             GgmlDType::Q4_1 => {
                 cpu_moe_matmul::<k_quants::BlockQ4_1>(
-                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
                 )?;
             }
             GgmlDType::Q5_0 => {
                 cpu_moe_matmul::<k_quants::BlockQ5_0>(
-                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
                 )?;
             }
             GgmlDType::Q5_1 => {
                 cpu_moe_matmul::<k_quants::BlockQ5_1>(
-                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
                 )?;
             }
             GgmlDType::Q8_0 => {
                 cpu_moe_matmul::<k_quants::BlockQ8_0>(
-                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
                 )?;
             }
             GgmlDType::Q8_1 => {
                 cpu_moe_matmul::<k_quants::BlockQ8_1>(
-                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
                 )?;
             }
             GgmlDType::Q2K => {
                 cpu_moe_matmul::<k_quants::BlockQ2K>(
-                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
                 )?;
             }
             GgmlDType::Q3K => {
                 cpu_moe_matmul::<k_quants::BlockQ3K>(
-                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
                 )?;
             }
             GgmlDType::Q4K => {
                 cpu_moe_matmul::<k_quants::BlockQ4K>(
-                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
                 )?;
             }
             GgmlDType::Q5K => {
                 cpu_moe_matmul::<k_quants::BlockQ5K>(
-                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
                 )?;
             }
             GgmlDType::Q6K => {
                 cpu_moe_matmul::<k_quants::BlockQ6K>(
-                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
                 )?;
             }
             GgmlDType::Q8K => {
                 cpu_moe_matmul::<k_quants::BlockQ8K>(
-                    experts, out_dim, in_dim, slots, topk, &x_rows, &by_expert, data_ptr, &mut out,
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
                 )?;
             }
             _ => return self.generic_indexed_moe_forward(&x, ids),
