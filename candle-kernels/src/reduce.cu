@@ -197,64 +197,83 @@ static __device__ __forceinline__ float warp_reduce_sum(float x) {
     return x;
 }
 
+static __device__ __forceinline__ double warp_reduce_sum(double x) {
+#pragma unroll
+    for (int mask = 16; mask > 0; mask >>= 1) {
+        x += __shfl_xor_sync(0xffffffff, x, mask, 32);
+    }
+    return x;
+}
+
+static __device__ __forceinline__ float rsqrtg(float x) { return rsqrtf(x); }
+static __device__ __forceinline__ double rsqrtg(double x) { return rsqrt(x); }
+
 // LayerNorm implementation adapted from ggml, accumulation is made using f32.
 // https://github.com/ggerganov/llama.cpp/blob/d59bd97065cd7ded6c4ecab54b1d5e0b1b11e318/ggml-cuda.cu#L477
-template <typename T>
+// LayerNorm with the statistics in ACC: float for the half types and f32,
+// double for f64, so the fused forward matches its composed backward.
+template <typename T, typename ACC>
 __device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta, const int ncols, const int block_size, const float eps) {
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
 
-    float2 mean_var = make_float2(0.f, 0.f);
+    ACC sum = 0;
+    ACC sum2 = 0;
 
     for (int col = tid; col < ncols; col += block_size) {
-        const float xi = x[row*ncols + col];
-        mean_var.x += xi;
-        mean_var.y += xi * xi;
+        const ACC xi = static_cast<ACC>(x[row*ncols + col]);
+        sum += xi;
+        sum2 += xi * xi;
     }
 
     // sum up partial sums
-    mean_var = warp_reduce_sum(mean_var);
+    sum = warp_reduce_sum(sum);
+    sum2 = warp_reduce_sum(sum2);
     if (block_size > WARP_SIZE) {
-        __shared__ float2 s_sum[32];
+        __shared__ ACC s_sum[32];
+        __shared__ ACC s_sum2[32];
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
-            s_sum[warp_id] = mean_var;
+            s_sum[warp_id] = sum;
+            s_sum2[warp_id] = sum2;
         }
         __syncthreads();
-        mean_var = s_sum[lane_id];
-        mean_var = warp_reduce_sum(mean_var);
+        sum = s_sum[lane_id];
+        sum2 = s_sum2[lane_id];
+        sum = warp_reduce_sum(sum);
+        sum2 = warp_reduce_sum(sum2);
     }
 
-    const float mean = mean_var.x / ncols;
-    const float var = mean_var.y / ncols - mean * mean;
-    const float inv_std = rsqrtf(var + eps);
+    const ACC mean = sum / ncols;
+    const ACC var = sum2 / ncols - mean * mean;
+    const ACC inv_std = rsqrtg(var + static_cast<ACC>(eps));
 
     if (alpha == nullptr && beta == nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
+          ACC lhs = (static_cast<ACC>(x[row*ncols + col]) - mean) * inv_std;
           dst[row*ncols + col] = static_cast<T>(lhs);
       }
     }
     else if (alpha == nullptr && beta != nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
-          float b = static_cast<float>(beta[col]);
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
+          ACC b = static_cast<ACC>(beta[col]);
+          ACC lhs = (static_cast<ACC>(x[row*ncols + col]) - mean) * inv_std;
           dst[row*ncols + col] = static_cast<T>(lhs + b);
       }
     }
     else if (alpha != nullptr && beta == nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
-          float a = static_cast<float>(alpha[col]);
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
+          ACC a = static_cast<ACC>(alpha[col]);
+          ACC lhs = (static_cast<ACC>(x[row*ncols + col]) - mean) * inv_std;
           dst[row*ncols + col] = static_cast<T>(lhs * a);
       }
     }
     else {
       for (int col = tid; col < ncols; col += block_size) {
-          float a = static_cast<float>(alpha[col]);
-          float b = static_cast<float>(beta[col]);
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
+          ACC a = static_cast<ACC>(alpha[col]);
+          ACC b = static_cast<ACC>(beta[col]);
+          ACC lhs = (static_cast<ACC>(x[row*ncols + col]) - mean) * inv_std;
           dst[row*ncols + col] = static_cast<T>(lhs * a + b);
       }
     }
@@ -262,22 +281,22 @@ __device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta,
 
 // RmsNorm implementation adapted from ggml, accumulation is made using f32.
 // https://github.com/ggerganov/llama.cpp/blob/d59bd97065cd7ded6c4ecab54b1d5e0b1b11e318/ggml-cuda.cu#L523
-template <typename T>
+template <typename T, typename ACC>
 __device__ void rmsnorm(const T * x, T * dst, const T * alpha, const int ncols, const int block_size, const float eps) {
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
 
-    float tmp = 0.0f; // partial sum for thread in warp
+    ACC tmp = 0; // partial sum for thread in warp
 
     for (int col = tid; col < ncols; col += block_size) {
-        const float xi = static_cast<float>(x[row*ncols + col]);
+        const ACC xi = static_cast<ACC>(x[row*ncols + col]);
         tmp += xi * xi;
     }
 
     // sum up partial sums
     tmp = warp_reduce_sum(tmp);
     if (block_size > WARP_SIZE) {
-        __shared__ float s_sum[32];
+        __shared__ ACC s_sum[32];
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
@@ -288,18 +307,18 @@ __device__ void rmsnorm(const T * x, T * dst, const T * alpha, const int ncols, 
         tmp = warp_reduce_sum(tmp);
     }
 
-    const float mean = tmp / ncols;
-    const float scale = rsqrtf(mean + eps);
+    const ACC mean = tmp / ncols;
+    const ACC scale = rsqrtg(mean + static_cast<ACC>(eps));
 
     if (alpha == nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
-          dst[row*ncols + col] = static_cast<T>(scale * static_cast<float>(x[row*ncols + col]));
+          dst[row*ncols + col] = static_cast<T>(scale * static_cast<ACC>(x[row*ncols + col]));
       }
     }
     else {
       for (int col = tid; col < ncols; col += block_size) {
-          float a = static_cast<float>(alpha[col]);
-          dst[row*ncols + col] = static_cast<T>(scale * static_cast<float>(x[row*ncols + col]) * a);
+          ACC a = static_cast<ACC>(alpha[col]);
+          dst[row*ncols + col] = static_cast<T>(scale * static_cast<ACC>(x[row*ncols + col]) * a);
       }
     }
 }
@@ -308,15 +327,16 @@ __device__ void rmsnorm(const T * x, T * dst, const T * alpha, const int ncols, 
 // https://github.com/ggerganov/llama.cpp/blob/d59bd97065cd7ded6c4ecab54b1d5e0b1b11e318/ggml-cuda.cu#L4159
 template <typename T, typename ACC>
 __device__ void softmax(const T * x, T * dst, const int ncols) {
+    // Everything in ACC (f32 for the half types): one rounding, at the store.
     const int row = blockDim.x*blockIdx.x + threadIdx.x;
     const int block_size = blockDim.y;
     const int tid = threadIdx.y;
 
-    T max_val = -INFINITY;
+    ACC max_val = -INFINITY;
 
     for (int col = tid; col < ncols; col += block_size) {
         const int i = row*ncols + col;
-        max_val = maxg(max_val, x[i]);
+        max_val = maxg(max_val, static_cast<ACC>(x[i]));
     }
 
     // find the max value in the block
@@ -329,9 +349,7 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
 
     for (int col = tid; col < ncols; col += block_size) {
         const int i = row*ncols + col;
-        const T val = expg(x[i] - max_val);
-        tmp += static_cast<ACC>(val);
-        dst[i] = val;
+        tmp += expg(static_cast<ACC>(x[i]) - max_val);
     }
 
     // sum up partial sums
@@ -344,7 +362,30 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
 
     for (int col = tid; col < ncols; col += block_size) {
         const int i = row*ncols + col;
-        dst[i] *= inv_tmp;
+        dst[i] = static_cast<T>(expg(static_cast<ACC>(x[i]) - max_val) * inv_tmp);
+    }
+}
+
+// Backward of the softmax over the last dim: dx = y * (dy - sum(dy * y)),
+// with y the forward output. Same launch geometry as `softmax`.
+template <typename T, typename ACC>
+__device__ void softmax_bwd(const T * y, const T * dy, T * dx, const int ncols) {
+    const int row = blockDim.x*blockIdx.x + threadIdx.x;
+    const int block_size = blockDim.y;
+    const int tid = threadIdx.y;
+
+    ACC dot = 0.;
+    for (int col = tid; col < ncols; col += block_size) {
+        const int i = row*ncols + col;
+        dot += static_cast<ACC>(dy[i]) * static_cast<ACC>(y[i]);
+    }
+#pragma unroll
+    for (int mask = 16; mask > 0; mask >>= 1) {
+        dot += __shfl_xor_sync(0xffffffff, dot, mask, 32);
+    }
+    for (int col = tid; col < ncols; col += block_size) {
+        const int i = row*ncols + col;
+        dx[i] = static_cast<T>(static_cast<ACC>(y[i]) * (static_cast<ACC>(dy[i]) - dot));
     }
 }
 
@@ -675,18 +716,25 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
     softmax<TYPENAME, ACC_TYPENAME>(src, dst, n_cols);                         \
   }                                                                            \
 
-#define RMSNORM_OP(TYPENAME, FN_NAME) \
+#define SOFTMAX_BWD_OP(TYPENAME, ACC_TYPENAME, FN_NAME) \
+  extern "C" __global__ void FN_NAME(                                          \
+      const TYPENAME *y, const TYPENAME *dy, TYPENAME *dx,                     \
+      const int n_cols) {                                                      \
+    softmax_bwd<TYPENAME, ACC_TYPENAME>(y, dy, dx, n_cols);                    \
+  }                                                                            \
+
+#define RMSNORM_OP(TYPENAME, ACC_TYPENAME, FN_NAME) \
   extern "C" __global__ void FN_NAME(                                          \
       const TYPENAME *src, TYPENAME *dst, const TYPENAME *alpha,               \
       const int n_cols, const int block_size, const float eps) {               \
-    rmsnorm<TYPENAME>(src, dst, alpha, n_cols, block_size, eps);               \
+    rmsnorm<TYPENAME, ACC_TYPENAME>(src, dst, alpha, n_cols, block_size, eps); \
   }                                                                            \
 
-#define LAYERNORM_OP(TYPENAME, FN_NAME) \
+#define LAYERNORM_OP(TYPENAME, ACC_TYPENAME, FN_NAME) \
   extern "C" __global__ void FN_NAME(                                          \
       const TYPENAME *src, TYPENAME *dst, const TYPENAME *alpha,               \
       const TYPENAME *beta, const int n_cols, const int block_size, const float eps) { \
-    layernorm<TYPENAME>(src, dst, alpha, beta, n_cols, block_size, eps);       \
+    layernorm<TYPENAME, ACC_TYPENAME>(src, dst, alpha, beta, n_cols, block_size, eps); \
   }                                                                            \
 
 #define ROPE_OP(TYPENAME, FN_NAME, FN_NAME_I, FN_NAME_THD) \
@@ -855,8 +903,9 @@ extern "C" __global__ void fast_sum_small_f16(
 
 #if __CUDA_ARCH__ >= 800
 SOFTMAX_OP(__nv_bfloat16, float, softmax_bf16)
-RMSNORM_OP(__nv_bfloat16, rmsnorm_bf16)
-LAYERNORM_OP(__nv_bfloat16, layernorm_bf16)
+SOFTMAX_BWD_OP(__nv_bfloat16, float, softmax_bwd_bf16)
+RMSNORM_OP(__nv_bfloat16, float, rmsnorm_bf16)
+LAYERNORM_OP(__nv_bfloat16, float, layernorm_bf16)
 ROPE_OP(__nv_bfloat16, rope_bf16, rope_i_bf16, rope_thd_bf16)
 SUM_OP(__nv_bfloat16, sum_bf16)
 
@@ -895,16 +944,17 @@ extern "C" __global__ void fast_argmax_bf16(
 // NOTE: No reduce ops for f8
 // SUM_OP(__nv_fp8_e4m3, sum_fp8_e4m3)
 // SOFTMAX_OP(__nv_fp8_e4m3, float, softmax_fp8_e4m3)
-// RMSNORM_OP(__nv_fp8_e4m3, rmsnorm_fp8_e4m3)
-// LAYERNORM_OP(__nv_fp8_e4m3, layernorm_fp8_e4m3)
+// RMSNORM_OP(__nv_fp8_e4m3, float, rmsnorm_fp8_e4m3)
+// LAYERNORM_OP(__nv_fp8_e4m3, float, layernorm_fp8_e4m3)
 // ROPE_OP(__nv_fp8_e4m3, rope_fp8_e4m3, rope_i_fp8_e4m3, rope_thd_fp8_e4m3)
 // FAST_OP(__nv_fp8_e4m3, fast_min_fp8_e4m3, fast_max_fp8_e4m3, fast_argmin_fp8_e4m3, fast_argmax_fp8_e4m3, fast_sum_fp8_e4m3)
 #endif
 
 #if __CUDA_ARCH__ >= 530
 SOFTMAX_OP(__half, float, softmax_f16)
-RMSNORM_OP(__half, rmsnorm_f16)
-LAYERNORM_OP(__half, layernorm_f16)
+SOFTMAX_BWD_OP(__half, float, softmax_bwd_f16)
+RMSNORM_OP(__half, float, rmsnorm_f16)
+LAYERNORM_OP(__half, float, layernorm_f16)
 ROPE_OP(__half, rope_f16, rope_i_f16, rope_thd_f16)
 SUM_OP(__half, sum_f16)
 FAST_OP(__half, fast_min_f16, fast_max_f16, fast_argmin_f16, fast_argmax_f16, fast_sum_f16)
@@ -914,11 +964,13 @@ SUM_OP(float, sum_f32)
 SUM_OP(double, sum_f64)
 SUM_OP(uint32_t, sum_u32)
 SOFTMAX_OP(float, float, softmax_f32)
+SOFTMAX_BWD_OP(float, float, softmax_bwd_f32)
 SOFTMAX_OP(double, double, softmax_f64)
-RMSNORM_OP(float, rmsnorm_f32)
-RMSNORM_OP(double, rmsnorm_f64)
-LAYERNORM_OP(float, layernorm_f32)
-LAYERNORM_OP(double, layernorm_f64)
+SOFTMAX_BWD_OP(double, double, softmax_bwd_f64)
+RMSNORM_OP(float, float, rmsnorm_f32)
+RMSNORM_OP(double, double, rmsnorm_f64)
+LAYERNORM_OP(float, float, layernorm_f32)
+LAYERNORM_OP(double, double, layernorm_f64)
 ROPE_OP(float, rope_f32, rope_i_f32, rope_thd_f32)
 ROPE_OP(double, rope_f64, rope_i_f64, rope_thd_f64)
 
