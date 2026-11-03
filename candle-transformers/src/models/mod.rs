@@ -110,6 +110,7 @@ pub mod quantized_t5;
 pub mod qwen2;
 pub mod qwen2_moe;
 pub mod qwen3;
+pub mod qwen3_5_linear_attn_scan;
 pub mod qwen3_moe;
 pub mod qwen3_vl;
 pub mod recurrent_gemma;
