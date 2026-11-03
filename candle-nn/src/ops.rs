@@ -1077,6 +1077,7 @@ impl candle::CustomOp3 for Sdpa {
 
         let mut implementation_supports_use_case = q_head == k_head;
         let supported_head_dim = q_head == 32
+            || q_head == 48
             || q_head == 64
             || q_head == 72
             || q_head == 80
@@ -1088,9 +1089,13 @@ impl candle::CustomOp3 for Sdpa {
         let supports_sdpa_full_mask = self.mask.is_none() || q_seq <= k_seq;
         // F32 full attention at head_dim=512 exceeds 32KB Metal threadgroup memory
         let supports_sdpa_full_dtype = !(q_head == 512 && q.dtype() == DType::F32);
-        let supports_sdpa_full =
-            q_seq > 1 && supported_head_dim && supports_sdpa_full_mask && supports_sdpa_full_dtype;
-        let supports_sdpa_vector = q_seq == 1 && supported_head_dim && q_seq <= k_seq;
+        // Vector kernel requires head_dim to be a multiple of 32
+        let supports_sdpa_vector_head = [32, 64, 96, 128, 256, 512].contains(&q_head);
+        let supports_sdpa_vector = q_seq == 1 && supports_sdpa_vector_head && q_seq <= k_seq;
+        let supports_sdpa_full = supported_head_dim
+            && supports_sdpa_full_mask
+            && supports_sdpa_full_dtype
+            && (q_seq > 1 || !supports_sdpa_vector);
 
         implementation_supports_use_case &= supports_sdpa_full || supports_sdpa_vector;
 
