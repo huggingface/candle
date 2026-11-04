@@ -2,7 +2,11 @@ use crate::{
     backend::BackendStorage, CpuStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
 use k_quants::*;
+use memmap2::Mmap;
 use std::borrow::Cow;
+use std::marker::PhantomData;
+use std::ops::Range;
+use std::sync::Arc;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub mod avx;
@@ -60,6 +64,47 @@ fn as_t_slice<T>(data: &[u8]) -> &[T] {
         "Data pointer must be aligned to T's alignment"
     );
     unsafe { std::slice::from_raw_parts(ptr as *const T, data.len() / size) }
+}
+
+/// A window of `map` as quantised blocks, checked to hold whole blocks and to start on one.
+fn mapped_blocks<T: k_quants::GgmlType + Send + Sync + 'static>(
+    map: Arc<Mmap>,
+    range: Range<usize>,
+) -> Result<Box<dyn QuantizedType>> {
+    let type_size = std::mem::size_of::<T>();
+    if !range.len().is_multiple_of(type_size) {
+        crate::bail!(
+            "a mapped {:?} window of {} bytes is not a whole number of {type_size} byte blocks",
+            T::DTYPE,
+            range.len()
+        )
+    }
+    let align = std::mem::align_of::<T>();
+    // `from_raw_parts` aligns the pointer, so the map base counts, not only the offset.
+    let addr = match (map.as_ptr() as usize).checked_add(range.start) {
+        Some(addr) => addr,
+        None => crate::bail!("a mapped {:?} window start overflows", T::DTYPE),
+    };
+    if !addr.is_multiple_of(align) {
+        crate::bail!(
+            "a mapped {:?} window starts at {addr:#x}, which is not {align}-byte aligned",
+            T::DTYPE
+        )
+    }
+    if range.end > map.len() {
+        crate::bail!(
+            "a mapped {:?} window ends at {}, past the {} byte mapping",
+            T::DTYPE,
+            range.end,
+            map.len()
+        )
+    }
+    Ok(Box::new(Blocks::Mapped {
+        map,
+        start: range.start,
+        len: range.len() / type_size,
+        _marker: PhantomData::<T>,
+    }))
 }
 
 pub struct QTensor {
@@ -136,6 +181,15 @@ impl QStorage {
         }
     }
 
+    /// Quantised CPU storage that borrows `range` of `map` instead of copying it.
+    ///
+    /// The mapping stays alive as long as the storage does, and its pages are read on first
+    /// use and reclaimed like any other clean page cache, rather than being copied into
+    /// anonymous memory at load time.
+    pub fn from_mapped(map: Arc<Mmap>, range: Range<usize>, dtype: GgmlDType) -> Result<Self> {
+        Ok(Self::Cpu(dtype.from_mapped(map, range)?))
+    }
+
     fn block_size(&self) -> usize {
         match self {
             QStorage::Cpu(storage) => storage.block_size(),
@@ -171,7 +225,7 @@ impl QStorage {
     fn quantize(&mut self, src: &Storage) -> Result<()> {
         match (self, src) {
             (QStorage::Cpu(storage), Storage::Cpu(src)) => {
-                storage.from_float(src.as_slice::<f32>()?);
+                storage.from_float(src.as_slice::<f32>()?)?;
             }
             (QStorage::Metal(storage), Storage::Metal(src)) => storage.quantize(src)?,
             (QStorage::Cuda(storage), Storage::Cuda(src)) => storage.quantize(src)?,
@@ -188,7 +242,7 @@ impl QStorage {
     ) -> Result<()> {
         match (self, src) {
             (QStorage::Cpu(storage), Storage::Cpu(src)) => {
-                storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
+                storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row)?;
             }
             (QStorage::Metal(storage), Storage::Metal(src)) => {
                 storage.quantize_imatrix(src, imatrix_weights, n_per_row)?
@@ -204,7 +258,7 @@ impl QStorage {
     fn quantize_onto(&mut self, src: &Storage) -> Result<()> {
         match (self, src) {
             (QStorage::Cpu(storage), Storage::Cpu(src)) => {
-                storage.from_float(src.as_slice::<f32>()?);
+                storage.from_float(src.as_slice::<f32>()?)?;
             }
             (QStorage::Metal(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
             (QStorage::Cuda(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
@@ -221,7 +275,7 @@ impl QStorage {
     ) -> Result<()> {
         match (self, src) {
             (QStorage::Cpu(storage), Storage::Cpu(src)) => {
-                storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
+                storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row)?;
             }
             (QStorage::Metal(storage), Storage::Cpu(src)) => {
                 storage.quantize_imatrix_onto(src, imatrix_weights, n_per_row)?
@@ -348,42 +402,106 @@ impl GgmlDType {
     /// The block dtype
     pub fn cpu_zeros(&self, elem_count: usize) -> Box<dyn QuantizedType> {
         match self {
-            Self::F32 => Box::new(vec![f32::zeros(); elem_count]),
-            Self::F16 => Box::new(vec![f16::zeros(); elem_count]),
-            Self::Q4_0 => Box::new(vec![BlockQ4_0::zeros(); elem_count / BlockQ4_0::BLCK_SIZE]),
-            Self::Q4_1 => Box::new(vec![BlockQ4_1::zeros(); elem_count / BlockQ4_1::BLCK_SIZE]),
-            Self::Q5_0 => Box::new(vec![BlockQ5_0::zeros(); elem_count / BlockQ5_0::BLCK_SIZE]),
-            Self::Q5_1 => Box::new(vec![BlockQ5_1::zeros(); elem_count / BlockQ5_1::BLCK_SIZE]),
-            Self::Q8_0 => Box::new(vec![BlockQ8_0::zeros(); elem_count / BlockQ8_0::BLCK_SIZE]),
-            Self::Q8_1 => Box::new(vec![BlockQ8_1::zeros(); elem_count / BlockQ8_1::BLCK_SIZE]),
-            Self::Q2K => Box::new(vec![BlockQ2K::zeros(); elem_count / BlockQ2K::BLCK_SIZE]),
-            Self::Q3K => Box::new(vec![BlockQ3K::zeros(); elem_count / BlockQ3K::BLCK_SIZE]),
-            Self::Q4K => Box::new(vec![BlockQ4K::zeros(); elem_count / BlockQ4K::BLCK_SIZE]),
-            Self::Q5K => Box::new(vec![BlockQ5K::zeros(); elem_count / BlockQ5K::BLCK_SIZE]),
-            Self::Q6K => Box::new(vec![BlockQ6K::zeros(); elem_count / BlockQ6K::BLCK_SIZE]),
-            Self::Q8K => Box::new(vec![BlockQ8K::zeros(); elem_count / BlockQ8K::BLCK_SIZE]),
-            Self::BF16 => Box::new(vec![bf16::zeros(); elem_count]),
+            Self::F32 => Box::new(Blocks::Owned(vec![f32::zeros(); elem_count])),
+            Self::F16 => Box::new(Blocks::Owned(vec![f16::zeros(); elem_count])),
+            Self::Q4_0 => Box::new(Blocks::Owned(vec![
+                BlockQ4_0::zeros();
+                elem_count / BlockQ4_0::BLCK_SIZE
+            ])),
+            Self::Q4_1 => Box::new(Blocks::Owned(vec![
+                BlockQ4_1::zeros();
+                elem_count / BlockQ4_1::BLCK_SIZE
+            ])),
+            Self::Q5_0 => Box::new(Blocks::Owned(vec![
+                BlockQ5_0::zeros();
+                elem_count / BlockQ5_0::BLCK_SIZE
+            ])),
+            Self::Q5_1 => Box::new(Blocks::Owned(vec![
+                BlockQ5_1::zeros();
+                elem_count / BlockQ5_1::BLCK_SIZE
+            ])),
+            Self::Q8_0 => Box::new(Blocks::Owned(vec![
+                BlockQ8_0::zeros();
+                elem_count / BlockQ8_0::BLCK_SIZE
+            ])),
+            Self::Q8_1 => Box::new(Blocks::Owned(vec![
+                BlockQ8_1::zeros();
+                elem_count / BlockQ8_1::BLCK_SIZE
+            ])),
+            Self::Q2K => Box::new(Blocks::Owned(vec![
+                BlockQ2K::zeros();
+                elem_count / BlockQ2K::BLCK_SIZE
+            ])),
+            Self::Q3K => Box::new(Blocks::Owned(vec![
+                BlockQ3K::zeros();
+                elem_count / BlockQ3K::BLCK_SIZE
+            ])),
+            Self::Q4K => Box::new(Blocks::Owned(vec![
+                BlockQ4K::zeros();
+                elem_count / BlockQ4K::BLCK_SIZE
+            ])),
+            Self::Q5K => Box::new(Blocks::Owned(vec![
+                BlockQ5K::zeros();
+                elem_count / BlockQ5K::BLCK_SIZE
+            ])),
+            Self::Q6K => Box::new(Blocks::Owned(vec![
+                BlockQ6K::zeros();
+                elem_count / BlockQ6K::BLCK_SIZE
+            ])),
+            Self::Q8K => Box::new(Blocks::Owned(vec![
+                BlockQ8K::zeros();
+                elem_count / BlockQ8K::BLCK_SIZE
+            ])),
+            Self::BF16 => Box::new(Blocks::Owned(vec![bf16::zeros(); elem_count])),
         }
     }
 
     pub fn from_data(&self, data: Cow<'_, [u8]>) -> Box<dyn QuantizedType> {
         let data: &[u8] = &data;
         match self {
-            Self::F32 => Box::new(as_t_slice::<f32>(data).to_vec()),
-            Self::F16 => Box::new(as_t_slice::<f16>(data).to_vec()),
-            Self::Q4_0 => Box::new(as_t_slice::<BlockQ4_0>(data).to_vec()),
-            Self::Q4_1 => Box::new(as_t_slice::<BlockQ4_1>(data).to_vec()),
-            Self::Q5_0 => Box::new(as_t_slice::<BlockQ5_0>(data).to_vec()),
-            Self::Q5_1 => Box::new(as_t_slice::<BlockQ5_1>(data).to_vec()),
-            Self::Q8_0 => Box::new(as_t_slice::<BlockQ8_0>(data).to_vec()),
-            Self::Q8_1 => Box::new(as_t_slice::<BlockQ8_1>(data).to_vec()),
-            Self::Q2K => Box::new(as_t_slice::<BlockQ2K>(data).to_vec()),
-            Self::Q3K => Box::new(as_t_slice::<BlockQ3K>(data).to_vec()),
-            Self::Q4K => Box::new(as_t_slice::<BlockQ4K>(data).to_vec()),
-            Self::Q5K => Box::new(as_t_slice::<BlockQ5K>(data).to_vec()),
-            Self::Q6K => Box::new(as_t_slice::<BlockQ6K>(data).to_vec()),
-            Self::Q8K => Box::new(as_t_slice::<BlockQ8K>(data).to_vec()),
-            Self::BF16 => Box::new(as_t_slice::<bf16>(data).to_vec()),
+            Self::F32 => Box::new(Blocks::Owned(as_t_slice::<f32>(data).to_vec())),
+            Self::F16 => Box::new(Blocks::Owned(as_t_slice::<f16>(data).to_vec())),
+            Self::Q4_0 => Box::new(Blocks::Owned(as_t_slice::<BlockQ4_0>(data).to_vec())),
+            Self::Q4_1 => Box::new(Blocks::Owned(as_t_slice::<BlockQ4_1>(data).to_vec())),
+            Self::Q5_0 => Box::new(Blocks::Owned(as_t_slice::<BlockQ5_0>(data).to_vec())),
+            Self::Q5_1 => Box::new(Blocks::Owned(as_t_slice::<BlockQ5_1>(data).to_vec())),
+            Self::Q8_0 => Box::new(Blocks::Owned(as_t_slice::<BlockQ8_0>(data).to_vec())),
+            Self::Q8_1 => Box::new(Blocks::Owned(as_t_slice::<BlockQ8_1>(data).to_vec())),
+            Self::Q2K => Box::new(Blocks::Owned(as_t_slice::<BlockQ2K>(data).to_vec())),
+            Self::Q3K => Box::new(Blocks::Owned(as_t_slice::<BlockQ3K>(data).to_vec())),
+            Self::Q4K => Box::new(Blocks::Owned(as_t_slice::<BlockQ4K>(data).to_vec())),
+            Self::Q5K => Box::new(Blocks::Owned(as_t_slice::<BlockQ5K>(data).to_vec())),
+            Self::Q6K => Box::new(Blocks::Owned(as_t_slice::<BlockQ6K>(data).to_vec())),
+            Self::Q8K => Box::new(Blocks::Owned(as_t_slice::<BlockQ8K>(data).to_vec())),
+            Self::BF16 => Box::new(Blocks::Owned(as_t_slice::<bf16>(data).to_vec())),
+        }
+    }
+
+    /// Quantised blocks borrowed from `range` of `map`.
+    ///
+    /// Unlike [`Self::from_data`], nothing is copied: the storage keeps a handle on the map
+    /// and reads its pages on first use.
+    pub fn from_mapped(
+        self,
+        map: Arc<Mmap>,
+        range: Range<usize>,
+    ) -> Result<Box<dyn QuantizedType>> {
+        match self {
+            Self::F32 => mapped_blocks::<f32>(map, range),
+            Self::F16 => mapped_blocks::<f16>(map, range),
+            Self::Q4_0 => mapped_blocks::<BlockQ4_0>(map, range),
+            Self::Q4_1 => mapped_blocks::<BlockQ4_1>(map, range),
+            Self::Q5_0 => mapped_blocks::<BlockQ5_0>(map, range),
+            Self::Q5_1 => mapped_blocks::<BlockQ5_1>(map, range),
+            Self::Q8_0 => mapped_blocks::<BlockQ8_0>(map, range),
+            Self::Q8_1 => mapped_blocks::<BlockQ8_1>(map, range),
+            Self::Q2K => mapped_blocks::<BlockQ2K>(map, range),
+            Self::Q3K => mapped_blocks::<BlockQ3K>(map, range),
+            Self::Q4K => mapped_blocks::<BlockQ4K>(map, range),
+            Self::Q5K => mapped_blocks::<BlockQ5K>(map, range),
+            Self::Q6K => mapped_blocks::<BlockQ6K>(map, range),
+            Self::Q8K => mapped_blocks::<BlockQ8K>(map, range),
+            Self::BF16 => mapped_blocks::<bf16>(map, range),
         }
     }
 
@@ -436,13 +554,56 @@ pub trait QuantizedType: Send + Sync {
     fn as_ptr(&self) -> *const u8;
     fn block_size(&self) -> usize;
     #[allow(clippy::wrong_self_convention)]
-    fn from_float(&mut self, xs: &[f32]);
+    fn from_float(&mut self, xs: &[f32]) -> Result<()>;
     #[allow(clippy::wrong_self_convention)]
-    fn from_float_imatrix(&mut self, xs: &[f32], imatrix_weights: &[f32], n_per_row: usize);
+    fn from_float_imatrix(
+        &mut self,
+        xs: &[f32],
+        imatrix_weights: &[f32],
+        n_per_row: usize,
+    ) -> Result<()>;
     fn size(&self) -> usize;
 }
 
-impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
+/// The blocks behind a CPU quantised tensor: either owned, or a window of a memory map.
+enum Blocks<T> {
+    Owned(Vec<T>),
+    Mapped {
+        map: Arc<Mmap>,
+        start: usize,
+        len: usize,
+        _marker: PhantomData<T>,
+    },
+}
+
+impl<T> Blocks<T> {
+    fn as_slice(&self) -> &[T] {
+        match self {
+            Self::Owned(blocks) => blocks,
+            // SAFETY: `mapped_blocks` checked that the window holds whole blocks, starts on a
+            // block boundary and lies inside the map, and the block types are plain data.
+            Self::Mapped {
+                map, start, len, ..
+            } => unsafe { std::slice::from_raw_parts(map.as_ptr().add(*start).cast::<T>(), *len) },
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Owned(blocks) => blocks.len(),
+            Self::Mapped { len, .. } => *len,
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> Result<&mut [T]> {
+        match self {
+            Self::Owned(blocks) => Ok(blocks),
+            Self::Mapped { .. } => crate::bail!("a memory-mapped quantized tensor is read-only"),
+        }
+    }
+}
+
+impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Blocks<T> {
     fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()> {
         k_quants::matmul(mkn, lhs, self.as_slice(), dst)
     }
@@ -451,6 +612,7 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
     }
 
     fn embedding(&self, ids: &[u32], rows: usize, hidden: usize) -> Result<CpuStorage> {
+        let blocks = self.as_slice();
         if !hidden.is_multiple_of(T::BLCK_SIZE) {
             crate::bail!(
                 "quantized embedding hidden size {hidden} is not divisible by block size {}",
@@ -458,10 +620,10 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
             )
         }
         let row_blocks = hidden / T::BLCK_SIZE;
-        if self.len() != rows * row_blocks {
+        if blocks.len() != rows * row_blocks {
             crate::bail!(
                 "quantized tensor has {} blocks, expected {}",
-                self.len(),
+                blocks.len(),
                 rows * row_blocks
             )
         }
@@ -471,7 +633,7 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
             if row >= rows {
                 crate::bail!("embedding id {row} is out of range for {rows} rows")
             }
-            let src = &self[row * row_blocks..(row + 1) * row_blocks];
+            let src = &blocks[row * row_blocks..(row + 1) * row_blocks];
             let dst = &mut out[out_row * hidden..(out_row + 1) * hidden];
             T::to_float(src, dst);
         }
@@ -482,12 +644,19 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
         self.len() * core::mem::size_of::<T>()
     }
 
-    fn from_float(&mut self, xs: &[f32]) {
-        T::from_float(xs, self)
+    fn from_float(&mut self, xs: &[f32]) -> Result<()> {
+        T::from_float(xs, self.as_mut_slice()?);
+        Ok(())
     }
 
-    fn from_float_imatrix(&mut self, xs: &[f32], imatrix_weights: &[f32], n_per_row: usize) {
-        T::from_float_imatrix(xs, self, imatrix_weights, n_per_row)
+    fn from_float_imatrix(
+        &mut self,
+        xs: &[f32],
+        imatrix_weights: &[f32],
+        n_per_row: usize,
+    ) -> Result<()> {
+        T::from_float_imatrix(xs, self.as_mut_slice()?, imatrix_weights, n_per_row);
+        Ok(())
     }
 
     fn dtype(&self) -> GgmlDType {
@@ -509,7 +678,7 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
     }
 
     fn as_ptr(&self) -> *const u8 {
-        self.as_ptr() as *const u8
+        self.as_slice().as_ptr() as *const u8
     }
 }
 

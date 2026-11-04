@@ -2,10 +2,11 @@
 //!
 //! Spec: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
 
-use super::{GgmlDType, QTensor};
+use super::{GgmlDType, QStorage, QTensor};
 use crate::{Context, Device, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub const DEFAULT_ALIGNMENT: u64 = 32;
 
@@ -85,20 +86,24 @@ pub struct TensorInfo {
 }
 
 impl TensorInfo {
+    fn size_in_bytes(&self) -> Result<usize> {
+        let tensor_elems = self.shape.elem_count();
+        let block_size = self.ggml_dtype.block_size();
+        if !tensor_elems.is_multiple_of(block_size) {
+            crate::bail!(
+                "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
+            )
+        }
+        Ok(tensor_elems / block_size * self.ggml_dtype.type_size())
+    }
+
     pub fn read<R: std::io::Seek + std::io::Read>(
         &self,
         reader: &mut R,
         tensor_data_offset: u64,
         device: &Device,
     ) -> Result<QTensor> {
-        let tensor_elems = self.shape.elem_count();
-        let block_size = self.ggml_dtype.block_size();
-        if !tensor_elems.is_multiple_of(block_size) {
-            crate::bail!(
-            "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
-        )
-        }
-        let size_in_bytes = tensor_elems / block_size * self.ggml_dtype.type_size();
+        let size_in_bytes = self.size_in_bytes()?;
         let tensor_start = tensor_data_offset.saturating_add(self.offset);
         let file_size = reader.seek(std::io::SeekFrom::End(0))?;
         let remaining = file_size.saturating_sub(tensor_start);
@@ -116,6 +121,43 @@ impl TensorInfo {
             self.shape.dims().to_vec(),
             device,
         )
+    }
+
+    /// The same tensor as [`Self::read`], borrowed from `map` instead of copied.
+    ///
+    /// On the CPU the storage keeps the mapping alive and reads its pages on first use, so
+    /// the weights stay in the page cache instead of anonymous memory; other devices still
+    /// copy, since the bytes have to be uploaded anyway.
+    pub fn read_mapped(
+        &self,
+        map: &Arc<memmap2::Mmap>,
+        tensor_data_offset: u64,
+        device: &Device,
+    ) -> Result<QTensor> {
+        let size_in_bytes = self.size_in_bytes()?;
+        let offset = tensor_data_offset.saturating_add(self.offset);
+        let tensor_start: usize = match offset.try_into() {
+            Ok(start) => start,
+            Err(_) => crate::bail!("tensor offset {offset} does not fit in a usize"),
+        };
+        let tensor_end = match tensor_start.checked_add(size_in_bytes) {
+            Some(end) if end <= map.len() => end,
+            _ => crate::bail!(
+                "tensor needs {size_in_bytes} bytes at offset {tensor_start}, only {} remaining in the mapping",
+                map.len().saturating_sub(tensor_start)
+            ),
+        };
+        if !device.is_cpu() {
+            return super::ggml_file::qtensor_from_ggml(
+                self.ggml_dtype,
+                &map[tensor_start..tensor_end],
+                self.shape.dims().to_vec(),
+                device,
+            );
+        }
+        let storage =
+            QStorage::from_mapped(map.clone(), tensor_start..tensor_end, self.ggml_dtype)?;
+        QTensor::new(storage, self.shape.clone())
     }
 }
 
@@ -577,6 +619,41 @@ impl Content {
             None => crate::bail!("cannot find tensor info for {name}"),
         };
         tensor_info.read(reader, self.tensor_data_offset, device)
+    }
+
+    /// The same as [`Self::tensor`] but the weights are borrowed from `map`, which
+    /// [`Self::from_mmap`] returns.
+    pub fn tensor_mapped(
+        &self,
+        map: &Arc<memmap2::Mmap>,
+        name: &str,
+        device: &Device,
+    ) -> Result<QTensor> {
+        let tensor_info = match self.tensor_infos.get(name) {
+            Some(tensor_info) => tensor_info,
+            None => crate::bail!("cannot find tensor info for {name}"),
+        };
+        tensor_info.read_mapped(map, self.tensor_data_offset, device)
+    }
+
+    /// Read the metadata and tensor table from a memory-mapped file, returning the mapping
+    /// that [`Self::tensor_mapped`] lends tensors from.
+    ///
+    /// # Safety
+    ///
+    /// The unsafe is inherited from [`memmap2::MmapOptions`]: the file must not be modified
+    /// while the mapping is alive.
+    pub unsafe fn from_mmap<P: AsRef<std::path::Path>>(
+        path: P,
+    ) -> Result<(Self, Arc<memmap2::Mmap>)> {
+        let path = path.as_ref();
+        let file = std::fs::File::open(path).map_err(|e| crate::Error::from(e).with_path(path))?;
+        let map = memmap2::MmapOptions::new()
+            .map(&file)
+            .map_err(|e| crate::Error::from(e).with_path(path))?;
+        let map = Arc::new(map);
+        let content = Self::read(&mut std::io::Cursor::new(&map[..]))?;
+        Ok((content, map))
     }
 }
 
