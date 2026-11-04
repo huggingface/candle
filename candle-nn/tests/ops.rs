@@ -139,6 +139,87 @@ fn rms_norm_large_magnitude(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn rms_norm_half_bits(tensor: &Tensor, dtype: candle::DType) -> Result<Vec<u16>> {
+    let tensor = tensor.flatten_all()?;
+    match dtype {
+        candle::DType::F16 => Ok(tensor
+            .to_vec1::<half::f16>()?
+            .into_iter()
+            .map(|value| value.to_bits())
+            .collect()),
+        candle::DType::BF16 => Ok(tensor
+            .to_vec1::<half::bf16>()?
+            .into_iter()
+            .map(|value| value.to_bits())
+            .collect()),
+        _ => unreachable!("expected a 16-bit float dtype"),
+    }
+}
+
+fn rms_norm_half_precision_cpu(
+    dtype: candle::DType,
+    x_values: [f32; 4],
+    alpha_values: [f32; 4],
+    expected_bits: [u16; 4],
+) -> Result<()> {
+    let device = Device::Cpu;
+    for rows in [1usize, 33] {
+        let mut input_data = Vec::with_capacity(rows * 4 + 2);
+        input_data.push(-123.0);
+        for _ in 0..rows {
+            input_data.extend_from_slice(&x_values);
+        }
+        input_data.push(456.0);
+        let input = Tensor::from_vec(input_data, (rows * 4 + 2,), &device)?
+            .to_dtype(dtype)?
+            .i(1..1 + rows * 4)?
+            .reshape((rows, 4))?;
+
+        let mut alpha_data = Vec::with_capacity(6);
+        alpha_data.push(-789.0);
+        alpha_data.extend_from_slice(&alpha_values);
+        alpha_data.push(987.0);
+        let alpha = Tensor::from_vec(alpha_data, (6,), &device)?
+            .to_dtype(dtype)?
+            .i(1..5)?;
+
+        let output = candle_nn::ops::rms_norm(&input, &alpha, 1e-6)?;
+        let slow = candle_nn::ops::rms_norm_slow(&input, &alpha, 1e-6)?;
+        let output_bits = rms_norm_half_bits(&output, dtype)?;
+        assert_eq!(
+            output_bits,
+            rms_norm_half_bits(&slow, dtype)?,
+            "rms_norm and rms_norm_slow differ for {dtype:?} with {rows} rows"
+        );
+        assert_eq!(
+            output_bits,
+            expected_bits.repeat(rows),
+            "unexpected {dtype:?} rms_norm bits with {rows} rows"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn rms_norm_f16_scale_precision_cpu() -> Result<()> {
+    rms_norm_half_precision_cpu(
+        candle::DType::F16,
+        [8.0, 3.0, 0.0625, 0.5],
+        [7.675_781_3, 1.0, 1.0, 1.0],
+        [0x4b2c, 0x399c, 0x237a, 0x2f7a],
+    )
+}
+
+#[test]
+fn rms_norm_bf16_scale_precision_cpu() -> Result<()> {
+    rms_norm_half_precision_cpu(
+        candle::DType::BF16,
+        [2.0, 3.0, 16.0, 1.5],
+        [0.625, 1.0, 1.0, 1.0],
+        [0x3e1c, 0x3ebb, 0x3ff9, 0x3e3b],
+    )
+}
+
 fn layer_norm(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
     let tensor = Tensor::new(data, device)?;
