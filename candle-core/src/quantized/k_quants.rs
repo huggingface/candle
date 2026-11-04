@@ -2416,6 +2416,10 @@ impl GgmlType for BlockQ8K {
 /// cache while the rhs quad is streamed through once per tile instead of once per lhs row. This
 /// matches the 16-row src1 blocking of `ggml_compute_forward_mul_mat`.
 const MATMUL_ROW_TILE: usize = 16;
+/// Below this many column quads a single-row GEMV runs on the calling
+/// thread: waking the barrier-pool workers and the tree barrier cost more
+/// than the GEMV itself.
+const SINGLE_ROW_GEMV_POOL_MIN_QUADS: usize = 16;
 
 // https://github.com/ggml-org/llama.cpp/blob/aa3ee0eb0b80efca126cedf9bcb4fb5864b46ce3/ggml/src/ggml-cpu/ggml-cpu.c#L1205
 pub fn matmul<T: GgmlType>(
@@ -2538,18 +2542,22 @@ pub fn matmul<T: GgmlType>(
         };
 
         if m == 1 {
-            // Decode: a single row, the column quads are split across the pool.
+            // Decode: a single row. Every column quad is an equal-sized unit of
+            // work, so static per-thread ranges (no shared cursor) balance the
+            // pool without contention; very small GEMVs skip the pool entirely,
+            // because waking the workers and the tree barrier would cost more
+            // than the GEMV itself.
             let dot_range = |range: std::ops::Range<usize>| {
                 for quad_idx in range {
                     dot_quad(0, quad_idx * 4)
                 }
             };
-            if cfg!(target_arch = "x86_64") && T::DTYPE == GgmlDType::Q6K {
-                // Compact Q6K GEMV has equal-sized dot products; static ranges
-                // avoid the shared cursor overhead on this short decode path.
-                pool.execute_static(quads_total, dot_range);
+            if quads_total < SINGLE_ROW_GEMV_POOL_MIN_QUADS {
+                for quad_idx in 0..quads_total {
+                    dot_quad(0, quad_idx * 4);
+                }
             } else {
-                pool.execute_chunked(quads_total, dot_range);
+                pool.execute_static(quads_total, dot_range);
             }
             dot_tail(0);
             return Ok(());
