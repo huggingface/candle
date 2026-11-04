@@ -1032,34 +1032,57 @@ impl ZImageTransformer2DModel {
         let cap_pos_ids = create_coordinate_grid((text_len, 1, 1), (1, 0, 0), device)?;
         let (cap_cos, cap_sin) = self.rope_embedder.forward(&cap_pos_ids)?;
 
-        // 6. Create attention masks
-        let x_attn_mask = Tensor::ones((b, img_seq_len), DType::U8, device)?;
+        // 6. Create attention masks.
+        //
+        // The image-token mask is all-ones by construction, and with an
+        // unpadded caption (the batch-1 serving case) the caption mask
+        // is too. Passing an all-ones mask forces `attention_cuda` into
+        // its masked fallback — quadratic-memory naive attention — so
+        // flash-attn never engages. Detect the no-padding case once per
+        // forward and pass `None` so the accelerated path can run; the
+        // masked fallback remains for genuinely padded batches.
         let cap_attn_mask = cap_mask.to_dtype(DType::U8)?;
+        let cap_has_padding = {
+            let ones = cap_attn_mask
+                .to_dtype(DType::F32)?
+                .sum_all()?
+                .to_scalar::<f32>()?;
+            (ones as usize) != cap_attn_mask.elem_count()
+        };
+        let cap_layer_mask = cap_has_padding.then_some(&cap_attn_mask);
 
-        // 7. Noise refiner (process image with modulation)
+        // 7. Noise refiner (process image with modulation) — image
+        // tokens are never padded; no mask needed.
         for layer in &self.noise_refiner {
-            x = layer.forward(&x, Some(&x_attn_mask), &x_cos, &x_sin, Some(&adaln_input))?;
+            x = layer.forward(&x, None, &x_cos, &x_sin, Some(&adaln_input))?;
         }
 
         // 8. Context refiner (process text without modulation)
         for layer in &self.context_refiner {
-            cap = layer.forward(&cap, Some(&cap_attn_mask), &cap_cos, &cap_sin, None)?;
+            cap = layer.forward(&cap, cap_layer_mask, &cap_cos, &cap_sin, None)?;
         }
 
         // 9. Concatenate image and text: [image_tokens, text_tokens]
         let unified = Tensor::cat(&[&x, &cap], 1)?; // (B, img_seq + text_len, dim)
 
-        // 10. Create unified position IDs and attention mask
+        // 10. Create unified position IDs and attention mask. The
+        // unified mask is all-ones ⧺ caption mask — padded iff the
+        // caption is.
         let unified_pos_ids = Tensor::cat(&[&x_pos_ids, &cap_pos_ids], 0)?;
         let (unified_cos, unified_sin) = self.rope_embedder.forward(&unified_pos_ids)?;
-        let unified_attn_mask = Tensor::cat(&[&x_attn_mask, &cap_attn_mask], 1)?;
+        let unified_attn_mask = if cap_has_padding {
+            let x_attn_mask = Tensor::ones((b, img_seq_len), DType::U8, device)?;
+            Some(Tensor::cat(&[&x_attn_mask, &cap_attn_mask], 1)?)
+        } else {
+            None
+        };
 
         // 11. Main transformer layers
         let mut unified = unified;
         for layer in &self.layers {
             unified = layer.forward(
                 &unified,
-                Some(&unified_attn_mask),
+                unified_attn_mask.as_ref(),
                 &unified_cos,
                 &unified_sin,
                 Some(&adaln_input),
