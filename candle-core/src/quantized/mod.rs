@@ -665,8 +665,18 @@ impl QTensor {
             )
         }
         // storage is on the `dev`, src is on `cpu`
-        let mut storage = dev.qzeros(elem_count, dtype)?;
-        storage.quantize_onto(&src.storage())?;
+        let storage = if dev.is_metal() {
+            // Quantize on the cpu and upload the blocks once. `qzeros` on metal allocates a
+            // zero-filled buffer the size of the weights, which the device's buffer pool keeps
+            // until the next synchronize after `quantize_onto` replaces it.
+            let mut cpu = Device::Cpu.qzeros(elem_count, dtype)?;
+            cpu.quantize(&src.storage())?;
+            QStorage::from_data(cpu.data()?, dev, dtype)?
+        } else {
+            let mut storage = dev.qzeros(elem_count, dtype)?;
+            storage.quantize_onto(&src.storage())?;
+            storage
+        };
         Ok(Self {
             storage,
             shape: shape.clone(),
