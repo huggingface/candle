@@ -132,6 +132,11 @@ struct DeviceInner {
     /// next slot and the CPU reads it back one step behind.
     id_ring: std::sync::Mutex<Option<Arc<Buffer>>>,
     id_ring_next: AtomicUsize,
+    /// Adaptive estimate (ns) of the GPU time per encoded op: a smoothed
+    /// measurement of recent batches (see `finish_batch`), which
+    /// `execute` uses to bound each submitted batch below
+    /// `BATCH_TIME_LIMIT_NS`.
+    batch_ns_per_encode: AtomicU64,
     /// Per-width atomic float add support (SPV_EXT_shader_atomic_float_add),
     /// as enabled at device creation: F32/F64 via VK_EXT_shader_atomic_float,
     /// F16 via VK_EXT_shader_atomic_float2.
@@ -211,6 +216,7 @@ pub struct PipedId {
     device: VulkanDevice,
     fence: Arc<Fence>,
     ring_idx: usize,
+    n_encodes: usize,
     slot: usize,
 }
 
@@ -219,13 +225,44 @@ impl PipedId {
     /// handle.
     pub fn wait(self) -> Result<u32> {
         self.device
-            .read_id_slot(&self.fence, self.ring_idx, self.slot)
+            .read_id_slot(&self.fence, self.ring_idx, self.n_encodes, self.slot)
     }
 }
 
 /// Number of in-flight submissions allowed before `execute` waits for the
 /// GPU to catch up.
 const FENCE_RING_SIZE: usize = 128;
+
+/// Maximum total GPU time of one submitted command buffer (one driver
+/// job). The amdgpu driver aborts any gfx job that runs longer than its
+/// lockup timeout (2 s by default): the job is reset mid-flight and its
+/// writes are lost, so a later readback returns stale garbage (e.g. an
+/// "A weight is negative" sampling error) or the device is reported as
+/// lost. The bound is 4x under the timeout; per-encode GPU time varies
+/// widely with device load (see `BATCH_EMA_INIT_NS` for the measured
+/// range), so the batch cap adapts to the measured per-encode time (see
+/// `VulkanInner::batch_ns_per_encode`).
+const BATCH_TIME_LIMIT_NS: u64 = 500_000_000;
+/// Initial estimate of the per-encode GPU time (ns), used before the
+/// adaptive cap has measured the device. It is deliberately far above
+/// any per-encode time seen on a contended device, so that the very
+/// first submitted batches hold a single encode: on the Granite Ridge
+/// iGPU (no dedicated VRAM, system-RAM bandwidth shared with the CPU)
+/// prefill averages ~0.3 ms per encode when the CPU is idle, but under
+/// a saturated 16-core CPU load the iGPU loses most of its memory
+/// bandwidth and the measured per-encode time is ~190 ms with a wide
+/// variance (a single encode has been observed to cross the driver's
+/// 2 s per-job timeout on its own). Starting from single-encode
+/// batches is the only start that cannot trip the driver timeout
+/// before the first measurement exists. The EMA then converges to the
+/// measured per-encode time over a few dozen batches, so fast devices
+/// (per-encode in the microseconds) pay only a one-time cost of a few
+/// dozen extra submissions at the start of a workload.
+const BATCH_EMA_INIT_NS: u64 = 2_000_000_000;
+/// Hard cap on encodes per submitted batch: a backstop for the adaptive
+/// time cap (with the measured per-encode time floored at 1 us the time
+/// cap alone would allow unbounded batches of trivially small ops).
+const MAX_BATCH_OPS: usize = 64;
 
 /// Slots in the pinned id-readback ring (see
 /// `VulkanDevice::submit_id_readback`): the decode pipeline keeps at most
@@ -467,6 +504,7 @@ impl VulkanDevice {
                 readback_lock: std::sync::Mutex::new(()),
                 id_ring: std::sync::Mutex::new(None),
                 id_ring_next: AtomicUsize::new(0),
+                batch_ns_per_encode: AtomicU64::new(BATCH_EMA_INIT_NS),
                 pending: std::sync::Mutex::new(Vec::new()),
                 atomic_f32,
                 atomic_f64,
@@ -1189,11 +1227,25 @@ impl VulkanDevice {
             + Send
             + 'static,
     {
-        self.inner
-            .pending
-            .lock()
-            .map_err(|e| Error::Vulkan(e.to_string().into()))?
-            .push(Box::new(encode));
+        let reached_cap = {
+            let mut pending = self
+                .inner
+                .pending
+                .lock()
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            pending.push(Box::new(encode));
+            let n = pending.len() as u64;
+            let est_ns = n.saturating_mul(
+                self.inner
+                    .batch_ns_per_encode
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            );
+            n >= MAX_BATCH_OPS as u64 || est_ns > BATCH_TIME_LIMIT_NS
+        };
+        if reached_cap {
+            // Flush the batch; see BATCH_TIME_LIMIT_NS.
+            self.synchronize()?;
+        }
         Ok(())
     }
 
@@ -1203,18 +1255,18 @@ impl VulkanDevice {
     /// until the wait returns, then released.
     pub fn synchronize(&self) -> Result<()> {
         match self.submit_batch()? {
-            Some((fence, ring_idx)) => self.finish_batch(&fence, ring_idx),
+            Some((fence, ring_idx, n_encodes)) => self.finish_batch(&fence, ring_idx, n_encodes),
             None => Ok(()),
         }
     }
 
     /// Records all pending encodes onto a single command buffer and
     /// submits it (bounded by the fence ring) without waiting. Returns the
-    /// batch's fence and fence-ring index, or `None` when there were no
-    /// pending encodes. The command buffer (and with it every buffer of the
+    /// batch's fence, fence-ring index, and encode count, or `None` when
+    /// there were no pending encodes. The command buffer (and with it every buffer of the
     /// batch) stays pinned in the ring slot until `finish_batch` releases
     /// it, so in-flight batches keep their buffers alive.
-    pub fn submit_batch(&self) -> Result<Option<(Arc<Fence>, usize)>> {
+    pub fn submit_batch(&self) -> Result<Option<(Arc<Fence>, usize, usize)>> {
         let mut pending = self
             .inner
             .pending
@@ -1298,7 +1350,7 @@ impl VulkanDevice {
                 t_build
             );
         }
-        Ok(Some((fence, idx)))
+        Ok(Some((fence, idx, n_encodes)))
     }
 
     /// Waits for a batch submitted by `submit_batch` and releases everything
@@ -1307,11 +1359,32 @@ impl VulkanDevice {
     /// timeout, when the buffers are still in flight), the keepalive lists
     /// (so the allocator can recycle the memory), and the promotion of the
     /// pooled buffers that were returned during the batch.
-    pub fn finish_batch(&self, fence: &Arc<Fence>, ring_idx: usize) -> Result<()> {
+    pub fn finish_batch(
+        &self,
+        fence: &Arc<Fence>,
+        ring_idx: usize,
+        n_encodes: usize,
+    ) -> Result<()> {
         let t_wait = std::time::Instant::now();
         fence
             .wait(Some(std::time::Duration::from_secs(60)))
             .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        if n_encodes > 0 {
+            // Update the adaptive batch cap: the fence wait is the
+            // batch's GPU time (plus a small driver overhead), so the
+            // measured per-encode time tracks the device's actual speed
+            // (including throttle-downs while the CPU is busy).
+            let measured_ns =
+                std::cmp::max(1_000, t_wait.elapsed().as_nanos() as u64 / n_encodes as u64);
+            let old = self
+                .inner
+                .batch_ns_per_encode
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let new = (old.saturating_mul(3) + measured_ns) / 4;
+            self.inner
+                .batch_ns_per_encode
+                .store(new, std::sync::atomic::Ordering::Relaxed);
+        }
         {
             let mut ring = self
                 .inner
@@ -1424,7 +1497,7 @@ impl VulkanDevice {
                 .map_err(|e| e.to_string())?;
             Ok(())
         })?;
-        let (fence, ring_idx) = self.submit_batch()?.ok_or_else(|| {
+        let (fence, ring_idx, n_encodes) = self.submit_batch()?.ok_or_else(|| {
             Error::Vulkan(
                 "submit_id_readback: no batch was submitted"
                     .to_string()
@@ -1435,14 +1508,21 @@ impl VulkanDevice {
             device: self.clone(),
             fence,
             ring_idx,
+            n_encodes,
             slot,
         })
     }
 
     /// Waits for the batch that copied `slot` into the pinned id-readback
     /// ring, performs the batch's post-wait cleanup, and reads the id.
-    fn read_id_slot(&self, fence: &Arc<Fence>, ring_idx: usize, slot: usize) -> Result<u32> {
-        self.finish_batch(fence, ring_idx)?;
+    fn read_id_slot(
+        &self,
+        fence: &Arc<Fence>,
+        ring_idx: usize,
+        n_encodes: usize,
+        slot: usize,
+    ) -> Result<u32> {
+        self.finish_batch(fence, ring_idx, n_encodes)?;
         let ring = self.id_ring_buffer()?;
         let offset = slot as u64 * ID_RING_SLOT_BYTES;
         let slot_buf = ring.slice(offset..offset + 4);
