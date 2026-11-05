@@ -1,7 +1,303 @@
 //! Methods for backpropagation of gradients.
 use crate::op::{BinaryOp, Op, ReduceOp, UnaryOp};
+#[cfg(feature = "cudnn")]
+use crate::{CpuStorage, CudaStorage, CustomOp2, DType, Layout, Shape};
 use crate::{Error, Result, Tensor, TensorId};
 use std::collections::{hash_map::Entry, HashMap};
+
+#[cfg(feature = "cudnn")]
+struct CudnnConv2dBackwardData {
+    params: crate::conv::ParamsConv2D,
+}
+
+#[cfg(feature = "cudnn")]
+impl CustomOp2 for CudnnConv2dBackwardData {
+    fn name(&self) -> &'static str {
+        "cudnn-conv2d-backward-data"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _filter: &CpuStorage,
+        _filter_layout: &Layout,
+        _grad: &CpuStorage,
+        _grad_layout: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        crate::bail!("cuDNN convolution backward-data requires CUDA")
+    }
+
+    fn cuda_fwd(
+        &self,
+        filter: &CudaStorage,
+        filter_layout: &Layout,
+        grad: &CudaStorage,
+        grad_layout: &Layout,
+    ) -> Result<(CudaStorage, Shape)> {
+        if !filter_layout.is_contiguous() || !grad_layout.is_contiguous() {
+            crate::bail!("cuDNN convolution backward-data requires contiguous tensors")
+        }
+        let device = filter.device.clone();
+        let filter = filter
+            .as_cuda_slice::<f32>()?
+            .slice(filter_layout.start_offset()..);
+        let grad = grad
+            .as_cuda_slice::<f32>()?
+            .slice(grad_layout.start_offset()..);
+        let elem_count = self.params.b_size * self.params.c_in * self.params.i_h * self.params.i_w;
+        let mut dst = unsafe { device.alloc::<f32>(elem_count)? };
+        crate::cuda_backend::cudnn::launch_conv2d_backward_data_f32(
+            &filter,
+            &grad,
+            &mut dst,
+            &self.params,
+            &device,
+        )?;
+        let shape = Shape::from((
+            self.params.b_size,
+            self.params.c_in,
+            self.params.i_h,
+            self.params.i_w,
+        ));
+        Ok((CudaStorage::wrap_cuda_slice(dst, device), shape))
+    }
+}
+
+#[cfg(feature = "cudnn")]
+struct CudnnConv2dBackwardFilter {
+    params: crate::conv::ParamsConv2D,
+}
+
+#[cfg(feature = "cudnn")]
+impl CustomOp2 for CudnnConv2dBackwardFilter {
+    fn name(&self) -> &'static str {
+        "cudnn-conv2d-backward-filter"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _src: &CpuStorage,
+        _src_layout: &Layout,
+        _grad: &CpuStorage,
+        _grad_layout: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        crate::bail!("cuDNN convolution backward-filter requires CUDA")
+    }
+
+    fn cuda_fwd(
+        &self,
+        src: &CudaStorage,
+        src_layout: &Layout,
+        grad: &CudaStorage,
+        grad_layout: &Layout,
+    ) -> Result<(CudaStorage, Shape)> {
+        if !src_layout.is_contiguous() || !grad_layout.is_contiguous() {
+            crate::bail!("cuDNN convolution backward-filter requires contiguous tensors")
+        }
+        let device = src.device.clone();
+        let src = src
+            .as_cuda_slice::<f32>()?
+            .slice(src_layout.start_offset()..);
+        let grad = grad
+            .as_cuda_slice::<f32>()?
+            .slice(grad_layout.start_offset()..);
+        let elem_count = self.params.c_out * self.params.c_in * self.params.k_h * self.params.k_w;
+        let mut dst = unsafe { device.alloc::<f32>(elem_count)? };
+        crate::cuda_backend::cudnn::launch_conv2d_backward_filter_f32(
+            &src,
+            &grad,
+            &mut dst,
+            &self.params,
+            &device,
+        )?;
+        let shape = Shape::from((
+            self.params.c_out,
+            self.params.c_in,
+            self.params.k_h,
+            self.params.k_w,
+        ));
+        Ok((CudaStorage::wrap_cuda_slice(dst, device), shape))
+    }
+}
+
+fn conv2d_backward(
+    arg: &Tensor,
+    kernel: &Tensor,
+    grad: &Tensor,
+    padding: usize,
+    stride: usize,
+    dilation: usize,
+) -> Result<(Tensor, Tensor)> {
+    #[cfg(feature = "cudnn")]
+    if arg.device().is_cuda()
+        && arg.dtype() == DType::F32
+        && kernel.dtype() == DType::F32
+        && grad.dtype() == DType::F32
+        && arg.is_contiguous()
+        && kernel.is_contiguous()
+        && grad.is_contiguous()
+    {
+        let (b_size, c_in, i_h, i_w) = arg.dims4()?;
+        let (c_out, kernel_c_in, k_h, k_w) = kernel.dims4()?;
+        if kernel_c_in == c_in {
+            let params = crate::conv::ParamsConv2D {
+                b_size,
+                i_h,
+                i_w,
+                k_h,
+                k_w,
+                c_out,
+                c_in,
+                padding,
+                stride,
+                dilation,
+                cudnn_fwd_algo: None,
+            };
+            let grad_arg = kernel.apply_op2_no_bwd(
+                grad,
+                &CudnnConv2dBackwardData {
+                    params: params.clone(),
+                },
+            )?;
+            let grad_kernel = arg.apply_op2_no_bwd(grad, &CudnnConv2dBackwardFilter { params })?;
+            return Ok((grad_arg, grad_kernel));
+        }
+    }
+
+    // The output height for conv_transpose2d is:
+    // (i_h - 1) * stride - 2 * padding + dilation * (k_h - 1) + out_padding + 1
+    let grad_h = grad.dim(2)?;
+    let k_h = kernel.dim(2)?;
+    let out_size = (grad_h - 1) * stride + dilation * (k_h - 1) + 1 - 2 * padding;
+    let out_padding = arg.dim(2)? - out_size;
+    let grad_arg = grad.conv_transpose2d(kernel, padding, out_padding, stride, dilation)?;
+
+    let grad_kernel = arg
+        .transpose(0, 1)?
+        .conv2d(&grad.transpose(0, 1)?, padding, dilation, stride, 1)?
+        .transpose(0, 1)?;
+    let (_, _, k0, k1) = kernel.dims4()?;
+    let (_, _, g_k0, g_k1) = grad_kernel.dims4()?;
+    let grad_kernel = if g_k0 != k0 || g_k1 != k1 {
+        grad_kernel.narrow(2, 0, k0)?.narrow(3, 0, k1)?
+    } else {
+        grad_kernel
+    };
+    Ok((grad_arg, grad_kernel))
+}
+
+#[cfg(all(test, feature = "cudnn"))]
+mod cudnn_conv_backward_tests {
+    use crate::{Device, Var};
+    use anyhow::{bail, Context, Result};
+
+    fn values(len: usize, scale: f32) -> Vec<f32> {
+        (0..len)
+            .map(|index| (((index * 37 + 11) % 101) as f32 - 50.0) * scale)
+            .collect()
+    }
+
+    fn gradients(
+        device: &Device,
+        input_shape: (usize, usize, usize, usize),
+        kernel_shape: (usize, usize, usize, usize),
+        padding: usize,
+        stride: usize,
+        dilation: usize,
+    ) -> Result<(Vec<f32>, Vec<f32>)> {
+        let input = Var::from_slice(
+            &values(
+                input_shape.0 * input_shape.1 * input_shape.2 * input_shape.3,
+                0.01,
+            ),
+            input_shape,
+            device,
+        )?;
+        let kernel = Var::from_slice(
+            &values(
+                kernel_shape.0 * kernel_shape.1 * kernel_shape.2 * kernel_shape.3,
+                0.005,
+            ),
+            kernel_shape,
+            device,
+        )?;
+        let output = input.conv2d(&kernel, padding, stride, dilation, 1)?;
+        let gradients = output.sqr()?.mean_all()?.backward()?;
+        let input_gradient = gradients
+            .get(&input)
+            .context("missing input gradient")?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let kernel_gradient = gradients
+            .get(&kernel)
+            .context("missing kernel gradient")?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        Ok((input_gradient, kernel_gradient))
+    }
+
+    fn assert_close(label: &str, expected: &[f32], actual: &[f32]) -> Result<()> {
+        if expected.len() != actual.len() {
+            bail!(
+                "{label}: length mismatch {} != {}",
+                expected.len(),
+                actual.len()
+            )
+        }
+        let mut max_absolute = 0.0f32;
+        let mut max_relative = 0.0f32;
+        for (&expected, &actual) in expected.iter().zip(actual) {
+            let absolute = (expected - actual).abs();
+            let relative = absolute / expected.abs().max(1e-6);
+            max_absolute = max_absolute.max(absolute);
+            max_relative = max_relative.max(relative);
+        }
+        if max_absolute > 2e-4 && max_relative > 2e-3 {
+            bail!("{label}: max absolute error {max_absolute}, max relative error {max_relative}")
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nature_cnn_cudnn_gradients_match_cpu() -> Result<()> {
+        let cuda = Device::new_cuda(0)?;
+        for (input_shape, kernel_shape, stride) in [
+            ((2, 4, 84, 84), (32, 4, 8, 8), 4),
+            ((2, 32, 20, 20), (64, 32, 4, 4), 2),
+            ((2, 64, 9, 9), (64, 64, 3, 3), 1),
+        ] {
+            let expected = gradients(&Device::Cpu, input_shape, kernel_shape, 0, stride, 1)?;
+            let actual = gradients(&cuda, input_shape, kernel_shape, 0, stride, 1)?;
+            assert_close("input gradient", &expected.0, &actual.0)?;
+            assert_close("kernel gradient", &expected.1, &actual.1)?;
+        }
+        crate::cuda_backend::cudnn::clear_handle_cache();
+        Ok(())
+    }
+
+    #[test]
+    fn cudnn_gradients_match_cpu_with_padding_and_dilation() -> Result<()> {
+        let cuda = Device::new_cuda(0)?;
+        let expected = gradients(&Device::Cpu, (2, 4, 19, 21), (8, 4, 3, 3), 2, 2, 2)?;
+        let actual = gradients(&cuda, (2, 4, 19, 21), (8, 4, 3, 3), 2, 2, 2)?;
+        assert_close("input gradient", &expected.0, &actual.0)?;
+        assert_close("kernel gradient", &expected.1, &actual.1)?;
+        crate::cuda_backend::cudnn::clear_handle_cache();
+        Ok(())
+    }
+
+    #[test]
+    fn non_contiguous_input_uses_existing_fallback() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let input = Var::from_slice(&values(2 * 4 * 16 * 16, 0.01), (2, 4, 16, 16), &device)?;
+        let kernel = Var::from_slice(&values(8 * 4 * 3 * 3, 0.005), (8, 4, 3, 3), &device)?;
+        let output = input.transpose(2, 3)?.conv2d(&kernel, 0, 1, 1, 1)?;
+        let gradients = output.sqr()?.mean_all()?.backward()?;
+        gradients.get(&input).context("missing input gradient")?;
+        gradients.get(&kernel).context("missing kernel gradient")?;
+        crate::cuda_backend::cudnn::clear_handle_cache();
+        Ok(())
+    }
+}
 
 // arg has been reduced to node via reduce_dims, expand it back to arg.
 // This has to handle keepdims.
@@ -280,35 +576,12 @@ impl Tensor {
                         stride,
                         dilation,
                     } => {
-                        // The output height for conv_transpose2d is:
-                        // (i_h - 1) * stride - 2 * padding + dilation * (k_h - 1) + out_padding + 1
-                        let grad_h = grad.dim(2)?;
-                        let k_h = kernel.dim(2)?;
-                        let out_size =
-                            (grad_h - 1) * stride + dilation * (k_h - 1) + 1 - 2 * padding;
-                        let out_padding = arg.dim(2)? - out_size;
-                        let grad_arg = grad.conv_transpose2d(
-                            kernel,
-                            *padding,
-                            out_padding,
-                            *stride,
-                            *dilation,
-                        )?;
+                        let (grad_arg, grad_kernel) =
+                            conv2d_backward(arg, kernel, &grad, *padding, *stride, *dilation)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
 
-                        let grad_kernel = arg
-                            .transpose(0, 1)?
-                            .conv2d(&grad.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
-                            .transpose(0, 1)?;
                         let sum_grad = grads.or_insert(kernel)?;
-                        let (_, _, k0, k1) = kernel.dims4()?;
-                        let (_, _, g_k0, g_k1) = grad_kernel.dims4()?;
-                        let grad_kernel = if g_k0 != k0 || g_k1 != k1 {
-                            grad_kernel.narrow(2, 0, k0)?.narrow(3, 0, k1)?
-                        } else {
-                            grad_kernel
-                        };
                         *sum_grad = sum_grad.add(&grad_kernel)?;
                     }
                     Op::ConvTranspose1D { .. } => Err(Error::BackwardNotSupported {
