@@ -2264,6 +2264,30 @@ impl BackendStorage for CudaStorage {
     ) -> Result<Self> {
         let elem_count = b * m * n;
         let dev = &self.device;
+        #[cfg(feature = "cuda-legacy-bf16")]
+        if matches!(
+            (&self.slice, &rhs.slice),
+            (CudaStorageSlice::BF16(_), CudaStorageSlice::BF16(_))
+        ) && dev.cuda_stream().context().compute_capability().w()?.0 < 8
+        {
+            // Pre-Ampere cuBLAS cannot consume CUDA_R_16BF. BF16 -> F32
+            // is exact and preserves BF16's exponent range (unlike FP16).
+            // to_dtype materializes the logical layout, including offsets,
+            // transposes and broadcast strides, into a contiguous buffer.
+            let lhs_f32 = self.to_dtype(lhs_l, DType::F32)?;
+            let rhs_f32 = rhs.to_dtype(rhs_l, DType::F32)?;
+            let lhs_layout = Layout::contiguous(lhs_l.shape());
+            let rhs_layout = Layout::contiguous(rhs_l.shape());
+            let cfg = gemm_config(1f32, 0f32, (b, m, n, k), &lhs_layout, &rhs_layout)?;
+            let lhs = lhs_f32.as_cuda_slice::<f32>()?.slice(..);
+            let rhs = rhs_f32.as_cuda_slice::<f32>()?.slice(..);
+            let mut output = unsafe { dev.alloc::<f32>(elem_count)? };
+            // The BF16 fallback always accumulates in F32, independently of
+            // the global reduced-precision setting for ordinary F32 GEMMs.
+            unsafe { dev.blas.gemm_strided_batched(cfg, &rhs, &lhs, &mut output) }.w()?;
+            let output = Self::wrap_cuda_slice(output, dev.clone());
+            return output.to_dtype(&Layout::contiguous((b, m, n)), DType::BF16);
+        }
         let slice = match (&self.slice, &rhs.slice) {
             (CudaStorageSlice::BF16(lhs), CudaStorageSlice::BF16(rhs)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
