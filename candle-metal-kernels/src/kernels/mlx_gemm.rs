@@ -13,6 +13,25 @@ pub enum GemmDType {
     F32,
 }
 
+/// The `addmm_params` struct the MLX GEMM kernel reads when `use_out_source` is set.
+/// With `ldc = 0` and `fdc = 1`, the kernel's `C` pointer addresses a `[N]` row, so the
+/// `TransformAdd` epilogue applies a per-column bias to every row.
+#[derive(Copy, Clone)]
+#[repr(C)]
+struct GemmAddMMParams {
+    ldc: i32,
+    fdc: i32,
+    batch_stride_c: usize,
+    alpha: f32,
+    beta: f32,
+}
+
+impl EncoderParam for GemmAddMMParams {
+    fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+        encoder.set_bytes(position, &data);
+    }
+}
+
 /// Tile configuration for GEMM kernel.
 ///
 /// These parameters control the block sizes and warp tiling for the Metal GEMM kernel.
@@ -450,7 +469,55 @@ pub fn call_mlx_gemv(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// `out = lhs @ rhs`, the MLX Steel GEMM path.
+#[allow(clippy::too_many_arguments)]
 pub fn call_mlx_gemm(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GemmDType,
+    mnk: (usize, usize, usize, usize),
+    lhs_stride: &[usize],
+    lhs_offset: usize,
+    lhs_buffer: &Buffer,
+    rhs_stride: &[usize],
+    rhs_offset: usize,
+    rhs_buffer: &Buffer,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    call_mlx_gemm_impl(
+        device, ep, kernels, dtype, mnk, lhs_stride, lhs_offset, lhs_buffer, rhs_stride,
+        rhs_offset, rhs_buffer, output, None,
+    )
+}
+
+/// `out = lhs @ rhs + bias` with one dispatch: the GEMM epilogue adds the `[N]` bias
+/// row through the kernel's `TransformAdd` path (`ldc = 0`, `fdc = 1` addresses the
+/// same `C` element for every row). Requires `M > 1` and `N > 1`.
+#[allow(clippy::too_many_arguments)]
+pub fn call_mlx_gemm_bias(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GemmDType,
+    mnk: (usize, usize, usize, usize),
+    lhs_stride: &[usize],
+    lhs_offset: usize,
+    lhs_buffer: &Buffer,
+    rhs_stride: &[usize],
+    rhs_offset: usize,
+    rhs_buffer: &Buffer,
+    output: &Buffer,
+    bias_buffer: &Buffer,
+    bias_offset: usize,
+) -> Result<(), MetalKernelError> {
+    call_mlx_gemm_impl(
+        device, ep, kernels, dtype, mnk, lhs_stride, lhs_offset, lhs_buffer, rhs_stride,
+        rhs_offset, rhs_buffer, output, Some((bias_buffer, bias_offset)),
+    )
+}
+
+fn call_mlx_gemm_impl(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
@@ -463,6 +530,7 @@ pub fn call_mlx_gemm(
     rhs_offset: usize,
     rhs_buffer: &Buffer,
     output: &Buffer,
+    bias: Option<(&Buffer, usize)>,
 ) -> Result<(), MetalKernelError> {
     #[derive(Debug)]
     #[repr(C)]
@@ -517,6 +585,11 @@ pub fn call_mlx_gemm(
         .bt())?;
     };
 
+    if bias.is_some() && (m == 1 || n == 1) {
+        return Err(MetalKernelError::InvalidInput(
+            "mlx gemm bias epilogue requires M > 1 and N > 1".to_string(),
+        ));
+    }
     if m == 1 || n == 1 {
         return call_mlx_gemv(
             device,
@@ -553,9 +626,10 @@ pub fn call_mlx_gemm(
     // has_batch should be true when b > 1, matching the original candle behavior
     let has_batch = b > 1;
 
+    let has_bias = bias.is_some();
     let constants = Some(ConstantValues::new(vec![
         (10, Value::Bool(has_batch)),
-        (100, Value::Bool(/* use_out_source */ false)),
+        (100, Value::Bool(/* use_out_source */ has_bias)),
         (110, Value::Bool(/* do_axpby */ false)),
         (200, Value::Bool(/* align_m */ m % bm == 0)),
         (201, Value::Bool(/* align_n */ n % bn == 0)),
@@ -639,19 +713,45 @@ pub fn call_mlx_gemm(
     // Batch strides for buffer 7 (same as main branch)
     let batch_strides = [batch_stride_a, batch_stride_b];
 
-    set_params!(
-        encoder,
-        (
-            (lhs_buffer, lhs_offset),
-            (rhs_buffer, rhs_offset),
-            (),
-            Output::new(output),
-            gemm_params,
-            (),
-            b as i32,
-            &batch_strides[..]
-        )
-    );
+    match bias {
+        Some((bias_buffer, bias_offset)) => {
+            let addmm = GemmAddMMParams {
+                ldc: 0,
+                fdc: 1,
+                batch_stride_c: 0,
+                alpha: 1.0,
+                beta: 1.0,
+            };
+            set_params!(
+                encoder,
+                (
+                    (lhs_buffer, lhs_offset),
+                    (rhs_buffer, rhs_offset),
+                    Input::with_offset(bias_buffer, bias_offset),
+                    Output::new(output),
+                    gemm_params,
+                    addmm,
+                    b as i32,
+                    &batch_strides[..]
+                )
+            );
+        }
+        None => {
+            set_params!(
+                encoder,
+                (
+                    (lhs_buffer, lhs_offset),
+                    (rhs_buffer, rhs_offset),
+                    (),
+                    Output::new(output),
+                    gemm_params,
+                    (),
+                    b as i32,
+                    &batch_strides[..]
+                )
+            );
+        }
+    }
 
     let grid_size = MTLSize {
         width: tn,

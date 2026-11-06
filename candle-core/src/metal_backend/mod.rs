@@ -1904,6 +1904,73 @@ impl BackendStorage for MetalStorage {
 }
 
 impl MetalStorage {
+    /// `lhs @ rhs + bias` through the MLX GEMM's bias epilogue (`call_mlx_gemm_bias`).
+    /// 2D lhs/rhs and a `[n]` bias; caller checks shapes and dtypes.
+    pub(crate) fn matmul_with_bias(
+        &self,
+        rhs: &Self,
+        bias: &Self,
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        bias_l: &Layout,
+    ) -> Result<Self> {
+        let (m, k) = lhs_l.shape().dims2()?;
+        let (k2, n) = rhs_l.shape().dims2()?;
+        if k != k2 {
+            return Err(MetalError::Message(format!(
+                "matmul_with_bias k mismatch: lhs {k}, rhs {k2}"
+            ))
+            .into());
+        }
+        if bias_l.shape().dims() != [n] {
+            return Err(MetalError::Message(format!(
+                "matmul_with_bias bias is {:?}, expected [{n}]",
+                bias_l.shape().dims()
+            ))
+            .into());
+        }
+        if self.dtype != rhs.dtype || self.dtype != bias.dtype {
+            return Err(MetalError::Message("matmul_with_bias dtype mismatch".to_string()).into());
+        }
+        let dtype = match self.dtype {
+            DType::F32 => candle_metal_kernels::GemmDType::F32,
+            DType::F16 => candle_metal_kernels::GemmDType::F16,
+            DType::BF16 => candle_metal_kernels::GemmDType::BF16,
+            dtype => {
+                return Err(MetalError::Message(format!(
+                    "matmul_with_bias doesn't support {dtype:?}"
+                ))
+                .into())
+            }
+        };
+        let size = self.dtype.size_in_bytes();
+        let buffer = self
+            .device
+            .new_buffer_builder()
+            .with_size_for(m * n, self.dtype)
+            .with_label("matmul_bias")
+            .build()?;
+        let encoder = self.device.command_encoder()?;
+        candle_metal_kernels::call_mlx_gemm_bias(
+            &self.device.device,
+            &encoder,
+            &self.device.kernels,
+            dtype,
+            (1, m, n, k),
+            lhs_l.stride(),
+            lhs_l.start_offset() * size,
+            &self.buffer,
+            rhs_l.stride(),
+            rhs_l.start_offset() * size,
+            &rhs.buffer,
+            &buffer,
+            &bias.buffer,
+            bias_l.start_offset() * size,
+        )
+        .map_err(MetalError::from)?;
+        Ok(Self::new(buffer, self.device.clone(), m * n, self.dtype))
+    }
+
     pub fn new(buffer: Arc<Buffer>, device: MetalDevice, count: usize, dtype: DType) -> Self {
         Self {
             buffer,
