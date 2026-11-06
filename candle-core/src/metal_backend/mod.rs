@@ -90,7 +90,24 @@ impl BackendStorage for MetalStorage {
     type Device = MetalDevice;
 
     fn try_clone(&self, _: &Layout) -> Result<Self> {
-        Ok(self.clone())
+        let size = self.count * self.dtype.size_in_bytes();
+        let buffer = self
+            .device
+            .new_buffer_builder()
+            .with_size_for(self.count, self.dtype)
+            .with_label("try_clone")
+            .build()?;
+        {
+            let mut blit = self.device.blit_command_encoder()?;
+            blit.set_label("try_clone");
+            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
+        }
+        Ok(Self::new(
+            buffer,
+            self.device.clone(),
+            self.count,
+            self.dtype,
+        ))
     }
 
     fn dtype(&self) -> DType {
