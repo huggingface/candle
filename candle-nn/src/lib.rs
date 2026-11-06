@@ -38,6 +38,8 @@ pub mod sampling;
 pub mod sequential;
 pub mod var_builder;
 pub mod var_map;
+#[cfg(feature = "vulkan")]
+mod vulkan;
 /// Re-export of [`attention::varlen`] for backward compatibility.
 pub mod varlen_attention {
     pub use crate::attention::varlen::*;

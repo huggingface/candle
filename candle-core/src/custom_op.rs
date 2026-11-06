@@ -1,8 +1,22 @@
+#[allow(unused_imports)]
+use crate::backend::{BackendDevice, BackendStorage};
 use crate::layout::LayoutRelation;
 use crate::op::{BackpropOp, Op};
 use crate::tensor::from_storage;
-use crate::{bail, CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Storage, Tensor};
+use crate::{
+    bail, CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Storage, Tensor,
+    VulkanStorage,
+};
 use std::sync::Arc;
+
+/// Records a Vulkan op that ran through the CPU round-trip (download, CPU
+/// kernel, upload) so that CPU fallback is never mistaken for GPU execution.
+#[cfg(feature = "vulkan")]
+fn note_vulkan_fallback(op: &str) {
+    crate::vulkan_backend::kernels::note_fallback(op, None)
+}
+#[cfg(not(feature = "vulkan"))]
+fn note_vulkan_fallback(_op: &str) {}
 
 /// Unary ops that can be defined in user-land.
 pub trait CustomOp1 {
@@ -31,6 +45,22 @@ pub trait CustomOp1 {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
         ))
+    }
+
+    /// The forward pass, as run on a vulkan device. Note that the storage can use arbitrary
+    /// strides, offsets etc so the associated layout should be used to access it.
+    ///
+    /// The default is a CPU round-trip (download, `cpu_fwd`, upload) that is recorded in the
+    /// Vulkan fallback counter; ops with a native kernel override it.
+    fn vulkan_fwd(
+        &self,
+        storage: &VulkanStorage,
+        layout: &Layout,
+    ) -> Result<(VulkanStorage, Shape)> {
+        note_vulkan_fallback(self.name());
+        let cpu = storage.to_cpu_storage()?;
+        let (out, shape) = self.cpu_fwd(&cpu, layout)?;
+        Ok((storage.device().storage_from_cpu_storage(&out)?, shape))
     }
 
     /// This function takes as argument the argument `arg` used in the forward pass, the result
@@ -80,6 +110,22 @@ pub trait CustomOp2 {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
         ))
+    }
+
+    /// The forward pass, as run on a vulkan device. The default is a CPU round-trip that is
+    /// recorded in the Vulkan fallback counter; ops with a native kernel override it.
+    fn vulkan_fwd(
+        &self,
+        s1: &VulkanStorage,
+        l1: &Layout,
+        s2: &VulkanStorage,
+        l2: &Layout,
+    ) -> Result<(VulkanStorage, Shape)> {
+        note_vulkan_fallback(self.name());
+        let c1 = s1.to_cpu_storage()?;
+        let c2 = s2.to_cpu_storage()?;
+        let (out, shape) = self.cpu_fwd(&c1, l1, &c2, l2)?;
+        Ok((s1.device().storage_from_cpu_storage(&out)?, shape))
     }
 
     fn bwd(
@@ -138,6 +184,26 @@ pub trait CustomOp3 {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
         ))
+    }
+
+    /// The forward pass, as run on a vulkan device. The default is a CPU round-trip that is
+    /// recorded in the Vulkan fallback counter; ops with a native kernel override it.
+    #[allow(clippy::too_many_arguments)]
+    fn vulkan_fwd(
+        &self,
+        s1: &VulkanStorage,
+        l1: &Layout,
+        s2: &VulkanStorage,
+        l2: &Layout,
+        s3: &VulkanStorage,
+        l3: &Layout,
+    ) -> Result<(VulkanStorage, Shape)> {
+        note_vulkan_fallback(self.name());
+        let c1 = s1.to_cpu_storage()?;
+        let c2 = s2.to_cpu_storage()?;
+        let c3 = s3.to_cpu_storage()?;
+        let (out, shape) = self.cpu_fwd(&c1, l1, &c2, l2, &c3, l3)?;
+        Ok((s1.device().storage_from_cpu_storage(&out)?, shape))
     }
 
     fn bwd(
@@ -271,6 +337,16 @@ pub trait InplaceOp1 {
             format!("no metal implementation for {}", self.name()).into(),
         ))
     }
+
+    /// The forward pass, as run on a vulkan device. The default is a CPU round-trip that is
+    /// recorded in the Vulkan fallback counter; ops with a native kernel override it.
+    fn vulkan_fwd(&self, storage: &mut VulkanStorage, layout: &Layout) -> Result<()> {
+        note_vulkan_fallback(self.name());
+        let mut cpu = storage.to_cpu_storage()?;
+        self.cpu_fwd(&mut cpu, layout)?;
+        *storage = storage.device().storage_from_cpu_storage(&cpu)?;
+        Ok(())
+    }
 }
 
 /// In-place ops that can be defined in user-land.
@@ -342,6 +418,26 @@ pub trait InplaceOpN<const N: usize> {
     ) -> Result<()> {
         let _ = (dst, dst_l, srcs);
         bail!("no aliased metal implementation for {}", self.name())
+    }
+
+    fn vulkan_fwd(
+        &self,
+        dst: &mut VulkanStorage,
+        dst_l: &Layout,
+        srcs: [(&VulkanStorage, &Layout); N],
+    ) -> Result<()> {
+        let _ = (dst, dst_l, srcs);
+        bail!("no vulkan implementation for {}", self.name())
+    }
+
+    fn vulkan_fwd_aliased(
+        &self,
+        dst: &mut VulkanStorage,
+        dst_l: &Layout,
+        srcs: [(Src<'_, VulkanStorage>, &Layout); N],
+    ) -> Result<()> {
+        let _ = (dst, dst_l, srcs);
+        bail!("no aliased vulkan implementation for {}", self.name())
     }
 }
 
@@ -428,6 +524,7 @@ impl<C: InplaceOp1> InplaceOpN<0> for C {
     forward_op1!(cpu_fwd, cpu_fwd_aliased, CpuStorage);
     forward_op1!(cuda_fwd, cuda_fwd_aliased, CudaStorage);
     forward_op1!(metal_fwd, metal_fwd_aliased, MetalStorage);
+    forward_op1!(vulkan_fwd, vulkan_fwd_aliased, VulkanStorage);
 }
 
 macro_rules! forward_op2 {
@@ -467,6 +564,7 @@ impl<C: InplaceOp2> InplaceOpN<1> for C {
     forward_op2!(cpu_fwd, cpu_fwd_aliased, CpuStorage);
     forward_op2!(cuda_fwd, cuda_fwd_aliased, CudaStorage);
     forward_op2!(metal_fwd, metal_fwd_aliased, MetalStorage);
+    forward_op2!(vulkan_fwd, vulkan_fwd_aliased, VulkanStorage);
 }
 
 pub trait InplaceOp2 {
@@ -505,6 +603,23 @@ pub trait InplaceOp2 {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
         ))
+    }
+
+    /// The forward pass, as run on a vulkan device. The default is a CPU round-trip that is
+    /// recorded in the Vulkan fallback counter; ops with a native kernel override it.
+    fn vulkan_fwd(
+        &self,
+        s1: &mut VulkanStorage,
+        l1: &Layout,
+        s2: &VulkanStorage,
+        l2: &Layout,
+    ) -> Result<()> {
+        note_vulkan_fallback(self.name());
+        let mut c1 = s1.to_cpu_storage()?;
+        let c2 = s2.to_cpu_storage()?;
+        self.cpu_fwd(&mut c1, l1, &c2, l2)?;
+        *s1 = s1.device().storage_from_cpu_storage(&c1)?;
+        Ok(())
     }
 }
 
@@ -547,6 +662,7 @@ impl<C: InplaceOp3> InplaceOpN<2> for C {
     forward_op3!(cpu_fwd, cpu_fwd_aliased, CpuStorage);
     forward_op3!(cuda_fwd, cuda_fwd_aliased, CudaStorage);
     forward_op3!(metal_fwd, metal_fwd_aliased, MetalStorage);
+    forward_op3!(vulkan_fwd, vulkan_fwd_aliased, VulkanStorage);
 }
 
 pub trait InplaceOp3 {
@@ -594,6 +710,27 @@ pub trait InplaceOp3 {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
         ))
+    }
+
+    /// The forward pass, as run on a vulkan device. The default is a CPU round-trip that is
+    /// recorded in the Vulkan fallback counter; ops with a native kernel override it.
+    #[allow(clippy::too_many_arguments)]
+    fn vulkan_fwd(
+        &self,
+        s1: &mut VulkanStorage,
+        l1: &Layout,
+        s2: &VulkanStorage,
+        l2: &Layout,
+        s3: &VulkanStorage,
+        l3: &Layout,
+    ) -> Result<()> {
+        note_vulkan_fallback(self.name());
+        let mut c1 = s1.to_cpu_storage()?;
+        let c2 = s2.to_cpu_storage()?;
+        let c3 = s3.to_cpu_storage()?;
+        self.cpu_fwd(&mut c1, l1, &c2, l2, &c3, l3)?;
+        *s1 = s1.device().storage_from_cpu_storage(&c1)?;
+        Ok(())
     }
 }
 

@@ -84,14 +84,63 @@ impl Device {
                 let storage = cuda::QCudaStorage::zeros(cuda, elem_count, dtype)?;
                 Ok(QStorage::Cuda(storage))
             }
+            Device::Vulkan(vk) => {
+                // Blocks stay in their GGUF format on the device; the Vulkan
+                // kernels dequantize inside the matmul.
+                Ok(QStorage::Vulkan(crate::QVulkanStorage::zeros(
+                    vk, elem_count, dtype,
+                )?))
+            }
         }
     }
 }
+
+/// Quantize `xs` on the CPU into `dst`'s block format and upload it.
+fn vulkan_quantize(dst: &mut crate::QVulkanStorage, xs: &[f32]) -> Result<()> {
+    let mut cpu = dst.dtype().cpu_zeros(dst.elem_count());
+    cpu.from_float(xs);
+    // # Safety: the storage owns `storage_size_in_bytes` bytes at `as_ptr`.
+    let bytes = unsafe { std::slice::from_raw_parts(cpu.as_ptr(), cpu.storage_size_in_bytes()) };
+    *dst = crate::QVulkanStorage::from_bytes(dst.device(), dst.dtype(), dst.elem_count(), bytes)?;
+    Ok(())
+}
+
+/// Importance-weighted quantization on the CPU into raw block bytes.
+fn vulkan_quantize_imatrix(
+    dst: &mut crate::QVulkanStorage,
+    xs: &[f32],
+    imatrix_weights: &[f32],
+    n_per_row: usize,
+) -> Result<()> {
+    let mut cpu = dst.dtype().cpu_zeros(dst.elem_count());
+    cpu.from_float_imatrix(xs, imatrix_weights, n_per_row);
+    // # Safety: the storage owns `storage_size_in_bytes` bytes at `as_ptr`.
+    let bytes = unsafe { std::slice::from_raw_parts(cpu.as_ptr(), cpu.storage_size_in_bytes()) };
+    *dst = crate::QVulkanStorage::from_bytes(dst.device(), dst.dtype(), dst.elem_count(), bytes)?;
+    Ok(())
+}
+
+/// Whether the Vulkan native kernels are on (`false` without the feature).
+#[cfg(feature = "vulkan")]
+fn vulkan_native() -> bool {
+    crate::vulkan_backend::native_enabled()
+}
+#[cfg(not(feature = "vulkan"))]
+fn vulkan_native() -> bool {
+    false
+}
+#[cfg(feature = "vulkan")]
+fn vulkan_note_fallback(op: &str, why: Option<&crate::Error>) {
+    crate::vulkan_backend::kernels::note_fallback(op, why)
+}
+#[cfg(not(feature = "vulkan"))]
+fn vulkan_note_fallback(_op: &str, _why: Option<&crate::Error>) {}
 
 pub enum QStorage {
     Cpu(Box<dyn QuantizedType>),
     Metal(metal::QMetalStorage),
     Cuda(cuda::QCudaStorage),
+    Vulkan(crate::QVulkanStorage),
 }
 
 impl QStorage {
@@ -133,6 +182,13 @@ impl QStorage {
                 GgmlDType::Q8K => cuda::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => cuda::load_quantized(d, as_t_slice::<bf16>(data)),
             },
+            Device::Vulkan(d) => {
+                // Every block format is uploaded as-is; see `QVulkanStorage`.
+                let elem_count = data.len() / dtype.type_size() * dtype.block_size();
+                Ok(QStorage::Vulkan(crate::QVulkanStorage::from_bytes(
+                    d, dtype, elem_count, data,
+                )?))
+            }
         }
     }
 
@@ -141,6 +197,7 @@ impl QStorage {
             QStorage::Cpu(storage) => storage.block_size(),
             QStorage::Metal(storage) => storage.dtype().block_size(),
             QStorage::Cuda(storage) => storage.dtype().block_size(),
+            QStorage::Vulkan(storage) => storage.dtype().block_size(),
         }
     }
 
@@ -149,6 +206,7 @@ impl QStorage {
             QStorage::Cpu(storage) => storage.dtype(),
             QStorage::Metal(storage) => storage.dtype(),
             QStorage::Cuda(storage) => storage.dtype(),
+            QStorage::Vulkan(storage) => storage.dtype(),
         }
     }
 
@@ -157,6 +215,7 @@ impl QStorage {
             QStorage::Cpu(_storage) => Device::Cpu,
             QStorage::Metal(storage) => Device::Metal(storage.device().clone()),
             QStorage::Cuda(storage) => Device::Cuda(storage.device().clone()),
+            QStorage::Vulkan(storage) => Device::Vulkan(storage.device().clone()),
         }
     }
 
@@ -165,6 +224,7 @@ impl QStorage {
             QStorage::Cpu(storage) => storage.storage_size_in_bytes(),
             QStorage::Metal(storage) => storage.storage_size_in_bytes(),
             QStorage::Cuda(storage) => storage.storage_size_in_bytes(),
+            QStorage::Vulkan(storage) => storage.storage_size_in_bytes(),
         }
     }
 
@@ -175,6 +235,13 @@ impl QStorage {
             }
             (QStorage::Metal(storage), Storage::Metal(src)) => storage.quantize(src)?,
             (QStorage::Cuda(storage), Storage::Cuda(src)) => storage.quantize(src)?,
+            (QStorage::Vulkan(dst), Storage::Vulkan(src)) => {
+                let cpu = src.to_cpu_storage()?;
+                vulkan_quantize(dst, cpu.as_slice::<f32>()?)?;
+            }
+            (QStorage::Vulkan(dst), Storage::Cpu(src)) => {
+                vulkan_quantize(dst, src.as_slice::<f32>()?)?;
+            }
             _ => crate::bail!("Invalid quantize storage locations do not match"),
         }
         Ok(())
@@ -196,6 +263,10 @@ impl QStorage {
             (QStorage::Cuda(storage), Storage::Cuda(src)) => {
                 storage.quantize_imatrix(src, imatrix_weights, n_per_row)?
             }
+            (QStorage::Vulkan(dst), Storage::Vulkan(src)) => {
+                let cpu = src.to_cpu_storage()?;
+                vulkan_quantize_imatrix(dst, cpu.as_slice::<f32>()?, imatrix_weights, n_per_row)?;
+            }
             _ => crate::bail!("Invalid quantize storage locations do not match"),
         }
         Ok(())
@@ -208,6 +279,9 @@ impl QStorage {
             }
             (QStorage::Metal(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
             (QStorage::Cuda(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
+            (QStorage::Vulkan(dst), Storage::Cpu(src)) => {
+                vulkan_quantize(dst, src.as_slice::<f32>()?)?;
+            }
             _ => crate::bail!("Invalid quantize source storage locations: not on cpu"),
         }
         Ok(())
@@ -229,6 +303,9 @@ impl QStorage {
             (QStorage::Cuda(storage), Storage::Cpu(src)) => {
                 storage.quantize_imatrix_onto(src, imatrix_weights, n_per_row)?
             }
+            (QStorage::Vulkan(dst), Storage::Cpu(src)) => {
+                vulkan_quantize_imatrix(dst, src.as_slice::<f32>()?, imatrix_weights, n_per_row)?;
+            }
             _ => crate::bail!("Invalid quantize storage locations do not match"),
         }
         Ok(())
@@ -239,6 +316,7 @@ impl QStorage {
             QStorage::Cpu(storage) => Ok(Storage::Cpu(storage.dequantize(elem_count)?)),
             QStorage::Metal(storage) => Ok(Storage::Metal(storage.dequantize(elem_count)?)),
             QStorage::Cuda(storage) => Ok(Storage::Cuda(storage.dequantize(elem_count)?)),
+            QStorage::Vulkan(storage) => Ok(Storage::Vulkan(storage.dequantize(elem_count)?)),
         }
     }
 
@@ -252,13 +330,14 @@ impl QStorage {
             }
             QStorage::Cuda(storage) => Ok(Cow::from(storage.data()?)),
             QStorage::Metal(storage) => Ok(Cow::from(storage.data()?)),
+            QStorage::Vulkan(storage) => Ok(Cow::from(storage.data()?)),
         }
     }
 
     pub fn device_ptr(&self) -> Result<*const u8> {
         match self {
             QStorage::Cuda(storage) => storage.device_ptr(),
-            QStorage::Metal(_) | QStorage::Cpu(_) => {
+            QStorage::Metal(_) | QStorage::Cpu(_) | QStorage::Vulkan(_) => {
                 crate::bail!("not implemented");
             }
         }
@@ -274,7 +353,7 @@ impl QStorage {
     )> {
         match self {
             QStorage::Cuda(storage) => storage.device_ptr_with_guard(stream),
-            QStorage::Metal(_) | QStorage::Cpu(_) => {
+            QStorage::Metal(_) | QStorage::Cpu(_) | QStorage::Vulkan(_) => {
                 crate::bail!("not implemented");
             }
         }
@@ -746,6 +825,33 @@ impl QTensor {
                 }
                 _ => unreachable!("ids were moved to the QTensor device"),
             },
+            QStorage::Vulkan(storage) => {
+                use crate::backend::BackendDevice;
+                let native = if vulkan_native() {
+                    match &*ids.storage() {
+                        Storage::Vulkan(ids_storage) => {
+                            match storage.embedding(rows, hidden, ids_storage, ids.layout()) {
+                                Ok(out) => Some(out),
+                                Err(e) => {
+                                    vulkan_note_fallback("qembedding", Some(&e));
+                                    None
+                                }
+                            }
+                        }
+                        _ => unreachable!("ids were moved to the QTensor device"),
+                    }
+                } else {
+                    vulkan_note_fallback("qembedding", None);
+                    None
+                };
+                match native {
+                    Some(out) => Storage::Vulkan(out),
+                    None => {
+                        let out = self.cpu_embedding(&ids, rows, hidden)?;
+                        Storage::Vulkan(storage.device().storage_from_cpu_storage(&out)?)
+                    }
+                }
+            }
         };
         let none = crate::op::BackpropOp::none();
         Ok(crate::tensor::from_storage(storage, out_shape, none, false))
@@ -757,6 +863,31 @@ impl QTensor {
 
     pub fn data(&self) -> Result<Cow<'_, [u8]>> {
         self.storage.data()
+    }
+
+    /// The block storage, for backend kernels outside this module.
+    pub fn storage(&self) -> &QStorage {
+        &self.storage
+    }
+
+    /// A CPU copy of this tensor (its block bytes read back from the device),
+    /// used by the Vulkan backend when its native kernels are off or a
+    /// launch is rejected. Every such use is counted as a fallback.
+    #[allow(dead_code)]
+    fn cpu_copy(&self) -> Result<QTensor> {
+        let storage = QStorage::from_data(self.data()?, &Device::Cpu, self.dtype())?;
+        QTensor::new(storage, self.shape.clone())
+    }
+
+    /// The embedding gather on a CPU copy of the table.
+    #[allow(dead_code)]
+    fn cpu_embedding(&self, ids: &Tensor, rows: usize, hidden: usize) -> Result<CpuStorage> {
+        let ids = ids.to_vec1::<u32>()?;
+        let cpu = self.cpu_copy()?;
+        match &cpu.storage {
+            QStorage::Cpu(storage) => storage.embedding(&ids, rows, hidden),
+            _ => unreachable!("cpu_copy builds a CPU storage"),
+        }
     }
 
     /// Applies weights `[experts, n, k]` to inputs `[tokens, slots, k]`, returning `[tokens, topk, n]`.
@@ -813,7 +944,7 @@ impl QTensor {
     pub fn device_ptr(&self) -> Result<*const u8> {
         match &self.storage {
             QStorage::Cuda(storage) => storage.device_ptr(),
-            QStorage::Metal(_) | QStorage::Cpu(_) => {
+            QStorage::Metal(_) | QStorage::Cpu(_) | QStorage::Vulkan(_) => {
                 crate::bail!("not implemented");
             }
         }
@@ -1220,7 +1351,9 @@ impl crate::CustomOp1 for QTensor {
         #[allow(clippy::infallible_destructuring_match)]
         let self_storage = match &self.storage {
             QStorage::Cpu(storage) => storage,
-            QStorage::Metal(_) | QStorage::Cuda(_) => crate::bail!("Invalid storage"),
+            QStorage::Metal(_) | QStorage::Cuda(_) | QStorage::Vulkan(_) => {
+                crate::bail!("Invalid storage")
+            }
         };
         match storage.dtype() {
             DType::F32 => {
@@ -1304,6 +1437,34 @@ impl crate::CustomOp1 for QTensor {
             _ => unreachable!("Cannot call cuda matmul on non cuda QTensor"),
         };
         self_storage.fwd(&self.shape, storage, layout)
+    }
+
+    /// Native quantized matmul when the kernels are on and the launch is
+    /// accepted; otherwise the CPU reference path (block bytes and the
+    /// activation come back to the host, the result goes up). Every CPU
+    /// round-trip is counted by the Vulkan fallback counter.
+    fn vulkan_fwd(
+        &self,
+        storage: &crate::VulkanStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::VulkanStorage, Shape)> {
+        use crate::backend::{BackendDevice, BackendStorage};
+        let self_storage = match &self.storage {
+            QStorage::Vulkan(vk) => vk,
+            _ => unreachable!("Cannot call vulkan matmul on non vulkan QTensor"),
+        };
+        if vulkan_native() {
+            match self_storage.fwd(&self.shape, storage, layout) {
+                Ok(out) => return Ok(out),
+                Err(e) => vulkan_note_fallback("qmatmul", Some(&e)),
+            }
+        } else {
+            vulkan_note_fallback("qmatmul", None);
+        }
+        let cpu_q = self.cpu_copy()?;
+        let cpu_in = storage.to_cpu_storage()?;
+        let (out, shape) = crate::CustomOp1::cpu_fwd(&cpu_q, &cpu_in, layout)?;
+        Ok((self_storage.device().storage_from_cpu_storage(&out)?, shape))
     }
 }
 

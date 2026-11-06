@@ -16,6 +16,26 @@ impl candle::CustomOp3 for RotaryEmbI {
         "rotary-emb-int"
     }
 
+    #[cfg(feature = "vulkan")]
+    fn vulkan_fwd(
+        &self,
+        s1: &candle::VulkanStorage,
+        l1: &Layout,
+        s2: &candle::VulkanStorage,
+        l2: &Layout,
+        s3: &candle::VulkanStorage,
+        l3: &Layout,
+    ) -> Result<(candle::VulkanStorage, Shape)> {
+        if let Some(out) =
+            crate::vulkan::native_rope("rotary-emb-int", true, s1, l1, s2, l2, s3, l3)?
+        {
+            return Ok((out, l1.shape().clone()));
+        }
+        crate::vulkan::round_trip3(s1, l1, s2, l2, s3, l3, |a, la, b, lb, c, lc| {
+            self.cpu_fwd(a, la, b, lb, c, lc)
+        })
+    }
+
     fn cpu_fwd(
         &self,
         s1: &CpuStorage,
@@ -314,6 +334,25 @@ struct RotaryEmb;
 impl candle::CustomOp3 for RotaryEmb {
     fn name(&self) -> &'static str {
         "rotary-emb"
+    }
+
+    #[cfg(feature = "vulkan")]
+    fn vulkan_fwd(
+        &self,
+        s1: &candle::VulkanStorage,
+        l1: &Layout,
+        s2: &candle::VulkanStorage,
+        l2: &Layout,
+        s3: &candle::VulkanStorage,
+        l3: &Layout,
+    ) -> Result<(candle::VulkanStorage, Shape)> {
+        if let Some(out) = crate::vulkan::native_rope("rotary-emb", false, s1, l1, s2, l2, s3, l3)?
+        {
+            return Ok((out, l1.shape().clone()));
+        }
+        crate::vulkan::round_trip3(s1, l1, s2, l2, s3, l3, |a, la, b, lb, c, lc| {
+            self.cpu_fwd(a, la, b, lb, c, lc)
+        })
     }
 
     fn cpu_fwd(
