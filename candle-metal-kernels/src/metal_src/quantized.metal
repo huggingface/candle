@@ -7141,22 +7141,22 @@ kernel void kernel_mul_mm(device const  uchar * src0,
 }
 
 // same as kernel_mul_mm_impl, but src1 and dst are accessed via indices stored in rowids
-template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread half4x4 &)>
+template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread half4x4 &), typename row_index = ushort2>
 void kernel_mul_mm_id_impl(
         device const  uchar * src0,
         device const  uchar * src1,
-        threadgroup ushort2 * rowids,
+        threadgroup row_index * rowids,
         device        float * dst,
-        constant    int64_t & ne00,
-        constant    int64_t & ne02,
-        constant   uint64_t & nb01,
-        constant   uint64_t & nb02,
-        constant    int64_t & ne11,
-        constant    int64_t & ne12,
-        constant   uint64_t & nb10,
-        constant   uint64_t & nb11,
-        constant   uint64_t & nb12,
-        constant    int64_t & ne0,
+                    int64_t   ne00,
+                    int64_t   ne02,
+                   uint64_t   nb01,
+                   uint64_t   nb02,
+                    int64_t   ne11,
+                    int64_t   ne12,
+                   uint64_t   nb10,
+                   uint64_t   nb11,
+                   uint64_t   nb12,
+                    int64_t   ne0,
                     int64_t   ne1,
                     int64_t   ne0ne1,
         threadgroup   uchar * shared_memory,
@@ -7198,7 +7198,7 @@ void kernel_mul_mm_id_impl(
         + nb11 * (id[0] % ne11)
         + nb10 * (BLOCK_SIZE_K / THREAD_PER_COL * (tiitg % THREAD_PER_COL)));
 
-    for (int loop_k = 0; loop_k < ne00; loop_k += BLOCK_SIZE_K) {
+    for (int64_t loop_k = 0; loop_k < ne00; loop_k += BLOCK_SIZE_K) {
         // load data and store to threadgroup memory
         half4x4 temp_a;
         dequantize_func(x, il, temp_a);
@@ -7254,7 +7254,7 @@ void kernel_mul_mm_id_impl(
         if (sgitg == 0) {
             for (int j = tiitg; j < n_cols; j += BLOCK_SIZE_N) {
                 threadgroup const auto & jid = rowids[r1 * BLOCK_SIZE_N + j];
-                int joff =  jid[0] * ne0 + jid[1] * ne0ne1;
+                uint64_t joff = uint64_t(jid[0]) * ne0 + uint64_t(jid[1]) * ne0ne1;
                 for (int i = 0; i < n_rows; i++) {
                     *(C + i + joff) = *(temp_str + i + j * BLOCK_SIZE_M);
                 }
@@ -7337,7 +7337,185 @@ kernel void kernel_mul_mm_id(
         sgitg);
 }
 
+constant constexpr uint MOE_ROUTE_THREADS = 128;
+constant constexpr uint MOE_ROUTE_SIMDS = 4;
+constant constexpr uint MOE_ROUTE_COUNTS = MOE_ROUTE_THREADS + 1;
+constant constexpr uint MOE_ROUTE_TILE = 32;
+constant constexpr uint MOE_MATRIX_SCRATCH_BYTES = 8192;
+
+kernel void kernel_moe_route_counts(
+        device const uint * ids,
+        device uint * counts,
+        constant uint & pairs,
+        constant uint & experts,
+        uint expert [[threadgroup_position_in_grid]],
+        uint tid [[thread_index_in_threadgroup]],
+        uint lane [[thread_index_in_simdgroup]],
+        uint simd [[simdgroup_index_in_threadgroup]]) {
+    threadgroup uint totals[MOE_ROUTE_SIMDS];
+    const uint per_thread = pairs / MOE_ROUTE_THREADS + (pairs % MOE_ROUTE_THREADS != 0);
+    const uint begin = min(tid * per_thread, pairs);
+    const uint end = begin + min(per_thread, pairs - begin);
+    uint count = 0;
+    for (uint p = begin; p < end; ++p) {
+        count += min(ids[p], experts) == expert;
+    }
+    const ulong base = ulong(expert) * MOE_ROUTE_COUNTS;
+    counts[base + tid] = count;
+    const uint total = simd_sum(count);
+    if (lane == 0) {
+        totals[simd] = total;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid == 0) {
+        uint sum = 0;
+        for (uint i = 0; i < MOE_ROUTE_SIMDS; ++i) {
+            sum += totals[i];
+        }
+        counts[base + MOE_ROUTE_THREADS] = sum;
+    }
+}
+
+kernel void kernel_moe_route_compact(
+        device const uint * ids,
+        device const uint * counts,
+        device uint * routes,
+        device uint4 * tasks,
+        constant uint & pairs,
+        constant uint & experts,
+        uint expert [[threadgroup_position_in_grid]],
+        uint tid [[thread_index_in_threadgroup]],
+        uint lane [[thread_index_in_simdgroup]],
+        uint simd [[simdgroup_index_in_threadgroup]]) {
+    threadgroup uint2 totals[MOE_ROUTE_SIMDS];
+    uint2 prior = uint2(0);
+    for (ulong e = tid; e < expert; e += MOE_ROUTE_THREADS) {
+        const uint count = counts[e * MOE_ROUTE_COUNTS + MOE_ROUTE_THREADS];
+        prior += uint2(count, count / MOE_ROUTE_TILE + (count % MOE_ROUTE_TILE != 0));
+    }
+    const uint2 subtotal = uint2(simd_sum(prior.x), simd_sum(prior.y));
+    if (lane == 0) {
+        totals[simd] = subtotal;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    uint2 base = uint2(0);
+    for (uint i = 0; i < MOE_ROUTE_SIMDS; ++i) {
+        base += totals[i];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const ulong count_base = ulong(expert) * MOE_ROUTE_COUNTS;
+    const uint count = counts[count_base + tid];
+    const uint total = counts[count_base + MOE_ROUTE_THREADS];
+    uint offset = simd_prefix_exclusive_sum(count);
+    const uint simd_total = simd_sum(count);
+    if (lane == 0) {
+        totals[simd].x = simd_total;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = 0; i < simd; ++i) {
+        offset += totals[i].x;
+    }
+
+    // Contiguous slices preserve token/slot order without atomic placement.
+    const uint per_thread = pairs / MOE_ROUTE_THREADS + (pairs % MOE_ROUTE_THREADS != 0);
+    const uint begin = min(tid * per_thread, pairs);
+    const uint end = begin + min(per_thread, pairs - begin);
+    uint write = base.x + offset;
+    for (uint p = begin; p < end; ++p) {
+        if (min(ids[p], experts) == expert) {
+            routes[write++] = p;
+        }
+    }
+
+    const uint tiles = total / MOE_ROUTE_TILE + (total % MOE_ROUTE_TILE != 0);
+    for (uint tile = tid; tile < tiles; tile += MOE_ROUTE_THREADS) {
+        const uint start = tile * MOE_ROUTE_TILE;
+        tasks[ulong(base.y) + tile + 1] =
+            uint4(expert, base.x + start, min(MOE_ROUTE_TILE, total - start), 0);
+    }
+    if (expert == experts && tid == 0) {
+        tasks[0] = uint4(base.y + tiles, 0, 0, 0);
+    }
+}
+
+template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread half4x4 &)>
+kernel void kernel_mul_mm_routed(
+        device const uchar * weights,
+        device const float * input,
+        device const uint * routes,
+        device const uint4 * tasks,
+        device float * dst,
+        constant uint & k,
+        constant uint & n,
+        constant uint & topk,
+        constant uint & input_slots,
+        constant uint & experts,
+        constant ulong & weight_row_bytes,
+        constant ulong & weight_expert_bytes,
+        threadgroup uchar * shared_memory [[threadgroup(0)]],
+        uint3 group [[threadgroup_position_in_grid]],
+        uint tid [[thread_index_in_threadgroup]],
+        uint simd [[simdgroup_index_in_threadgroup]]) {
+    if (group.x >= tasks[0].x) {
+        return;
+    }
+    const uint4 task = tasks[ulong(group.x) + 1];
+    const ulong output_start = ulong(group.y) * BLOCK_SIZE_M;
+    const uint output_rows = uint(min(ulong(BLOCK_SIZE_M), ulong(n) - output_start));
+    if (task.x == experts) {
+        for (uint i = tid; i < task.z * output_rows; i += MOE_ROUTE_THREADS) {
+            const uint route = routes[task.y + i / output_rows];
+            dst[ulong(route) * n + output_start + i % output_rows] = 0.f;
+        }
+        return;
+    }
+
+    threadgroup uint2 * rowids = (threadgroup uint2 *)(shared_memory + MOE_MATRIX_SCRATCH_BYTES);
+    if (tid < task.z) {
+        const uint route = routes[task.y + tid];
+        rowids[tid] = uint2(route % topk, route / topk);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    kernel_mul_mm_id_impl<block_q, nl, dequantize_func, uint2>(
+        weights + ulong(task.x) * weight_expert_bytes,
+        (device const uchar *)input,
+        rowids,
+        dst,
+        k,
+        experts,
+        weight_row_bytes,
+        weight_expert_bytes,
+        input_slots,
+        0,
+        sizeof(float),
+        ulong(k) * sizeof(float),
+        ulong(input_slots) * k * sizeof(float),
+        n,
+        task.z,
+        ulong(n) * topk,
+        shared_memory,
+        uint3(0, group.y, 0),
+        tid,
+        simd);
+}
+
 #define QK_NL 16
+
+typedef decltype(kernel_mul_mm_routed<float4x4, 1, dequantize_f32>) mat_mm_routed_t;
+
+template [[host_name("kernel_mul_mm_routed_f32_f32")]]  kernel mat_mm_routed_t kernel_mul_mm_routed<float4x4, 1, dequantize_f32>;
+template [[host_name("kernel_mul_mm_routed_f16_f32")]]  kernel mat_mm_routed_t kernel_mul_mm_routed<half4x4, 1, dequantize_f16>;
+template [[host_name("kernel_mul_mm_routed_q4_0_f32")]] kernel mat_mm_routed_t kernel_mul_mm_routed<block_q4_0, 2, dequantize_q4_0>;
+template [[host_name("kernel_mul_mm_routed_q4_1_f32")]] kernel mat_mm_routed_t kernel_mul_mm_routed<block_q4_1, 2, dequantize_q4_1>;
+template [[host_name("kernel_mul_mm_routed_q5_0_f32")]] kernel mat_mm_routed_t kernel_mul_mm_routed<block_q5_0, 2, dequantize_q5_0>;
+template [[host_name("kernel_mul_mm_routed_q5_1_f32")]] kernel mat_mm_routed_t kernel_mul_mm_routed<block_q5_1, 2, dequantize_q5_1>;
+template [[host_name("kernel_mul_mm_routed_q8_0_f32")]] kernel mat_mm_routed_t kernel_mul_mm_routed<block_q8_0, 2, dequantize_q8_0>;
+template [[host_name("kernel_mul_mm_routed_q2_K_f32")]] kernel mat_mm_routed_t kernel_mul_mm_routed<block_q2_K, QK_NL, dequantize_q2_K>;
+template [[host_name("kernel_mul_mm_routed_q3_K_f32")]] kernel mat_mm_routed_t kernel_mul_mm_routed<block_q3_K, QK_NL, dequantize_q3_K>;
+template [[host_name("kernel_mul_mm_routed_q4_K_f32")]] kernel mat_mm_routed_t kernel_mul_mm_routed<block_q4_K, QK_NL, dequantize_q4_K>;
+template [[host_name("kernel_mul_mm_routed_q5_K_f32")]] kernel mat_mm_routed_t kernel_mul_mm_routed<block_q5_K, QK_NL, dequantize_q5_K>;
+template [[host_name("kernel_mul_mm_routed_q6_K_f32")]] kernel mat_mm_routed_t kernel_mul_mm_routed<block_q6_K, QK_NL, dequantize_q6_K>;
 
 //
 // get rows
@@ -7570,13 +7748,25 @@ kernel void kernel_mul_mv_id(
         uint3                  tgpig[[threadgroup_position_in_grid]],
         uint                   tiitg[[thread_index_in_threadgroup]],
         uint                   tiisg[[thread_index_in_simdgroup]],
-        uint                   sgitg[[simdgroup_index_in_threadgroup]]) {
+        uint                   sgitg[[simdgroup_index_in_threadgroup]],
+        uint3                  ntg[[threads_per_threadgroup]]) {
     const int iid1 = tgpig.z/nei0;
     const int idx = tgpig.z%nei0;
 
     tgpig.z = 0;
 
     const int32_t i02 = ((device const int32_t *) (ids + iid1*nbi1))[idx];
+
+    if (i02 < 0 || int64_t(i02) >= ne02) {
+        if (tgpig.x == 0 && tgpig.y == 0) {
+            const uint threads = ntg.x * ntg.y * ntg.z;
+            const uint64_t base = (uint64_t(iid1) * nei0 + idx) * ne0;
+            for (uint64_t row = tiitg; row < uint64_t(ne0); row += threads) {
+                dst[base + row] = 0.f;
+            }
+        }
+        return;
+    }
 
     const int64_t i11 = idx % ne11;
     const int64_t i12 = iid1;
