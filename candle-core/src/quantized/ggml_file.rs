@@ -130,6 +130,16 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
         Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
         Device::Metal(metal) => super::metal::load_quantized(metal, data)?,
         Device::Cuda(cuda) => super::cuda::load_quantized(cuda, data)?,
+        Device::Vulkan(d) => {
+            // Blocks go to the device as-is; the kernels dequantize in place.
+            let n = data.len() * T::BLCK_SIZE;
+            QStorage::Vulkan(crate::QVulkanStorage::from_bytes(
+                d,
+                T::DTYPE,
+                n,
+                &raw_data[..size_in_bytes],
+            )?)
+        }
     };
     super::QTensor::new(data, dims)
 }

@@ -36,6 +36,8 @@ yoke = { workspace = true }
 zerocopy = { workspace = true }
 zip = { workspace = true }
 parking_lot = "0.12.5"
+ash = { version = "0.38", default-features = false, features = ["loaded", "std"], optional = true }
+naga = { version = "27", default-features = false, features = ["glsl-in", "wgsl-in", "spv-out"], optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokenizers = { workspace = true, features = ["fancy-regex"] }
 
@@ -58,6 +60,10 @@ metal = [
     "dep:candle-metal-kernels",
 ]
 metal-debug-labels = ["metal", "candle-metal-kernels/debug-labels"]
+# Vulkan accelerator backend (iGPU/dGPU via libvulkan, e.g. RADV). Uses ash with
+# the `loaded` feature (libvulkan is loaded at runtime, not hard-linked) and naga
+# (pure-Rust GLSL/WGSL -> SPIR-V, so no external glslc is needed). Off by default.
+vulkan = ["dep:ash", "dep:naga"]
 
 [[bench]]
 name = "bench_main"

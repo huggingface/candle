@@ -53,6 +53,18 @@ impl candle::CustomOp1 for Sigmoid {
         "sigmoid"
     }
 
+    #[cfg(feature = "vulkan")]
+    fn vulkan_fwd(
+        &self,
+        s: &candle::VulkanStorage,
+        l: &Layout,
+    ) -> Result<(candle::VulkanStorage, Shape)> {
+        if let Some(out) = crate::vulkan::native_sigmoid(s, l)? {
+            return Ok((out, l.shape().clone()));
+        }
+        crate::vulkan::round_trip1(s, l, |c, l| self.cpu_fwd(c, l))
+    }
+
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
         use candle::backend::BackendStorage;
 
@@ -289,6 +301,18 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         "softmax-last-dim"
     }
 
+    #[cfg(feature = "vulkan")]
+    fn vulkan_fwd(
+        &self,
+        s: &candle::VulkanStorage,
+        l: &Layout,
+    ) -> Result<(candle::VulkanStorage, Shape)> {
+        if let Some(out) = crate::vulkan::native_softmax_last_dim(s, l)? {
+            return Ok((out, l.shape().clone()));
+        }
+        crate::vulkan::round_trip1(s, l, |c, l| self.cpu_fwd(c, l))
+    }
+
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
         fn softmax<T: candle::WithDType + num_traits::Float>(
             src: &[T],
@@ -446,6 +470,20 @@ struct RmsNorm {
 impl candle::CustomOp2 for RmsNorm {
     fn name(&self) -> &'static str {
         "rms-norm"
+    }
+
+    #[cfg(feature = "vulkan")]
+    fn vulkan_fwd(
+        &self,
+        s1: &candle::VulkanStorage,
+        l1: &Layout,
+        s2: &candle::VulkanStorage,
+        l2: &Layout,
+    ) -> Result<(candle::VulkanStorage, Shape)> {
+        if let Some(out) = crate::vulkan::native_rms_norm(s1, l1, s2, l2, self.eps)? {
+            return Ok((out, l1.shape().clone()));
+        }
+        crate::vulkan::round_trip2(s1, l1, s2, l2, |a, la, b, lb| self.cpu_fwd(a, la, b, lb))
     }
 
     fn cpu_fwd(
