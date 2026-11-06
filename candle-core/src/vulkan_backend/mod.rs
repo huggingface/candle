@@ -746,7 +746,35 @@ impl VulkanDevice {
             precise_math: true,
         })
     }
+    /// The device with ordinal `gpu_id`.
+    ///
+    /// Handles are shared per ordinal: while any handle (or tensor) for
+    /// `gpu_id` is alive, `new(gpu_id)` returns another handle on the same
+    /// logical device, so tensors created through separate `new` calls can be
+    /// combined. When every handle is dropped the device and its memory are
+    /// released. Use [`VulkanDevice::new_isolated`] for a private context.
     pub fn new(gpu_id: usize) -> Result<Self> {
+        static SHARED: Mutex<Vec<(usize, std::sync::Weak<VulkanContext>)>> = Mutex::new(Vec::new());
+        let mut shared = SHARED.lock().unwrap_or_else(|p| p.into_inner());
+        shared.retain(|(_, w)| w.strong_count() > 0);
+        if let Some(inner) = shared
+            .iter()
+            .find(|(id, _)| *id == gpu_id)
+            .and_then(|(_, w)| w.upgrade())
+        {
+            return Ok(VulkanDevice {
+                gpu_id,
+                inner,
+                precise_math: false,
+            });
+        }
+        let dev = init_vulkan(gpu_id, None)?;
+        shared.push((gpu_id, Arc::downgrade(&dev.inner)));
+        Ok(dev)
+    }
+
+    /// A new, private logical device for `gpu_id` (not shared with [`VulkanDevice::new`]).
+    pub fn new_isolated(gpu_id: usize) -> Result<Self> {
         init_vulkan(gpu_id, None)
     }
 
@@ -2286,7 +2314,7 @@ impl QVulkanStorage {
 
     /// Dequantize to an f32 storage on the device.
     pub fn dequantize(&self, elem_count: usize) -> Result<VulkanStorage> {
-        kernels::note_dequantize();
+        kernels::note_dequantize(self.dtype, elem_count);
         let out = self.inner.device.alloc(DType::F32, elem_count)?;
         match self.dtype {
             GgmlDType::F32 => {
@@ -3176,7 +3204,7 @@ mod tests {
     fn vulkan_quantized_gemm_reuses_bounded_scratch() -> crate::Result<()> {
         use crate::quantized::{QMatMul, QStorage, QTensor};
         use crate::Module;
-        let vk = VulkanDevice::new(0)?;
+        let vk = VulkanDevice::new_isolated(0)?;
         let weak = Arc::downgrade(&vk.inner);
         {
             let dev = Device::Vulkan(vk.clone());
@@ -3257,7 +3285,7 @@ mod tests {
 
     #[test]
     fn vulkan_allocation_keeps_pending_arguments_alive() -> crate::Result<()> {
-        let vk = VulkanDevice::new(0)?;
+        let vk = VulkanDevice::new_isolated(0)?;
         let temporary = vk.alloc(DType::F32, 1)?;
         kernels::run_fill(&vk, 4, temporary.buf(), 1, &Layout::contiguous(1), 0)?;
         drop(temporary);
@@ -3276,6 +3304,22 @@ mod tests {
             "allocation retired prepared buffers"
         );
         vk.flush()?;
+        Ok(())
+    }
+
+    #[test]
+    fn vulkan_devices_are_shared_per_ordinal() -> crate::Result<()> {
+        let a = VulkanDevice::new(0)?;
+        let b = VulkanDevice::new(0)?;
+        assert!(
+            a.same_device(&b),
+            "new(0) must return the same logical device"
+        );
+        let c = VulkanDevice::new_isolated(0)?;
+        assert!(!a.same_device(&c), "new_isolated must not share");
+        let x = Tensor::new(&[1f32, 2., 3.], &Device::Vulkan(a))?;
+        let y = Tensor::new(&[4f32, 5., 6.], &Device::Vulkan(b))?;
+        assert_eq!((x + y)?.to_vec1::<f32>()?, vec![5., 7., 9.]);
         Ok(())
     }
 

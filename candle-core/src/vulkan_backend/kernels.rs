@@ -73,8 +73,11 @@ pub(crate) fn note_submit(wait: std::time::Duration) {
     SUBMITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     WAIT_NS.fetch_add(wait.as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
 }
-pub(crate) fn note_dequantize() {
+pub(crate) fn note_dequantize(dtype: crate::quantized::GgmlDType, elem_count: usize) {
     DEQUANTIZE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if trace_enabled() {
+        eprintln!("[vulkan] full dequantization of a {dtype:?} tensor ({elem_count} elements)");
+    }
 }
 
 /// A snapshot of the process-wide Vulkan execution counters (all devices).
@@ -920,7 +923,7 @@ impl Push {
 
 /// Group counts for `n` invocations of 1-D groups of `wg`, spread over the
 /// x and y grid axes (`z` is the caller's batch axis).
-fn grid(n: usize, wg: usize, z: usize, max_x: u32) -> [u32; 3] {
+pub fn grid(n: usize, wg: usize, z: usize, max_x: u32) -> [u32; 3] {
     let groups = n.div_ceil(wg).max(1);
     let gx = groups.min(max_x as usize).max(1);
     let gy = groups.div_ceil(gx);

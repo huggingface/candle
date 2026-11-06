@@ -33,7 +33,10 @@ pub const MAXD: usize = 8;
 
 /// The common prelude: version, the `Idx` descriptor, the parameter buffer
 /// (always binding `{P}`), and the helpers.
-fn prelude(wg: usize, nbuf: usize) -> String {
+/// The common kernel header: `#version`, `WG`, the `Idx` parameter block
+/// bound at `nbuf` (after the kernel's own `nbuf` buffers) and the `gid()` /
+/// `grow()` / `off*()` helpers. Public for kernels defined outside candle.
+pub fn prelude(wg: usize, nbuf: usize) -> String {
     format!(
         r#"#version 450
 #define WG {wg}
