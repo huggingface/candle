@@ -95,6 +95,24 @@ fn conv1d(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+fn conv_transpose1d_issue4063(dev: &Device) -> Result<()> {
+    // Regression test for issue #4063:
+    // l_in = 1, k_size = 3, stride = 2, padding = 1, dilation = 1, output_padding = 1
+    // Output shape should be [1, 1, 2]
+    let t = Tensor::new(&[2.0f32], dev)?.reshape((1, 1, 1))?;
+    let w = Tensor::new(&[1.0f32, 3.0, 5.0], dev)?.reshape((1, 1, 3))?;
+    let res = t.conv_transpose1d(&w, 1, 1, 2, 1, 1)?;
+    assert_eq!(res.dims(), [1, 1, 2]);
+    assert_eq!(
+        test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+        [6.0, 10.0]
+    );
+
+    // Check invalid padding error handling
+    let res_err = t.conv_transpose1d(&w, 10, 1, 2, 1, 1);
+    assert!(res_err.is_err());
+    Ok(())
+}
 fn conv1d_small(dev: &Device) -> Result<()> {
     let t = Tensor::new(&[0.4056f32, -0.8689, -0.0773, -1.5630], dev)?.reshape((1, 1, 4))?;
     let w = Tensor::new(&[1f32, 0., 0.], dev)?.reshape((1, 1, 3))?;
@@ -1018,4 +1036,11 @@ test_device!(
     conv2d_grad_noncontiguous_kernel_cpu,
     conv2d_grad_noncontiguous_kernel_gpu,
     conv2d_grad_noncontiguous_kernel_metal
+);
+
+test_device!(
+    conv_transpose1d_issue4063,
+    conv_transpose1d_issue4063_cpu,
+    conv_transpose1d_issue4063_gpu,
+    conv_transpose1d_issue4063_metal
 );
