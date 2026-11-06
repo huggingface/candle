@@ -1583,8 +1583,8 @@ impl Map2 for MatMul {
                         let a = rhs_p.as_ptr() as *const f32;
                         let b = lhs_p.as_ptr() as *const f32;
                         let c = dst_p.as_mut_ptr() as *mut f32;
-                        let a = std::slice::from_raw_parts(a, a_skip);
-                        let b = std::slice::from_raw_parts(b, b_skip);
+                        let a = std::slice::from_raw_parts(a, rhs_p.len());
+                        let b = std::slice::from_raw_parts(b, lhs_p.len());
                         let c = std::slice::from_raw_parts_mut(c, c_skip);
                         crate::accelerate::sgemm(
                             transa, transb, /* m= */ n as i32, /* n= */ m as i32,
@@ -1604,8 +1604,8 @@ impl Map2 for MatMul {
                         let a = rhs_p.as_ptr() as *const f64;
                         let b = lhs_p.as_ptr() as *const f64;
                         let c = dst_p.as_mut_ptr() as *mut f64;
-                        let a = std::slice::from_raw_parts(a, a_skip);
-                        let b = std::slice::from_raw_parts(b, b_skip);
+                        let a = std::slice::from_raw_parts(a, rhs_p.len());
+                        let b = std::slice::from_raw_parts(b, lhs_p.len());
                         let c = std::slice::from_raw_parts_mut(c, c_skip);
                         crate::accelerate::dgemm(
                             transa, transb, /* m= */ n as i32, /* n= */ m as i32,
@@ -1671,8 +1671,8 @@ impl Map2 for MatMul {
                         let a = rhs_p.as_ptr() as *const f16;
                         let b = lhs_p.as_ptr() as *const f16;
                         let c = dst_p.as_mut_ptr() as *mut f16;
-                        let a = std::slice::from_raw_parts(a, a_skip);
-                        let b = std::slice::from_raw_parts(b, b_skip);
+                        let a = std::slice::from_raw_parts(a, rhs_p.len());
+                        let b = std::slice::from_raw_parts(b, lhs_p.len());
                         let c = std::slice::from_raw_parts_mut(c, c_skip);
                         crate::mkl::hgemm(
                             transa,
@@ -1701,8 +1701,8 @@ impl Map2 for MatMul {
                         let a = rhs_p.as_ptr() as *const f32;
                         let b = lhs_p.as_ptr() as *const f32;
                         let c = dst_p.as_mut_ptr() as *mut f32;
-                        let a = std::slice::from_raw_parts(a, a_skip);
-                        let b = std::slice::from_raw_parts(b, b_skip);
+                        let a = std::slice::from_raw_parts(a, rhs_p.len());
+                        let b = std::slice::from_raw_parts(b, lhs_p.len());
                         let c = std::slice::from_raw_parts_mut(c, c_skip);
                         crate::mkl::sgemm(
                             transa, transb, /* m= */ n as i32, /* n= */ m as i32,
@@ -1722,8 +1722,8 @@ impl Map2 for MatMul {
                         let a = rhs_p.as_ptr() as *const f64;
                         let b = lhs_p.as_ptr() as *const f64;
                         let c = dst_p.as_mut_ptr() as *mut f64;
-                        let a = std::slice::from_raw_parts(a, a_skip);
-                        let b = std::slice::from_raw_parts(b, b_skip);
+                        let a = std::slice::from_raw_parts(a, rhs_p.len());
+                        let b = std::slice::from_raw_parts(b, lhs_p.len());
                         let c = std::slice::from_raw_parts_mut(c, c_skip);
                         crate::mkl::dgemm(
                             transa, transb, /* m= */ n as i32, /* n= */ m as i32,
