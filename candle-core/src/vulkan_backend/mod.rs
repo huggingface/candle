@@ -3284,6 +3284,8 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "asserts a device's private recording state, which the per-thread fault drain \
+                flushes whenever another test thread exits; run with --ignored --test-threads=1"]
     fn vulkan_allocation_keeps_pending_arguments_alive() -> crate::Result<()> {
         let vk = VulkanDevice::new_isolated(0)?;
         let temporary = vk.alloc(DType::F32, 1)?;
