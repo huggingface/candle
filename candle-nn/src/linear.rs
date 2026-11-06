@@ -42,45 +42,66 @@ impl Linear {
 impl super::Module for Linear {
     fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
         // When possible, we avoid using a broadcasted matmul as it is much slower
-        // than the standard matmul for the cuda and cpu backends.
-        let x = match *x.dims() {
+        // than the standard matmul for the cuda and cpu backends. The bias is folded
+        // into the GEMM epilogue on the 2D reshapes, so it costs no extra dispatch
+        // there (and no second pass over the output).
+        let bias = self.bias.as_ref();
+        match *x.dims() {
             [b1, b2, m, k] => {
                 if x.is_contiguous() {
                     let w = self.weight.t()?;
-                    x.reshape((b1 * b2 * m, k))?
-                        .matmul(&w)?
-                        .reshape((b1, b2, m, ()))?
+                    let x = x.reshape((b1 * b2 * m, k))?;
+                    let x = match bias {
+                        Some(b) => x.matmul_with_bias(&w, b)?,
+                        None => x.matmul(&w)?,
+                    };
+                    x.reshape((b1, b2, m, ()))
                 } else {
                     let w = self.weight.broadcast_left((b1, b2))?.t()?;
-                    x.matmul(&w)?
+                    let x = x.matmul(&w)?;
+                    match bias {
+                        Some(b) => x.broadcast_add(b),
+                        None => Ok(x),
+                    }
                 }
             }
             [bsize, m, k] => {
                 if x.is_contiguous() {
                     let w = self.weight.t()?;
-                    x.reshape((bsize * m, k))?
-                        .matmul(&w)?
-                        .reshape((bsize, m, ()))?
+                    let x = x.reshape((bsize * m, k))?;
+                    let x = match bias {
+                        Some(b) => x.matmul_with_bias(&w, b)?,
+                        None => x.matmul(&w)?,
+                    };
+                    x.reshape((bsize, m, ()))
                 } else {
                     let w = self.weight.broadcast_left(bsize)?.t()?;
-                    x.matmul(&w)?
+                    let x = x.matmul(&w)?;
+                    match bias {
+                        Some(b) => x.broadcast_add(b),
+                        None => Ok(x),
+                    }
+                }
+            }
+            [m, k] => {
+                let w = self.weight.t()?;
+                match bias {
+                    Some(b) => x.matmul_with_bias(&w, b),
+                    None => x.matmul(&w),
                 }
             }
             _ => {
                 let w = self.weight.t()?;
-                x.matmul(&w)?
+                let x = x.matmul(&w)?;
+                match bias {
+                    Some(b) => x.broadcast_add(b),
+                    None => Ok(x),
+                }
             }
-        };
-        match &self.bias {
-            None => Ok(x),
-            Some(bias) => x.broadcast_add(bias),
         }
     }
 }
 
-/// Create or initialize a new linear layer.
-///
-/// This uses some default names for weights and biases, namely `"weight"` and `"bias"`.
 pub fn linear(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Result<Linear> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints((out_dim, in_dim), "weight", init_ws)?;

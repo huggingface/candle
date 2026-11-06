@@ -2491,3 +2491,117 @@ fn residency_set_batch_insert_remove() {
     set.remove_batch(std::iter::empty());
     assert_eq!(raw.allocationCount(), base);
 }
+
+fn run_mlx_gemm_bias<T: Clone>(
+    dtype: GemmDType,
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs: &[T],
+    lhs_stride: &[usize],
+    rhs: &[T],
+    rhs_stride: &[usize],
+    bias: &[T],
+) -> Vec<T> {
+    let device = device();
+    let kernels = Kernels::new();
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let lhs = new_buffer(&device, lhs);
+    let rhs = new_buffer(&device, rhs);
+    let bias = new_buffer(&device, bias);
+    let length = b * m * n;
+    let output = device
+        .new_buffer(length * core::mem::size_of::<T>(), RESOURCE_OPTIONS)
+        .unwrap();
+    call_mlx_gemm_bias(
+        &device,
+        &encoder,
+        &kernels,
+        dtype,
+        (b, m, n, k),
+        lhs_stride,
+        0,
+        &lhs,
+        rhs_stride,
+        0,
+        &rhs,
+        &output,
+        &bias,
+        0,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+    read_to_vec(&output, length)
+}
+
+fn reference_gemm_bias(
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs: &[f32],
+    rhs: &[f32],
+    bias: &[f32],
+) -> Vec<f32> {
+    let mut out = vec![0f32; b * m * n];
+    for batch in 0..b {
+        for row in 0..m {
+            for col in 0..n {
+                let mut acc = bias[col];
+                for kk in 0..k {
+                    // rhs is stored as a [k, n] row-major operand (a linear weight seen transposed).
+                    acc += lhs[batch * m * k + row * k + kk] * rhs[batch * n * k + kk * n + col];
+                }
+                out[batch * m * n + row * n + col] = acc;
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn mlx_gemm_bias_epilogue_f32() {
+    // Aligned and unaligned shapes; the kernel has separate aligned/edge paths.
+    for (b, m, n, k) in [(1, 64, 64, 32), (1, 67, 33, 17)] {
+        let lhs: Vec<f32> = (0..b * m * k).map(|i| (i % 7) as f32 * 0.5).collect();
+        let rhs: Vec<f32> = (0..b * n * k).map(|i| (i % 5) as f32 * 0.25).collect();
+        let bias: Vec<f32> = (0..n).map(|i| i as f32 * 0.125 - 1.0).collect();
+        let got = run_mlx_gemm_bias(
+            GemmDType::F32,
+            (b, m, n, k),
+            &lhs,
+            &[m * k, k, 1],
+            &rhs,
+            &[n * k, n, 1],
+            &bias,
+        );
+        let want = reference_gemm_bias((b, m, n, k), &lhs, &rhs, &bias);
+        assert_eq!(approx(got, 4), approx(want, 4), "shape {b}x{m}x{n}x{k}");
+    }
+}
+
+#[test]
+fn mlx_gemm_bias_epilogue_f16() {
+    let (b, m, n, k) = (1, 64, 64, 32);
+    let lhs: Vec<f32> = (0..b * m * k).map(|i| (i % 7) as f32 * 0.5).collect();
+    let rhs: Vec<f32> = (0..b * n * k).map(|i| (i % 5) as f32 * 0.25).collect();
+    let bias: Vec<f32> = (0..n).map(|i| i as f32 * 0.125 - 1.0).collect();
+    let lhs16: Vec<f16> = lhs.iter().map(|v| f16::from_f32(*v)).collect();
+    let rhs16: Vec<f16> = rhs.iter().map(|v| f16::from_f32(*v)).collect();
+    let bias16: Vec<f16> = bias.iter().map(|v| f16::from_f32(*v)).collect();
+    let got = run_mlx_gemm_bias(
+        GemmDType::F16,
+        (b, m, n, k),
+        &lhs16,
+        &[m * k, k, 1],
+        &rhs16,
+        &[n * k, n, 1],
+        &bias16,
+    );
+    let want = reference_gemm_bias((b, m, n, k), &lhs, &rhs, &bias);
+    let got = approx_f16_to_f32(got);
+    for (g, w) in got.iter().zip(want.iter()) {
+        assert!((g - w).abs() < 0.1, "got {g} want {w}");
+    }
+}
+
+fn approx_f16_to_f32(v: Vec<f16>) -> Vec<f32> {
+    v.into_iter().map(|x| x.to_f32()).collect()
+}
