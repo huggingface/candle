@@ -258,7 +258,7 @@ impl BertSelfAttention {
         let attention_scores = attention_scores.broadcast_add(attention_mask)?;
         let attention_probs = {
             let _enter_sm = self.span_softmax.enter();
-            candle_nn::ops::softmax(&attention_scores, candle::D::Minus1)?
+            candle_nn::ops::softmax_last_dim(&attention_scores)?
         };
         let attention_probs = self.dropout.forward(&attention_probs)?;
 
