@@ -9,7 +9,7 @@ use candle_nn::{linear_b as linear_bias, Activation, Linear, VarBuilder};
 
 use super::config::Gemma4TextConfig;
 
-// ── RmsNorm (Gemma-style with +1 offset) ────────────────────────────────────
+// ── RmsNorm (Gemma-style, but without any offset) ───────────────────────────
 
 #[derive(Debug, Clone)]
 struct RmsNorm {
@@ -35,9 +35,7 @@ impl Module for RmsNorm {
         let x = x.to_dtype(internal_dtype)?;
         let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        x_normed
-            .to_dtype(x_dtype)?
-            .broadcast_mul(&(&self.weight + 1.0)?)
+        x_normed.to_dtype(x_dtype)?.broadcast_mul(&self.weight)
     }
 }
 
@@ -82,18 +80,15 @@ impl RotaryEmbedding {
         })
     }
 
-    fn apply_rotary_emb_qkv(
+    fn rotary_emb_cos_sin_for_query(
         &self,
         q: &Tensor,
-        k: &Tensor,
         seqlen_offset: usize,
     ) -> Result<(Tensor, Tensor)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-        let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
-        Ok((q_embed, k_embed))
+        Ok((cos, sin))
     }
 }
 
@@ -135,18 +130,15 @@ impl ProportionalRotaryEmbedding {
         Ok(Self { cos, sin })
     }
 
-    fn apply_rotary_emb_qkv(
+    fn rotary_emb_cos_sin_for_query(
         &self,
         q: &Tensor,
-        k: &Tensor,
         seqlen_offset: usize,
     ) -> Result<(Tensor, Tensor)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-        let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
-        Ok((q_embed, k_embed))
+        Ok((cos, sin))
     }
 }
 
@@ -215,26 +207,45 @@ enum KvCache {
     Rotating(candle_nn::kv_cache::RotatingKvCache),
 }
 
+// FIXME(eddyb) where should this be placed?
+#[derive(Default)]
+struct SharedKvStates {
+    for_full: Option<(Tensor, Tensor)>,
+    for_sliding: Option<(Tensor, Tensor)>,
+}
+
 // ── Attention ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 struct Attention {
+    kv: KvSource,
     q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
     o_proj: Linear,
     q_norm: RmsNorm,
-    k_norm: RmsNorm,
     num_heads: usize,
-    num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    rms_norm_eps: f64,
     is_sliding: bool,
     rotary_emb_global: Arc<ProportionalRotaryEmbedding>,
     rotary_emb_local: Arc<RotaryEmbedding>,
-    kv_cache: KvCache,
     use_flash_attn: bool,
+}
+
+// FIXME(eddyb) where should this be placed?
+#[derive(Debug, Clone)]
+enum KvSource {
+    Computed {
+        k_proj: Linear,
+        v_proj: Option<Linear>,
+        k_norm: RmsNorm,
+        num_kv_heads: usize,
+        rms_norm_eps: f64,
+        kv_cache: KvCache,
+
+        // FIXME(eddyb) suboptimal name? should maybe mention "store to shared".
+        store_full_length_kv: bool,
+    },
+    Shared,
 }
 
 impl Attention {
@@ -251,51 +262,84 @@ impl Attention {
         let bias = cfg.attention_bias;
         let is_sliding = cfg.is_sliding(layer_idx);
 
-        let (head_dim, num_kv_heads) = if is_sliding {
-            (cfg.head_dim, cfg.num_key_value_heads)
+        let head_dim = if is_sliding {
+            cfg.head_dim
         } else {
-            let global_kv = cfg
-                .num_global_key_value_heads
-                .unwrap_or(cfg.num_key_value_heads);
-            (cfg.global_head_dim, global_kv)
+            cfg.global_head_dim
+        };
+
+        let use_alternative_attention = cfg.attention_k_eq_v && !is_sliding;
+        let num_kv_heads = if use_alternative_attention {
+            cfg.num_global_key_value_heads.ok_or_else(|| {
+                candle::Error::Msg(
+                    "missing `num_global_key_value_heads` \
+                     (required by `attention_k_eq_v` for full layers)"
+                        .to_string(),
+                )
+            })?
+        } else {
+            cfg.num_key_value_heads
         };
 
         let num_kv_groups = num_heads / num_kv_heads;
         let q_proj = linear_bias(hidden_sz, num_heads * head_dim, bias, vb.pp("q_proj"))?;
-        let k_proj = linear_bias(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("k_proj"))?;
-        let v_proj = linear_bias(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("v_proj"))?;
         let o_proj = linear_bias(num_heads * head_dim, hidden_sz, bias, vb.pp("o_proj"))?;
         let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
-        let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
 
-        let kv_cache = if is_sliding {
-            KvCache::Rotating(candle_nn::kv_cache::RotatingKvCache::new(
-                2,
-                cfg.effective_sliding_window(),
-            ))
+        let first_kv_shared_layer_idx = cfg
+            .num_hidden_layers
+            .saturating_sub(cfg.num_kv_shared_layers);
+        let is_kv_shared_layer = layer_idx >= first_kv_shared_layer_idx;
+
+        let kv = if is_kv_shared_layer {
+            KvSource::Shared
         } else {
-            KvCache::Normal(candle_nn::kv_cache::KvCache::new(
-                2,
-                cfg.max_position_embeddings,
-            ))
+            let k_proj = linear_bias(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("k_proj"))?;
+            let v_proj = (!use_alternative_attention)
+                .then(|| linear_bias(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("v_proj")))
+                .transpose()?;
+            let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
+
+            let store_full_length_kv = !is_kv_shared_layer
+                && Some(layer_idx)
+                    == cfg.layer_types[..first_kv_shared_layer_idx]
+                        .iter()
+                        .rposition(|t| *t == cfg.layer_types[layer_idx]);
+
+            let kv_cache = if is_sliding {
+                KvCache::Rotating(candle_nn::kv_cache::RotatingKvCache::new(
+                    2,
+                    cfg.effective_sliding_window(),
+                ))
+            } else {
+                KvCache::Normal(candle_nn::kv_cache::KvCache::new(
+                    2,
+                    cfg.max_position_embeddings,
+                ))
+            };
+
+            KvSource::Computed {
+                k_proj,
+                v_proj,
+                k_norm,
+                num_kv_heads,
+                rms_norm_eps: cfg.rms_norm_eps,
+                kv_cache,
+                store_full_length_kv,
+            }
         };
 
         Ok(Self {
+            kv,
             q_proj,
-            k_proj,
-            v_proj,
             o_proj,
             q_norm,
-            k_norm,
             num_heads,
-            num_kv_heads,
             num_kv_groups,
             head_dim,
-            rms_norm_eps: cfg.rms_norm_eps,
             is_sliding,
             rotary_emb_global,
             rotary_emb_local,
-            kv_cache,
             use_flash_attn: cfg.use_flash_attn,
         })
     }
@@ -306,41 +350,80 @@ impl Attention {
         attention_mask: Option<&Tensor>,
         sliding_attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
+
+        shared_kv_states: &mut SharedKvStates,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let mut q = self.q_proj.forward(xs)?;
-        let mut k = self.k_proj.forward(xs)?;
-        let v = self.v_proj.forward(xs)?;
 
         q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-        k = k
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        let v = v
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
 
-        // Q/K norms
         q = self.q_norm.forward(&q)?;
-        k = self.k_norm.forward(&k)?;
-        // V norm (RMS without learned weight)
-        let v = v_norm(&v, self.rms_norm_eps)?;
 
-        // Apply RoPE
-        let (q, k) = if self.is_sliding {
+        let (cos, sin) = if self.is_sliding {
             self.rotary_emb_local
-                .apply_rotary_emb_qkv(&q, &k, seqlen_offset)?
+                .rotary_emb_cos_sin_for_query(&q, seqlen_offset)?
         } else {
             self.rotary_emb_global
-                .apply_rotary_emb_qkv(&q, &k, seqlen_offset)?
+                .rotary_emb_cos_sin_for_query(&q, seqlen_offset)?
         };
+        let q = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
 
-        let (k, v) = match &mut self.kv_cache {
-            KvCache::Normal(cache) => cache.append(&k, &v)?,
-            KvCache::Rotating(cache) => cache.append(&k, &v)?,
+        let (k, v) = match self.kv {
+            KvSource::Computed {
+                ref k_proj,
+                ref v_proj,
+                ref k_norm,
+                num_kv_heads,
+                rms_norm_eps,
+                ref mut kv_cache,
+                store_full_length_kv,
+            } => {
+                let mut k = k_proj.forward(xs)?;
+                let mut v = match v_proj {
+                    Some(v_proj) => v_proj.forward(xs)?,
+                    _ => k.clone(),
+                };
+                k = k
+                    .reshape((b_sz, q_len, num_kv_heads, self.head_dim))?
+                    .transpose(1, 2)?;
+                v = v
+                    .reshape((b_sz, q_len, num_kv_heads, self.head_dim))?
+                    .transpose(1, 2)?;
+
+                k = k_norm.forward(&k)?;
+
+                k = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+
+                // V norm (RMS without learned weight)
+                v = v_norm(&v, rms_norm_eps)?;
+
+                let (k, v) = match kv_cache {
+                    KvCache::Normal(cache) => cache.append(&k, &v)?,
+                    KvCache::Rotating(cache) => cache.append(&k, &v)?,
+                };
+
+                if store_full_length_kv {
+                    let kv = (k.clone(), v.clone());
+                    if self.is_sliding {
+                        shared_kv_states.for_sliding = Some(kv);
+                    } else {
+                        shared_kv_states.for_full = Some(kv);
+                    }
+                }
+
+                (k, v)
+            }
+            KvSource::Shared => {
+                if self.is_sliding {
+                    shared_kv_states.for_sliding.clone().unwrap()
+                } else {
+                    shared_kv_states.for_full.clone().unwrap()
+                }
+            }
         };
 
         let k = crate::utils::repeat_kv(k, self.num_kv_groups)?.contiguous()?;
@@ -356,11 +439,9 @@ impl Attention {
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
             let v = v.transpose(1, 2)?;
-            let scale = 1f32 / (self.head_dim as f32).sqrt();
-            flash_attn(&q, &k, &v, scale, mask.is_some())?.transpose(1, 2)?
+            flash_attn(&q, &k, &v, 1.0, mask.is_some())?.transpose(1, 2)?
         } else {
-            let scale = 1f64 / f64::sqrt(self.head_dim as f64);
-            let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+            let attn_weights = q.matmul(&k.transpose(2, 3)?)?;
 
             let attn_weights = match mask {
                 None => attn_weights,
@@ -376,9 +457,12 @@ impl Attention {
     }
 
     fn clear_kv_cache(&mut self) {
-        match &mut self.kv_cache {
-            KvCache::Normal(c) => c.reset(),
-            KvCache::Rotating(c) => c.reset(),
+        match &mut self.kv {
+            KvSource::Computed { kv_cache, .. } => match kv_cache {
+                KvCache::Normal(c) => c.reset(),
+                KvCache::Rotating(c) => c.reset(),
+            },
+            KvSource::Shared => {}
         }
     }
 }
@@ -395,6 +479,19 @@ struct DecoderLayer {
     post_feedforward_layernorm: RmsNorm,
     #[allow(dead_code)]
     is_sliding: bool,
+
+    layer_scalar: Tensor,
+
+    pli_mixer: Option<PerLayerInputMixer>,
+}
+
+// FIXME(eddyb) where should this be placed? should fields have `per_layer`?
+#[derive(Debug, Clone)]
+struct PerLayerInputMixer {
+    per_layer_input_gate: Linear,
+    act_fn: Activation,
+    per_layer_projection: Linear,
+    post_per_layer_input_norm: RmsNorm,
 }
 
 impl DecoderLayer {
@@ -413,9 +510,18 @@ impl DecoderLayer {
             layer_idx,
             vb.pp("self_attn"),
         )?;
+        let first_kv_shared_layer_idx = cfg
+            .num_hidden_layers
+            .saturating_sub(cfg.num_kv_shared_layers);
+        let is_kv_shared = first_kv_shared_layer_idx > 0 && layer_idx >= first_kv_shared_layer_idx;
+        let effective_intermediate = if cfg.use_double_wide_mlp && is_kv_shared {
+            cfg.intermediate_size * 2
+        } else {
+            cfg.intermediate_size
+        };
         let mlp = MLP::new(
             cfg.hidden_size,
-            cfg.intermediate_size,
+            effective_intermediate,
             cfg.hidden_activation,
             false,
             vb.pp("mlp"),
@@ -437,6 +543,30 @@ impl DecoderLayer {
             cfg.rms_norm_eps,
             vb.pp("post_feedforward_layernorm"),
         )?;
+
+        let pli_mixer = if cfg.hidden_size_per_layer_input > 0 {
+            Some(PerLayerInputMixer {
+                per_layer_input_gate: candle_nn::linear_no_bias(
+                    cfg.hidden_size,
+                    cfg.hidden_size_per_layer_input,
+                    vb.pp("per_layer_input_gate"),
+                )?,
+                act_fn: cfg.hidden_activation,
+                per_layer_projection: candle_nn::linear_no_bias(
+                    cfg.hidden_size_per_layer_input,
+                    cfg.hidden_size,
+                    vb.pp("per_layer_projection"),
+                )?,
+                post_per_layer_input_norm: RmsNorm::new(
+                    cfg.hidden_size,
+                    cfg.rms_norm_eps,
+                    vb.pp("post_per_layer_input_norm"),
+                )?,
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             self_attn,
             mlp,
@@ -445,6 +575,10 @@ impl DecoderLayer {
             pre_feedforward_layernorm,
             post_feedforward_layernorm,
             is_sliding,
+
+            layer_scalar: vb.get(1, "layer_scalar")?,
+
+            pli_mixer,
         })
     }
 
@@ -454,19 +588,42 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         sliding_attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
+
+        per_layer_input: Option<&Tensor>,
+        shared_kv_states: &mut SharedKvStates,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs =
-            self.self_attn
-                .forward(&xs, attention_mask, sliding_attention_mask, seqlen_offset)?;
+        let xs = self.self_attn.forward(
+            &xs,
+            attention_mask,
+            sliding_attention_mask,
+            seqlen_offset,
+            shared_kv_states,
+        )?;
         let xs = xs.apply(&self.post_attention_layernorm)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = xs.apply(&self.pre_feedforward_layernorm)?;
         let xs = xs.apply(&self.mlp)?;
         let xs = xs.apply(&self.post_feedforward_layernorm)?;
-        residual + xs
+        let xs = (residual + xs)?;
+
+        let xs = match (&self.pli_mixer, per_layer_input) {
+            (Some(pli_mixer), Some(per_layer_input)) => {
+                let residual = &xs;
+                let xs = xs.apply(&pli_mixer.per_layer_input_gate)?;
+                let xs = xs.apply(&pli_mixer.act_fn)?;
+                let xs = (xs * per_layer_input)?;
+                let xs = xs.apply(&pli_mixer.per_layer_projection)?;
+                let xs = xs.apply(&pli_mixer.post_per_layer_input_norm)?;
+                (residual + xs)?
+            }
+            (None, None) => xs,
+            _ => unreachable!(),
+        };
+
+        xs.broadcast_mul(&self.layer_scalar)
     }
 
     fn clear_kv_cache(&mut self) {
@@ -525,11 +682,22 @@ pub struct TextModel {
     dtype: DType,
     hidden_size: usize,
     sliding_window: usize,
+
+    ple: Option<PerLayerEmbeddings>,
+}
+
+// FIXME(eddyb) where should this be placed? should fields have `per_layer`?
+#[derive(Debug, Clone)]
+struct PerLayerEmbeddings {
+    hidden_size_per_layer_input: usize,
+    embed_tokens_per_layer: candle_nn::Embedding,
+    per_layer_model_projection: Linear,
+    per_layer_projection_norm: RmsNorm,
 }
 
 impl TextModel {
     pub fn new(cfg: &Gemma4TextConfig, vb: VarBuilder) -> Result<Self> {
-        let vb_m = vb.pp("model");
+        let vb_m = vb.clone();
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
 
@@ -567,6 +735,30 @@ impl TextModel {
         } else {
             candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
         };
+
+        let ple = if cfg.hidden_size_per_layer_input > 0 {
+            Some(PerLayerEmbeddings {
+                hidden_size_per_layer_input: cfg.hidden_size_per_layer_input,
+                embed_tokens_per_layer: candle_nn::embedding(
+                    cfg.vocab_size_per_layer_input,
+                    cfg.num_hidden_layers * cfg.hidden_size_per_layer_input,
+                    vb.pp("embed_tokens_per_layer"),
+                )?,
+                per_layer_model_projection: candle_nn::linear_no_bias(
+                    cfg.hidden_size,
+                    cfg.num_hidden_layers * cfg.hidden_size_per_layer_input,
+                    vb_m.pp("per_layer_model_projection"),
+                )?,
+                per_layer_projection_norm: RmsNorm::new(
+                    cfg.hidden_size_per_layer_input,
+                    cfg.rms_norm_eps,
+                    vb_m.pp("per_layer_projection_norm"),
+                )?,
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             embed_tokens,
             layers,
@@ -577,6 +769,8 @@ impl TextModel {
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
             sliding_window: cfg.sliding_window,
+
+            ple,
         })
     }
 
@@ -616,11 +810,12 @@ impl TextModel {
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         let xs = self.embed_tokens(input_ids)?;
-        self.forward_embeds(&xs, seqlen_offset, b_size, seq_len)
+        self.forward_embeds(input_ids, &xs, seqlen_offset, b_size, seq_len)
     }
 
     pub fn forward_embeds(
         &mut self,
+        input_ids: &Tensor,
         xs: &Tensor,
         seqlen_offset: usize,
         batch_size: usize,
@@ -629,13 +824,50 @@ impl TextModel {
         let (attention_mask, sliding_attention_mask) =
             self.create_attention_masks(batch_size, seq_len, seqlen_offset)?;
 
+        let per_layer_inputs = self
+            .ple
+            .as_ref()
+            .map(|ple| {
+                let inputs_embeds = xs;
+
+                let per_layer_projection = (xs.apply(&ple.per_layer_model_projection)?
+                    * (1.0 / (self.hidden_size as f64).sqrt()))?;
+
+                let mut shape = inputs_embeds.dims().to_vec();
+                shape.pop().unwrap();
+                shape.extend([self.layers.len(), ple.hidden_size_per_layer_input]);
+                let per_layer_projection = per_layer_projection.reshape(shape)?;
+                let per_layer_projection =
+                    per_layer_projection.apply(&ple.per_layer_projection_norm)?;
+
+                let per_layer_inputs = (input_ids.apply(&ple.embed_tokens_per_layer)?
+                    * (ple.hidden_size_per_layer_input as f64).sqrt())?
+                .reshape(
+                    input_ids
+                        .shape()
+                        .clone()
+                        .extend(&[self.layers.len(), ple.hidden_size_per_layer_input]),
+                )?;
+
+                (per_layer_projection + per_layer_inputs)? * (1.0 / 2.0f64.sqrt())
+            })
+            .transpose()?;
+
+        let mut shared_kv_states = SharedKvStates::default();
+
         let mut xs = xs.clone();
-        for layer in self.layers.iter_mut() {
+        for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = layer.forward(
                 &xs,
                 attention_mask.as_ref(),
                 sliding_attention_mask.as_ref(),
                 seqlen_offset,
+                per_layer_inputs
+                    .as_ref()
+                    .map(|per_layer_inputs| per_layer_inputs.get_on_dim(2, i))
+                    .transpose()?
+                    .as_ref(),
+                &mut shared_kv_states,
             )?
         }
         let logits = xs

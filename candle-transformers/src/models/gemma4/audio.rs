@@ -404,13 +404,23 @@ impl ConformerAttention {
         let attn_vb = vb.pp("self_attn");
         let relative_position_embedding = RelativePositionEmbedding::new(cfg, attn_vb.clone())?;
         let per_dim_scale = attn_vb.get(head_dim, "per_dim_scale")?;
-        let q_proj =
-            candle_nn::linear_no_bias(hidden_size, num_heads * head_dim, attn_vb.pp("q_proj"))?;
-        let k_proj =
-            candle_nn::linear_no_bias(hidden_size, num_heads * head_dim, attn_vb.pp("k_proj"))?;
-        let v_proj =
-            candle_nn::linear_no_bias(hidden_size, num_heads * head_dim, attn_vb.pp("v_proj"))?;
-        let post = candle_nn::linear_no_bias(hidden_size, hidden_size, attn_vb.pp("post"))?;
+        let q_proj = candle_nn::linear_no_bias(
+            hidden_size,
+            num_heads * head_dim,
+            attn_vb.pp("q_proj").pp("linear"),
+        )?;
+        let k_proj = candle_nn::linear_no_bias(
+            hidden_size,
+            num_heads * head_dim,
+            attn_vb.pp("k_proj").pp("linear"),
+        )?;
+        let v_proj = candle_nn::linear_no_bias(
+            hidden_size,
+            num_heads * head_dim,
+            attn_vb.pp("v_proj").pp("linear"),
+        )?;
+        let post =
+            candle_nn::linear_no_bias(hidden_size, hidden_size, attn_vb.pp("post").pp("linear"))?;
 
         let pre_attn_norm = RmsNorm::new(hidden_size, cfg.rms_norm_eps, vb.pp("norm_pre_attn"))?;
         let post_norm = RmsNorm::new(hidden_size, cfg.rms_norm_eps, vb.pp("norm_post_attn"))?;
@@ -666,12 +676,12 @@ impl ConformerFeedForward {
             ffw_layer_1: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.hidden_size * 4,
-                vb.pp("ffw_layer_1"),
+                vb.pp("ffw_layer_1").pp("linear"),
             )?,
             ffw_layer_2: candle_nn::linear_no_bias(
                 cfg.hidden_size * 4,
                 cfg.hidden_size,
-                vb.pp("ffw_layer_2"),
+                vb.pp("ffw_layer_2").pp("linear"),
             )?,
             post_layer_norm: RmsNorm::new(
                 cfg.hidden_size,
@@ -720,7 +730,7 @@ impl ConformerLightConv1d {
             linear_start: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.hidden_size * 2,
-                vb.pp("linear_start"),
+                vb.pp("linear_start").pp("linear"),
             )?,
             depthwise_conv1d: candle_nn::conv1d_no_bias(
                 cfg.hidden_size,
@@ -739,7 +749,7 @@ impl ConformerLightConv1d {
             linear_end: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.hidden_size,
-                vb.pp("linear_end"),
+                vb.pp("linear_end").pp("linear"),
             )?,
             causal_padding: cfg.conf_conv_kernel_size - 1,
             gradient_clipping: cfg.gradient_clipping,
