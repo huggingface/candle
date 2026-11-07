@@ -58,7 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # are mostly self-contained), installs them under /usr/local/bin, and removes
 # the source and build trees (--clean) so the image only keeps the binaries.
 # Bump SLANG_VERSION to match the version installed on the host.
-ARG SLANG_VERSION=v2026.20
+ARG SLANG_VERSION=v2026.21
 # libx11-dev: the SPIR-V/Vulkan codegen path pulls in the X11 surface headers.
 COPY build-install-slang.sh /tmp/build-install-slang.sh
 RUN apt-get update && apt-get install -y --no-install-recommends libx11-dev \

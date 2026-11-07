@@ -29,7 +29,7 @@
 #
 # Options:
 #   --install-dir DIR   Install directory (default: $HOME/.local/bin)
-#   --version TAG       Release tag to build (default: v2026.20)
+#   --version TAG       Release tag to build (default: v2026.21)
 #   --src-dir DIR       Source clone location (default: $HOME/.local/share/slang-src)
 #   --build-dir DIR     CMake build directory (default: $HOME/.local/share/slang-build)
 #   --jobs N            Parallel build jobs (default: nproc)
@@ -46,7 +46,7 @@
 
 set -eu
 
-SLANG_VERSION_DEFAULT=v2026.20
+SLANG_VERSION_DEFAULT=v2026.21
 SLANG_REPO=https://github.com/shader-slang/slang.git
 # Programs to install; each one is copied from the build bin directory when
 # it exists there. slangc is the one candle's build.rs invokes; the rest are
@@ -110,7 +110,7 @@ echo "    jobs:        $JOBS"
 # submodules); otherwise perform a fresh shallow clone.
 if [ -d "$SRC_DIR/.git" ]; then
     echo "==> reusing script clone at $SRC_DIR (checking out $SLANG_VERSION)"
-    git -C "$SRC_DIR" fetch --depth 1 origin "$SLANG_VERSION"
+    git -C "$SRC_DIR" fetch --depth 1 origin "refs/tags/$SLANG_VERSION:refs/tags/$SLANG_VERSION"
     git -C "$SRC_DIR" checkout -f "$SLANG_VERSION"
     git -C "$SRC_DIR" submodule update --init --recursive --depth 1
 else
