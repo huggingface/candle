@@ -1,0 +1,101 @@
+STAGE: check pinned Candle source and build tools
++ rustup component add rustfmt
+info: component rustfmt is up to date
+STAGE: unpack source and verify CUDA runtime
++ nvidia-smi
++ nvcc --version
++ rustc --version
+STAGE: build CUDA kernels and run CPU/CUDA unit tests
+STAGE: prepare pinned fp32 weights
++ uv pip install --python /content/candle/experiments/kev-rust-gpu/.venv/bin/python torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+Checked 1 package in 4ms
++ uv pip install --python /content/candle/experiments/kev-rust-gpu/.venv/bin/python safetensors==0.8.0 huggingface-hub==2.2.0 numpy
+Resolved 17 packages in 122ms
+Downloading numpy (15.9MiB)
+ Downloaded numpy
+Prepared 1 package in 299ms
+Installed 1 package in 17ms
+ + numpy==2.5.4
++ /content/candle/experiments/kev-rust-gpu/.venv/bin/python scripts/prepare.py
+Fetching 9 files:   0%|          | 0/9 [00:00<?, ?it/s]Fetching 9 files: 100%|██████████| 9/9 [00:00<00:00, 1493.40it/s]
+Fetching 3 files:   0%|          | 0/3 [00:00<?, ?it/s]Fetching 3 files: 100%|██████████| 3/3 [00:00<00:00, 715.10it/s]
+Writing 320 backbone tensors
+{
+  "base": "Qwen/Qwen3.5-0.8B-Base",
+  "base_revision": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+  "head_dim": 256,
+  "temperature": 2.3510958125672174,
+  "lora": 16,
+  "option_isolation": false,
+  "kev_revision": "bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+  "adapter_scale": 2.0,
+  "dtype": "float32",
+  "kev_path": "/root/.cache/huggingface/hub/models--jaredpalmer--kev-0.8b/snapshots/bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+  "base_path": "/root/.cache/huggingface/hub/models--Qwen--Qwen3.5-0.8B-Base/snapshots/dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+  "merged_tensors": 186,
+  "adapter_sha256": "9b908623acb162118575f4e7a94524f9c139c335be4bfb74d6cfceca01e1885a"
+}
+STAGE: validate CUDA decisions against official Python fp32 reference
++ /content/candle/target/release/kev-rust --device cuda --input fixtures/parity-v2.jsonl
+Loaded Kev-0.8B in 7.17s
++ /content/candle/experiments/kev-rust-gpu/.venv/bin/python scripts/compare.py reference-cpu.jsonl /content/candle/experiments/kev-rust-gpu/results-gpu/cuda-prefix.jsonl --out /content/candle/experiments/kev-rust-gpu/results-gpu/cuda-prefix.json
+{
+  "records": 10,
+  "questions": 22,
+  "max_logit_error": 4.199455642672767e-06,
+  "max_probability_error": 7.436862302645508e-07,
+  "argmax_flips": 0,
+  "token_ids_identical": true,
+  "max_serialized_probability_error": 4.703000000000346e-05,
+  "reference_median_ms": 3267.478542000049,
+  "candidate_median_ms": 92.251341,
+  "speedup": 35.419306717720765,
+  "atol": 0.0001,
+  "logit_atol": 0.001,
+  "passed": true
+}
++ /content/candle/target/release/kev-rust --device cuda --input fixtures/parity-v2.jsonl --rows
+Loaded Kev-0.8B in 1.78s
++ /content/candle/experiments/kev-rust-gpu/.venv/bin/python scripts/compare.py reference-cpu.jsonl /content/candle/experiments/kev-rust-gpu/results-gpu/cuda-rows.jsonl --out /content/candle/experiments/kev-rust-gpu/results-gpu/cuda-rows.json
+{
+  "records": 10,
+  "questions": 22,
+  "max_logit_error": 5.897824554457198e-06,
+  "max_probability_error": 1.52923729390686e-06,
+  "argmax_flips": 0,
+  "token_ids_identical": true,
+  "max_serialized_probability_error": 4.699999999999149e-05,
+  "reference_median_ms": 3267.478542000049,
+  "candidate_median_ms": 86.9971155,
+  "speedup": 37.558469878234625,
+  "atol": 0.0001,
+  "logit_atol": 0.001,
+  "passed": true
+}
++ /content/candle/target/release/kev-rust --device cuda --input fixtures/parity-v2.jsonl --unbatched
+Loaded Kev-0.8B in 1.60s
++ /content/candle/experiments/kev-rust-gpu/.venv/bin/python scripts/compare.py reference-cpu.jsonl /content/candle/experiments/kev-rust-gpu/results-gpu/cuda-unbatched.jsonl --out /content/candle/experiments/kev-rust-gpu/results-gpu/cuda-unbatched.json
+{
+  "records": 10,
+  "questions": 22,
+  "max_logit_error": 4.499455642681394e-06,
+  "max_probability_error": 6.664697402292141e-07,
+  "argmax_flips": 0,
+  "token_ids_identical": true,
+  "max_serialized_probability_error": 4.727000000001591e-05,
+  "reference_median_ms": 3267.478542000049,
+  "candidate_median_ms": 107.7175685,
+  "speedup": 30.33375694884952,
+  "atol": 0.0001,
+  "logit_atol": 0.001,
+  "passed": true
+}
+STAGE: benchmark GPU and CPU on the same VM
++ /content/candle/target/release/kev-rust --device cuda --input fixtures/requests.jsonl --repeats 5
+Loaded Kev-0.8B in 1.56s
++ /content/candle/target/release/kev-rust --device cpu --input fixtures/requests.jsonl --repeats 5
+Loaded Kev-0.8B in 3.08s
+STAGE: package binary and verification artifacts
++ tar -czf /content/kev-rust-linux-x86_64-cuda.tar.gz -C /content/candle/experiments/kev-rust-gpu/dist kev-rust-linux-x86_64-cuda SHA256SUMS build.json
++ tar -czf /content/kev-gpu-results.tar.gz results-gpu src cuda Cargo.toml Cargo.lock build.rs
+GPU JOB COMPLETE

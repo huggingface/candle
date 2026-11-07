@@ -1,0 +1,164 @@
+{
+  "hardware": {
+    "architecture": "x86_64",
+    "cpu_count": 2,
+    "threads": 2,
+    "gpu_used": false
+  },
+  "packages": {
+    "torch": "2.8.0+cpu",
+    "transformers": "5.19.0",
+    "peft": "0.21.2",
+    "tokenizers": "0.23.3",
+    "safetensors": "0.8.0"
+  },
+  "checkpoint": {
+    "base": "Qwen/Qwen3.5-0.8B-Base",
+    "base_revision": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+    "head_dim": 256,
+    "temperature": 2.3510958125672174,
+    "lora": 16,
+    "option_isolation": false,
+    "kev_revision": "bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+    "adapter_scale": 2.0,
+    "dtype": "float32",
+    "kev_path": "/root/.cache/huggingface/hub/models--jaredpalmer--kev-0.8b/snapshots/bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+    "base_path": "/root/.cache/huggingface/hub/models--Qwen--Qwen3.5-0.8B-Base/snapshots/dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+    "merged_tensors": 186,
+    "adapter_sha256": "9b908623acb162118575f4e7a94524f9c139c335be4bfb74d6cfceca01e1885a"
+  },
+  "parity": {
+    "unbatched": {
+      "records": 10,
+      "questions": 22,
+      "max_logit_error": 6.476365661534089e-06,
+      "max_probability_error": 1.2263851557059446e-06,
+      "argmax_flips": 0,
+      "token_ids_identical": true,
+      "max_serialized_probability_error": 4.720999999999198e-05,
+      "reference_median_ms": 3267.478542000049,
+      "candidate_median_ms": 4218.9301595,
+      "speedup": 0.7744803584014032,
+      "atol": 0.0001,
+      "logit_atol": 0.001,
+      "passed": true
+    },
+    "rows-batched": {
+      "records": 10,
+      "questions": 22,
+      "max_logit_error": 6.476365661534089e-06,
+      "max_probability_error": 1.2263851557059446e-06,
+      "argmax_flips": 0,
+      "token_ids_identical": true,
+      "max_serialized_probability_error": 4.720999999999198e-05,
+      "reference_median_ms": 3267.478542000049,
+      "candidate_median_ms": 3834.1300225,
+      "speedup": 0.8522085904299948,
+      "atol": 0.0001,
+      "logit_atol": 0.001,
+      "passed": true
+    },
+    "prefix-batched": {
+      "records": 10,
+      "questions": 22,
+      "max_logit_error": 6.476365661534089e-06,
+      "max_probability_error": 1.2263851557059446e-06,
+      "argmax_flips": 0,
+      "token_ids_identical": true,
+      "max_serialized_probability_error": 4.707000000001016e-05,
+      "reference_median_ms": 3267.478542000049,
+      "candidate_median_ms": 3558.6848865,
+      "speedup": 0.9181702359754714,
+      "atol": 0.0001,
+      "logit_atol": 0.001,
+      "passed": true
+    }
+  },
+  "benchmarks": {
+    "python": {
+      "warm_median_ms": 3378.1599905000803,
+      "samples": 16,
+      "by_record_ms": [
+        3378.1599905000803,
+        3027.2343719999526,
+        5216.529672999968,
+        1859.998965000159
+      ]
+    },
+    "rows-tensor": {
+      "warm_median_ms": 5650.514526999999,
+      "samples": 16,
+      "by_record_ms": [
+        6731.925021499999,
+        6332.6574235,
+        6289.15684,
+        4646.375885
+      ]
+    },
+    "unbatched": {
+      "warm_median_ms": 4244.076510999999,
+      "samples": 16,
+      "by_record_ms": [
+        5055.76466,
+        4306.361424,
+        4283.6384865,
+        2420.0625545
+      ]
+    },
+    "rows-batched": {
+      "warm_median_ms": 3882.034697,
+      "samples": 16,
+      "by_record_ms": [
+        3942.4418785,
+        3798.3342064999997,
+        4224.217076499999,
+        1772.3668360000001
+      ]
+    },
+    "prefix-batched": {
+      "warm_median_ms": 3465.301665,
+      "samples": 16,
+      "by_record_ms": [
+        3986.5859794999997,
+        3889.204971,
+        3377.700309,
+        2179.8958625
+      ]
+    }
+  },
+  "best_short_request_mode": "prefix-batched",
+  "speedup_vs_python": 0.9748530768965767,
+  "speedup_vs_native_baseline": 1.630598162368066,
+  "source_sha256": {
+    "Cargo.toml": "0d2b27e425247d3fbe935058e0462faf0558c8a0c5f976a853cf2930a86bceed",
+    "src/delta.rs": "92ac975389be662368fd1ce6e937a98ab020fe270bab496ebf5c9513465a5283",
+    "src/lib.rs": "bda90854610e927a3b8876ca2897f0b5c4b41f1afebda3656d1662f5395f518b",
+    "src/main.rs": "70d481374d2a5f59b9f102aee895d62a950eb02df64569b7dc88e331097ac817",
+    "src/qwen3_5.rs": "079b9d324a73623f70d09333e4119753017cf44954401fc74ccf22ea27355b61"
+  },
+  "isolation_passed": true,
+  "numeric_tokenization_passed": true,
+  "default_mode": "prefix-batched",
+  "default_parity": {
+    "records": 10,
+    "questions": 22,
+    "max_logit_error": 6.476365661534089e-06,
+    "max_probability_error": 1.2263851557059446e-06,
+    "argmax_flips": 0,
+    "token_ids_identical": true,
+    "max_serialized_probability_error": 4.707000000001016e-05,
+    "reference_median_ms": 3267.478542000049,
+    "candidate_median_ms": 3376.3249589999996,
+    "speedup": 0.9677618658388295,
+    "atol": 0.0001,
+    "logit_atol": 0.001,
+    "passed": true
+  },
+  "final_source_sha256": {
+    "Cargo.toml": "0d2b27e425247d3fbe935058e0462faf0558c8a0c5f976a853cf2930a86bceed",
+    "src/delta.rs": "92ac975389be662368fd1ce6e937a98ab020fe270bab496ebf5c9513465a5283",
+    "src/lib.rs": "a27c44c630021e3ac1811a94fb78be58f128979d77f08b544adae31a49c8d0b1",
+    "src/main.rs": "735dd5aa01bcc16d1312234177c3c46f542cc347efb4d4ea787937414d320332",
+    "src/qwen3_5.rs": "079b9d324a73623f70d09333e4119753017cf44954401fc74ccf22ea27355b61"
+  }
+}

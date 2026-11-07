@@ -1,0 +1,48 @@
++ cargo fmt
++ cargo test --release
+   Compiling kev-rust v0.1.0 (/content/candle/experiments/kev-rust)
+    Finished `release` profile [optimized] target(s) in 33.38s
+     Running unittests src/lib.rs (target/release/deps/kev_rust-5f49ae1c6ba7c032)
+
+running 4 tests
+test delta::tests::depthwise_matches_grouped_convolution ... ok
+test tests::numeric_state_preserves_python_float_and_integer_text ... ok
+test delta::tests::scan_matches_independent_tensor_rule_and_continuation ... ok
+test tests::structured_state_matches_python_rendering ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/release/deps/kev_rust-be3564f09095a136)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kev_rust
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
++ cargo build --release
+   Compiling kev-rust v0.1.0 (/content/candle/experiments/kev-rust)
+    Finished `release` profile [optimized] target(s) in 3.04s
++ /content/candle/experiments/kev-rust/target/release/kev-rust --input fixtures/parity-v2.jsonl
+Loaded Kev-0.8B in 9.63s
++ /content/candle/experiments/kev-rust/.venv/bin/python scripts/compare.py /content/candle/experiments/kev-rust/results-v2/python-parity.jsonl /content/candle/experiments/kev-rust/results-v2/default-parity.jsonl --out /content/candle/experiments/kev-rust/results-v2/default-parity.json
+{
+  "records": 10,
+  "questions": 22,
+  "max_logit_error": 6.476365661534089e-06,
+  "max_probability_error": 1.2263851557059446e-06,
+  "argmax_flips": 0,
+  "token_ids_identical": true,
+  "max_serialized_probability_error": 4.707000000001016e-05,
+  "reference_median_ms": 3267.478542000049,
+  "candidate_median_ms": 3376.3249589999996,
+  "speedup": 0.9677618658388295,
+  "atol": 0.0001,
+  "logit_atol": 0.001,
+  "passed": true
+}
++ tar -czf /content/kev-cpu-final-results.tar.gz results results-v2 src Cargo.toml Cargo.lock
