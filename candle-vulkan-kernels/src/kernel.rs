@@ -13,6 +13,7 @@ use vulkano::descriptor_set::layout::{
 };
 use vulkano::device::Device;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::pipeline::cache::{PipelineCache, PipelineCacheCreateInfo, PipelineCacheData};
 use vulkano::pipeline::compute::ComputePipelineCreateInfo;
 use vulkano::pipeline::layout::{PipelineLayoutCreateInfo, PushConstantRange};
 use vulkano::pipeline::{ComputePipeline, PipelineLayout, PipelineShaderStageCreateInfo};
@@ -1036,6 +1037,10 @@ pub struct Kernels {
     device: Arc<Device>,
     dss_alloc: Arc<StandardDescriptorSetAllocator>,
     pipelines: RwLock<Pipelines>,
+    /// Persistent pipeline cache shared by every pipeline build: it carries
+    /// the driver's compiled pipeline blobs across processes (loaded from and
+    /// saved to disk), so a cold start skips recompilation.
+    pipeline_cache: Arc<PipelineCache>,
     /// True when the device enables VK_KHR_shader_bfloat16 and reports
     /// shaderBFloat16Type: the native-`BFloat16` kernel variants
     /// (`*_native.spv`, compiled with `-DBF16_NATIVE=1`) are used for the
@@ -1050,6 +1055,45 @@ pub struct Kernels {
     mem_alloc: Arc<StandardMemoryAllocator>,
     /// Lazily-created 8-byte zero source for `prime_coopmat_output`.
     coopmat_zeros: OnceLock<Subbuffer<[u8]>>,
+}
+
+/// On-disk path for the persistent pipeline cache, keyed by the physical
+/// device (vendor/device id) and driver version, so a cache written for a
+/// different driver or GPU is never reused.
+fn pipeline_cache_path(device: &Arc<Device>) -> std::path::PathBuf {
+    let props = device.physical_device().properties();
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".cache")))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let file = format!(
+        "vend{:08x}-dev{:08x}-drv{:08x}.bin",
+        props.vendor_id, props.device_id, props.driver_version
+    );
+    base.join("candle-vulkan-pipelines").join(file)
+}
+
+/// Loads (or creates) the persistent pipeline cache for `device`, seeding it
+/// from the on-disk blob written by a previous process when one exists. A
+/// stale or corrupt blob is discarded (the driver rejects it) and replaced
+/// with an empty cache.
+fn load_pipeline_cache(device: &Arc<Device>) -> Arc<PipelineCache> {
+    let empty = || {
+        PipelineCache::new(device, &PipelineCacheCreateInfo::default())
+            .expect("empty pipeline cache")
+    };
+    // Build the cache inside the same scope as the on-disk blob so the
+    // `initial_data` borrow is valid for the whole `new` call.
+    match std::fs::read(pipeline_cache_path(device)) {
+        Ok(data) => {
+            let create_info = PipelineCacheCreateInfo {
+                initial_data: Some(unsafe { PipelineCacheData::new(data.as_slice()) }),
+                ..Default::default()
+            };
+            PipelineCache::new(device, &create_info).unwrap_or_else(|_| empty())
+        }
+        Err(_) => empty(),
+    }
 }
 
 impl Kernels {
@@ -1069,10 +1113,12 @@ impl Kernels {
             .iter()
             .any(|e| e.extension_name.eq("VK_EXT_shader_float8"))
             && physical.supported_features().shader_float8;
+        let pipeline_cache = load_pipeline_cache(&device);
         Self {
             device,
             dss_alloc,
             pipelines: RwLock::new(Pipelines::new()),
+            pipeline_cache,
             native_bf16,
             native_fp8,
             mem_alloc,
@@ -1219,14 +1265,36 @@ impl Kernels {
         let layout = PipelineLayout::new(&self.device, &create_info).map_err(pipeline_error)?;
         let stage = PipelineShaderStageCreateInfo::new(&entry_point);
         let create_info = ComputePipelineCreateInfo::new(stage, &layout);
-        let pipeline =
-            ComputePipeline::new(&self.device, None, &create_info).map_err(pipeline_error)?;
+        let pipeline = ComputePipeline::new(
+            &self.device,
+            Some(&self.pipeline_cache),
+            &create_info,
+        )
+        .map_err(pipeline_error)?;
 
         Ok(PipelineEntry {
             pipeline,
             layout,
             set_layout,
         })
+    }
+}
+
+impl Drop for Kernels {
+    fn drop(&mut self) {
+        // Best-effort persist of the compiled pipeline blobs for the next cold
+        // start. Never panic from a destructor, and ignore errors: a dropped
+        // device may already be partially torn down.
+        if let Ok(data) = self.pipeline_cache.get_data() {
+            if data.is_empty() {
+                return;
+            }
+            let path = pipeline_cache_path(&self.device);
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(path, data);
+        }
     }
 }
 
