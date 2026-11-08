@@ -1939,7 +1939,7 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        let out = self.device.zeros_impl(l.shape(), dtype)?;
+        let out = VulkanStorage::new(&self.device, l.shape().elem_count(), dtype)?;
         if len == 0 {
             return Ok(out);
         }
@@ -2169,7 +2169,7 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        let out = self.device.zeros_impl(l.shape(), dtype)?;
+        let out = VulkanStorage::new(&self.device, l.shape().elem_count(), dtype)?;
         if len == 0 {
             return Ok(out);
         }
@@ -2392,7 +2392,7 @@ impl BackendStorage for VulkanStorage {
                 return materialized.elu(&contiguous, alpha);
             }
         };
-        let out = self.device.zeros_impl(l.shape(), dtype)?;
+        let out = VulkanStorage::new(&self.device, l.shape().elem_count(), dtype)?;
         if len == 0 {
             return Ok(out);
         }
@@ -3649,7 +3649,7 @@ impl BackendStorage for VulkanStorage {
         if len == 0 {
             return self.device.zeros_impl(l.shape(), dtype);
         }
-        let out = self.device.zeros_impl(l.shape(), dtype)?;
+        let out = VulkanStorage::new(&self.device, l.shape().elem_count(), dtype)?;
         let start = start as u64;
         let end = start + len as u64;
         match (self.dtype, dtype) {
@@ -6130,7 +6130,7 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
-        let out = self.device.zeros_impl(l.shape(), dtype)?;
+        let out = VulkanStorage::new(&self.device, l.shape().elem_count(), dtype)?;
         if len == 0 {
             return Ok(out);
         }
@@ -6614,7 +6614,7 @@ impl BackendStorage for VulkanStorage {
             Some(c) => c,
             None => rhs_ref,
         };
-        let out = self.device.zeros_impl(lhs_l.shape(), dtype)?;
+        let out = VulkanStorage::new(&self.device, lhs_l.shape().elem_count(), dtype)?;
         if len == 0 {
             return Ok(out);
         }
@@ -7516,7 +7516,7 @@ impl BackendStorage for VulkanStorage {
                 _ => unreachable!(),
             }
         };
-        let out = self.device.zeros_impl(l.shape(), dtype)?;
+        let out = VulkanStorage::new(&self.device, l.shape().elem_count(), dtype)?;
         if len == 0 {
             return Ok(out);
         }
@@ -13118,9 +13118,8 @@ impl VulkanStorage {
                 ))
             }
         };
-        let out = self.device.zeros_impl(l.shape(), dtype)?;
         if len == 0 {
-            return Ok(out);
+            return VulkanStorage::new(&self.device, 0, dtype);
         }
         let (input, keep_in) = self.f32_view(self, l)?;
         let out_dtype = dtype;
