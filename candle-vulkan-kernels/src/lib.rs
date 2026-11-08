@@ -24,8 +24,8 @@ pub use kernels::{
     call_upsample_slang, call_where_slang, call_zero_fill, DECODE_ATTENTION_CHUNK,
 };
 pub use push_constants::{
-    AffineParams, ArgsortParams, ConstFillBytesParams, ConstSetParams, DecodeAttentionParams,
-    KvRowCopyParams, NormParams,
+    AffineParams, ArgsortParams, ConstFillBytesParams, ConstSetF64Params, ConstSetI64Params,
+    ConstSetParams, ConstSetU32Params, DecodeAttentionParams, KvRowCopyParams, NormParams,
     ToDtypeParams, UnaryParams, UpsampleParams,
 };
 pub use source::Source;

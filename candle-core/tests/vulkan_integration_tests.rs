@@ -2485,6 +2485,63 @@ fn test_vulkan_reduce_op() {
     tracing::debug!("Vulkan device {gpu_id} reduce_op OK");
 }
 
+/// `Tensor::full` with wide i64/u32/f64 constants must round-trip exactly. The
+/// fill value travels through a native-width push constant, not an f32 (which
+/// only keeps 24 significant bits and would silently round >= 2^24 values).
+#[test]
+
+fn test_vulkan_const_set_wide() {
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+
+    for &v in &[1i64 << 40, (1i64 << 40) + 12345, -(1i64 << 45)] {
+        let t = candle_core::Tensor::full(v, 4usize, &dev).unwrap();
+        assert_eq!(t.to_vec1::<i64>().unwrap(), vec![v; 4]);
+    }
+
+    for &v in &[(1u32 << 31) | 12345u32, 0xDEAD_BEEF] {
+        let t = candle_core::Tensor::full(v, 4usize, &dev).unwrap();
+        assert_eq!(t.to_vec1::<u32>().unwrap(), vec![v; 4]);
+    }
+
+    // 2^24 + 1 is the first integer that f32 cannot represent; 1e20 needs more
+    // than 24 significant bits.
+    for &v in &[16777217.0f64, 1e20f64] {
+        let t = candle_core::Tensor::full(v, 4usize, &dev).unwrap();
+        assert_eq!(t.to_vec1::<f64>().unwrap(), vec![v; 4]);
+    }
+
+    tracing::debug!("Vulkan device {gpu_id} const_set wide OK");
+}
+
+/// Empty-input reduce semantics match the CPU backend: `sum` over zero elements
+/// is the additive identity (zeros), while `min`/`max`/`argmin`/`argmax` over
+/// zero elements have no identity and error.
+#[test]
+
+fn test_vulkan_reduce_empty() {
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+
+    let t = candle_core::Tensor::zeros((4usize, 0usize), candle_core::DType::F32, &dev).unwrap();
+    assert_eq!(t.sum(1).unwrap().to_vec1::<f32>().unwrap(), vec![0.0; 4]);
+    assert!(t.max(1).is_err(), "empty max should error");
+    assert!(t.min(1).is_err(), "empty min should error");
+    assert!(t.argmax(1).is_err(), "empty argmax should error");
+
+    let ti = candle_core::Tensor::zeros((4usize, 0usize), candle_core::DType::I64, &dev).unwrap();
+    assert_eq!(ti.sum(1).unwrap().to_vec1::<i64>().unwrap(), vec![0i64; 4]);
+    assert!(ti.max(1).is_err(), "empty integer max should error");
+
+    tracing::debug!("Vulkan device {gpu_id} reduce empty OK");
+}
+
 /// `matmul` (2D and 3D, standard and transposed rhs) vs the CPU backend.
 #[test]
 

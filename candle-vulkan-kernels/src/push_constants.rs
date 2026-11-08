@@ -53,6 +53,32 @@ pub struct ConstSetParams {
     pub value: f32,
 }
 
+/// `const_set_i64` shader: `I64Params { uint64_t count; int64_t value; }`.
+/// Native-width so `Tensor::full` with an i64 constant is not round-tripped
+/// through an f32 (which only keeps 24 bits).
+#[repr(C)]
+#[derive(Clone, Copy, AnyBitPattern)]
+pub struct ConstSetI64Params {
+    pub count: u64,
+    pub value: i64,
+}
+
+/// `const_set_u32` shader: `U32Params { uint64_t count; uint32_t value; }`.
+#[repr(C)]
+#[derive(Clone, Copy, AnyBitPattern)]
+pub struct ConstSetU32Params {
+    pub count: u64,
+    pub value: u32,
+}
+
+/// `const_set_f64` shader: `F64Params { uint64_t count; double value; }`.
+#[repr(C)]
+#[derive(Clone, Copy, AnyBitPattern)]
+pub struct ConstSetF64Params {
+    pub count: u64,
+    pub value: f64,
+}
+
 /// `const_fill_bytes` shader: `Params { uint64_t count; uint32_t pattern; }`.
 #[repr(C)]
 #[derive(Clone, Copy, AnyBitPattern)]

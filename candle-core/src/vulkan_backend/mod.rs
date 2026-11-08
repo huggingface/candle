@@ -2612,6 +2612,33 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         }
+        // Empty-input semantics match the CPU backend: `sum` over zero elements
+        // is the additive identity (the CPU `ReduceSum` seeds with `T::zero()`
+        // and returns the reduced shape filled with zeros), while
+        // `min`/`max`/`argmin`/`argmax` over zero elements have no identity and
+        // error (the CPU `ReduceIndex`).
+        if l.shape().elem_count() == 0 {
+            if matches!(
+                op,
+                ReduceOp::Min | ReduceOp::Max | ReduceOp::ArgMin | ReduceOp::ArgMax
+            ) {
+                return Err(Error::EmptyTensor { op: "reduce" }.bt());
+            }
+            // ReduceOp::Sum: return the additive identity for the reduced shape.
+            let dims = l.dims();
+            let result_dims: Vec<usize> = (0..dims.len())
+                .filter(|&i| !reduce_dims.contains(&i))
+                .map(|i| dims[i])
+                .collect();
+            let result_count = result_dims.iter().product();
+            if result_count > 0 {
+                let out = VulkanStorage::new(&self.device, result_count, self.dtype)?;
+                out.zero_fill()?;
+                return Ok(out);
+            }
+            // result_count == 0 (empty result): fall through to the normal
+            // dispatch, which records zero workgroups and yields the empty tensor.
+        }
         // Convert integer dtypes to F64 for the reduction (its 52-bit mantissa
         // keeps the integer sums the tests exercise exact; F32 would round values
         // above 2^24), then convert the reduced result back to the original dtype.
@@ -2643,24 +2670,6 @@ impl BackendStorage for VulkanStorage {
                     .to_string()
                     .into(),
             ));
-        }
-        // An empty input reduces to the identity value (zero) for each output row;
-        // materializing a zero-element buffer is not possible, so handle it here.
-        if l.shape().elem_count() == 0 {
-            let result_dims: Vec<usize> = (0..ndim)
-                .filter(|&i| !reduce_dims.contains(&i))
-                .map(|i| dims[i])
-                .collect();
-            let result_count = result_dims.iter().product();
-            if result_count > 0 {
-                let out_dtype = match op {
-                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => self.dtype,
-                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
-                };
-                let out = VulkanStorage::new(&self.device, result_count, out_dtype)?;
-                out.zero_fill()?;
-                return Ok(out);
-            }
         }
         // If the reduction axis is not the last one, permute the layout to
         // move it to the last position, materialize, reduce, then permute back.
@@ -12064,15 +12073,31 @@ impl BackendStorage for VulkanStorage {
                 }
             }
             VulkanStorageBuffer::U32(buffer) => {
+                // Native-width fill value: avoid the f32 round-trip in `value`
+                // (f32 only keeps 24 bits, so a u32 >= 2^24 would be rounded).
+                let native: u32 = match scalar {
+                    Scalar::U32(v) => v,
+                    Scalar::U8(v) => v as u32,
+                    Scalar::I32(v) => v as u32,
+                    Scalar::I64(v) => v as u32,
+                    Scalar::I16(v) => v as u32,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "const_set: unsupported scalar/dtype combination"
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
                 for &(off, len) in &blocks {
                     if len == 0 {
                         continue;
                     }
                     let kernels = kernels.clone();
                     let sub = buffer.clone().slice(off as u64..(off + len) as u64);
-                    let params = candle_vulkan_kernels::ConstSetParams {
+                    let params = candle_vulkan_kernels::ConstSetU32Params {
                         count: len as u64,
-                        value,
+                        value: native,
                     };
                     self.device.execute(move |cbb| {
                         candle_vulkan_kernels::call_const_set_u32(cbb, &kernels, &sub, &params, len)
@@ -12081,15 +12106,31 @@ impl BackendStorage for VulkanStorage {
                 }
             }
             VulkanStorageBuffer::I64(buffer) => {
+                // Native-width fill value: avoid the f32 round-trip in `value`
+                // (f32 only keeps 24 bits, so an i64 >= 2^24 would be rounded).
+                let native: i64 = match scalar {
+                    Scalar::I64(v) => v,
+                    Scalar::I32(v) => v as i64,
+                    Scalar::I16(v) => v as i64,
+                    Scalar::U8(v) => v as i64,
+                    Scalar::U32(v) => v as i64,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "const_set: unsupported scalar/dtype combination"
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
                 for &(off, len) in &blocks {
                     if len == 0 {
                         continue;
                     }
                     let kernels = kernels.clone();
                     let sub = buffer.clone().slice(off as u64..(off + len) as u64);
-                    let params = candle_vulkan_kernels::ConstSetParams {
+                    let params = candle_vulkan_kernels::ConstSetI64Params {
                         count: len as u64,
-                        value,
+                        value: native,
                     };
                     self.device.execute(move |cbb| {
                         candle_vulkan_kernels::call_const_set_i64(cbb, &kernels, &sub, &params, len)
@@ -12115,15 +12156,30 @@ impl BackendStorage for VulkanStorage {
                 }
             }
             VulkanStorageBuffer::F64(buffer) => {
+                // Native-width fill value: avoid the f32 round-trip in `value`
+                // (an f64 constant >= 2^24 would be rounded through f32).
+                let native: f64 = match scalar {
+                    Scalar::F64(v) => v,
+                    Scalar::F32(v) => v as f64,
+                    Scalar::F16(v) => v.to_f32() as f64,
+                    Scalar::BF16(v) => v.to_f32() as f64,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "const_set: unsupported scalar/dtype combination"
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
                 for &(off, len) in &blocks {
                     if len == 0 {
                         continue;
                     }
                     let kernels = kernels.clone();
                     let sub = buffer.clone().slice(off as u64..(off + len) as u64);
-                    let params = candle_vulkan_kernels::ConstSetParams {
+                    let params = candle_vulkan_kernels::ConstSetF64Params {
                         count: len as u64,
-                        value,
+                        value: native,
                     };
                     self.device.execute(move |cbb| {
                         candle_vulkan_kernels::call_const_set_f64(cbb, &kernels, &sub, &params, len)
@@ -12894,9 +12950,10 @@ impl VulkanStorage {
         // keeps a `head_dim/32` f32 accumulator in `acc[16]`); reject larger
         // head dims on the host instead of silently overflowing it.
         if head_dim > 512 {
-            return Err(Error::Vulkan(format!(
-                "fused_decode_attention: head_dim {head_dim} > 512 is not supported"
-            ).into()));
+            return Err(Error::Vulkan(
+                format!("fused_decode_attention: head_dim {head_dim} > 512 is not supported")
+                    .into(),
+            ));
         }
         let num_chunks = kv_len.div_ceil(DECODE_ATTENTION_CHUNK);
         let out = VulkanStorage::new(&self.device, num_heads * head_dim, DType::F32)?;
@@ -12971,7 +13028,9 @@ impl VulkanStorage {
         let (b, h, t, d) = (dims[0], dims[1], dims[2], dims[3]);
         if d < 2 || d % 2 != 0 {
             return Err(Error::Vulkan(
-                "rope_int: head dim must be even and >= 2".to_string().into(),
+                "rope_int: head dim must be even and >= 2"
+                    .to_string()
+                    .into(),
             ));
         }
         let n_el = b * h * t * d;

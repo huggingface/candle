@@ -7,7 +7,9 @@ use vulkano::pipeline::PipelineBindPoint;
 
 use crate::err::VulkanKernelError;
 use crate::kernel::{KernelName, Kernels};
-use crate::push_constants::ConstSetParams;
+use crate::push_constants::{
+    ConstSetF64Params, ConstSetI64Params, ConstSetParams, ConstSetU32Params,
+};
 use crate::source::Source;
 /// Records a constant-fill dispatch (`main`) onto `cbb`: the first `total`
 /// elements of `out` get `value` written to them. `params` (`count`,
@@ -115,7 +117,7 @@ pub fn call_const_set_u32(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
     out: &Subbuffer<[u32]>,
-    params: &ConstSetParams,
+    params: &ConstSetU32Params,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::ConstSetU32, KernelName::ConstSetU32)?;
@@ -148,7 +150,7 @@ pub fn call_const_set_i64(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
     out: &Subbuffer<[i64]>,
-    params: &ConstSetParams,
+    params: &ConstSetI64Params,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::ConstSetI64, KernelName::ConstSetI64)?;
@@ -214,7 +216,7 @@ pub fn call_const_set_f64(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
     out: &Subbuffer<[f64]>,
-    params: &ConstSetParams,
+    params: &ConstSetF64Params,
     total: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::ConstSetF64, KernelName::ConstSetF64)?;
