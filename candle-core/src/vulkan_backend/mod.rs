@@ -13277,6 +13277,14 @@ impl VulkanStorage {
                     .into(),
             ));
         }
+        // An empty cache has no scores to reduce: the kernel returns zeros for
+        // it (softmax over zero positions has no identity), and the KV row view
+        // would otherwise reject the zero-length range.
+        if kv_len == 0 {
+            let out = VulkanStorage::new(&self.device, num_heads * head_dim, DType::F32)?;
+            out.zero_fill()?;
+            return Ok(out);
+        }
         let num_chunks = kv_len.div_ceil(DECODE_ATTENTION_CHUNK);
         let out = VulkanStorage::new(&self.device, num_heads * head_dim, DType::F32)?;
         let scratch = VulkanStorage::new(

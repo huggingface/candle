@@ -8746,6 +8746,18 @@ fn test_vulkan_fused_decode_attention() {
     check_fused_decode_attention(&dev, 4, 2, 16, 33, 0.5, Some(64));
 
     check_fused_decode_attention(&dev, 4, 2, 16, 5000, 0.5, Some(8192));
+
+    // Multi-query attention: a single KV head shared by every head.
+    check_fused_decode_attention(&dev, 4, 1, 16, 33, 0.5, None);
+
+    // Non-divisible GQA: num_heads / num_kv_heads is not an integer, so the
+    // `h * num_kv_heads / num_heads` grouping is uneven (heads 6/4 -> [0,0,1,2,2,3]).
+    check_fused_decode_attention(&dev, 6, 4, 16, 33, 0.5, None);
+
+    // Edge cases: empty and single-position caches (num_chunks 0 and 1).
+    check_fused_decode_attention(&dev, 4, 2, 16, 0, 0.5, None);
+
+    check_fused_decode_attention(&dev, 4, 2, 16, 1, 0.5, None);
 }
 
 fn check_fused_decode_attention(
