@@ -7873,14 +7873,22 @@ fn test_vulkan_softmax_last_dim() {
         }
     }
 
-    for dtype in [candle_core::DType::F32, candle_core::DType::F16] {
+    for dtype in [
+        candle_core::DType::F32,
+        candle_core::DType::F16,
+        candle_core::DType::BF16,
+    ] {
         let shape = (n_rows, n);
 
         let in_storage = match dtype {
             candle_core::DType::F32 => device
                 .storage_from_cpu_storage(&candle_core::CpuStorage::F32(x_vals.clone()))
                 .unwrap(),
-
+            candle_core::DType::BF16 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::BF16(
+                    x_vals.iter().map(|v| half::bf16::from_f32(*v)).collect(),
+                ))
+                .unwrap(),
             _ => device
                 .storage_from_cpu_storage(&candle_core::CpuStorage::F16(
                     x_vals.iter().map(|v| half::f16::from_f32(*v)).collect(),
@@ -7898,9 +7906,8 @@ fn test_vulkan_softmax_last_dim() {
 
         let out_f32: Vec<f32> = match out_cpu {
             candle_core::CpuStorage::F32(v) => v,
-
             candle_core::CpuStorage::F16(v) => v.iter().map(|v| v.to_f32()).collect(),
-
+            candle_core::CpuStorage::BF16(v) => v.iter().map(|v| v.to_f32()).collect(),
             _ => panic!("unexpected out dtype"),
         };
 
@@ -7912,9 +7919,16 @@ fn test_vulkan_softmax_last_dim() {
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
 
+        // bf16 has an 8-bit mantissa, so its output values are quantized to
+        // ~0.4% before comparison; use a looser tolerance for it.
+        let (tol, sum_tol) = if dtype == candle_core::DType::BF16 {
+            (1e-2, 1e-2)
+        } else {
+            (2e-3, 1e-3)
+        };
         assert!(
-            max_err <= 2e-3,
-            "{dtype:?}: softmax max_err {max_err} exceeds 2e-3"
+            max_err <= tol,
+            "{dtype:?}: softmax max_err {max_err} exceeds {tol}"
         );
 
         // each row must sum to 1
@@ -7923,13 +7937,13 @@ fn test_vulkan_softmax_last_dim() {
             let row_sum: f32 = (i * n..(i + 1) * n).map(|k| out_f32[k]).sum();
 
             assert!(
-                (row_sum - 1.0).abs() <= 1e-3,
+                (row_sum - 1.0).abs() <= sum_tol,
                 "{dtype:?}: softmax row {i} sum {row_sum} != 1"
             );
         }
     }
 
-    tracing::debug!("Vulkan softmax_last_dim OK for F32 + F16");
+    tracing::debug!("Vulkan softmax_last_dim OK for F32 + F16 + BF16");
 }
 
 #[test]
