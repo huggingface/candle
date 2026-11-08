@@ -809,8 +809,8 @@ impl VulkanDevice {
 
     /// Correctness probe for the f16 cooperative-matrix GEMM: a known
     /// 16x16 product (A all 1.0, B[i] = (i % 16) * 0.5, so every
-    /// element of A @ B is 30.0) run through `source`/`name` and
-    /// checked against the expected value.
+    /// element [i] of A @ B is 8 * (i % 16)) run through `source`/`name`
+    /// and checked against the expected value.
     fn probe_coopmat_f16(
         &self,
         source: candle_vulkan_kernels::Source,

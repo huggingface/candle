@@ -7,8 +7,9 @@
 // output for the 16-bit input cooperative-matrix shapes). The tile row
 // strides (k for lhs, n for rhs/out) must satisfy the
 // cooperative-matrix load/store alignment: a multiple of 8 elements
-// (16 bytes) for f16. m, n and k need not be multiples of 16:
-// out-of-range elements load as zero and out-of-range stores are
+// (16 bytes) for f16. m, n and k must be multiples of 16 (the
+// caller gates cooperative-matrix dispatch on it): the load/store has no
+// bounds check, so out-of-range elements are neither zero-filled nor
 // dropped.
 //
 // The rhs may be stored transposed as (b, n, k); params[4]

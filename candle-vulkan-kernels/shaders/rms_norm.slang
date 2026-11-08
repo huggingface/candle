@@ -31,7 +31,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         float sq = v * v;
         sum2 += sq;
     }
-    // Reproduce `rms_norm_slow` bit for bit: the sum is the same f32
+    // Match `rms_norm_slow` (within ~1 ULP): the sum is the same f32
     // left fold, `sum / n` and `+ eps` are the two affine steps (f64
     // multiply / add, each rounded to f32), then f32 sqrt and a true
     // f32 division (not a reciprocal multiply).

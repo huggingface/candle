@@ -12,10 +12,10 @@
 //
 // The tile row strides (k for lhs, n for rhs/out) must satisfy the
 // cooperative-matrix load/store alignment: a multiple of 8 elements
-// (16 bytes) for f16. m, n and k need not be multiples of 16:
-// out-of-range elements load as zero and out-of-range stores are
-// dropped. The bias load is always in range: the bias has n elements
-// and n is a multiple of 8.
+// (16 bytes) for f16. m, n and k must be multiples of 16 (the caller
+// gates cooperative-matrix dispatch on it): the load/store has no
+// bounds check. The bias load is in range because the bias has n
+// elements and n is a multiple of 16.
 //
 // The rhs may be stored transposed as (b, n, k); params[4]
 // (rhs_transposed, 0/1) selects the load layout.
