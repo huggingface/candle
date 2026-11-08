@@ -2482,6 +2482,59 @@ fn test_vulkan_reduce_op() {
 
     assert_eq!(gb.to_vec1::<u32>().unwrap(), cb.to_vec1::<u32>().unwrap());
 
+    // Wide rows (cols > 256): each thread folds multiple columns, and the
+    // argmin/argmax index is the earliest across the whole row (the value mix
+    // repeats, so tie-breaking is exercised).
+    let shape = candle_core::Shape::from((3, 1024));
+
+    let v: Vec<f32> = (0..3 * 1024)
+        .map(|i| ((i * 7919) % 257) as f32 * 0.3 - 20.0)
+        .collect();
+
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+
+    let (gs, cs) = (g.sum(1).unwrap(), c.sum(1).unwrap());
+
+    for (a, b) in gs
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(cs.to_vec1::<f32>().unwrap().iter())
+    {
+        assert!(
+            (a - b).abs() < 1e-3 * (1.0 + b.abs()),
+            "wide sum: gpu {a} cpu {b}"
+        );
+    }
+
+    assert_eq!(
+        g.max(1).unwrap().to_vec1::<f32>().unwrap(),
+        c.max(1).unwrap().to_vec1::<f32>().unwrap()
+    );
+
+    assert_eq!(
+        g.min(1).unwrap().to_vec1::<f32>().unwrap(),
+        c.min(1).unwrap().to_vec1::<f32>().unwrap()
+    );
+
+    assert_eq!(
+        g.argmax(1).unwrap().to_vec1::<u32>().unwrap(),
+        c.argmax(1).unwrap().to_vec1::<u32>().unwrap()
+    );
+
+    assert_eq!(
+        g.argmin(1).unwrap().to_vec1::<u32>().unwrap(),
+        c.argmin(1).unwrap().to_vec1::<u32>().unwrap()
+    );
+
     tracing::debug!("Vulkan device {gpu_id} reduce_op OK");
 }
 
