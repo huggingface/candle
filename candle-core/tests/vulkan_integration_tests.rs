@@ -7162,6 +7162,19 @@ fn test_vulkan_matmul_coopmat_aligned() {
         return;
     };
 
+    // Path verification: this test exists to exercise the cooperative-matrix
+    // GEMM. When the device (or probe) does not select coopmat, the matmuls
+    // below would silently fall back to the tiled kernel and still compare
+    // equal, so skip rather than validating the wrong path.
+    let vdev = match &dev {
+        candle_core::Device::Vulkan(v) => v,
+        _ => unreachable!(),
+    };
+    if !vdev.coopmat_gemm_available(candle_core::DType::F16) {
+        eprintln!("skipping: cooperative-matrix F16 GEMM not available on this device");
+        return;
+    }
+
     let cpu = candle_core::Device::Cpu;
 
     let m = 48usize;
@@ -7239,6 +7252,14 @@ fn test_vulkan_matmul_coopmat_aligned() {
         "matmul f16 coopmat: {} mismatches, first: {first:?}",
         bads.len()
     );
+
+    // BF16 coopmat needs shaderBFloat16CooperativeMatrix on top of the base
+    // feature (e.g. RDNA 3.5 iGPUs lack it). Skip the BF16 leg rather than
+    // silently validating the tiled fallback.
+    if !vdev.coopmat_gemm_available(candle_core::DType::BF16) {
+        eprintln!("skipping BF16 coopmat leg: not available on this device");
+        return;
+    }
 
     // BF16.
 
@@ -9670,6 +9691,18 @@ fn test_vulkan_matmul_f16_16x16() {
         eprintln!("skipping: no Vulkan device available");
         return;
     };
+
+    // Path verification: only meaningful when the cooperative-matrix kernel
+    // is actually selected (16-multiple dims); otherwise the tiled fallback
+    // would pass here and mask a coopmat regression.
+    let vdev = match &dev {
+        candle_core::Device::Vulkan(v) => v,
+        _ => unreachable!(),
+    };
+    if !vdev.coopmat_gemm_available(candle_core::DType::F16) {
+        eprintln!("skipping: cooperative-matrix F16 GEMM not available on this device");
+        return;
+    }
 
     let cpu = candle_core::Device::Cpu;
 

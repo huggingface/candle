@@ -784,7 +784,7 @@ impl VulkanDevice {
     /// load/store (or reject the pipeline build), so the first use
     /// runs a known 16x16 product through the kernel once and caches
     /// the outcome; a failed probe keeps the classic tiled kernel.
-    pub(crate) fn coopmat_gemm_available(&self, dtype: DType) -> bool {
+    pub fn coopmat_gemm_available(&self, dtype: DType) -> bool {
         if !self.supports_coopmat_gemm() {
             return false;
         }
