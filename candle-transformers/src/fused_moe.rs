@@ -181,55 +181,6 @@ pub struct FusedMoeGGUF {
 }
 
 impl FusedMoeGGUF {
-    pub fn new(
-        cfg: &MoeCfg,
-        vb: crate::quantized_var_builder::VarBuilder,
-        dtype: DType,
-    ) -> Result<Self> {
-        let num_experts = cfg.num_experts;
-        let gate_ws = vb
-            .pp("ffn_gate_inp")
-            .get((num_experts, cfg.hidden_size), "weight")?
-            .dequantize(vb.device())?
-            .to_dtype(DType::F32)?;
-
-        let gate = Linear::new(gate_ws, None);
-
-        let (gate_experts, up_experts, down_experts) = {
-            (
-                vb.pp("ffn_gate_exps").get(
-                    (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
-                    "weight",
-                )?,
-                vb.pp("ffn_up_exps").get(
-                    (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
-                    "weight",
-                )?,
-                vb.pp("ffn_down_exps").get(
-                    (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
-                    "weight",
-                )?,
-            )
-        };
-
-        let gate_up_experts = Arc::new(pack_gate_up_experts(&gate_experts, &up_experts)?);
-
-        Ok(Self {
-            gate,
-            gate_experts,
-            up_experts,
-            gate_up_experts,
-            w_size_n: cfg.moe_intermediate_size,
-            down_experts,
-            act: cfg.act,
-            norm_topk_prob: cfg.norm_topk_prob,
-            num_experts_per_tok: cfg.num_experts_per_tok,
-            // all_reduce: AllReduce::new(comm),
-            // world_size: 1,
-            dtype,
-        })
-    }
-
     pub fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
         let (batch, seq_len, hidden_dim) = xs.dims3()?;
         let xs = xs.reshape(((), hidden_dim))?;
