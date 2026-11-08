@@ -6,13 +6,18 @@
 // be multiples of 16 (out-of-range elements are zero-filled in the
 // tiles).
 //
+// 2x2 register micro-tile: the 8x8 workgroup threads each own a 2x2
+// block of outputs, so every loaded lhs/rhs tile cell feeds four FMAs
+// (2x the arithmetic intensity of one-output-per-thread). Reduction
+// values are summed into four independent accumulators to further
+// break the FMA dependency chain (ILP).
+//
 // Barrier discipline: GroupMemoryBarrierWithGroupSync() is UB in
 // divergent control flow (Vulkan spec 15.5.3), and RADV miscompiles
 // it there. Every thread therefore executes both barriers on every
-// slab iteration, regardless of whether its output element is in
-// range; out-of-range threads still load/zero-fill their tile cells
-// (so in-range readers see valid data) and skip only the reduction
-// and the output store.
+// slab iteration, regardless of whether its outputs are in range;
+// out-of-range threads still load/zero-fill their tile cells (so
+// in-range readers see valid data) and skip only the output stores.
 //
 // Params: [0]=batch, [1]=m, [2]=n, [3]=k, [4]=rhs_transposed (0/1)
 import common_gemm;
@@ -23,63 +28,97 @@ layout(push_constant) Params g_Params;
 static groupshared float a_tile[16 * 16];
 static groupshared float b_tile[16 * 16];
 [shader("compute")]
-[numthreads(16, 16, 1)]
+[numthreads(8, 8, 1)]
 void main_gemm(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 localID : SV_GroupThreadID)
 {
     uint batch = groupID.z;
-    uint row = groupID.x * 16u + localID.y;
-    uint col = groupID.y * 16u + localID.x;
     uint64_t m = g_Params.m;
     uint64_t n = g_Params.n;
     uint64_t k = g_Params.k;
     uint64_t rt = g_Params.rhs_transposed;
-    bool in_range = row < m && col < n;
-    // Four independent accumulators break the serial FMA chain of the
-    // per-slab reduction (ILP).
-    float acc0 = 0.0, acc1 = 0.0, acc2 = 0.0, acc3 = 0.0;
+    // This thread's 2x2 output block.
+    uint row0 = groupID.x * 16u + localID.y * 2u;
+    uint row1 = row0 + 1u;
+    uint col0 = groupID.y * 16u + localID.x * 2u;
+    uint col1 = col0 + 1u;
+    // Four independent accumulators (2x2 outputs, one each).
+    float acc00 = 0.0, acc01 = 0.0, acc10 = 0.0, acc11 = 0.0;
     for (uint k0 = 0u; k0 < k; k0 += 16u)
     {
-        uint a_k = k0 + localID.x;
-        if (a_k < k && row < m)
+        // Cooperative load: 64 threads fill the 16x16 lhs slab (4 cells
+        // each); out-of-range cells are zero-filled.
+        for (uint r = 0u; r < 2u; ++r)
         {
-            a_tile[localID.y * 16u + localID.x] = g_Lhs[batch * m * k + row * k + a_k];
-        }
-        else
-        {
-            a_tile[localID.y * 16u + localID.x] = 0.0;
-        }
-        uint b_k = k0 + localID.y;
-        if (b_k < k && col < n)
-        {
-            if (rt == 1u)
+            uint tr = localID.y + r * 8u;
+            uint grow = groupID.x * 16u + tr;
+            for (uint c = 0u; c < 2u; ++c)
             {
-                b_tile[localID.y * 16u + localID.x] = g_Rhs[batch * n * k + col * k + b_k];
-            }
-            else
-            {
-                b_tile[localID.y * 16u + localID.x] = g_Rhs[batch * k * n + b_k * n + col];
+                uint tc = localID.x + c * 8u;
+                uint a_k = k0 + tc;
+                a_tile[tr * 16u + tc] =
+                    (grow < m && a_k < k) ? g_Lhs[batch * m * k + grow * k + a_k] : 0.0;
             }
         }
-        else
+        // Cooperative load of the 16x16 rhs slab (4 cells each).
+        for (uint r = 0u; r < 2u; ++r)
         {
-            b_tile[localID.y * 16u + localID.x] = 0.0;
+            uint tr = localID.y + r * 8u;
+            uint b_k = k0 + tr;
+            for (uint c = 0u; c < 2u; ++c)
+            {
+                uint tc = localID.x + c * 8u;
+                uint gcol = groupID.y * 16u + tc;
+                if (b_k < k && gcol < n)
+                {
+                    if (rt == 1u)
+                    {
+                        b_tile[tr * 16u + tc] = g_Rhs[batch * n * k + gcol * k + b_k];
+                    }
+                    else
+                    {
+                        b_tile[tr * 16u + tc] = g_Rhs[batch * k * n + b_k * n + gcol];
+                    }
+                }
+                else
+                {
+                    b_tile[tr * 16u + tc] = 0.0;
+                }
+            }
         }
         GroupMemoryBarrierWithGroupSync();
-        if (in_range)
+        // Reduction: the 2 rows x 2 cols owned by this thread.
+        uint ar0 = localID.y * 2u;
+        uint ar1 = ar0 + 1u;
+        uint bc0 = localID.x * 2u;
+        uint bc1 = bc0 + 1u;
+        for (uint kk = 0u; kk < 16u; ++kk)
         {
-            uint arb = localID.y * 16u;
-            for (uint kk = 0u; kk < 16u; kk += 4u)
-            {
-                acc0 += a_tile[arb + kk] * b_tile[kk * 16u + localID.x];
-                acc1 += a_tile[arb + kk + 1u] * b_tile[(kk + 1u) * 16u + localID.x];
-                acc2 += a_tile[arb + kk + 2u] * b_tile[(kk + 2u) * 16u + localID.x];
-                acc3 += a_tile[arb + kk + 3u] * b_tile[(kk + 3u) * 16u + localID.x];
-            }
+            float a0 = a_tile[ar0 * 16u + kk];
+            float a1 = a_tile[ar1 * 16u + kk];
+            float b0 = b_tile[kk * 16u + bc0];
+            float b1 = b_tile[kk * 16u + bc1];
+            acc00 += a0 * b0;
+            acc01 += a0 * b1;
+            acc10 += a1 * b0;
+            acc11 += a1 * b1;
         }
         GroupMemoryBarrierWithGroupSync();
     }
-    if (in_range)
+    uint64_t ob = batch * m * n;
+    if (row0 < m && col0 < n)
     {
-        g_Out[batch * m * n + row * n + col] = acc0 + acc1 + acc2 + acc3;
+        g_Out[ob + uint64_t(row0) * n + col0] = acc00;
+    }
+    if (row0 < m && col1 < n)
+    {
+        g_Out[ob + uint64_t(row0) * n + col1] = acc01;
+    }
+    if (row1 < m && col0 < n)
+    {
+        g_Out[ob + uint64_t(row1) * n + col0] = acc10;
+    }
+    if (row1 < m && col1 < n)
+    {
+        g_Out[ob + uint64_t(row1) * n + col1] = acc11;
     }
 }
