@@ -24,6 +24,54 @@ pub enum GgmlDType {
     BF16,
 }
 
+/// Threadgroup geometry for the `kernel_mul_mv_*_f32` family: `(nth0, nth1, align)`.
+///
+/// `align` must equal the number of `dst` rows a single threadgroup writes, because
+/// the caller dispatches `ceil(ne01 / align)` threadgroups. Either direction is a bug:
+/// an `align` smaller than the kernel's real row stride over-dispatches, and the surplus
+/// threadgroups compute rows past `ne01` — reading `src0` out of bounds on the way, since
+/// every one of these kernels derives its `src0` base pointer from the row index before
+/// any bound check. An `align` larger than the stride under-dispatches and leaves rows
+/// never written at all.
+///
+/// Row stride per kernel, from `metal_src/quantized.metal` (`N_DST` 4, `N_SIMDGROUP` 2):
+///
+/// | kernel | row index          | rows/simdgroup | simdgroups | stride |
+/// |--------|--------------------|----------------|------------|--------|
+/// | q2_K   | `(r0*2+sgitg)*4`   | 4              | 2          | 8      |
+/// | q3_K   | `(r0*2+sgitg)*2`   | 2              | 2          | 4      |
+/// | q4_K   | `r0*4`             | 4              | 1          | 4      |
+/// | q5_K   | `(r0*2+sgitg)*2`   | 2              | 2          | 4      |
+/// | q6_K   | `2*r0+sgitg`       | 1              | 2          | 2      |
+///
+/// The `F32` and `F16`/`BF16`/`Q8K` arms below violate this rule in the under-dispatch
+/// direction: `kernel_mul_mv_impl` takes `r0 = tgpig.x`, one row per threadgroup, so
+/// their stride is 1 while `align` is 8 — at `ne01 = 12` only 2 of 12 rows are written.
+/// That is the subject of #3856 and is left untouched here to avoid duplicating it.
+pub(crate) fn mul_mv_dispatch_geometry(dtype: GgmlDType) -> (usize, usize, usize) {
+    match dtype {
+        GgmlDType::Q4_0
+        | GgmlDType::Q4_1
+        | GgmlDType::Q5_0
+        | GgmlDType::Q5_1
+        | GgmlDType::Q8_0
+        | GgmlDType::Q8_1 => (8, 8, 8),
+        // Fixing a bug in Metal for GGML
+        // https://github.com/ggerganov/llama.cpp/blob/b8109bc0139f15a5b321909f47510b89dca47ffc/ggml-metal.m#L1576
+        //
+        // `align` was 4 here, but the kernel row stride is 8:
+        // `first_row = (r0 * N_SIMDGROUP + sgitg) * N_DST` with two simdgroups per
+        // threadgroup (nth0 * nth1 = 64 threads).
+        GgmlDType::Q2K => (2, 32, 8),
+        GgmlDType::Q4K => (4, 8, 4),
+        GgmlDType::Q3K | GgmlDType::Q5K => (2, 32, 4),
+        GgmlDType::Q6K => (2, 32, 2),
+        // Original implem uses rows
+        GgmlDType::F16 | GgmlDType::BF16 | GgmlDType::Q8K => (32, 1, 8),
+        GgmlDType::F32 => (32, 1, 8),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn call_quantized_matmul_mv_t(
     device: &Device,
@@ -61,58 +109,7 @@ pub fn call_quantized_matmul_mv_t(
     let r2: u32 = (ne12 / ne02) as u32;
     let r3: u32 = (ne13 / ne03) as u32;
 
-    let (nth0, nth1, align) = match dtype {
-        GgmlDType::Q4_0
-        | GgmlDType::Q4_1
-        | GgmlDType::Q5_0
-        | GgmlDType::Q5_1
-        | GgmlDType::Q8_0
-        | GgmlDType::Q8_1 => {
-            let nth0 = 8;
-            let nth1 = 8;
-            let align = 8;
-            (nth0, nth1, align)
-        }
-        GgmlDType::Q2K => {
-            // Fixing a bug in Metal for GGML
-            // https://github.com/ggerganov/llama.cpp/blob/b8109bc0139f15a5b321909f47510b89dca47ffc/ggml-metal.m#L1576
-            let nth0 = 2;
-            let nth1 = 32;
-            let align = 4;
-            (nth0, nth1, align)
-        }
-        GgmlDType::Q4K => {
-            let nth0 = 4;
-            let nth1 = 8;
-            let align = 4;
-            (nth0, nth1, align)
-        }
-        GgmlDType::Q3K | GgmlDType::Q5K => {
-            let nth0 = 2;
-            let nth1 = 32;
-            let align = 4;
-            (nth0, nth1, align)
-        }
-        GgmlDType::Q6K => {
-            let nth0 = 2;
-            let nth1 = 32;
-            let align = 2;
-            (nth0, nth1, align)
-        }
-        GgmlDType::F16 | GgmlDType::BF16 | GgmlDType::Q8K => {
-            // Original implem uses rows
-            let nth0 = 32;
-            let nth1 = 1;
-            let align = 8;
-            (nth0, nth1, align)
-        }
-        GgmlDType::F32 => {
-            let nth0 = 32;
-            let nth1 = 1;
-            let align = 8;
-            (nth0, nth1, align)
-        }
-    };
+    let (nth0, nth1, align) = mul_mv_dispatch_geometry(dtype);
     let thread_groups_count = MTLSize {
         width: divide(ne01 as usize, align),
         height: ne11 as usize,
