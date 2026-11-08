@@ -2542,6 +2542,62 @@ fn test_vulkan_reduce_empty() {
     tracing::debug!("Vulkan device {gpu_id} reduce empty OK");
 }
 
+/// Float -> integer `to_dtype` must match Rust's saturating `as` semantics: NaN
+/// converts to 0, and +/-inf/out-of-range values clamp to the destination range
+/// (a C-style cast would be UB on the out-of-range/NaN cases).
+#[test]
+
+fn test_vulkan_to_dtype_float_to_int_saturating() {
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+
+    let vals: Vec<f32> = vec![
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        3e9,
+        -3e9,
+        3.7,
+        -3.7,
+        300.0,
+        -1.0,
+    ];
+    let t = candle_core::Tensor::new(vals.as_slice(), &dev).unwrap();
+
+    for &dtype in &[
+        candle_core::DType::I32,
+        candle_core::DType::U32,
+        candle_core::DType::I16,
+        candle_core::DType::U8,
+    ] {
+        let got = t.to_dtype(dtype).unwrap();
+        match dtype {
+            candle_core::DType::I32 => {
+                let expected: Vec<i32> = vals.iter().map(|&v| v as i32).collect();
+                assert_eq!(got.to_vec1::<i32>().unwrap(), expected, "f32 -> i32");
+            }
+            candle_core::DType::U32 => {
+                let expected: Vec<u32> = vals.iter().map(|&v| v as u32).collect();
+                assert_eq!(got.to_vec1::<u32>().unwrap(), expected, "f32 -> u32");
+            }
+            candle_core::DType::I16 => {
+                let expected: Vec<i16> = vals.iter().map(|&v| v as i16).collect();
+                assert_eq!(got.to_vec1::<i16>().unwrap(), expected, "f32 -> i16");
+            }
+            candle_core::DType::U8 => {
+                let expected: Vec<u8> = vals.iter().map(|&v| v as u8).collect();
+                assert_eq!(got.to_vec1::<u8>().unwrap(), expected, "f32 -> u8");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    tracing::debug!("Vulkan device {gpu_id} float->int saturating OK");
+}
+
 /// `matmul` (2D and 3D, standard and transposed rhs) vs the CPU backend.
 #[test]
 

@@ -1,5 +1,6 @@
 // to_dtype: F16 -> U8. g_Out[i] = <expr> for i < g_Count.
 
+import sat_cast;
 StructuredBuffer<half> g_In;
 RWStructuredBuffer<uint8_t> g_Out;
 layout(push_constant) uint64_t g_Count;
@@ -8,5 +9,5 @@ layout(push_constant) uint64_t g_Count;
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint idx = dispatchThreadID.x;
-    if (idx < uint(g_Count)) { g_Out[idx] = uint8_t(float(g_In[idx])); }
+    if (idx < uint(g_Count)) { g_Out[idx] = sat_f32_u8(float(g_In[idx])); }
 }
