@@ -672,6 +672,10 @@ impl VulkanStorage {
             .readback_lock()
             .lock()
             .map_err(|e| Error::Vulkan(format!("readback lock poisoned: {e}").into()))?;
+        // Drain any deferred encodes first: the copy is submitted as its own
+        // command buffer, so without this it could read stale data from buffers
+        // whose producing ops are still pinned in the deferred batch.
+        device.synchronize()?;
         let len = vram.len();
         let bytes = len * std::mem::size_of::<T>() as u64;
         let buffer = Self::readback_buffer(device, bytes)?;
@@ -1886,13 +1890,23 @@ impl BackendStorage for VulkanStorage {
     fn affine(&self, l: &Layout, mul: f64, add: f64) -> Result<Self> {
         use candle_vulkan_kernels::{KernelName, Source};
         let dtype = self.dtype;
-        // Integer dtypes: affine is a no-op (mul=1, add=0) or identity.
-        // Return a clone since we can't do meaningful affine on integers.
+        // Integer dtypes: only the identity (mul=1, add=0) is representable.
+        // Any other affine cannot be represented in an integer dtype, so error
+        // instead of silently returning the input unchanged.
         if matches!(
             dtype,
             DType::U8 | DType::U32 | DType::I16 | DType::I32 | DType::I64
         ) {
-            return Ok(self.clone());
+            if mul == 1.0 && add == 0.0 {
+                return Ok(self.clone());
+            }
+            return Err(Error::Vulkan(
+                format!(
+                    "affine: integer dtype {:?} supports only the identity (mul=1, add=0)",
+                    dtype
+                )
+                .into(),
+            ));
         }
         let supported = matches!(
             dtype,
@@ -3036,6 +3050,19 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
+        // A contiguous rhs view of a larger buffer has a non-zero start_offset;
+        // the per-dtype rhs matches below slice by this (offset, len) instead of
+        // handing the whole buffer to the kernel.
+        let (rhs_start, rhs_len) = match rhs_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "cmp: non-contiguous rhs not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
         // U8 output storage (1 where the predicate holds, 0 otherwise).
         let out = VulkanStorage::new(&self.device, len, DType::U8)?;
         if len == 0 {
@@ -3102,7 +3129,9 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs.buffer {
-                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    VulkanStorageBuffer::F32(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -3149,7 +3178,9 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs.buffer {
-                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    VulkanStorageBuffer::BF16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -3196,7 +3227,9 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs.buffer {
-                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    VulkanStorageBuffer::F8E4M3(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -3243,7 +3276,9 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs.buffer {
-                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -3290,7 +3325,9 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs.buffer {
-                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    VulkanStorageBuffer::F64(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -3337,7 +3374,9 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs.buffer {
-                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    VulkanStorageBuffer::U8(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -3385,7 +3424,9 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs.buffer {
-                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    VulkanStorageBuffer::U32(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -3433,7 +3474,9 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs.buffer {
-                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    VulkanStorageBuffer::I16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -3481,7 +3524,9 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs.buffer {
-                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    VulkanStorageBuffer::I32(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -3529,7 +3574,9 @@ impl BackendStorage for VulkanStorage {
                     }
                 };
                 let rhs_buf = match &rhs.buffer {
-                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    VulkanStorageBuffer::I64(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
                     _ => {
                         return Err(Error::Vulkan(
                             format!("dtype checked above (dtype={:?})", self.dtype)
@@ -6439,7 +6486,17 @@ impl BackendStorage for VulkanStorage {
                 DType::F32
             } else {
                 // Integer ops: keep the wider integer type.
-                DType::F32
+                if self.dtype == DType::I64 || rhs.dtype == DType::I64 {
+                    DType::I64
+                } else if self.dtype == DType::I32 || rhs.dtype == DType::I32 {
+                    DType::I32
+                } else if self.dtype == DType::U32 || rhs.dtype == DType::U32 {
+                    DType::U32
+                } else if self.dtype == DType::I16 || rhs.dtype == DType::I16 {
+                    DType::I16
+                } else {
+                    DType::U8
+                }
             };
             let self_p = if self.dtype != result_dtype {
                 Some(self.to_dtype(lhs_l, result_dtype)?)
@@ -6486,11 +6543,18 @@ impl BackendStorage for VulkanStorage {
                 .into(),
             ));
         }
-        let lhs_contiguous = matches!(
-            lhs_l.strided_blocks(),
-            crate::StridedBlocks::SingleBlock { .. }
-        );
-        let start = if lhs_contiguous {
+        // A promoted operand is a fresh contiguous buffer at offset 0 laid out
+        // in the full broadcast shape; the original layout's offset/strides
+        // must not be re-applied to it.
+        let lhs_promoted = self_promoted.is_some();
+        let lhs_contiguous = lhs_promoted
+            || matches!(
+                lhs_l.strided_blocks(),
+                crate::StridedBlocks::SingleBlock { .. }
+            );
+        let start = if lhs_promoted {
+            0
+        } else if lhs_contiguous {
             match lhs_l.strided_blocks() {
                 crate::StridedBlocks::SingleBlock { start_offset, .. } => start_offset,
                 _ => {
@@ -6503,11 +6567,15 @@ impl BackendStorage for VulkanStorage {
             0
         };
         let len = lhs_l.shape().elem_count();
-        let rhs_contiguous = matches!(
-            rhs_l.strided_blocks(),
-            crate::StridedBlocks::SingleBlock { .. }
-        );
-        let rhs_start = if rhs_contiguous {
+        let rhs_promoted = rhs_promoted.is_some();
+        let rhs_contiguous = rhs_promoted
+            || matches!(
+                rhs_l.strided_blocks(),
+                crate::StridedBlocks::SingleBlock { .. }
+            );
+        let rhs_start = if rhs_promoted {
+            0
+        } else if rhs_contiguous {
             match rhs_l.strided_blocks() {
                 crate::StridedBlocks::SingleBlock { start_offset, .. } => start_offset,
                 _ => {
@@ -6564,7 +6632,7 @@ impl BackendStorage for VulkanStorage {
         // full broadcast shape, so the kernel must index it with the full
         // dims; a single-block operand is read in its original layout, where
         // broadcast dims collapse to 1.
-        let rhs_dims: Vec<usize> = if rhs_own.is_some() {
+        let rhs_dims: Vec<usize> = if rhs_own.is_some() || rhs_promoted {
             rhs_l.dims().to_vec()
         } else {
             rhs_l
@@ -6574,7 +6642,7 @@ impl BackendStorage for VulkanStorage {
                 .map(|(d, s)| if *s == 0 { 1 } else { *d })
                 .collect()
         };
-        let lhs_data_dims: Vec<usize> = if lhs_own.is_some() {
+        let lhs_data_dims: Vec<usize> = if lhs_own.is_some() || lhs_promoted {
             lhs_l.dims().to_vec()
         } else {
             lhs_l
