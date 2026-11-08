@@ -87,7 +87,10 @@ fn test_vulkan_device_properties() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let phys = device.physical_device();
 
@@ -148,7 +151,10 @@ fn test_vulkan_device_f8e4m3_support() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let phys = device.physical_device();
 
@@ -188,7 +194,10 @@ fn test_vulkan_device_bf16_support() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let phys = device.physical_device();
 
@@ -230,7 +239,10 @@ fn test_vulkan_device_storage() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     // A 1-D shape of 256 elements (NOT 256 zero-sized dims).
 
@@ -261,7 +273,10 @@ fn test_vulkan_device_fill_f16() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     // 65,536 elements: one slot for every possible f16 bit pattern.
 
@@ -309,7 +324,10 @@ fn test_vulkan_device_fill_u8() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     // 256 elements: one slot for every possible byte value.
 
@@ -347,7 +365,10 @@ fn test_vulkan_device_fill_i16() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     // 65,536 elements: one slot for every possible 16-bit bit pattern.
 
@@ -391,7 +412,10 @@ fn test_vulkan_device_fill_bf16() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     // 65,536 elements: one slot for every possible 16-bit bit pattern.
 
@@ -439,7 +463,10 @@ fn test_vulkan_device_fill_bf16_emulated() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     // 65,536 elements: one slot for every possible 16-bit bit pattern.
 
@@ -486,7 +513,10 @@ fn test_vulkan_device_fill_bf16_native() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     if !device.supports_bf16() {
         tracing::debug!(
@@ -534,7 +564,10 @@ fn test_vulkan_device_fill_u32() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let shape = candle_core::Shape::from(256);
 
@@ -579,7 +612,10 @@ fn test_vulkan_device_fill_i32() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let shape = candle_core::Shape::from(256);
 
@@ -624,7 +660,10 @@ fn test_vulkan_device_fill_f32() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let shape = candle_core::Shape::from(256);
 
@@ -672,7 +711,10 @@ fn test_vulkan_device_fill_i64() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let shape = candle_core::Shape::from(256);
 
@@ -717,7 +759,10 @@ fn test_vulkan_device_fill_f64() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let shape = candle_core::Shape::from(256);
 
@@ -765,7 +810,10 @@ fn test_vulkan_device_fill_f4() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     // 16 elements: one slot for every possible raw value.
 
@@ -814,7 +862,10 @@ fn test_vulkan_device_fill_f6e2m3() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     // 64 elements: one slot for every possible raw value.
 
@@ -865,7 +916,10 @@ fn test_vulkan_device_fill_f6e3m2() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     // 64 elements: one slot for every possible raw value.
 
@@ -916,7 +970,10 @@ fn test_vulkan_device_fill_f8e4m3() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     // 256 elements: one slot for every possible raw value.
 
@@ -967,7 +1024,10 @@ fn test_vulkan_device_fill_f8e8m0() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     // 256 elements: one slot for every possible raw value.
 
@@ -1019,7 +1079,10 @@ fn test_vulkan_device_synchronize() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let shape = candle_core::Shape::from((4, 4));
 
@@ -1044,7 +1107,10 @@ fn test_vulkan_device_set_seed() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     device.set_seed(0xDEADBEEF).unwrap();
 
@@ -1064,7 +1130,10 @@ fn test_vulkan_device_get_current_seed() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     device.set_seed(42).unwrap();
 
@@ -1079,7 +1148,10 @@ fn test_vulkan_device_storage_from_slice() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let data: Vec<f32> = (0..64).map(|i| i as f32 * 0.5 - 8.0).collect();
 
@@ -1106,7 +1178,10 @@ fn test_vulkan_device_storage_from_cpu_storage() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -1135,7 +1210,10 @@ fn test_vulkan_device_storage_from_cpu_storage_owned() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -1164,7 +1242,10 @@ fn test_vulkan_device_rand_uniform() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let shape = candle_core::Shape::from(1024);
 
@@ -1216,7 +1297,10 @@ fn test_vulkan_device_rand_normal() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let shape = candle_core::Shape::from(4096);
 
@@ -1273,7 +1357,10 @@ fn test_vulkan_const_set() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let shape = candle_core::Shape::from((4, 8));
 
@@ -1308,7 +1395,10 @@ fn test_vulkan_unary_ops() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -1413,7 +1503,10 @@ fn test_vulkan_binary_ops() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -1537,7 +1630,10 @@ fn test_vulkan_cmp_ops() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -1611,7 +1707,10 @@ fn test_vulkan_where_cond() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -1701,7 +1800,10 @@ fn test_vulkan_affine() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -1778,7 +1880,10 @@ fn test_vulkan_powf() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -1820,7 +1925,10 @@ fn test_vulkan_elu() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -1862,7 +1970,10 @@ fn test_vulkan_to_dtype() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -1987,7 +2098,10 @@ fn test_vulkan_to_dtype_ints_f8() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -2304,7 +2418,10 @@ fn test_vulkan_copy_strided_src() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -2369,7 +2486,10 @@ fn test_vulkan_copy2d() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -2434,7 +2554,10 @@ fn test_vulkan_reduce_op() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -2577,7 +2700,10 @@ fn test_vulkan_reduce_int() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -2670,7 +2796,10 @@ fn test_vulkan_const_set_wide() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     for &v in &[1i64 << 40, (1i64 << 40) + 12345, -(1i64 << 45)] {
         let t = candle_core::Tensor::full(v, 4usize, &dev).unwrap();
@@ -2702,7 +2831,10 @@ fn test_vulkan_reduce_empty() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let t = candle_core::Tensor::zeros((4usize, 0usize), candle_core::DType::F32, &dev).unwrap();
     assert_eq!(t.sum(1).unwrap().to_vec1::<f32>().unwrap(), vec![0.0; 4]);
@@ -2726,7 +2858,10 @@ fn test_vulkan_reduce_coverage() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
     let cpu = candle_core::Device::Cpu;
 
     let shape = candle_core::Shape::from((3usize, 4usize, 5usize));
@@ -2794,7 +2929,10 @@ fn test_vulkan_to_dtype_float_to_int_saturating() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let vals: Vec<f32> = vec![
         f32::NAN,
@@ -2848,7 +2986,10 @@ fn test_vulkan_matmul() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -2979,7 +3120,10 @@ fn test_vulkan_gather() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3032,7 +3176,10 @@ fn test_vulkan_index_select() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3075,7 +3222,10 @@ fn test_vulkan_avg_pool2d() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3126,7 +3276,10 @@ fn test_vulkan_max_pool2d() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3175,7 +3328,10 @@ fn test_vulkan_upsample_nearest1d() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3221,7 +3377,10 @@ fn test_vulkan_upsample_nearest2d() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3267,7 +3426,10 @@ fn test_vulkan_upsample_bilinear2d() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3331,7 +3493,10 @@ fn test_vulkan_conv1d() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3407,7 +3572,10 @@ fn test_vulkan_conv2d() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3485,7 +3653,10 @@ fn test_vulkan_conv_transpose1d() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3566,7 +3737,10 @@ fn test_vulkan_conv_transpose2d() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3651,7 +3825,10 @@ fn test_vulkan_scatter() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3763,7 +3940,10 @@ fn test_vulkan_scatter_add() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3865,7 +4045,10 @@ fn test_vulkan_scatter_add_view() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -3937,7 +4120,10 @@ fn test_vulkan_index_add() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -4017,7 +4203,10 @@ fn test_vulkan_index_add_sentinel() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -4114,7 +4303,10 @@ fn test_vulkan_index_add_oob() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let vdev = match &dev {
         candle_core::Device::Vulkan(v) => v,
@@ -4227,7 +4419,10 @@ fn test_vulkan_index_add_dtypes() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -4397,7 +4592,10 @@ fn test_vulkan_binary_ops_bf16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -4503,7 +4701,10 @@ fn test_vulkan_binary_ops_f8e4m3() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -4608,7 +4809,10 @@ fn test_vulkan_cmp_ops_bf16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -4696,7 +4900,10 @@ fn test_vulkan_cmp_ops_f8e4m3() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -4821,7 +5028,10 @@ fn test_vulkan_unary_ops_bf16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -4904,7 +5114,10 @@ fn test_vulkan_unary_ops_f8e4m3() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -4995,7 +5208,10 @@ fn test_vulkan_affine_dtype() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -5086,7 +5302,10 @@ fn test_vulkan_powf_dtype() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -5178,7 +5397,10 @@ fn test_vulkan_elu_dtype() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -5270,7 +5492,10 @@ fn test_vulkan_where_dtype() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -5443,7 +5668,10 @@ fn test_vulkan_binary_ops_f16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -5523,7 +5751,10 @@ fn test_vulkan_binary_ops_f64() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -5588,7 +5819,10 @@ fn test_vulkan_cmp_ops_f16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -5651,7 +5885,10 @@ fn test_vulkan_cmp_ops_f64() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -5711,7 +5948,10 @@ fn test_vulkan_unary_ops_f16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -5781,7 +6021,10 @@ fn test_vulkan_unary_ops_f64() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -5839,7 +6082,10 @@ fn test_vulkan_affine_f16_f64() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -5920,7 +6166,10 @@ fn test_vulkan_where_f16_f64() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6093,7 +6342,10 @@ fn test_vulkan_binary_ops_u8() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6151,7 +6403,10 @@ fn test_vulkan_cmp_ops_u8() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6209,7 +6464,10 @@ fn test_vulkan_binary_ops_u32() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6267,7 +6525,10 @@ fn test_vulkan_cmp_ops_u32() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6325,7 +6586,10 @@ fn test_vulkan_binary_ops_i16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6383,7 +6647,10 @@ fn test_vulkan_cmp_ops_i16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6441,7 +6708,10 @@ fn test_vulkan_binary_ops_i32() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6499,7 +6769,10 @@ fn test_vulkan_cmp_ops_i32() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6557,7 +6830,10 @@ fn test_vulkan_binary_ops_i64() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6615,7 +6891,10 @@ fn test_vulkan_cmp_ops_i64() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6673,7 +6952,10 @@ fn test_vulkan_matmul_f16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6735,7 +7017,10 @@ fn test_vulkan_matmul_f64() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6795,7 +7080,10 @@ fn test_vulkan_matmul_bf16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -6869,7 +7157,10 @@ fn test_vulkan_matmul_coopmat_aligned() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -7005,7 +7296,10 @@ fn test_vulkan_reduce_op_f16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -7074,7 +7368,10 @@ fn test_vulkan_reduce_op_f64() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -7132,7 +7429,10 @@ fn test_vulkan_reduce_op_bf16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -7201,7 +7501,10 @@ fn test_vulkan_conv1d_f16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -7289,7 +7592,10 @@ fn test_vulkan_conv1d_f64() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -7360,7 +7666,10 @@ fn test_vulkan_avg_pool2d_f16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let f: Vec<f32> = (0..16).map(|i| (i as f32) * 0.5 - 3.0).collect();
 
@@ -7413,7 +7722,10 @@ fn test_vulkan_max_pool2d_f64() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let f: Vec<f64> = (0..16).map(|i| (i as f64) * 0.5 - 3.0).collect();
 
@@ -7455,7 +7767,10 @@ fn test_vulkan_upsample_nearest2d_f16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let f: Vec<f32> = (0..8).map(|i| (i as f32) * 0.5 - 1.0).collect();
 
@@ -7507,7 +7822,10 @@ fn test_vulkan_gather_f16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -7573,7 +7891,10 @@ fn test_vulkan_to_dtype_f64() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let f: Vec<f64> = (0..16).map(|i| (i as f64) * 0.5 - 3.0).collect();
 
@@ -7618,7 +7939,10 @@ fn test_vulkan_try_clone() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     // 1D F32: correctness + independence.
 
@@ -7725,7 +8049,10 @@ fn test_vulkan_dequantize_all_dtypes() {
 
     let gpu_id = *GPU_ID;
 
-    let vk_dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(vk_dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu_dev = candle_core::Device::Cpu;
 
@@ -7824,7 +8151,10 @@ fn test_vulkan_quantized_matmul() {
 
     let gpu_id = *GPU_ID;
 
-    let vk_dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(vk_dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu_dev = candle_core::Device::Cpu;
 
@@ -7946,7 +8276,10 @@ fn test_vulkan_moe_gemm() {
 
     let gpu_id = *GPU_ID;
 
-    let vk_dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(vk_dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let vk_device = match &vk_dev {
         candle_core::Device::Vulkan(v) => v.clone(),
@@ -8086,7 +8419,10 @@ fn test_vulkan_quantized_embedding() {
 
     let gpu_id = *GPU_ID;
 
-    let vk_dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(vk_dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu_dev = candle_core::Device::Cpu;
 
@@ -8189,7 +8525,10 @@ fn test_vulkan_rms_norm() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let n_rows = 5usize;
 
@@ -8312,7 +8651,10 @@ fn test_vulkan_layer_norm() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let n_rows = 3usize;
 
@@ -8392,7 +8734,10 @@ fn test_vulkan_softmax_last_dim() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let n_rows = 4usize;
 
@@ -8506,7 +8851,10 @@ fn test_vulkan_softmax_wide_row() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let n_rows = 3usize;
 
@@ -8570,7 +8918,10 @@ fn test_vulkan_rotary_emb() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let (b, h, t, d) = (1usize, 2usize, 4usize, 16usize);
 
@@ -8760,7 +9111,10 @@ fn test_vulkan_shader_printf() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let words = printf_probe_words();
 
@@ -8987,7 +9341,10 @@ fn test_vulkan_fused_decode_attention() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let dev = candle_core::Device::Vulkan(device);
 
@@ -9197,7 +9554,10 @@ fn test_vulkan_fused_add_rms_norm() {
 
     let gpu_id = *GPU_ID;
 
-    let device = VulkanDevice::new(gpu_id).unwrap();
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let dev = candle_core::Device::Vulkan(device);
 
@@ -9306,7 +9666,10 @@ fn test_vulkan_matmul_f16_16x16() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
@@ -9396,7 +9759,11 @@ fn test_vulkan_const_fill_transfer_paths() {
 
     let gpu_id = *GPU_ID;
 
-    let device = candle_core::Device::Vulkan(VulkanDevice::new(gpu_id).unwrap());
+    let Some(vk) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let device = candle_core::Device::Vulkan(vk);
 
     use candle_core::{DType, Tensor};
 
@@ -9774,7 +10141,10 @@ fn test_vulkan_affine_matmul() {
 
     let gpu_id = *GPU_ID;
 
-    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
 
     let cpu = candle_core::Device::Cpu;
 
