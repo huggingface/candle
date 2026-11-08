@@ -7125,6 +7125,74 @@ fn test_vulkan_reduce_op_f64() {
     tracing::debug!("Vulkan device {gpu_id} reduce_op f64 OK");
 }
 
+/// Reduce ops for BF16 (decoded to f32, accumulated in f32) vs the CPU backend.
+#[test]
+fn test_vulkan_reduce_op_bf16() {
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+
+    let cpu = candle_core::Device::Cpu;
+
+    let shape = candle_core::Shape::from((4, 8));
+
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.7 - 10.0).collect();
+
+    let v: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+
+    let (gs, cs) = (g.clone().sum(1).unwrap(), c.clone().sum(1).unwrap());
+
+    for (a, b) in gs
+        .to_vec1::<half::bf16>()
+        .unwrap()
+        .iter()
+        .zip(cs.to_vec1::<half::bf16>().unwrap().iter())
+    {
+        assert!(
+            (a.to_f32() - b.to_f32()).abs() < 0.05 * (1.0 + b.to_f32().abs()),
+            "sum bf16: gpu {} cpu {}",
+            a.to_f32(),
+            b.to_f32()
+        );
+    }
+
+    let (gm, cm) = (g.clone().max(1).unwrap(), c.clone().max(1).unwrap());
+
+    assert_eq!(
+        gm.to_vec1::<half::bf16>().unwrap(),
+        cm.to_vec1::<half::bf16>().unwrap()
+    );
+
+    let (gn, cn) = (g.clone().min(1).unwrap(), c.clone().min(1).unwrap());
+
+    assert_eq!(
+        gn.to_vec1::<half::bf16>().unwrap(),
+        cn.to_vec1::<half::bf16>().unwrap()
+    );
+
+    let (ga, ca) = (g.clone().argmax(1).unwrap(), c.clone().argmax(1).unwrap());
+
+    assert_eq!(ga.to_vec1::<u32>().unwrap(), ca.to_vec1::<u32>().unwrap());
+
+    let (gb, cb) = (g.clone().argmin(1).unwrap(), c.clone().argmin(1).unwrap());
+
+    assert_eq!(gb.to_vec1::<u32>().unwrap(), cb.to_vec1::<u32>().unwrap());
+
+    tracing::debug!("Vulkan device {gpu_id} reduce_op bf16 OK");
+}
+
 /// conv1d for F16 (native half, F32 accumulate) vs the CPU backend.
 #[test]
 
