@@ -28,7 +28,9 @@ uint2 get_scale_min_k4(uint j, uint off, uint soff)
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
-    uint b = dispatchThreadID.x;
+    uint t = dispatchThreadID.x;
+    uint b = t / 256u;
+    uint e = t % 256u;
     if (b >= g_Params.num_blocks)
     {
         return;
@@ -50,24 +52,21 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint a3 = ((a1 >> 4) & KMASK2) | (((tmp >> 6) & KMASK1) << 4);
     a0 = (a0 & KMASK2) | (((tmp) & KMASK1) << 4);
     a1 = (a1 & KMASK2) | (((tmp >> 2) & KMASK1) << 4);
-    for (uint e = 0u; e < 256u; ++e)
-    {
-        uint yc = e / 128u;
-        uint sl = e % 128u;
-        uint s = sl / 32u;
-        uint w32 = sl % 32u;
-        uint scidx = w32 / 16u;
-        uint ii = w32 % 16u;
-        uint is = yc * 8u + s * 2u + scidx;
-        uint shift = 2u * s;
-        uint m = 1u << (yc * 4u + s);
-        uint qbyte = off + 32u + yc * 32u + ii + 16u * scidx;
-        uint hbyte = ii + 16u * scidx;
-        uint v = (g_Src[qbyte] >> shift) & 3u;
-        uint correction = (g_Src[off + hbyte] & m) == 0u ? 4u : 0u;
-        uint word = (is / 4u) == 0u ? a0 : (is / 4u) == 1u ? a1 : (is / 4u) == 2u ? a2 : a3;
-        int scale_val = sbyte((word >> (8u * (is % 4u))) & 0xFFu);
-        g_Dst[b * 256u + e] = d * float(scale_val - 32) * float(int(v) - int(correction));
-    }
+    uint yc = e / 128u;
+    uint sl = e % 128u;
+    uint s = sl / 32u;
+    uint w32 = sl % 32u;
+    uint scidx = w32 / 16u;
+    uint ii = w32 % 16u;
+    uint is = yc * 8u + s * 2u + scidx;
+    uint shift = 2u * s;
+    uint m = 1u << (yc * 4u + s);
+    uint qbyte = off + 32u + yc * 32u + ii + 16u * scidx;
+    uint hbyte = ii + 16u * scidx;
+    uint v = (g_Src[qbyte] >> shift) & 3u;
+    uint correction = (g_Src[off + hbyte] & m) == 0u ? 4u : 0u;
+    uint word = (is / 4u) == 0u ? a0 : (is / 4u) == 1u ? a1 : (is / 4u) == 2u ? a2 : a3;
+    int scale_val = sbyte((word >> (8u * (is % 4u))) & 0xFFu);
+    g_Dst[b * 256u + e] = d * float(scale_val - 32) * float(int(v) - int(correction));
 
 }

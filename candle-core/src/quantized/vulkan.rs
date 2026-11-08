@@ -230,7 +230,7 @@ impl QVulkanStorage {
         let kernels = self.device.kernels();
         self.device.execute(move |cbb| {
             candle_vulkan_kernels::call_dequantize_slang(
-                cbb, &kernels, source, name, &src, &dst, &params, num_blocks,
+                cbb, &kernels, source, name, &src, &dst, &params, elem_count,
             )
             .map_err(|e| e.to_string())
         })?;

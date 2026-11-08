@@ -10,7 +10,9 @@ layout(push_constant) Params g_Params;
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
-    uint b = dispatchThreadID.x;
+    uint t = dispatchThreadID.x;
+    uint b = t / 32u;
+    uint e = t % 32u;
     if (b >= g_Params.num_blocks)
     {
         return;
@@ -18,10 +20,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     uint off = b * 34u;
     float d = f16_bits_to_f32(uint16_t(g_Src[off]) | (uint16_t(g_Src[off + 1]) << 8));
-    for (uint j = 0u; j < 32u; ++j)
-    {
-        int q = sbyte(g_Src[off + 2u + j]);
-        g_Dst[b * 32u + j] = float(q) * d;
-    }
+    int q = sbyte(g_Src[off + 2u + e]);
+    g_Dst[b * 32u + e] = float(q) * d;
 
 }

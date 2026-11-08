@@ -19,10 +19,10 @@ fn buf_info<T>(buf: &Subbuffer<[T]>) -> DescriptorBufferInfo<'_> {
     }
 }
 
-/// Records a Slang dequantize dispatch onto `cbb`: dequantizes `num_blocks`
-/// quantized blocks from `src` (raw bytes) into `dst` (f32). The shader is
-/// selected by `source`/`name` (one per `GgmlDType`). `params` holds
-/// `[num_blocks]`.
+/// Records a Slang dequantize dispatch onto `cbb`: dequantizes `elem_count`
+/// f32 elements from `src` (raw bytes) into `dst` (f32). The shader is
+/// selected by `source`/`name` (one per `GgmlDType`); each thread writes one
+/// output element (coalesced). `params` holds `[num_blocks]`.
 pub fn call_dequantize_slang(
     cbb: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     kernels: &Kernels,
@@ -31,7 +31,7 @@ pub fn call_dequantize_slang(
     src: &Subbuffer<[u8]>,
     dst: &Subbuffer<[f32]>,
     params: &DequantParams,
-    num_blocks: usize,
+    elem_count: usize,
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;
     let src_info = buf_info(src);
@@ -49,7 +49,7 @@ pub fn call_dequantize_slang(
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.push_constants(entry.layout.clone(), 0, *params)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
-    let workgroups = (num_blocks as u64 + 255) / 256;
+    let workgroups = (elem_count as u64 + 255) / 256;
     unsafe { cbb.dispatch([workgroups as u32, 1, 1]) }
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     Ok(())

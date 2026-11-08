@@ -28,7 +28,9 @@ uint2 get_scale_min_k4(uint j, uint off, uint soff)
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
-    uint b = dispatchThreadID.x;
+    uint t = dispatchThreadID.x;
+    uint b = t / 256u;
+    uint e = t % 256u;
     if (b >= g_Params.num_blocks)
     {
         return;
@@ -38,10 +40,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint32_t dbits = uint32_t(g_Src[off]) | (uint32_t(g_Src[off + 1]) << 8)
         | (uint32_t(g_Src[off + 2]) << 16) | (uint32_t(g_Src[off + 3]) << 24);
     float d = asfloat(dbits);
-    for (uint j = 0u; j < 256u; ++j)
-    {
-        int q = sbyte(g_Src[off + 4u + j]);
-        g_Dst[b * 256u + j] = float(q) * d;
-    }
+    int q = sbyte(g_Src[off + 4u + e]);
+    g_Dst[b * 256u + e] = float(q) * d;
 
 }
