@@ -7770,14 +7770,22 @@ fn test_vulkan_rms_norm() {
         }
     }
 
-    for dtype in [candle_core::DType::F32, candle_core::DType::F16] {
+    for dtype in [
+        candle_core::DType::F32,
+        candle_core::DType::F16,
+        candle_core::DType::BF16,
+    ] {
         let shape = (n_rows, n);
 
         let in_storage = match dtype {
             candle_core::DType::F32 => device
                 .storage_from_cpu_storage(&candle_core::CpuStorage::F32(x_vals.clone()))
                 .unwrap(),
-
+            candle_core::DType::BF16 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::BF16(
+                    x_vals.iter().map(|v| half::bf16::from_f32(*v)).collect(),
+                ))
+                .unwrap(),
             _ => device
                 .storage_from_cpu_storage(&candle_core::CpuStorage::F16(
                     x_vals.iter().map(|v| half::f16::from_f32(*v)).collect(),
@@ -7789,7 +7797,14 @@ fn test_vulkan_rms_norm() {
             candle_core::DType::F32 => device
                 .storage_from_cpu_storage(&candle_core::CpuStorage::F32(alpha_vals.clone()))
                 .unwrap(),
-
+            candle_core::DType::BF16 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::BF16(
+                    alpha_vals
+                        .iter()
+                        .map(|v| half::bf16::from_f32(*v))
+                        .collect(),
+                ))
+                .unwrap(),
             _ => device
                 .storage_from_cpu_storage(&candle_core::CpuStorage::F16(
                     alpha_vals.iter().map(|v| half::f16::from_f32(*v)).collect(),
@@ -7811,9 +7826,8 @@ fn test_vulkan_rms_norm() {
 
         let out_f32: Vec<f32> = match out_cpu {
             candle_core::CpuStorage::F32(v) => v,
-
             candle_core::CpuStorage::F16(v) => v.iter().map(|v| v.to_f32()).collect(),
-
+            candle_core::CpuStorage::BF16(v) => v.iter().map(|v| v.to_f32()).collect(),
             _ => panic!("unexpected out dtype"),
         };
 
@@ -7825,13 +7839,18 @@ fn test_vulkan_rms_norm() {
             .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
             .fold(0.0f32, f32::max);
 
+        let tol = if dtype == candle_core::DType::BF16 {
+            1e-2
+        } else {
+            2e-3
+        };
         assert!(
-            max_err <= 2e-3,
-            "{dtype:?}: rms_norm max_err {max_err} exceeds 2e-3"
+            max_err <= tol,
+            "{dtype:?}: rms_norm max_err {max_err} exceeds {tol}"
         );
     }
 
-    tracing::debug!("Vulkan rms_norm OK for F32 + F16");
+    tracing::debug!("Vulkan rms_norm OK for F32 + F16 + BF16");
 }
 
 #[test]
