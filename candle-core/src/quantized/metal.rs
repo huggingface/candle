@@ -428,7 +428,7 @@ impl QMetalStorage {
                 .map(|x| x * DType::F32.size_in_bytes())
                 .collect::<Vec<_>>(),
             storage.buffer(),
-            src1_l.start_offset() * storage.dtype().size_in_bytes(),
+            layout.start_offset() * storage.dtype().size_in_bytes(),
             dst_shape.dims(),
             0,
             &dst,

@@ -258,9 +258,55 @@ fn qmm_batch(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+// A contiguous view that does not start at the beginning of its buffer (e.g. `t.get(1)` on a
+// stacked tensor) must be multiplied from its own start offset, not from the buffer start.
+fn qmm_view_offset(dev: &Device) -> Result<()> {
+    let (b, m, k, n) = (2, 4, 64, 32);
+    let w = (Tensor::arange(0f32, (n * k) as f32, &Device::Cpu)? * 0.37)?
+        .sin()?
+        .reshape((n, k))?;
+    let x = (Tensor::arange(0f32, (b * m * k) as f32, &Device::Cpu)? * 0.11)?
+        .cos()?
+        .reshape((b, m, k))?;
+
+    let qm = quantized::QMatMul::from_qtensor(quantized::QTensor::quantize(
+        &w.to_device(dev)?,
+        GgmlDType::Q8_0,
+    )?)?;
+    let x1 = x.to_device(dev)?.get(1)?;
+    assert!(x1.is_contiguous());
+    assert_eq!(x1.layout().start_offset(), m * k);
+    let got = qm.forward(&x1)?;
+    // `copy` keeps the layout (and so the start offset); `force_contiguous` gives a fresh buffer.
+    let x1_fresh = x1.force_contiguous()?;
+    assert_eq!(x1_fresh.layout().start_offset(), 0);
+    let fresh = qm.forward(&x1_fresh)?;
+
+    let qm_cpu =
+        quantized::QMatMul::from_qtensor(quantized::QTensor::quantize(&w, GgmlDType::Q8_0)?)?;
+    let want = qm_cpu.forward(&x.get(1)?.force_contiguous()?)?;
+
+    let max_diff = |a: &Tensor, b: &Tensor| -> Result<f32> {
+        (a.to_device(&Device::Cpu)? - b)?
+            .abs()?
+            .max_all()?
+            .to_vec0::<f32>()
+    };
+    let diff_fresh = max_diff(&got, &fresh.to_device(&Device::Cpu)?)?;
+    assert!(
+        diff_fresh < 1e-3,
+        "view vs fresh buffer: max diff {diff_fresh}"
+    );
+    // The cpu path quantizes the activations to q8_0 too, so only expect rough agreement there.
+    let diff_cpu = max_diff(&got, &want)?;
+    assert!(diff_cpu < 0.1, "view vs cpu: max diff {diff_cpu}");
+    Ok(())
+}
+
 test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal);
 test_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal);
 test_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal);
+test_device!(qmm_view_offset, qmm_vo_cpu, qmm_vo_cuda, qmm_vo_metal);
 
 fn embedding_weight(device: &Device) -> Result<Tensor> {
     let values = (0..(8 * 256))
