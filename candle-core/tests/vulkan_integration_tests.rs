@@ -8293,6 +8293,72 @@ fn test_vulkan_softmax_last_dim() {
     tracing::debug!("Vulkan softmax_last_dim OK for F32 + F16 + BF16");
 }
 
+/// Softmax with a row longer than the 256-thread workgroup: each thread walks a
+/// strided slice of the row, so the parallel reduction spans multiple elements
+/// per thread.
+#[test]
+fn test_vulkan_softmax_wide_row() {
+    use candle_core::backend::BackendDevice;
+
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let device = VulkanDevice::new(gpu_id).unwrap();
+
+    let n_rows = 3usize;
+
+    let n = 1024usize;
+
+    let x_vals: Vec<f32> = (0..n_rows * n)
+        .map(|i| ((i % 37) as f32) * 0.13 - 2.0)
+        .collect();
+
+    let mut ref_t = vec![0.0f32; n_rows * n];
+
+    for i in 0..n_rows {
+        let base = i * n;
+
+        let mx = (0..n)
+            .map(|j| x_vals[base + j])
+            .fold(f32::NEG_INFINITY, f32::max);
+
+        let exps: Vec<f32> = (0..n).map(|j| (x_vals[base + j] - mx).exp()).collect();
+
+        let sum: f32 = exps.iter().sum();
+
+        for j in 0..n {
+            ref_t[base + j] = exps[j] / sum;
+        }
+    }
+
+    let in_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(x_vals))
+        .unwrap();
+
+    let in_l = candle_core::Layout::contiguous((n_rows, n));
+
+    let out = in_storage.softmax_last_dim(&in_l).unwrap();
+
+    let out_f32 = match out.to_cpu_storage().unwrap() {
+        candle_core::CpuStorage::F32(v) => v,
+        _ => panic!("unexpected out dtype"),
+    };
+
+    let max_err = out_f32
+        .iter()
+        .zip(ref_t.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+
+    assert!(
+        max_err <= 2e-3,
+        "softmax wide-row max_err {max_err} exceeds 2e-3"
+    );
+
+    tracing::debug!("Vulkan softmax wide row (n={n}) OK (max_err {max_err})");
+}
+
 #[test]
 
 fn test_vulkan_rotary_emb() {

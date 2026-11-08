@@ -1,4 +1,4 @@
-//! Slang last-dim softmax dispatch: one thread per row.
+//! Slang last-dim softmax dispatch: one 256-thread workgroup per row.
 //! `params` is pushed through the pipeline's push constant block.
 use crate::err::VulkanKernelError;
 use crate::kernel::{KernelName, Kernels};
