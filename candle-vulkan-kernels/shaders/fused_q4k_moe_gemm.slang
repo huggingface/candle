@@ -34,7 +34,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
 {
     uint n = (uint)g_Params.n;
     uint k = (uint)g_Params.k;
-    uint wexp = (uint)g_Params.weight_expert_bytes;
+    uint64_t wexp = g_Params.weight_expert_bytes;
     uint col = groupID.y * 32u + dispatchThreadID.x;
     if (col >= n)
     {
@@ -42,14 +42,14 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
     }
     uint route = groupID.z;
     uint expert = g_Ids[route];
-    uint wbase = expert * wexp;
+    uint64_t wbase = (uint64_t)expert * wexp;
     uint kblocks = k / 256u;
     uint lhs_base = route * k;
     // Four independent accumulators break the serial FMA chain (ILP).
     float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
     for (uint bb = 0u; bb < kblocks; ++bb)
     {
-        uint u = (wbase + (col * kblocks + bb) * 144u) / 4u; // uint index of the block
+        uint64_t u = (wbase + (col * kblocks + bb) * 144u) / 4u; // uint index of the block
         uint u0 = g_W[u];
         float d = f16_bits_to_f32(uint16_t(u0 & 0xFFFFu));
         float mn = f16_bits_to_f32(uint16_t((u0 >> 16u) & 0xFFFFu));

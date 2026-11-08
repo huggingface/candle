@@ -41,13 +41,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
     }
     uint route = groupID.z;
     uint expert = g_Ids[route];
-    uint wbase = expert * (uint)wexp;
+    uint64_t wbase = (uint64_t)expert * wexp;
     uint kblocks = (uint)k / 256u;
     uint lhs_base = route * (uint)k;
     float acc = 0.0;
     for (uint bb = 0u; bb < kblocks; ++bb)
     {
-        uint off = wbase + (col * kblocks + bb) * 84u;
+        uint64_t off = wbase + (col * kblocks + bb) * 84u;
         float d =
             f16_bits_to_f32(uint16_t(g_W[off + 80u]) | (uint16_t(g_W[off + 81u]) << 8u));
         float mn =
@@ -58,7 +58,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
             uint isw = is % 8u;
             uint sc = g_W[off + is];
             uint shift = 2u * (isw / 2u);
-            uint qbyte = off + 16u + (e / 128u) * 32u + (e % 32u);
+            uint64_t qbyte = off + 16u + (e / 128u) * 32u + (e % 32u);
             uint v = (g_W[qbyte] >> shift) & 3u;
             float dl = d * float(sc & 0xFu);
             float ml = mn * float((sc >> 4) & 0xFu);
