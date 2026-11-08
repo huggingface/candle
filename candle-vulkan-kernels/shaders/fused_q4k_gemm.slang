@@ -53,7 +53,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
         return;
     }
     uint kblocks = k / 256u;
-    float acc = 0.0;
+    // Four independent accumulators break the serial FMA chain (ILP).
+    float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
     for (uint bb = 0u; bb < kblocks; ++bb)
     {
         uint off = (col * kblocks + bb) * 144u;
@@ -72,17 +73,27 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
             {
                 for (uint i = 0u; i < 32u; ++i)
                 {
-                    acc += g_Lhs[k0 + i] * (d1 * float(g_W[qbyte0 + i] & 0xFu) - m1);
+                    float val = g_Lhs[k0 + i] * (d1 * float(g_W[qbyte0 + i] & 0xFu) - m1);
+                    uint r = i & 3u;
+                    if (r == 0u) { a0 += val; }
+                    else if (r == 1u) { a1 += val; }
+                    else if (r == 2u) { a2 += val; }
+                    else { a3 += val; }
                 }
             }
             else
             {
                 for (uint i = 0u; i < 32u; ++i)
                 {
-                    acc += g_Lhs[k0 + i] * (d1 * float((g_W[qbyte0 + i] >> 4) & 0xFu) - m1);
+                    float val = g_Lhs[k0 + i] * (d1 * float((g_W[qbyte0 + i] >> 4) & 0xFu) - m1);
+                    uint r = i & 3u;
+                    if (r == 0u) { a0 += val; }
+                    else if (r == 1u) { a1 += val; }
+                    else if (r == 2u) { a2 += val; }
+                    else { a3 += val; }
                 }
             }
         }
     }
-    g_Out[col] = acc;
+    g_Out[col] = a0 + a1 + a2 + a3;
 }
