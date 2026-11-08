@@ -453,9 +453,9 @@ impl ModernBertClassifier {
 }
 
 impl Module for ModernBertClassifier {
+    /// Returns raw classification logits without applying an activation.
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = xs.apply(&self.classifier)?;
-        softmax(&xs, D::Minus1)
+        xs.apply(&self.classifier)
     }
 }
 
@@ -484,6 +484,11 @@ impl ModernBertForSequenceClassification {
         })
     }
 
+    /// Returns raw logits of shape `(batch_size, num_labels)`.
+    ///
+    /// Apply `candle_nn::ops::sigmoid` for independent multilabel probabilities,
+    /// or `candle_nn::ops::softmax` along the last dimension for single-label
+    /// classification probabilities.
     pub fn forward(&self, xs: &Tensor, mask: &Tensor) -> Result<Tensor> {
         let output = self.model.forward(xs, mask)?;
         let last_hidden_state = match self.classifier_pooling {
@@ -499,5 +504,30 @@ impl ModernBertForSequenceClassification {
             .forward(&last_hidden_state)?
             .apply(&self.classifier)?;
         Ok(xs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifier_returns_raw_logits() -> Result<()> {
+        let device = &Device::Cpu;
+        let weights = Tensor::new(&[[1f32, 0.], [0., 1.], [1., 1.]], device)?;
+        let bias = Tensor::new(&[1f32, -1., 0.], device)?;
+        let classifier = ModernBertClassifier {
+            classifier: Linear::new(weights, Some(bias)),
+        };
+        let input = Tensor::new(&[[1f32, 2.], [-2., 1.]], device)?;
+        let logits = classifier.forward(&input)?;
+        assert_eq!(
+            logits.to_vec2::<f32>()?,
+            vec![vec![2., 1., 3.], vec![-1., 0., -1.]]
+        );
+        // Multiple labels can independently exceed the probability threshold.
+        let probabilities = candle_nn::ops::sigmoid(&logits)?.to_vec2::<f32>()?;
+        assert!(probabilities[0].iter().all(|&p| p > 0.5));
+        Ok(())
     }
 }
