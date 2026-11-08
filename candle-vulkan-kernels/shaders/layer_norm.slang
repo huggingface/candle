@@ -30,6 +30,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         sum2 += v * v;
     }
     double mean = double(sum) / double(n);
+    // `var` uses E[x^2] - E[x]^2, matching the candle CPU `LayerNorm` reference
+    // exactly. This form can lose precision (catastrophic cancellation) when the
+    // mean is large relative to the variance, but switching to the two-pass
+    // stable form here would make the GPU diverge from the CPU reference, so
+    // keep the parity until the CPU reference itself changes.
     double var = double(sum2) / double(n) - mean * mean;
     double inv_std = 1.0 / sqrt(var + g_Params.eps);
     float mean_f = float(mean);
