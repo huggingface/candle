@@ -11859,6 +11859,18 @@ impl BackendStorage for VulkanStorage {
     }
     fn const_set(&mut self, scalar: crate::scalar::Scalar, l: &Layout) -> Result<()> {
         use crate::scalar::Scalar;
+        // I32/I16 const_set has no kernel dispatch (the scalar match accepts it
+        // but the buffer match has no I32/I16 arm), so reject it here with a
+        // clear error instead of failing later at dispatch time.
+        if matches!(self.dtype, DType::I32 | DType::I16) {
+            return Err(Error::Vulkan(
+                format!(
+                    "const_set: dtype {:?} not supported on the Vulkan backend",
+                    self.dtype
+                )
+                .into(),
+            ));
+        }
         let value = match (self.dtype, &scalar) {
             (DType::F32, Scalar::F32(v)) => *v,
             (DType::F32, Scalar::F16(v)) => v.to_f32(),

@@ -1576,8 +1576,8 @@ impl VulkanDevice {
         Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    /// Copies a device f32 buffer (VRAM) back to the host via a
-    /// host-visible staging buffer, then returns the data.
+    /// Uploads host `u8` data to a new device-local storage buffer via a
+    /// host-visible staging buffer.
     pub fn upload_u8(&self, data: &[u8]) -> Result<Subbuffer<[u8]>> {
         let buffer = Buffer::new_slice(
             &self.inner.mem_alloc,
@@ -1611,7 +1611,7 @@ impl VulkanDevice {
         })?;
         Ok(buffer)
     }
-    /// Downloads a device u8 storage buffer to the host.
+    /// Uploads host `u32` data to a new device-local storage buffer.
     pub fn upload_u32(&self, data: &[u32]) -> Result<Subbuffer<[u32]>> {
         let buffer = Buffer::new_slice(
             &self.inner.mem_alloc,
@@ -1646,7 +1646,7 @@ impl VulkanDevice {
         Ok(buffer)
     }
 
-    /// Copies a device u32 buffer (VRAM) back to the host.
+    /// Returns the device's atomic seed counter.
     pub fn seed_atomic(&self) -> &AtomicU64 {
         &self.inner.seed
     }
