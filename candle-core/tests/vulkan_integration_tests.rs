@@ -10225,3 +10225,55 @@ fn test_vulkan_affine_matmul() {
         );
     }
 }
+
+#[test]
+fn test_vulkan_argsort() {
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+
+    let cpu = candle_core::Device::Cpu;
+
+    // 3 rows x 64 cols, with duplicates (ties) to exercise the stable
+    // (value, index) ordering that must match the CPU reference.
+    let cols = 64usize;
+    let rows = 3usize;
+    let vals: Vec<f32> = (0..rows * cols)
+        .map(|i| {
+            let x = ((i % cols) as f32) * 0.37 - 5.0;
+            (x * 3.0).round() / 3.0
+        })
+        .collect();
+
+    let vg = candle_core::Tensor::new(vals.as_slice(), &dev)
+        .unwrap()
+        .reshape((rows, cols))
+        .unwrap();
+    let vc = candle_core::Tensor::new(vals.as_slice(), &cpu)
+        .unwrap()
+        .reshape((rows, cols))
+        .unwrap();
+
+    for asc in [true, false] {
+        let gidx = vg.arg_sort_last_dim(asc).unwrap();
+        let cidx = vc.arg_sort_last_dim(asc).unwrap();
+        let g: Vec<u32> = gidx
+            .to_vec2::<u32>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        let c: Vec<u32> = cidx
+            .to_vec2::<u32>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(g, c, "argsort asc={asc} indices differ from CPU");
+    }
+}

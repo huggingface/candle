@@ -11,8 +11,43 @@ layout(push_constant) Params g_Params;
 
 // One row per work item. The output buffer doubles as the index
 // workspace: it is initialized to the identity permutation and sorted
-// in place with a stable insertion sort, so the final buffer content is
-// the argsort result.
+// in place with an O(n log n) heapsort (the previous insertion sort was
+// O(n^2)). The (value, index) comparison gives a total order, so ties
+// keep their original relative order and NaN sorts last in both
+// directions, matching the CPU reference in `candle-core/src/sort.rs`.
+//
+// `less(base, a, b)` is "element a sorts before element b".
+bool less(uint64_t base, uint a, uint b, bool desc)
+{
+    float va = g_In[base + a];
+    float vb = g_In[base + b];
+    if (isnan(va)) { return false; }
+    if (isnan(vb)) { return true; }
+    if (va == vb) { return a < b; }
+    return desc ? (va > vb) : (va < vb);
+}
+
+void sift_down(uint64_t base, uint root, uint len, bool desc)
+{
+    while (true)
+    {
+        uint child = root * 2u + 1u;
+        if (child >= len) { break; }
+        uint right = child + 1u;
+        // Pick the child that sorts later (max in the sort order).
+        if (right < len && less(base, g_Out[base + child], g_Out[base + right], desc))
+        {
+            child = right;
+        }
+        // If the child sorts before the root, the root is already the max.
+        if (less(base, g_Out[base + child], g_Out[base + root], desc)) { break; }
+        uint t = g_Out[base + root];
+        g_Out[base + root] = g_Out[base + child];
+        g_Out[base + child] = t;
+        root = child;
+    }
+}
+
 void argsort_row(uint row, bool desc)
 {
     uint64_t rows = g_Params.rows;
@@ -26,42 +61,19 @@ void argsort_row(uint row, bool desc)
     {
         g_Out[base + j] = uint(j);
     }
-    for (uint64_t j = 1u; j < cols; j += 1u)
+    uint len = uint(cols);
+    // Build the max-heap.
+    for (uint i = len / 2u; i > 0u; i -= 1u)
     {
-        uint cur = g_Out[base + j];
-        float cv = g_In[base + cur];
-        uint64_t k = j;
-        while (k > 0u)
-        {
-            uint prev = g_Out[base + k - 1u];
-            float pv = g_In[base + prev];
-            bool move;
-            if (isnan(cv))
-            {
-                // NaN never moves: it sorts last in both directions and
-                // keeps its original order relative to other NaNs.
-                move = false;
-            }
-            else if (isnan(pv))
-            {
-                move = true;
-            }
-            else if (desc)
-            {
-                move = cv > pv;
-            }
-            else
-            {
-                move = cv < pv;
-            }
-            if (!move)
-            {
-                break;
-            }
-            g_Out[base + k] = g_Out[base + k - 1u];
-            k -= 1u;
-        }
-        g_Out[base + k] = cur;
+        sift_down(base, i - 1u, len, desc);
+    }
+    // Repeatedly move the max to the end and restore the heap.
+    for (uint end = len - 1u; end > 0u; end -= 1u)
+    {
+        uint t = g_Out[base];
+        g_Out[base] = g_Out[base + end];
+        g_Out[base + end] = t;
+        sift_down(base, 0u, end, desc);
     }
 }
 
