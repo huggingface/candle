@@ -2542,6 +2542,73 @@ fn test_vulkan_reduce_empty() {
     tracing::debug!("Vulkan device {gpu_id} reduce empty OK");
 }
 
+/// Reduce over a non-last axis (exercises the permute/materialize path),
+/// `sum_all`, and `mean`, each against the CPU reference.
+#[test]
+
+fn test_vulkan_reduce_coverage() {
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+    let cpu = candle_core::Device::Cpu;
+
+    let shape = candle_core::Shape::from((3usize, 4usize, 5usize));
+    let v: Vec<f32> = (0..60).map(|i| (i as f32) * 0.5 - 15.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+
+    // sum over dim 0 (non-last axis).
+    let (gs, cs) = (g.sum(0).unwrap(), c.sum(0).unwrap());
+    for (a, b) in gs
+        .to_vec2::<f32>()
+        .unwrap()
+        .iter()
+        .flatten()
+        .zip(cs.to_vec2::<f32>().unwrap().iter().flatten())
+    {
+        assert!(
+            (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+            "sum dim0: gpu {a} cpu {b}"
+        );
+    }
+
+    // sum_all (reduce every axis).
+    let (gs, cs) = (g.sum_all().unwrap(), c.sum_all().unwrap());
+    let (gs, cs) = (
+        gs.to_scalar::<f32>().unwrap(),
+        cs.to_scalar::<f32>().unwrap(),
+    );
+    assert!(
+        (gs - cs).abs() < 1e-3 * (1.0 + cs.abs()),
+        "sum_all: gpu {gs} cpu {cs}"
+    );
+
+    // mean over the last axis.
+    let (gm, cm) = (g.mean(2).unwrap(), c.mean(2).unwrap());
+    for (a, b) in gm
+        .to_vec2::<f32>()
+        .unwrap()
+        .iter()
+        .flatten()
+        .zip(cm.to_vec2::<f32>().unwrap().iter().flatten())
+    {
+        assert!(
+            (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+            "mean dim2: gpu {a} cpu {b}"
+        );
+    }
+
+    tracing::debug!("Vulkan device {gpu_id} reduce coverage OK");
+}
+
 /// Float -> integer `to_dtype` must match Rust's saturating `as` semantics: NaN
 /// converts to 0, and +/-inf/out-of-range values clamp to the destination range
 /// (a C-style cast would be UB on the out-of-range/NaN cases).
