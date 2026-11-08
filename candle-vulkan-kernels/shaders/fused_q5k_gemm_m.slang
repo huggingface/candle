@@ -1,13 +1,13 @@
 // Fused Q5_K prefill GEMM: out[row, col] = lhs[row, k] @ dequant(W[col, k]).
 //
-// Multi-row lhs (prefill): one thread per output element. The dispatch is
-// (1, ceil(n/32), m) workgroups of 32 threads: groupID.z selects the lhs row,
-// groupID.y * 32 + dispatchThreadID.x the weight column. Each thread
-// dequantizes its column in registers (no shared memory or barriers). W holds
-// raw Q5_K blocks (256 elements per 176 bytes: 2 f16 super scale/min, 12 bytes
-// of 6-bit scale/min pairs, 32 bytes of high bits, 128 bytes of 4-bit quants)
-// stored (n, k)-contiguous. k must be a multiple of 256; n need not be a
-// multiple of 32 (out-of-range columns early-exit).
+// Multi-row lhs (prefill): one thread per weight column, computing an 8-row
+// block of outputs. The dispatch is (1, ceil(n/32), ceil(m/8)) workgroups of
+// 32 threads: groupID.z * 8 selects the first lhs row. Each thread dequantizes
+// each column element once and reuses it across the 8 rows (8x less redundant
+// dequant than one-thread-per-(row,col)); the 8 partial sums live in registers.
+// W holds raw Q5_K blocks (256 elements per 176 bytes: 2 f16 super scale/min,
+// 12 bytes of 6-bit scale/min pairs, 32 bytes of high bits, 128 bytes of 4-bit
+// quants) stored (n, k)-contiguous. k must be a multiple of 256.
 //
 // Params: [0]=m, [1]=n, [2]=k.
 import dequant_helpers;
@@ -40,17 +40,14 @@ uint2 get_scale_min_k4(uint j, uint off, uint soff)
 [numthreads(32, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_GroupID)
 {
+    uint64_t m = g_Params.m;
     uint64_t n = g_Params.n;
     uint64_t k = g_Params.k;
     uint col = groupID.y * 32u + dispatchThreadID.x;
-    if (col >= n)
-    {
-        return;
-    }
-    uint row = groupID.z;
-    uint row_base = uint(row) * uint(k);
+    uint row0 = groupID.z * 8u;
     uint kblocks = k / 256u;
-    float acc = 0.0;
+    float acc0 = 0.0, acc1 = 0.0, acc2 = 0.0, acc3 = 0.0;
+    float acc4 = 0.0, acc5 = 0.0, acc6 = 0.0, acc7 = 0.0;
     for (uint bb = 0u; bb < kblocks; ++bb)
     {
         uint off = (col * kblocks + bb) * 176u;
@@ -72,7 +69,16 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
                 {
                     uint qv = g_W[ql0 + i] & 0xFu;
                     uint to_add = (g_W[off + 16u + i] & bit) != 0u ? 16u : 0u;
-                    acc += g_Lhs[row_base + k0 + i] * (d1 * float(qv + to_add) - m1);
+                    float deq = d1 * float(qv + to_add) - m1;
+                    uint64_t gi = uint64_t(k0 + i);
+                    if (uint64_t(row0) < m) { acc0 += g_Lhs[uint64_t(row0) * k + gi] * deq; }
+                    if (uint64_t(row0 + 1u) < m) { acc1 += g_Lhs[uint64_t(row0 + 1u) * k + gi] * deq; }
+                    if (uint64_t(row0 + 2u) < m) { acc2 += g_Lhs[uint64_t(row0 + 2u) * k + gi] * deq; }
+                    if (uint64_t(row0 + 3u) < m) { acc3 += g_Lhs[uint64_t(row0 + 3u) * k + gi] * deq; }
+                    if (uint64_t(row0 + 4u) < m) { acc4 += g_Lhs[uint64_t(row0 + 4u) * k + gi] * deq; }
+                    if (uint64_t(row0 + 5u) < m) { acc5 += g_Lhs[uint64_t(row0 + 5u) * k + gi] * deq; }
+                    if (uint64_t(row0 + 6u) < m) { acc6 += g_Lhs[uint64_t(row0 + 6u) * k + gi] * deq; }
+                    if (uint64_t(row0 + 7u) < m) { acc7 += g_Lhs[uint64_t(row0 + 7u) * k + gi] * deq; }
                 }
             }
             else
@@ -81,10 +87,30 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
                 {
                     uint qv = (g_W[ql0 + i] >> 4u) & 0xFu;
                     uint to_add = (g_W[off + 16u + i] & bit) != 0u ? 16u : 0u;
-                    acc += g_Lhs[row_base + k0 + i] * (d1 * float(qv + to_add) - m1);
+                    float deq = d1 * float(qv + to_add) - m1;
+                    uint64_t gi = uint64_t(k0 + i);
+                    if (uint64_t(row0) < m) { acc0 += g_Lhs[uint64_t(row0) * k + gi] * deq; }
+                    if (uint64_t(row0 + 1u) < m) { acc1 += g_Lhs[uint64_t(row0 + 1u) * k + gi] * deq; }
+                    if (uint64_t(row0 + 2u) < m) { acc2 += g_Lhs[uint64_t(row0 + 2u) * k + gi] * deq; }
+                    if (uint64_t(row0 + 3u) < m) { acc3 += g_Lhs[uint64_t(row0 + 3u) * k + gi] * deq; }
+                    if (uint64_t(row0 + 4u) < m) { acc4 += g_Lhs[uint64_t(row0 + 4u) * k + gi] * deq; }
+                    if (uint64_t(row0 + 5u) < m) { acc5 += g_Lhs[uint64_t(row0 + 5u) * k + gi] * deq; }
+                    if (uint64_t(row0 + 6u) < m) { acc6 += g_Lhs[uint64_t(row0 + 6u) * k + gi] * deq; }
+                    if (uint64_t(row0 + 7u) < m) { acc7 += g_Lhs[uint64_t(row0 + 7u) * k + gi] * deq; }
                 }
             }
         }
     }
-    g_Out[uint(row) * uint(n) + col] = acc;
+    if (col < n)
+    {
+        uint64_t ob = uint64_t(col);
+        if (uint64_t(row0) < m) { g_Out[uint64_t(row0) * n + ob] = acc0; }
+        if (uint64_t(row0 + 1u) < m) { g_Out[uint64_t(row0 + 1u) * n + ob] = acc1; }
+        if (uint64_t(row0 + 2u) < m) { g_Out[uint64_t(row0 + 2u) * n + ob] = acc2; }
+        if (uint64_t(row0 + 3u) < m) { g_Out[uint64_t(row0 + 3u) * n + ob] = acc3; }
+        if (uint64_t(row0 + 4u) < m) { g_Out[uint64_t(row0 + 4u) * n + ob] = acc4; }
+        if (uint64_t(row0 + 5u) < m) { g_Out[uint64_t(row0 + 5u) * n + ob] = acc5; }
+        if (uint64_t(row0 + 6u) < m) { g_Out[uint64_t(row0 + 6u) * n + ob] = acc6; }
+        if (uint64_t(row0 + 7u) < m) { g_Out[uint64_t(row0 + 7u) * n + ob] = acc7; }
+    }
 }
