@@ -44,7 +44,9 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
     uint64_t wbase = (uint64_t)expert * wexp;
     uint kblocks = (uint)k / 256u;
     uint lhs_base = route * (uint)k;
-    float acc = 0.0;
+    // Four independent accumulators break the serial FMA chain (ILP).
+    // `acc*` avoids clashing with the `a0..a3` scale-word temporaries below.
+    float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
     for (uint bb = 0u; bb < kblocks; ++bb)
     {
         uint64_t off = wbase + (col * kblocks + bb) * 110u;
@@ -81,10 +83,27 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
             uint word =
                 (is / 4u) == 0u ? a0 : (is / 4u) == 1u ? a1 : (is / 4u) == 2u ? a2 : a3;
             int scale_val = sbyte((word >> (8u * (is % 4u))) & 0xFFu);
-            acc +=
+            float val =
                 g_Lhs[lhs_base + bb * 256u + e] *
                 (d * float(scale_val - 32) * float(int(v) - int(correction)));
+            uint r = e & 3u;
+            if (r == 0u)
+            {
+                acc0 += val;
+            }
+            else if (r == 1u)
+            {
+                acc1 += val;
+            }
+            else if (r == 2u)
+            {
+                acc2 += val;
+            }
+            else
+            {
+                acc3 += val;
+            }
         }
     }
-    g_Out[route * (uint)n + col] = acc;
+    g_Out[route * (uint)n + col] = acc0 + acc1 + acc2 + acc3;
 }

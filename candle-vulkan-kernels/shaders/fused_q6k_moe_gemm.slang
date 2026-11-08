@@ -44,7 +44,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
     uint64_t wbase = (uint64_t)expert * wexp;
     uint kblocks = (uint)k / 256u;
     uint lhs_base = route * (uint)k;
-    float acc = 0.0;
+    // Four independent accumulators break the serial FMA chain (ILP).
+    float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
     for (uint bb = 0u; bb < kblocks; ++bb)
     {
         uint64_t off = wbase + (col * kblocks + bb) * 210u;
@@ -68,12 +69,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
                 float s3 = d * float(sbyte(g_W[sc + 4u]));
                 float s4 = d * float(sbyte(g_W[sc + 6u]));
                 uint k0 = bb * 256u + 128u * idx + l;
-                acc += g_Lhs[lhs_base + k0] * (s1 * float(q1));
-                acc += g_Lhs[lhs_base + k0 + 32u] * (s2 * float(q2));
-                acc += g_Lhs[lhs_base + k0 + 64u] * (s3 * float(q3));
-                acc += g_Lhs[lhs_base + k0 + 96u] * (s4 * float(q4));
+                a0 += g_Lhs[lhs_base + k0] * (s1 * float(q1));
+                a1 += g_Lhs[lhs_base + k0 + 32u] * (s2 * float(q2));
+                a2 += g_Lhs[lhs_base + k0 + 64u] * (s3 * float(q3));
+                a3 += g_Lhs[lhs_base + k0 + 96u] * (s4 * float(q4));
             }
         }
     }
-    g_Out[route * (uint)n + col] = acc;
+    g_Out[route * (uint)n + col] = a0 + a1 + a2 + a3;
 }
