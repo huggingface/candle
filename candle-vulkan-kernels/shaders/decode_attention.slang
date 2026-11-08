@@ -145,11 +145,16 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
     GroupMemoryBarrierWithGroupSync();
     float m_c = red[0];
 
-    // Block sum of exp(s - m_c) -> S_c.
+    // Block sum of exp(s - m_c) -> S_c, caching each exponentiated score
+    // back into g_s so the fold below reuses it (one exp per score, not
+    // two). The barrier after the block sum also publishes these writes
+    // before the cross-lane fold reads them.
     float ls = 0.0f;
     for (uint slot = 0u; slot < 4u; ++slot)
     {
-        ls += exp(g_s[tid * 4u + slot] - m_c);
+        float e = exp(g_s[tid * 4u + slot] - m_c);
+        g_s[tid * 4u + slot] = e;
+        ls += e;
     }
     red[tid] = ls;
     GroupMemoryBarrierWithGroupSync();
@@ -180,7 +185,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_Group
             uint j = j0 + t + 32u * slot;
             if (j < jend)
             {
-                float w = exp(g_s[t * 4u + slot] - m_c);
+                // g_s already holds exp(s - m_c) (cached by the block sum).
+                float w = g_s[t * 4u + slot];
                 uint vbase = khead + j * D;
                 for (uint i = 0u; i < chunk; ++i)
                 {
