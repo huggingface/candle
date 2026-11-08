@@ -347,6 +347,31 @@ pub enum KernelName {
     ReduceMinBf16,
     ReduceArgMinBf16,
     ReduceArgMaxBf16,
+    ReduceSumI64,
+    ReduceMaxI64,
+    ReduceMinI64,
+    ReduceArgMinI64,
+    ReduceArgMaxI64,
+    ReduceSumI32,
+    ReduceMaxI32,
+    ReduceMinI32,
+    ReduceArgMinI32,
+    ReduceArgMaxI32,
+    ReduceSumU32,
+    ReduceMaxU32,
+    ReduceMinU32,
+    ReduceArgMinU32,
+    ReduceArgMaxU32,
+    ReduceSumI16,
+    ReduceMaxI16,
+    ReduceMinI16,
+    ReduceArgMinI16,
+    ReduceArgMaxI16,
+    ReduceSumU8,
+    ReduceMaxU8,
+    ReduceMinU8,
+    ReduceArgMinU8,
+    ReduceArgMaxU8,
     AvgPool2dF32,
     MaxPool2dF32,
     UpsampleNearest1dF32,
@@ -843,6 +868,31 @@ impl AsRef<str> for KernelName {
             Self::ReduceMinBf16 => "main_reduce_min",
             Self::ReduceArgMinBf16 => "main_reduce_argmin",
             Self::ReduceArgMaxBf16 => "main_reduce_argmax",
+            Self::ReduceSumI64 => "main_reduce_sum",
+            Self::ReduceMaxI64 => "main_reduce_max",
+            Self::ReduceMinI64 => "main_reduce_min",
+            Self::ReduceArgMinI64 => "main_reduce_argmin",
+            Self::ReduceArgMaxI64 => "main_reduce_argmax",
+            Self::ReduceSumI32 => "main_reduce_sum",
+            Self::ReduceMaxI32 => "main_reduce_max",
+            Self::ReduceMinI32 => "main_reduce_min",
+            Self::ReduceArgMinI32 => "main_reduce_argmin",
+            Self::ReduceArgMaxI32 => "main_reduce_argmax",
+            Self::ReduceSumU32 => "main_reduce_sum",
+            Self::ReduceMaxU32 => "main_reduce_max",
+            Self::ReduceMinU32 => "main_reduce_min",
+            Self::ReduceArgMinU32 => "main_reduce_argmin",
+            Self::ReduceArgMaxU32 => "main_reduce_argmax",
+            Self::ReduceSumI16 => "main_reduce_sum",
+            Self::ReduceMaxI16 => "main_reduce_max",
+            Self::ReduceMinI16 => "main_reduce_min",
+            Self::ReduceArgMinI16 => "main_reduce_argmin",
+            Self::ReduceArgMaxI16 => "main_reduce_argmax",
+            Self::ReduceSumU8 => "main_reduce_sum",
+            Self::ReduceMaxU8 => "main_reduce_max",
+            Self::ReduceMinU8 => "main_reduce_min",
+            Self::ReduceArgMinU8 => "main_reduce_argmin",
+            Self::ReduceArgMaxU8 => "main_reduce_argmax",
 
             Self::AvgPool2dF32 => "main_avg_pool2d",
             Self::MaxPool2dF32 => "main_max_pool2d",
@@ -1790,7 +1840,32 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::ReduceMaxBf16
         | KernelName::ReduceMinBf16
         | KernelName::ReduceArgMinBf16
-        | KernelName::ReduceArgMaxBf16 => 3,
+        | KernelName::ReduceArgMaxBf16
+        | KernelName::ReduceSumI64
+        | KernelName::ReduceMaxI64
+        | KernelName::ReduceMinI64
+        | KernelName::ReduceArgMinI64
+        | KernelName::ReduceArgMaxI64
+        | KernelName::ReduceSumI32
+        | KernelName::ReduceMaxI32
+        | KernelName::ReduceMinI32
+        | KernelName::ReduceArgMinI32
+        | KernelName::ReduceArgMaxI32
+        | KernelName::ReduceSumU32
+        | KernelName::ReduceMaxU32
+        | KernelName::ReduceMinU32
+        | KernelName::ReduceArgMinU32
+        | KernelName::ReduceArgMaxU32
+        | KernelName::ReduceSumI16
+        | KernelName::ReduceMaxI16
+        | KernelName::ReduceMinI16
+        | KernelName::ReduceArgMinI16
+        | KernelName::ReduceArgMaxI16
+        | KernelName::ReduceSumU8
+        | KernelName::ReduceMaxU8
+        | KernelName::ReduceMinU8
+        | KernelName::ReduceArgMinU8
+        | KernelName::ReduceArgMaxU8 => 3,
         // argsort: in/out (params are push constants).
         KernelName::ArgsortAscF32 | KernelName::ArgsortDescF32 => 2,
         // conv: in/w/out (params are push constants).

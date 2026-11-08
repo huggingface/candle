@@ -2639,29 +2639,6 @@ impl BackendStorage for VulkanStorage {
             // result_count == 0 (empty result): fall through to the normal
             // dispatch, which records zero workgroups and yields the empty tensor.
         }
-        // Convert integer dtypes to F64 for the reduction (its 52-bit mantissa
-        // keeps the integer sums the tests exercise exact; F32 would round values
-        // above 2^24), then convert the reduced result back to the original dtype.
-        // The reduced result has the input shape with the reduced dims removed, so
-        // the final dtype conversion must use that reduced layout, not the input one.
-        if self.dtype.is_int() {
-            let f64 = self.to_dtype(l, DType::F64)?;
-            // to_dtype materializes a non-contiguous input to a fresh contiguous
-            // buffer, so the reduce must use a layout matching the (now contiguous)
-            // f64 storage, not the original layout l.
-            let f64_l = if matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
-                l.clone()
-            } else {
-                crate::Layout::contiguous(l.shape())
-            };
-            let result = f64.reduce_op(op, &f64_l, reduce_dims)?;
-            let reduced_dims: Vec<usize> = (0..l.dims().len())
-                .filter(|&i| !reduce_dims.contains(&i))
-                .map(|i| l.dims()[i])
-                .collect();
-            let reduced_l = crate::Layout::contiguous(crate::Shape::from(reduced_dims));
-            return result.to_dtype(&reduced_l, self.dtype);
-        }
         let dims = l.dims();
         let ndim = dims.len();
         if ndim == 0 {
@@ -2978,6 +2955,301 @@ impl BackendStorage for VulkanStorage {
                         cbb,
                         &kernels,
                         candle_vulkan_kernels::Source::ReduceBf16,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::I64 => {
+                let input: Subbuffer<[i64]> = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::I64,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumI64,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxI64,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinI64,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinI64,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxI64,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<i64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceI64,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::I32 => {
+                let input: Subbuffer<[i32]> = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::I32,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumI32,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxI32,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinI32,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinI32,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxI32,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<i32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceI32,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::U32 => {
+                let input: Subbuffer<[u32]> = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::U32,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumU32,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxU32,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinU32,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinU32,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxU32,
+                };
+                // U32 is the output type of both the value ops (sum/min/max) and
+                // the index ops (argmin/argmax), so the slot selection is
+                // disambiguated by the op, not just the buffer type.
+                let (out_f, out_i) = match (&out.buffer, op) {
+                    (VulkanStorageBuffer::U32(b), ReduceOp::ArgMin | ReduceOp::ArgMax) => {
+                        (None, Some(b.clone()))
+                    }
+                    (VulkanStorageBuffer::U32(b), _) => (Some(b.clone()), None),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<u32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceU32,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::I16 => {
+                let input: Subbuffer<[i16]> = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::I16,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumI16,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxI16,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinI16,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinI16,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxI16,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<i16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceI16,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::U8 => {
+                let input: Subbuffer<[u8]> = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::U8,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumU8,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxU8,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinU8,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinU8,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxU8,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<u8>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceU8,
                         name,
                         &input,
                         of.as_ref(),

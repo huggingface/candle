@@ -112,6 +112,11 @@ const ARGSORT_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/argsort.spv
 const REDUCE_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f16.spv"));
 const REDUCE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f64.spv"));
 const REDUCE_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_bf16.spv"));
+const REDUCE_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_i64.spv"));
+const REDUCE_I32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_i32.spv"));
+const REDUCE_U32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_u32.spv"));
+const REDUCE_I16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_i16.spv"));
+const REDUCE_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_u8.spv"));
 const POOL2D_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d.spv"));
 const POOL2D_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d_f16.spv"));
 const POOL2D_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pool2d_f64.spv"));
@@ -550,6 +555,11 @@ pub enum Source {
     ReduceF16,
     ReduceF64,
     ReduceBf16,
+    ReduceI64,
+    ReduceI32,
+    ReduceU32,
+    ReduceI16,
+    ReduceU8,
     ArgsortSlang,
     Pool2dSlang,
     Pool2dF16,
@@ -1046,7 +1056,32 @@ impl Source {
             | KernelName::ReduceMaxBf16
             | KernelName::ReduceMinBf16
             | KernelName::ReduceArgMinBf16
-            | KernelName::ReduceArgMaxBf16 => 16,
+            | KernelName::ReduceArgMaxBf16
+            | KernelName::ReduceSumI64
+            | KernelName::ReduceMaxI64
+            | KernelName::ReduceMinI64
+            | KernelName::ReduceArgMinI64
+            | KernelName::ReduceArgMaxI64
+            | KernelName::ReduceSumI32
+            | KernelName::ReduceMaxI32
+            | KernelName::ReduceMinI32
+            | KernelName::ReduceArgMinI32
+            | KernelName::ReduceArgMaxI32
+            | KernelName::ReduceSumU32
+            | KernelName::ReduceMaxU32
+            | KernelName::ReduceMinU32
+            | KernelName::ReduceArgMinU32
+            | KernelName::ReduceArgMaxU32
+            | KernelName::ReduceSumI16
+            | KernelName::ReduceMaxI16
+            | KernelName::ReduceMinI16
+            | KernelName::ReduceArgMinI16
+            | KernelName::ReduceArgMaxI16
+            | KernelName::ReduceSumU8
+            | KernelName::ReduceMaxU8
+            | KernelName::ReduceMinU8
+            | KernelName::ReduceArgMinU8
+            | KernelName::ReduceArgMaxU8 => 16,
             // `argsort`: `uint64_t rows; uint64_t cols`.
             KernelName::ArgsortAscF32 | KernelName::ArgsortDescF32 => 16,
             // `cmp`: three scalars + two `uint64_t[4]` arrays.
@@ -1305,6 +1340,11 @@ impl Source {
             Self::ReduceF16 => REDUCE_F16_SPV,
             Self::ReduceF64 => REDUCE_F64_SPV,
             Self::ReduceBf16 => REDUCE_BF16_SPV,
+            Self::ReduceI64 => REDUCE_I64_SPV,
+            Self::ReduceI32 => REDUCE_I32_SPV,
+            Self::ReduceU32 => REDUCE_U32_SPV,
+            Self::ReduceI16 => REDUCE_I16_SPV,
+            Self::ReduceU8 => REDUCE_U8_SPV,
             Self::Pool2dSlang => POOL2D_SLANG_SPV,
             Self::Pool2dF16 => POOL2D_F16_SPV,
             Self::Pool2dF64 => POOL2D_F64_SPV,
@@ -1627,6 +1667,11 @@ impl AsRef<str> for Source {
             Self::ReduceF16 => "reduce_f16",
             Self::ReduceF64 => "reduce_f64",
             Self::ReduceBf16 => "reduce_bf16",
+            Self::ReduceI64 => "reduce_i64",
+            Self::ReduceI32 => "reduce_i32",
+            Self::ReduceU32 => "reduce_u32",
+            Self::ReduceI16 => "reduce_i16",
+            Self::ReduceU8 => "reduce_u8",
             Self::ArgsortSlang => "argsort",
             Self::Pool2dSlang => "pool2d",
             Self::Pool2dF16 => "pool2d_f16",

@@ -2485,6 +2485,128 @@ fn test_vulkan_reduce_op() {
     tracing::debug!("Vulkan device {gpu_id} reduce_op OK");
 }
 
+fn check_reduce_ops<T>(g: &candle_core::Tensor, c: &candle_core::Tensor)
+where
+    T: candle_core::WithDType + PartialEq + std::fmt::Debug,
+{
+    assert_eq!(
+        g.sum(1).unwrap().to_vec1::<T>().unwrap(),
+        c.sum(1).unwrap().to_vec1::<T>().unwrap(),
+        "int sum"
+    );
+    assert_eq!(
+        g.max(1).unwrap().to_vec1::<T>().unwrap(),
+        c.max(1).unwrap().to_vec1::<T>().unwrap(),
+        "int max"
+    );
+    assert_eq!(
+        g.min(1).unwrap().to_vec1::<T>().unwrap(),
+        c.min(1).unwrap().to_vec1::<T>().unwrap(),
+        "int min"
+    );
+    assert_eq!(
+        g.argmax(1).unwrap().to_vec1::<u32>().unwrap(),
+        c.argmax(1).unwrap().to_vec1::<u32>().unwrap(),
+        "int argmax"
+    );
+    assert_eq!(
+        g.argmin(1).unwrap().to_vec1::<u32>().unwrap(),
+        c.argmin(1).unwrap().to_vec1::<u32>().unwrap(),
+        "int argmin"
+    );
+}
+
+/// Integer reductions run natively (sum/min/max/argmin/argmax) instead of an
+/// F64 round-trip, so I64 values above 2^53 stay exact.
+#[test]
+fn test_vulkan_reduce_int() {
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+
+    let cpu = candle_core::Device::Cpu;
+
+    // I64: values straddling 2^53, where an F64 round-trip would round (and
+    // collapse distinct values).
+    let v: Vec<i64> = (0..16)
+        .map(|i| (1i64 << 53) + (i as i64) * 3 - 20)
+        .collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape((4, 4))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape((4, 4))
+        .unwrap();
+    check_reduce_ops::<i64>(&g, &c);
+
+    // Non-last-axis (dim 0) and multi-axis (all dims) native int reduce.
+    assert_eq!(
+        g.sum(0).unwrap().to_vec1::<i64>().unwrap(),
+        c.sum(0).unwrap().to_vec1::<i64>().unwrap(),
+        "i64 dim-0 sum"
+    );
+    assert_eq!(
+        g.sum_all().unwrap().to_scalar::<i64>().unwrap(),
+        c.sum_all().unwrap().to_scalar::<i64>().unwrap(),
+        "i64 sum_all"
+    );
+
+    // I32: full-range values (any F32 round-trip loses values above 2^24).
+    let v: Vec<i32> = (0..12).map(|i| i * 100_000_003 - 600_000_000).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape((3, 4))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape((3, 4))
+        .unwrap();
+    check_reduce_ops::<i32>(&g, &c);
+
+    // U32: large unsigned values.
+    let v: Vec<u32> = (0..12).map(|i| (i as u32) * 40_000_000 + 123_456).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape((3, 4))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape((3, 4))
+        .unwrap();
+    check_reduce_ops::<u32>(&g, &c);
+
+    // I16: signed 16-bit values (wraps naturally within the native width here).
+    let v: Vec<i16> = (0..16).map(|i| (i as i16) * 421 - 3000).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape((4, 4))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape((4, 4))
+        .unwrap();
+    check_reduce_ops::<i16>(&g, &c);
+
+    // U8: keep row sums below 255 (native-width wrapping would overflow the
+    // debug CPU build, which panics on `u8` addition overflow).
+    let v: Vec<u8> = (0..16).map(|i| (i as u8) * 4).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape((4, 4))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape((4, 4))
+        .unwrap();
+    check_reduce_ops::<u8>(&g, &c);
+
+    tracing::debug!("Vulkan device {gpu_id} reduce_int OK");
+}
+
 /// `Tensor::full` with wide i64/u32/f64 constants must round-trip exactly. The
 /// fill value travels through a native-width push constant, not an f32 (which
 /// only keeps 24 significant bits and would silently round >= 2^24 values).
