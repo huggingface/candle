@@ -197,6 +197,10 @@ type Encode = Box<
         + Send,
 >;
 
+/// A submitted batch: the fence it signals, its fence-ring index, the number
+/// of encodes it recorded, and its slot generation (see `InFlight`).
+type SubmittedBatch = (Arc<Fence>, usize, usize, u64);
+
 /// One slot of the fence ring: the fence the last submission using this
 /// slot signals, plus (as a safety net only) a pin on that submission's
 /// command buffer while its wait is outstanding: the pin is cleared as
@@ -208,6 +212,11 @@ struct InFlight {
     /// Wall-clock instant the last submission using this slot was enqueued,
     /// used to estimate per-encode GPU time for the adaptive batch cap.
     submit_time: std::time::Instant,
+    /// Monotonic submission generation: bumped each time the slot is reused,
+    /// so `finish_batch` can detect when its (fence, index) has been stale
+    /// behind a wrapped ring and skip clearing a slot that now belongs to a
+    /// later submission.
+    generation: u64,
 }
 
 /// A sampled token id that the GPU is copying (or has copied) into the
@@ -220,6 +229,7 @@ pub struct PipedId {
     fence: Arc<Fence>,
     ring_idx: usize,
     n_encodes: usize,
+    generation: u64,
     slot: usize,
 }
 
@@ -227,8 +237,13 @@ impl PipedId {
     /// Blocks until the id is available and returns it. Consumes the
     /// handle.
     pub fn wait(self) -> Result<u32> {
-        self.device
-            .read_id_slot(&self.fence, self.ring_idx, self.n_encodes, self.slot)
+        self.device.read_id_slot(
+            &self.fence,
+            self.ring_idx,
+            self.n_encodes,
+            self.generation,
+            self.slot,
+        )
     }
 }
 
@@ -484,6 +499,7 @@ impl VulkanDevice {
                 cbb: None,
                 fence: Arc::new(fence),
                 submit_time: std::time::Instant::now(),
+                generation: 0,
             });
         }
         tracing::debug!(
@@ -1259,7 +1275,9 @@ impl VulkanDevice {
     /// until the wait returns, then released.
     pub fn synchronize(&self) -> Result<()> {
         match self.submit_batch()? {
-            Some((fence, ring_idx, n_encodes)) => self.finish_batch(&fence, ring_idx, n_encodes),
+            Some((fence, ring_idx, n_encodes, generation)) => {
+                self.finish_batch(&fence, ring_idx, n_encodes, generation)
+            }
             None => Ok(()),
         }
     }
@@ -1270,7 +1288,7 @@ impl VulkanDevice {
     /// there were no pending encodes. The command buffer (and with it every buffer of the
     /// batch) stays pinned in the ring slot until `finish_batch` releases
     /// it, so in-flight batches keep their buffers alive.
-    pub fn submit_batch(&self) -> Result<Option<(Arc<Fence>, usize, usize)>> {
+    pub fn submit_batch(&self) -> Result<Option<SubmittedBatch>> {
         let mut pending = self
             .inner
             .pending
@@ -1319,7 +1337,7 @@ impl VulkanDevice {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             % FENCE_RING_SIZE;
         let cbb_submit = cbb.clone();
-        let fence = {
+        let (fence, generation) = {
             let mut ring = self
                 .inner
                 .fence_ring
@@ -1336,7 +1354,8 @@ impl VulkanDevice {
             unsafe { slot.fence.reset() }.map_err(|e| Error::Vulkan(e.to_string().into()))?;
             slot.cbb = Some(cbb);
             slot.submit_time = std::time::Instant::now();
-            slot.fence.clone()
+            slot.generation = slot.generation.wrapping_add(1);
+            (slot.fence.clone(), slot.generation)
         };
         let submit_result = self.inner.queue.with(|mut q| unsafe {
             q.submit(
@@ -1370,7 +1389,7 @@ impl VulkanDevice {
                 t_build
             );
         }
-        Ok(Some((fence, idx, n_encodes)))
+        Ok(Some((fence, idx, n_encodes, generation)))
     }
 
     /// Waits for a batch submitted by `submit_batch` and releases everything
@@ -1384,6 +1403,7 @@ impl VulkanDevice {
         fence: &Arc<Fence>,
         ring_idx: usize,
         n_encodes: usize,
+        generation: u64,
     ) -> Result<()> {
         let t_wait = std::time::Instant::now();
         fence
@@ -1402,6 +1422,7 @@ impl VulkanDevice {
                     .lock()
                     .map_err(|e| Error::Vulkan(e.to_string().into()))?;
                 ring.get(ring_idx)
+                    .filter(|s| s.generation == generation)
                     .map(|s| s.submit_time.elapsed().as_nanos() as u64)
                     .unwrap_or(0)
             };
@@ -1422,7 +1443,12 @@ impl VulkanDevice {
                 .lock()
                 .map_err(|e| Error::Vulkan(e.to_string().into()))?;
             if let Some(slot) = ring.get_mut(ring_idx) {
-                slot.cbb = None;
+                // Only clear the slot if it still belongs to this submission: a
+                // wrapped fence ring may have reused the slot for a later batch,
+                // and clearing it here would drop that batch's pin.
+                if slot.generation == generation {
+                    slot.cbb = None;
+                }
             }
         }
         self.inner
@@ -1539,7 +1565,7 @@ impl VulkanDevice {
                 Ok(())
             }));
         }
-        let (fence, ring_idx, n_encodes) = self.submit_batch()?.ok_or_else(|| {
+        let (fence, ring_idx, n_encodes, generation) = self.submit_batch()?.ok_or_else(|| {
             Error::Vulkan(
                 "submit_id_readback: no batch was submitted"
                     .to_string()
@@ -1551,6 +1577,7 @@ impl VulkanDevice {
             fence,
             ring_idx,
             n_encodes,
+            generation,
             slot,
         })
     }
@@ -1562,9 +1589,10 @@ impl VulkanDevice {
         fence: &Arc<Fence>,
         ring_idx: usize,
         n_encodes: usize,
+        generation: u64,
         slot: usize,
     ) -> Result<u32> {
-        self.finish_batch(fence, ring_idx, n_encodes)?;
+        self.finish_batch(fence, ring_idx, n_encodes, generation)?;
         let ring = self.id_ring_buffer()?;
         let offset = slot as u64 * ID_RING_SLOT_BYTES;
         let slot_buf = ring.slice(offset..offset + 4);
