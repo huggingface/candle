@@ -7813,6 +7813,140 @@ fn test_vulkan_quantized_matmul() {
     }
 }
 
+/// Fused routed-MoE quantized GEMM: for each fused-MoE dtype, quantize a few
+/// distinct (n, k) expert weight matrices, route (num_routes,) inputs to them,
+/// run `QVulkanStorage::fused_moe_gemm`, and compare against the CPU reference
+/// computed with the dequantized expert weights.
+#[test]
+fn test_vulkan_moe_gemm() {
+    use candle_core::backend::BackendStorage;
+
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let vk_dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+
+    let vk_device = match &vk_dev {
+        candle_core::Device::Vulkan(v) => v.clone(),
+        _ => unreachable!(),
+    };
+
+    let cpu_dev = candle_core::Device::Cpu;
+
+    let experts = 3usize;
+
+    let n = 64usize;
+
+    let k = 512usize; // multiple of the 256/32 block sizes across the dtypes
+
+    let num_routes = 5usize;
+
+    let dtypes = [
+        candle_core::quantized::GgmlDType::Q2K,
+        candle_core::quantized::GgmlDType::Q3K,
+        candle_core::quantized::GgmlDType::Q4K,
+        candle_core::quantized::GgmlDType::Q6K,
+        candle_core::quantized::GgmlDType::Q8_0,
+    ];
+
+    for dtype in dtypes {
+        // Distinct (n, k) f32 weights per expert; quantize each on the CPU and
+        // concatenate the quantized bytes into the (experts, n, k) storage.
+        let mut expert_deq: Vec<Vec<f32>> = Vec::new();
+
+        let mut all_bytes: Vec<u8> = Vec::new();
+
+        for e in 0..experts {
+            let w: Vec<f32> = (0..n * k)
+                .map(|i| i as f32 * 0.11 + e as f32 * 1.7 - 5.0)
+                .collect();
+
+            let w_t = candle_core::Tensor::new(w.as_slice(), &cpu_dev)
+                .unwrap()
+                .reshape((n, k))
+                .unwrap();
+
+            let q = candle_core::quantized::QTensor::quantize(&w_t, dtype).unwrap();
+
+            expert_deq.push(
+                q.dequantize(&cpu_dev)
+                    .unwrap()
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap(),
+            );
+
+            all_bytes.extend_from_slice(&q.data().unwrap());
+        }
+
+        let lhs_vals: Vec<f32> = (0..num_routes * k).map(|i| i as f32 * 0.17 - 1.0).collect();
+
+        let ids_vals: Vec<u32> = (0..num_routes)
+            .map(|r| (r as u32 * 7919) % experts as u32)
+            .collect();
+
+        let q_storage = candle_core::quantized::QStorage::from_data(
+            std::borrow::Cow::Owned(all_bytes),
+            &vk_dev,
+            dtype,
+        )
+        .unwrap();
+
+        let candle_core::quantized::QStorage::Vulkan(moe) = q_storage else {
+            panic!("expected Vulkan quantized storage");
+        };
+
+        let lhs = vk_device.storage_from_slice(&lhs_vals).unwrap();
+
+        let ids = vk_device.storage_from_slice(&ids_vals).unwrap();
+
+        let out = moe
+            .fused_moe_gemm(&lhs, &ids, experts, n, k, num_routes)
+            .unwrap();
+
+        let out_vals = match out.to_cpu_storage().unwrap() {
+            candle_core::CpuStorage::F32(v) => v,
+            _ => panic!("fused moe gemm output must be f32"),
+        };
+
+        // CPU reference: out[r, j] = sum_i lhs[r, i] * W[ids[r], j, i].
+        let mut ref_vals = vec![0.0f32; num_routes * n];
+
+        for r in 0..num_routes {
+            let e = ids_vals[r] as usize;
+
+            let w = &expert_deq[e];
+
+            for j in 0..n {
+                let mut acc = 0.0;
+
+                for i in 0..k {
+                    acc += lhs_vals[r * k + i] * w[j * k + i];
+                }
+
+                ref_vals[r * n + j] = acc;
+            }
+        }
+
+        assert_eq!(out_vals.len(), ref_vals.len(), "{dtype:?} length mismatch");
+
+        let max_err = out_vals
+            .iter()
+            .zip(ref_vals.iter())
+            .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+            .fold(0.0f32, f32::max);
+
+        assert!(
+            max_err <= 1e-3,
+            "{dtype:?}: Vulkan fused MoE GEMM max_err {max_err} exceeds 1e-3"
+        );
+
+        tracing::debug!("Vulkan device {gpu_id} fused MoE GEMM {dtype:?} OK (max_err={max_err})");
+    }
+}
+
 /// Quantized embedding test: for each `GgmlDType`, quantize a `(rows, hidden)`
 ///
 /// weight matrix on the CPU, gather rows on Vulkan via `QMatMul::embedding`,
