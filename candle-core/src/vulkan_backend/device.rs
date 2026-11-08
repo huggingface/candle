@@ -205,6 +205,9 @@ type Encode = Box<
 struct InFlight {
     cbb: Option<Arc<PrimaryAutoCommandBuffer>>,
     fence: Arc<Fence>,
+    /// Wall-clock instant the last submission using this slot was enqueued,
+    /// used to estimate per-encode GPU time for the adaptive batch cap.
+    submit_time: std::time::Instant,
 }
 
 /// A sampled token id that the GPU is copying (or has copied) into the
@@ -480,6 +483,7 @@ impl VulkanDevice {
             fence_ring.push(InFlight {
                 cbb: None,
                 fence: Arc::new(fence),
+                submit_time: std::time::Instant::now(),
             });
         }
         tracing::debug!(
@@ -1273,6 +1277,10 @@ impl VulkanDevice {
             .lock()
             .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         let encodes = std::mem::take(&mut *pending);
+        // Release the pending lock before recording: recording is the slow part
+        // and must not serialize other threads' `execute` calls (or deadlock if
+        // an encode re-enters `execute`).
+        drop(pending);
         if std::env::var("CANDLE_VULKAN_TRACE").is_ok() && !encodes.is_empty() {
             let counts = candle_vulkan_kernels::trace_counts();
             let total: u64 = counts.iter().map(|(_, c)| c).sum();
@@ -1327,22 +1335,34 @@ impl VulkanDevice {
             }
             unsafe { slot.fence.reset() }.map_err(|e| Error::Vulkan(e.to_string().into()))?;
             slot.cbb = Some(cbb);
+            slot.submit_time = std::time::Instant::now();
             slot.fence.clone()
         };
-        self.inner
-            .queue
-            .with(|mut q| unsafe {
-                q.submit(
-                    &[SubmitInfo {
-                        wait_semaphores: &[],
-                        command_buffers: &[CommandBufferSubmitInfo::new(cbb_submit.as_raw())],
-                        signal_semaphores: &[],
-                        ..Default::default()
-                    }],
-                    Some(&fence),
-                )
-            })
-            .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        let submit_result = self.inner.queue.with(|mut q| unsafe {
+            q.submit(
+                &[SubmitInfo {
+                    wait_semaphores: &[],
+                    command_buffers: &[CommandBufferSubmitInfo::new(cbb_submit.as_raw())],
+                    signal_semaphores: &[],
+                    ..Default::default()
+                }],
+                Some(&fence),
+            )
+        });
+        if submit_result.is_err() {
+            // The fence was reset before submission; a failed submit leaves a
+            // never-signaling fence pinned to the slot, which would deadlock
+            // the next submission to it. Un-arm the slot's command-buffer pin.
+            let mut ring = self
+                .inner
+                .fence_ring
+                .lock()
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            if let Some(slot) = ring.get_mut(idx) {
+                slot.cbb = None;
+            }
+        }
+        submit_result.map_err(|e| Error::Vulkan(e.to_string().into()))?;
         if std::env::var("CANDLE_VULKAN_PROFILE").is_ok() {
             tracing::debug!(
                 "vulkan profile: {} encodes, encode+build {:?}",
@@ -1370,12 +1390,22 @@ impl VulkanDevice {
             .wait(Some(std::time::Duration::from_secs(60)))
             .map_err(|e| Error::Vulkan(e.to_string().into()))?;
         if n_encodes > 0 {
-            // Update the adaptive batch cap: the fence wait is the
-            // batch's GPU time (plus a small driver overhead), so the
-            // measured per-encode time tracks the device's actual speed
-            // (including throttle-downs while the CPU is busy).
-            let measured_ns =
-                std::cmp::max(1_000, t_wait.elapsed().as_nanos() as u64 / n_encodes as u64);
+            // Update the adaptive batch cap. Measure from submission, not the
+            // fence wait: in the pipelined decode path the fence is already
+            // signaled by the time `finish_batch` runs, so the wait duration is
+            // ~0 and would decay the estimate to its 1 us floor, disabling the
+            // driver-timeout protection the cap exists to provide.
+            let submit_elapsed_ns = {
+                let ring = self
+                    .inner
+                    .fence_ring
+                    .lock()
+                    .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                ring.get(ring_idx)
+                    .map(|s| s.submit_time.elapsed().as_nanos() as u64)
+                    .unwrap_or(0)
+            };
+            let measured_ns = std::cmp::max(1_000, submit_elapsed_ns / n_encodes as u64);
             let old = self
                 .inner
                 .batch_ns_per_encode
@@ -1492,11 +1522,23 @@ impl VulkanDevice {
             % ID_RING_SLOTS;
         let offset = slot as u64 * ID_RING_SLOT_BYTES;
         let dst = ring.slice(offset..offset + 4);
-        self.execute(move |cbb| {
-            cbb.copy_buffer(CopyBufferInfo::new(src, dst))
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })?;
+        // Record the id copy directly onto the pending batch, bypassing the
+        // cap-flushing `execute`: `execute` can synchronously flush the batch
+        // when this copy trips the cap, which would leave nothing for the
+        // follow-up `submit_batch` to submit and surface as a spurious "no
+        // batch was submitted" error.
+        {
+            let mut pending = self
+                .inner
+                .pending
+                .lock()
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+            pending.push(Box::new(move |cbb| {
+                cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            }));
+        }
         let (fence, ring_idx, n_encodes) = self.submit_batch()?.ok_or_else(|| {
             Error::Vulkan(
                 "submit_id_readback: no batch was submitted"
