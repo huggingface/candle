@@ -1392,13 +1392,7 @@ fn test_vulkan_unary_ops() {
         .unwrap();
 
         for (i, (g, c)) in gpu.iter().zip(cpu_t.iter()).enumerate() {
-            let tol = if g.is_infinite() || c.is_infinite() {
-                0.0
-            } else {
-                1e-5 * (1.0 + g.abs().max(c.abs()))
-            };
-
-            if (g - c).abs() > tol.max(1e-5) {
+            if !close(*g, *c, 1e-5) {
                 failures += 1;
 
                 tracing::debug!("unary {name}: mismatch at {i}: gpu {g} cpu {c}");
