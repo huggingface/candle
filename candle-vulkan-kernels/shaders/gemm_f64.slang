@@ -26,7 +26,8 @@ void main_gemm(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_
     uint64_t k = g_Params.k;
     uint64_t rt = g_Params.rhs_transposed;
     bool in_range = row < m && col < n;
-    double acc = 0.0;
+    // Four independent accumulators break the serial FMA chain (ILP).
+    double acc0 = 0.0, acc1 = 0.0, acc2 = 0.0, acc3 = 0.0;
     for (uint k0 = 0u; k0 < k; k0 += 16u)
     {
         uint a_k = k0 + localID.x;
@@ -57,15 +58,19 @@ void main_gemm(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_
         GroupMemoryBarrierWithGroupSync();
         if (in_range)
         {
-            for (uint kk = 0u; kk < 16u; kk += 1u)
+            uint arb = localID.y * 16u;
+            for (uint kk = 0u; kk < 16u; kk += 4u)
             {
-                acc += a_tile[localID.y * 16u + kk] * b_tile[kk * 16u + localID.x];
+                acc0 += a_tile[arb + kk] * b_tile[kk * 16u + localID.x];
+                acc1 += a_tile[arb + kk + 1u] * b_tile[(kk + 1u) * 16u + localID.x];
+                acc2 += a_tile[arb + kk + 2u] * b_tile[(kk + 2u) * 16u + localID.x];
+                acc3 += a_tile[arb + kk + 3u] * b_tile[(kk + 3u) * 16u + localID.x];
             }
         }
         GroupMemoryBarrierWithGroupSync();
     }
     if (in_range)
     {
-        g_Out[batch * m * n + row * n + col] = acc;
+        g_Out[batch * m * n + row * n + col] = acc0 + acc1 + acc2 + acc3;
     }
 }
