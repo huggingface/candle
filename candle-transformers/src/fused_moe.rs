@@ -168,8 +168,10 @@ pub struct FusedMoeGGUF {
     pub gate_experts: Arc<QTensor>,
     pub up_experts: Arc<QTensor>,
     // Gate and up experts packed into `[experts, 2 * inter, hidden]` so the
-    // non-CUDA path issues one fused MoE GEMM instead of two.
-    pub gate_up_experts: Arc<QTensor>,
+    // non-CUDA path issues one fused MoE GEMM instead of two. `None` on
+    // CUDA, where the forward uses `gate_experts`/`up_experts` separately and
+    // the packed copy would only duplicate the weights.
+    pub gate_up_experts: Option<Arc<QTensor>>,
     pub w_size_n: usize,
     pub down_experts: Arc<QTensor>,
     pub act: Activation,
@@ -246,7 +248,11 @@ impl FusedMoeGGUF {
             let xs = xs.reshape((num_tokens, 1, hidden_dim))?.contiguous()?;
             // One fused GEMM over the packed `[experts, 2 * inter, hidden]`
             // weight, then split the output into the gate and up halves.
-            let gate_up = self.gate_up_experts.indexed_moe_forward(&xs, &topk_ids)?;
+            let gate_up = self
+                .gate_up_experts
+                .as_ref()
+                .ok_or_else(|| candle::Error::Msg("gate_up_experts are not packed".to_string()))?
+                .indexed_moe_forward(&xs, &topk_ids)?;
             let gate = gate_up.narrow(D::Minus1, 0, self.w_size_n)?.contiguous()?;
             let up = gate_up
                 .narrow(D::Minus1, self.w_size_n, self.w_size_n)?
