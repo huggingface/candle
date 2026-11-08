@@ -12878,6 +12878,14 @@ impl VulkanStorage {
         use candle_vulkan_kernels::{
             call_decode_attention_slang, DecodeAttentionParams, DECODE_ATTENTION_CHUNK,
         };
+        // The decode-attention shaders cap head_dim at MAX_D = 512 (each lane
+        // keeps a `head_dim/32` f32 accumulator in `acc[16]`); reject larger
+        // head dims on the host instead of silently overflowing it.
+        if head_dim > 512 {
+            return Err(Error::Vulkan(format!(
+                "fused_decode_attention: head_dim {head_dim} > 512 is not supported"
+            ).into()));
+        }
         let num_chunks = kv_len.div_ceil(DECODE_ATTENTION_CHUNK);
         let out = VulkanStorage::new(&self.device, num_heads * head_dim, DType::F32)?;
         let scratch = VulkanStorage::new(
@@ -12949,10 +12957,9 @@ impl VulkanStorage {
             ));
         }
         let (b, h, t, d) = (dims[0], dims[1], dims[2], dims[3]);
-        let half = d / 2;
-        if half == 0 {
+        if d < 2 || d % 2 != 0 {
             return Err(Error::Vulkan(
-                "rope_int: head dim must be >= 2".to_string().into(),
+                "rope_int: head dim must be even and >= 2".to_string().into(),
             ));
         }
         let n_el = b * h * t * d;
@@ -13222,9 +13229,9 @@ impl VulkanStorage {
         }
         let (b, h, t, d) = (dims[0], dims[1], dims[2], dims[3]);
         let half = d / 2;
-        if half == 0 {
+        if d < 2 || d % 2 != 0 {
             return Err(Error::Vulkan(
-                "rope: head dim must be >= 2".to_string().into(),
+                "rope: head dim must be even and >= 2".to_string().into(),
             ));
         }
         let n_el = b * h * t * d;

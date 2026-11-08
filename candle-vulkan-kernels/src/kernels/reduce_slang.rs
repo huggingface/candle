@@ -34,13 +34,13 @@ pub fn call_reduce_slang<T>(
     
     let out_f_info = out_f.map(buf_info);
     let out_i_info = out_i.map(buf_info);
+    // Always bind all three layout slots. The unused output path (min/sum/max
+    // has no u32 output; argmin/argmax has no float output) is bound to the
+    // input buffer so no descriptor is left null. The unused global is
+    // eliminated by Slang DCE and never dereferenced.
     let mut writes = vec![WriteDescriptorSet::buffer(0, &in_info)];
-    if let Some(info) = &out_f_info {
-        writes.push(WriteDescriptorSet::buffer(1, info));
-    }
-    if let Some(info) = &out_i_info {
-        writes.push(WriteDescriptorSet::buffer(2, info));
-    }
+    writes.push(WriteDescriptorSet::buffer(1, out_f_info.as_ref().unwrap_or(&in_info)));
+    writes.push(WriteDescriptorSet::buffer(2, out_i_info.as_ref().unwrap_or(&in_info)));
     let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
         .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())

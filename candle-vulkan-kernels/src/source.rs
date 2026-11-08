@@ -1612,7 +1612,7 @@ impl AsRef<str> for Source {
             Self::Copy2dF64 => "copy2d_f64",
             Self::Copy2dBf16 => "copy2d_bf16",
 
-            Self::Copy2dU32 => "copy2d",
+            Self::Copy2dU32 => "copy2d_u32",
             Self::Copy2dI64 => "copy2d_i64",
             Self::RotaryEmbInt => "rotary_emb_int",
             Self::Copy2dU8 => "copy2d_u8",
