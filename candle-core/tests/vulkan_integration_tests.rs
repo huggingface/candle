@@ -3682,6 +3682,78 @@ fn test_vulkan_scatter_add() {
     tracing::debug!("Vulkan device {gpu_id} scatter_add OK");
 }
 
+/// `scatter_add_set` into a narrow view: the host-side round-trip must read
+/// and write back only the view slice, not the whole destination buffer.
+#[test]
+fn test_vulkan_scatter_add_view() {
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let dev = candle_core::Device::new_vulkan(gpu_id).unwrap();
+
+    let cpu = candle_core::Device::Cpu;
+
+    let base: Vec<f32> = (0..8 * 3).map(|i| i as f32 * 0.5).collect();
+
+    let idx: Vec<u32> = vec![3, 0, 2, 1, 1, 2, 0, 3, 3, 2, 0, 1];
+
+    let src: Vec<f32> = (0..4 * 3).map(|i| i as f32 * -1.25 + 4.0).collect();
+
+    let gdst = candle_core::Tensor::new(base.as_slice(), &dev)
+        .unwrap()
+        .reshape((8, 3))
+        .unwrap();
+
+    let gid = candle_core::Tensor::new(idx.as_slice(), &dev)
+        .unwrap()
+        .reshape((4, 3))
+        .unwrap();
+
+    let gsrc = candle_core::Tensor::new(src.as_slice(), &dev)
+        .unwrap()
+        .reshape((4, 3))
+        .unwrap();
+
+    let gview = gdst.narrow(0, 2, 4).unwrap();
+
+    let cdst = candle_core::Tensor::new(base.as_slice(), &cpu)
+        .unwrap()
+        .reshape((8, 3))
+        .unwrap();
+
+    let cid = candle_core::Tensor::new(idx.as_slice(), &cpu)
+        .unwrap()
+        .reshape((4, 3))
+        .unwrap();
+
+    let csrc = candle_core::Tensor::new(src.as_slice(), &cpu)
+        .unwrap()
+        .reshape((4, 3))
+        .unwrap();
+
+    let cview = cdst.narrow(0, 2, 4).unwrap();
+
+    gview.scatter_add_set(&gid, &gsrc, 0).unwrap();
+
+    cview.scatter_add_set(&cid, &csrc, 0).unwrap();
+
+    let gv: Vec<f32> = gdst.flatten_all().unwrap().to_vec1().unwrap();
+
+    let cv: Vec<f32> = cdst.flatten_all().unwrap().to_vec1().unwrap();
+
+    assert_eq!(gv.len(), cv.len());
+
+    for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-5 * (1.0 + b.abs()),
+            "scatter_add view at {i}: gpu {a} cpu {b}"
+        );
+    }
+
+    tracing::debug!("Vulkan device {gpu_id} scatter_add view OK");
+}
+
 /// `index_add` vs the CPU backend (host-side implementation on Vulkan).
 #[test]
 

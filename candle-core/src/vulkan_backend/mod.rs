@@ -9808,11 +9808,22 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         }
+        // Nothing to add into an empty destination (or from an empty source):
+        // their operand buffers are one-element stand-ins whose zero-length
+        // slice would be rejected by subbuffer slicing and readback.
+        if dst_len == 0 || src_len == 0 {
+            return Ok(());
+        }
         // Drain any deferred encodes (e.g. the copy that materialized this
         // storage) before reading the buffer contents.
         self.device.synchronize()?;
-        let dst_v: Vec<f32> = match &self.buffer {
-            VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
+        // Read only the contiguous view of each operand, not the whole buffer:
+        // a scatter into a slice of a larger tensor would otherwise drain and
+        // re-upload the entire allocation.
+        let dst_slice = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b
+                .clone()
+                .slice(dst_start as u64..(dst_start + dst_len) as u64),
             _ => {
                 return Err(Error::Vulkan(
                     format!("dtype checked above (dtype={:?})", self.dtype)
@@ -9821,8 +9832,14 @@ impl BackendStorage for VulkanStorage {
                 ))
             }
         };
+        let dst_v: Vec<f32> = Self::copy_to_host(&self.device, &dst_slice)?;
         let src_v: Vec<f32> = match &src.buffer {
-            VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
+            VulkanStorageBuffer::F32(b) => {
+                let s = b
+                    .clone()
+                    .slice(src_start as u64..(src_start + src_len) as u64);
+                Self::copy_to_host(&self.device, &s)?
+            }
             _ => {
                 return Err(Error::Vulkan(
                     format!("dtype checked above (dtype={:?})", self.dtype)
@@ -9833,16 +9850,22 @@ impl BackendStorage for VulkanStorage {
         };
         let ids_cpu = match &ids.buffer {
             VulkanStorageBuffer::U32(b) => {
-                let v: Vec<u32> = Self::copy_to_host(&self.device, b)?;
-                CpuStorage::U32(v)
+                let s = b
+                    .clone()
+                    .slice(ids_start as u64..(ids_start + ids_len) as u64);
+                CpuStorage::U32(Self::copy_to_host(&self.device, &s)?)
             }
             VulkanStorageBuffer::I64(b) => {
-                let v: Vec<i64> = Self::copy_to_host(&self.device, b)?;
-                CpuStorage::I64(v)
+                let s = b
+                    .clone()
+                    .slice(ids_start as u64..(ids_start + ids_len) as u64);
+                CpuStorage::I64(Self::copy_to_host(&self.device, &s)?)
             }
             VulkanStorageBuffer::U8(b) => {
-                let v: Vec<u8> = Self::copy_to_host(&self.device, b)?;
-                CpuStorage::U8(v)
+                let s = b
+                    .clone()
+                    .slice(ids_start as u64..(ids_start + ids_len) as u64);
+                CpuStorage::U8(Self::copy_to_host(&self.device, &s)?)
             }
             _ => {
                 return Err(Error::Vulkan(
@@ -9854,9 +9877,11 @@ impl BackendStorage for VulkanStorage {
         };
         let mut dst_cpu = CpuStorage::F32(dst_v);
         let src_cpu = CpuStorage::F32(src_v);
-        let l_c = Layout::contiguous_with_offset(dst_dims.to_vec(), dst_start);
-        let s_c = Layout::contiguous_with_offset(ids_dims.to_vec(), src_start);
-        let i_c = Layout::contiguous_with_offset(ids_dims.to_vec(), ids_start);
+        // Each view is now the leading contiguous block of its buffer, so the
+        // CPU scatter operates at offset 0.
+        let l_c = Layout::contiguous(dst_dims.to_vec());
+        let s_c = Layout::contiguous(ids_dims.to_vec());
+        let i_c = Layout::contiguous(ids_dims.to_vec());
         dst_cpu.scatter_add_set(&l_c, &ids_cpu, &i_c, &src_cpu, &s_c, dim)?;
         let CpuStorage::F32(v) = dst_cpu else {
             return Err(Error::Vulkan(
@@ -9865,8 +9890,33 @@ impl BackendStorage for VulkanStorage {
                     .into(),
             ));
         };
-        let mut updated = self.device.storage_from_cpu_storage(&CpuStorage::F32(v))?;
-        std::mem::swap(&mut self.buffer, &mut updated.buffer);
+        // Write the updated view back into the destination slice in place,
+        // rather than re-uploading a fresh full buffer. `size_of_val` is taken
+        // on the slice view, not the `Vec` handle, so the length is the byte
+        // span of the data (`v.len() * size_of::<f32>()`), not the 24-byte
+        // `Vec` header.
+        let v_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v.as_slice()))
+        };
+        let staging = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            v_bytes.iter().copied(),
+        )
+        .map_err(|e| Error::Vulkan(format!("scatter_add staging: {e:?}").into()))?;
+        self.device.execute(move |cbb| {
+            cbb.copy_buffer(CopyBufferInfo::new(staging, dst_slice))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
         Ok(())
     }
 
