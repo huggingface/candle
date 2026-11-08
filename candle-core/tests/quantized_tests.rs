@@ -1701,6 +1701,84 @@ fn indexed_gemv_matches_reference() -> Result<()> {
     Ok(())
 }
 
+/// CPU routed quantized MoE (`QTensor::indexed_moe_forward`) must match the
+/// dequantized per-route reference across the slot/topk configurations.
+#[test]
+fn indexed_moe_forward_matches_reference_cpu() -> Result<()> {
+    let dev = Device::Cpu;
+
+    let (experts, n_out, k) = (5usize, 64usize, 512usize);
+
+    for dtype in [GgmlDType::Q4K, GgmlDType::Q6K, GgmlDType::Q8_0] {
+        let w = Tensor::rand(-1f32, 1f32, (experts, n_out, k), &dev)?;
+
+        let qt = quantized::QTensor::quantize(&w, dtype)?;
+
+        let wref = qt.dequantize(&dev)?;
+
+        // (tokens, slots, topk): slots == topk, slots == 1 with topk > 1, and the
+        // single-route degenerate case.
+        for (tokens, slots, topk) in [(3usize, 2usize, 2usize), (5, 1, 3), (2, 1, 1)] {
+            let x = Tensor::rand(-1f32, 1f32, (tokens, slots, k), &dev)?;
+
+            let ids_v: Vec<u32> = (0..tokens * topk)
+                .map(|i| ((i * 7 + 3) % experts) as u32)
+                .collect();
+
+            let ids = Tensor::from_vec(ids_v.clone(), (tokens, topk), &dev)?;
+
+            let got = qt.indexed_moe_forward(&x, &ids)?;
+
+            assert_eq!(got.dims(), &[tokens, topk, n_out]);
+
+            let xv = x.to_vec3::<f32>()?;
+
+            let wv = wref.to_vec3::<f32>()?;
+
+            let got_v = got.flatten_all()?.to_vec1::<f32>()?;
+
+            let mut want_v = vec![0.0f32; tokens * topk * n_out];
+
+            for t in 0..tokens {
+                for j in 0..topk {
+                    let e = ids_v[t * topk + j] as usize;
+
+                    let slot = if slots == 1 { 0 } else { j };
+
+                    for o in 0..n_out {
+                        let mut acc = 0.0f32;
+
+                        for kk in 0..k {
+                            acc += xv[t][slot][kk] * wv[e][o][kk];
+                        }
+
+                        want_v[(t * topk + j) * n_out + o] = acc;
+                    }
+                }
+            }
+
+            // The SIMD quantized gemv differs from exact dequantize-then-mul by
+            // rounding on the coarse quants, so use the file's global relative
+            // tolerance (max |diff| over max |ref|), not a per-element one.
+            let max_diff = got_v
+                .iter()
+                .zip(&want_v)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+
+            let scale = want_v.iter().fold(0.0f32, |m, &b| m.max(b.abs())).max(1.0);
+
+            assert!(
+                max_diff / scale < 5e-2,
+                "{dtype:?} tokens={tokens} slots={slots} topk={topk}: max rel diff {} exceeds 5e-2",
+                max_diff / scale
+            );
+        }
+    }
+
+    Ok(())
+}
+
 #[test]
 fn bf16_lhs_matmul_matches_f32() -> Result<()> {
     let dev = Device::Cpu;
