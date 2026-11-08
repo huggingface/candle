@@ -65,7 +65,14 @@ pub fn call_fused_quant_gemm_slang(
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.push_constants(entry.layout.clone(), 0, *params)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
-    unsafe { cbb.dispatch([1, (n.div_ceil(TILE)) as u32, m as u32]) }
+    // The Q4_K prefill kernel is tiled 8 rows per workgroup (dequant-once per
+// 8-row block); the other prefill kernels and all decode kernels map one
+// workgroup per row.
+    let z = match source {
+        Source::FusedQ4kGemmM => m.div_ceil(8),
+        _ => m,
+    };
+    unsafe { cbb.dispatch([1, (n.div_ceil(TILE)) as u32, z as u32]) }
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     Ok(())
 }

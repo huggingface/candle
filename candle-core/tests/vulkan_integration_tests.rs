@@ -8213,7 +8213,7 @@ fn test_vulkan_quantized_matmul() {
         (1024usize, 1024usize),
         (1024usize, 1000usize),
     ] {
-        for m in [1usize, 4] {
+        for m in [1usize, 4, 16, 17] {
             for dtype in dtypes {
                 let w_vals: Vec<f32> = (0..n * k).map(|i| (i as f32) * 0.11 - 2.0).collect();
 
