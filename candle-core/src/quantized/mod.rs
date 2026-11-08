@@ -1026,6 +1026,12 @@ impl QTensor {
         for t in 0..tokens {
             for j in 0..topk {
                 let e = ids_v[t * topk + j] as usize;
+                // Invalid expert ids produce zero rows (matching the Metal
+                // path); the corresponding output lane stays zeroed in that
+                // case.
+                if e >= experts {
+                    continue;
+                }
                 by_expert[e].push((t, j));
             }
         }

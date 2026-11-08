@@ -10067,7 +10067,9 @@ impl BackendStorage for VulkanStorage {
             macro_rules! dispatch_index_add {
                 ($dst_variant:ident, $dst_ty:ty, $ids_variant:ident, $ids_ty:ty, $kern:ident) => {
                     let dst_sub = match &self.buffer {
-                        VulkanStorageBuffer::$dst_variant(b) => b.clone(),
+                        VulkanStorageBuffer::$dst_variant(b) => b
+                            .clone()
+                            .slice(dst_start as u64..(dst_start + dst_len) as u64),
                         _ => {
                             return Err(Error::Vulkan(
                                 format!("dtype checked above (dtype={:?})", self.dtype)
@@ -10077,7 +10079,9 @@ impl BackendStorage for VulkanStorage {
                         }
                     };
                     let src_sub = match &src.buffer {
-                        VulkanStorageBuffer::$dst_variant(b) => b.clone(),
+                        VulkanStorageBuffer::$dst_variant(b) => b
+                            .clone()
+                            .slice(src_start as u64..(src_start + src_len) as u64),
                         _ => {
                             return Err(Error::Vulkan(
                                 format!("dtype checked above (dtype={:?})", self.dtype)
@@ -10087,7 +10091,9 @@ impl BackendStorage for VulkanStorage {
                         }
                     };
                     let ids_sub = match &ids.buffer {
-                        VulkanStorageBuffer::$ids_variant(b) => b.clone(),
+                        VulkanStorageBuffer::$ids_variant(b) => b
+                            .clone()
+                            .slice(ids_start as u64..(ids_start + ids_len) as u64),
                         _ => {
                             return Err(Error::Vulkan(
                                 format!("ids dtype checked above (ids_dtype={:?})", ids.dtype)
@@ -10570,18 +10576,22 @@ impl BackendStorage for VulkanStorage {
                         .map_err(|e| e.to_string())
                     })?;
                 } else {
-                    // No native bf16 cooperative-matrix support (or
-                    // unaligned strides): widen to f16, run the f16 GEMM,
-                    // and narrow the result back to bf16. to_dtype
-                    // materializes non-contiguous layouts, so the
-                    // widened tensors are contiguous at offset 0.
-                    let lhs_f16 = self.to_dtype(lhs_l, DType::F16)?;
-                    let rhs_f16 = rhs_ref.to_dtype(rhs_l, DType::F16)?;
-                    let lhs_f16_l = crate::Layout::contiguous_with_offset(lhs_l.shape(), 0);
-                    let rhs_f16_l = crate::Layout::contiguous_with_offset(rhs_l.shape(), 0);
-                    let out_f16 = lhs_f16.matmul(&rhs_f16, bmnk, &lhs_f16_l, &rhs_f16_l)?;
-                    let out_f16_l = crate::Layout::contiguous_with_offset(&[bsz, m, n], 0);
-                    return out_f16.to_dtype(&out_f16_l, DType::BF16);
+                    // No native bf16 cooperative-matrix support (or unaligned
+                    // strides): widen to f32, run the f32 GEMM (f32
+                    // accumulation), and narrow the result back to bf16.
+                    // Widening through f16 instead would lose bf16's
+                    // exponent range (f16 saturates at 65504 and underflows
+                    // below ~6e-5) and accumulate the reduction in the
+                    // narrow f16 type. to_dtype materializes non-contiguous
+                    // layouts, so the widened tensors are contiguous at
+                    // offset 0.
+                    let lhs_f32 = self.to_dtype(lhs_l, DType::F32)?;
+                    let rhs_f32 = rhs_ref.to_dtype(rhs_l, DType::F32)?;
+                    let lhs_f32_l = crate::Layout::contiguous_with_offset(lhs_l.shape(), 0);
+                    let rhs_f32_l = crate::Layout::contiguous_with_offset(rhs_l.shape(), 0);
+                    let out_f32 = lhs_f32.matmul(&rhs_f32, bmnk, &lhs_f32_l, &rhs_f32_l)?;
+                    let out_f32_l = crate::Layout::contiguous_with_offset(&[bsz, m, n], 0);
+                    return out_f32.to_dtype(&out_f32_l, DType::BF16);
                 }
             }
             _ => {
@@ -12142,13 +12152,18 @@ impl VulkanStorage {
         if bias_dims.len() != 1 || bias_dims[0] != n || bias_l.stride()[0] != 1 {
             return Ok(None);
         }
-        let bias_start = bias_l.start_offset();
         let bias_len = n;
         let bias_converted;
+        let bias_start;
         let bias_ref: &Self = if self.dtype == bias.dtype {
+            bias_start = bias_l.start_offset();
             bias
         } else {
+            // The converted bias is a fresh contiguous buffer of exactly `n`
+            // elements at offset 0, so the original view offset must not be
+            // applied to it.
             bias_converted = bias.to_dtype(bias_l, self.dtype)?;
+            bias_start = 0;
             &bias_converted
         };
         let out = VulkanStorage::new(&self.device, bsz * m * n, self.dtype)?;

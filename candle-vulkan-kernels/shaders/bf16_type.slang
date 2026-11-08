@@ -24,7 +24,7 @@ module bf16_type;
 public float bf16_decode_bits(uint16_t b)
 {
     uint x = (uint)b;
-    if ((x & 0x7FFFu) > 0x7F80u) { return bit_cast<float>(x | 0x40u); }
+    if ((x & 0x7FFFu) > 0x7F80u) { return bit_cast<float>((x | 0x40u) << 16); }
     return bit_cast<float>(x << 16);
 }
 

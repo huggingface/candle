@@ -4,7 +4,7 @@ StructuredBuffer<float> g_Src;
 RWStructuredBuffer<float> g_Dst;
 layout(push_constant) Params g_Params;
 [shader("compute")]
-[numthreads(1, 1, 1)]
+[numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint i = dispatchThreadID.x;

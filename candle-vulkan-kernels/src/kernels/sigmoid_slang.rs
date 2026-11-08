@@ -30,7 +30,7 @@ pub fn call_sigmoid_slang(
     let entry = kernels.load_entry(source, name)?;
     let src_info = buf_info(src);
     let dst_info = buf_info(dst);
-    
+
     let writes = vec![
         WriteDescriptorSet::buffer(0, &src_info),
         WriteDescriptorSet::buffer(1, &dst_info),
@@ -43,7 +43,7 @@ pub fn call_sigmoid_slang(
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.push_constants(entry.layout.clone(), 0, *params)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
-    unsafe { cbb.dispatch([count as u32, 1, 1]) }
+    unsafe { cbb.dispatch([((count + 255) / 256) as u32, 1, 1]) }
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     Ok(())
 }
