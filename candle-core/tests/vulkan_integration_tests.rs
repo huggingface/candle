@@ -8302,6 +8302,87 @@ fn test_vulkan_rms_norm() {
     tracing::debug!("Vulkan rms_norm OK for F32 + F16 + BF16");
 }
 
+/// LayerNorm (fused mean/variance reduction + normalize) vs the CPU reference,
+/// with a row longer than the workgroup so each thread folds multiple columns.
+#[test]
+fn test_vulkan_layer_norm() {
+    use candle_core::backend::BackendDevice;
+
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let device = VulkanDevice::new(gpu_id).unwrap();
+
+    let n_rows = 3usize;
+
+    let n = 512usize;
+
+    let eps = 1e-5f64;
+
+    let x: Vec<f32> = (0..n_rows * n).map(|i| (i as f32) * 0.01 - 2.0).collect();
+
+    let alpha: Vec<f32> = (0..n).map(|i| (i as f32) * 0.001 + 0.5).collect();
+
+    let beta: Vec<f32> = (0..n).map(|i| (i as f32) * 0.002 - 0.1).collect();
+
+    let mut ref_t = vec![0.0f32; n_rows * n];
+
+    for i in 0..n_rows {
+        let base = i * n;
+
+        let sum: f64 = (0..n).map(|j| x[base + j] as f64).sum();
+
+        let sum2: f64 = (0..n).map(|j| (x[base + j] as f64).powi(2)).sum();
+
+        let mean = sum / n as f64;
+
+        let var = sum2 / n as f64 - mean * mean;
+
+        let inv_std = 1.0 / (var + eps).sqrt();
+
+        for j in 0..n {
+            ref_t[base + j] =
+                ((x[base + j] as f64 - mean) * inv_std * alpha[j] as f64 + beta[j] as f64) as f32;
+        }
+    }
+
+    let in_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(x))
+        .unwrap();
+
+    let alpha_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(alpha))
+        .unwrap();
+
+    let beta_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(beta))
+        .unwrap();
+
+    let in_l = candle_core::Layout::contiguous((n_rows, n));
+
+    let p_l = candle_core::Layout::contiguous(n);
+
+    let out = in_storage
+        .layer_norm(&in_l, &alpha_storage, &p_l, &beta_storage, &p_l, eps)
+        .unwrap();
+
+    let out_f32 = match out.to_cpu_storage().unwrap() {
+        candle_core::CpuStorage::F32(v) => v,
+        _ => panic!("unexpected out dtype"),
+    };
+
+    let max_err = out_f32
+        .iter()
+        .zip(ref_t.iter())
+        .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+        .fold(0.0f32, f32::max);
+
+    assert!(max_err <= 2e-3, "layer_norm max_err {max_err} exceeds 2e-3");
+
+    tracing::debug!("Vulkan layer_norm OK (max_err {max_err})");
+}
+
 #[test]
 
 fn test_vulkan_softmax_last_dim() {
