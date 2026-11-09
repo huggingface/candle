@@ -7,7 +7,7 @@
 //! - Group-Query Attention (GQA) with specialized key-value heads
 //! - RMSNorm for layer normalization
 //! - Specialized attention patterns with separate normalization for Q/K/V
-//! - Feed-forward network with SwiGLU activation
+//! - Feed-forward network with GELU activation (matches gelu_pytorch_tanh config)
 //! - Support for 2/3/4/8-bit quantization
 //!
 //! References:
@@ -19,13 +19,25 @@ use candle::quantized::gguf_file;
 use candle::quantized::QTensor;
 use candle::D;
 use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle_nn::kv_cache::{KvCache as NormalKvCache, RotatingKvCache};
 use candle_nn::{Embedding, Module};
 
+#[cfg(target_arch = "wasm32")]
+pub const MAX_SEQ_LEN: usize = 2048;
+#[cfg(not(target_arch = "wasm32"))]
 pub const MAX_SEQ_LEN: usize = 131072; // Gemma 3 supports 128K context window
+
 pub const DEFAULT_SLIDING_WINDOW_TYPE: usize = 6;
 pub const DEFAULT_ROPE_FREQUENCY: f32 = 1_000_000.;
 pub const DEFAULT_ROPE_FREQUENCY_SLIDING: f32 = 10_000.;
 pub const DEFAULT_ROPE_FREQUENCY_SCALE_FACTOR: f32 = 1.;
+
+/// Model type, gemma llm or embed gemma
+#[derive(Debug, PartialEq, Clone)]
+pub enum ModelType {
+    LLM,
+    Embed,
+}
 
 #[derive(Debug, Clone)]
 struct QMatMul {
@@ -57,8 +69,7 @@ impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let gate = self.feed_forward_gate.forward(xs)?;
         let up = self.feed_forward_up.forward(xs)?;
-        let silu = candle_nn::ops::silu(&gate)?;
-        let gated = (silu * up)?;
+        let gated = (gate.gelu()? * up)?;
         self.feed_forward_down.forward(&gated)
     }
 }
@@ -101,6 +112,28 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
+enum KvCache {
+    Normal(NormalKvCache),
+    Rotating(RotatingKvCache),
+}
+
+impl KvCache {
+    fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        match self {
+            KvCache::Normal(cache) => cache.append(k, v),
+            KvCache::Rotating(cache) => cache.append(k, v),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self {
+            KvCache::Normal(cache) => cache.reset(),
+            KvCache::Rotating(cache) => cache.reset(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct LayerWeights {
     // Attention components
     attention_wq: QMatMul,
@@ -133,7 +166,7 @@ struct LayerWeights {
     neg_inf: Tensor,
 
     // Cache
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: Option<KvCache>,
 
     // Tracing
     span_attn: tracing::Span,
@@ -177,6 +210,34 @@ impl LayerWeights {
             .to_dtype(dtype)
     }
 
+    fn bidir_mask(
+        &self,
+        b_sz: usize,
+        seq_len: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Tensor> {
+        let mask: Vec<u8> = if let Some(sliding_window_size) = self.sliding_window_size {
+            // Bi-directional sliding window mask, meaning a token can attend to any
+            // other token if their absolute distance is within half the sliding window size
+            let half_window = sliding_window_size / 2;
+            (0..seq_len)
+                .flat_map(|i| {
+                    (0..seq_len).map(move |j| {
+                        let distance = if i > j { i - j } else { j - i };
+                        (distance <= half_window) as u8
+                    })
+                })
+                .collect()
+        } else {
+            // Full attention mask, meaning a token can attend to all tokens
+            vec![1u8; seq_len * seq_len]
+        };
+
+        let mask = Tensor::from_slice(&mask, (seq_len, seq_len), device)?;
+        mask.expand(&[b_sz, 1, seq_len, seq_len])?.to_dtype(dtype)
+    }
+
     fn forward_attn(
         &mut self,
         x: &Tensor,
@@ -207,19 +268,11 @@ impl LayerWeights {
             .rotary_embedding
             .apply_rotary_emb_qkv(&q, &k, index_pos)?;
 
-        let (k, v) = match &self.kv_cache {
-            None => (k, v),
-            Some((k_cache, v_cache)) => {
-                if index_pos == 0 {
-                    (k, v)
-                } else {
-                    let k = Tensor::cat(&[k_cache, &k], 2)?; // concat on seq dim
-                    let v = Tensor::cat(&[v_cache, &v], 2)?;
-                    (k, v)
-                }
-            }
+        // If a kv cache exists, append into it; otherwise (for embed gemma) just use contiguous k/v as-is
+        let (k, v) = match &mut self.kv_cache {
+            Some(cache) => cache.append(&k.contiguous()?, &v.contiguous()?)?,
+            None => (k.contiguous()?, v.contiguous()?),
         };
-        self.kv_cache = Some((k.clone(), v.clone())); // update cache
 
         // Repeat KV for GQA
         let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
@@ -244,15 +297,22 @@ impl LayerWeights {
 
         self.attention_wo.forward(&attn_output)
     }
+
+    fn clear_kv_cache(&mut self) {
+        if let Some(cache) = &mut self.kv_cache {
+            cache.reset();
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct ModelWeights {
+    model_type: ModelType,
     tok_embeddings: Embedding,
     embedding_length: usize,
     layers: Vec<LayerWeights>,
     norm: RmsNorm,
-    output: QMatMul,
+    output: Option<QMatMul>,
     span: tracing::Span,
     span_output: tracing::Span,
 }
@@ -263,9 +323,10 @@ impl ModelWeights {
         reader: &mut R,
         device: &Device,
     ) -> Result<Self> {
+
         // Detect architecture prefix by probing which keys exist in metadata.
         // This supports gemma3, gemma2, gemma, gemma-embedding, and future variants.
-        let prefix = ["gemma3", "gemma2", "gemma", "gemma-embedding"]
+        let arch_prefix = ["gemma3", "gemma2", "gemma", "gemma-embedding"]
             .iter()
             .find(|p| {
                 ct.metadata
@@ -274,8 +335,13 @@ impl ModelWeights {
             .copied()
             .unwrap_or("gemma3");
 
+        let model_type = match arch_prefix {
+            "gemma-embedding" => ModelType::Embed,
+            _ => ModelType::LLM,
+        };
+
         let md_get = |s: &str| {
-            let key = format!("{prefix}.{s}");
+            let key = format!("{arch_prefix}.{s}");
             match ct.metadata.get(&key) {
                 None => candle::bail!("cannot find {key} in metadata"),
                 Some(v) => Ok(v),
@@ -321,9 +387,16 @@ impl ModelWeights {
             ct.tensor(reader, "output_norm.weight", device)?,
             rms_norm_eps,
         )?;
-        let output = match ct.tensor(reader, "output.weight", device) {
-            Ok(tensor) => tensor,
-            Err(_) => ct.tensor(reader, "token_embd.weight", device)?, // Use tied weights if output.weight doesn't exist
+
+        // If this is an embedding model, omit the output projection.
+        let output_opt = if model_type == ModelType::Embed {
+            None
+        } else {
+            let out_tensor = match ct.tensor(reader, "output.weight", device) {
+                Ok(tensor) => tensor,
+                Err(_) => ct.tensor(reader, "token_embd.weight", device)?,
+            };
+            Some(QMatMul::from_qtensor(out_tensor)?)
         };
 
         let mut layers = Vec::with_capacity(block_count);
@@ -393,6 +466,15 @@ impl ModelWeights {
 
             let rotary_embedding = RotaryEmbedding::new(key_length, layer_rope_frequency, device)?;
 
+            // Create appropriate KV cache based on layer type
+            let kv_cache = if model_type == ModelType::Embed {
+                None
+            } else if let Some(window_size) = sliding_window_size {
+                Some(KvCache::Rotating(RotatingKvCache::new(2, window_size)))
+            } else {
+                Some(KvCache::Normal(NormalKvCache::new(2, MAX_SEQ_LEN)))
+            };
+
             // Tracing spans
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
@@ -416,7 +498,7 @@ impl ModelWeights {
                 sliding_window_size,
                 rotary_embedding,
                 neg_inf: neg_inf.clone(),
-                kv_cache: None,
+                kv_cache,
                 span_attn,
                 span_mlp,
             })
@@ -426,11 +508,12 @@ impl ModelWeights {
         let span_output = tracing::span!(tracing::Level::TRACE, "output");
 
         Ok(Self {
+            model_type, 
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             embedding_length,
             layers,
             norm,
-            output: QMatMul::from_qtensor(output)?,
+            output: output_opt,
             span,
             span_output,
         })
@@ -447,7 +530,17 @@ impl ModelWeights {
             let attention_mask = if seq_len == 1 {
                 None
             } else {
-                Some(layer.mask(b_sz, seq_len, index_pos, x.dtype(), x.device())?)
+                // choose causal or bidirectional mask based on model type (llm vs embed)
+                let mask = match self.model_type {
+                    ModelType::Embed => {
+                        // bidirectional mask for embedding variant; use dim = 1 so shape matches previous mask expand
+                        layer.bidir_mask(b_sz, seq_len, x.dtype(), x.device())?
+                    }
+                    ModelType::LLM => {
+                        layer.mask(b_sz, seq_len, index_pos, x.dtype(), x.device())?
+                    }
+                };
+                Some(mask)
             };
 
             // Attention block
@@ -471,10 +564,31 @@ impl ModelWeights {
 
         let _enter = self.span_output.enter();
 
-        let x = layer_in.i((.., seq_len - 1, ..))?;
-        let x = self.norm.forward(&x)?;
-        let output = self.output.forward(&x)?;
+        let y = match self.model_type {
+            ModelType::Embed => {
+                let x = self.norm.forward(&layer_in)?;
+                // for batch size 1. TODO bs > 1
+                let embeddings = x.i((0, 0..seq_len))?;
+                (embeddings.sum_keepdim(0)? / (seq_len as f64))?
+            }
+            ModelType::LLM => {
+                // take last token, norm it and use output projection
+                let x = layer_in.i((.., seq_len - 1, ..))?;
+                let x = self.norm.forward(&x)?;
+                match &self.output {
+                    Some(out_proj) => out_proj.forward(&x)?,
+                    None => candle::bail!("missing output projection for LLM model"),
+                }
+                
+            }
 
-        Ok(output)
+        };
+        Ok(y)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in &mut self.layers {
+            layer.clear_kv_cache();
+        }
     }
 }
