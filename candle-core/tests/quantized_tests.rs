@@ -321,6 +321,39 @@ fn quantized_embedding_cpu() -> Result<()> {
     Ok(())
 }
 
+/// A quantized matmul on a narrow view of its input (a non-zero start
+/// offset, more than one row) gives the same rows as the full matmul.
+#[cfg(feature = "metal")]
+#[test]
+fn quantized_matmul_mm_narrowed_input_metal() -> Result<()> {
+    let device = Device::new_metal(0)?;
+    let (m, k, n) = (8, 64, 32);
+    let lhs = (0..m * k)
+        .map(|v| (v as f32 * 0.11).sin())
+        .collect::<Vec<_>>();
+    let rhs = (0..n * k)
+        .map(|v| (v as f32 * 0.37).sin())
+        .collect::<Vec<_>>();
+    let lhs = Tensor::from_slice(&lhs, (m, k), &device)?;
+    let rhs = Tensor::from_slice(&rhs, (n, k), &device)?;
+    for dtype in [GgmlDType::Q4_0, GgmlDType::Q8_0] {
+        let matmul = quantized::QMatMul::from_qtensor(quantized::QTensor::quantize(&rhs, dtype)?)?;
+        let full = matmul.forward(&lhs)?;
+        let (start, len) = (4, 4);
+        let view = lhs.narrow(0, start, len)?;
+        assert_ne!(view.layout().start_offset(), 0);
+        let res = matmul.forward(&view)?;
+        let expected = full.narrow(0, start, len)?;
+        let diff = (res - expected)?
+            .abs()?
+            .flatten_all()?
+            .max(0)?
+            .to_vec0::<f32>()?;
+        assert!(diff < 1e-4, "{dtype:?}: max diff {diff}");
+    }
+    Ok(())
+}
+
 #[cfg(feature = "metal")]
 #[test]
 fn quantized_embedding_metal() -> Result<()> {
