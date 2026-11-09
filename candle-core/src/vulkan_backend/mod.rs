@@ -10856,23 +10856,55 @@ impl BackendStorage for VulkanStorage {
                     && k % 16 == 0
                     && n % 16 == 0;
                 let params = self.gemm_params(bsz, m, n, k, rhs_transposed);
-                let (source, name) = if use_coopmat {
-                    (
-                        candle_vulkan_kernels::Source::GemmCoopMatF16,
-                        candle_vulkan_kernels::KernelName::GemmCoopMatF16,
-                    )
+                if use_coopmat {
+                    // Cooperative matrix with an f32 accumulator: accumulate
+                    // in f32 (no per-slab f16 rounding) into an f32 scratch,
+                    // then narrow back to the f16 output tensor.
+                    let out_f32 = self.device.new_f32_buffer(bsz * m * n)?;
+                    let (gemm_out, input, rhs_buf) =
+                        (out_f32.clone(), input.clone(), rhs_buf.clone());
+                    let kernels2 = self.device.kernels();
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_gemm_coopmat_f32_out::<half::f16>(
+                            cbb,
+                            &kernels2,
+                            candle_vulkan_kernels::Source::GemmCoopMatF16,
+                            candle_vulkan_kernels::KernelName::GemmCoopMatF16,
+                            &input,
+                            &rhs_buf,
+                            &gemm_out,
+                            &params,
+                            bsz,
+                            m,
+                            n,
+                        )
+                        .map_err(|e| e.to_string())
+                    })?;
+                    self.dispatch_to_dtype::<f32, half::f16>(
+                        &out_f32,
+                        &out_buf,
+                        candle_vulkan_kernels::Source::ToDtypeF32F16,
+                        candle_vulkan_kernels::KernelName::ToDtypeF32F16,
+                        bsz * m * n,
+                    )?;
                 } else {
-                    (
-                        candle_vulkan_kernels::Source::GemmF16,
-                        candle_vulkan_kernels::KernelName::GemmF16,
-                    )
-                };
-                self.device.execute(move |cbb| {
-                    candle_vulkan_kernels::call_gemm_slang::<half::f16>(
-                        cbb, &kernels, source, name, &input, &rhs_buf, &out_buf, &params, bsz, m, n,
-                    )
-                    .map_err(|e| e.to_string())
-                })?;
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_gemm_slang::<half::f16>(
+                            cbb,
+                            &kernels,
+                            candle_vulkan_kernels::Source::GemmF16,
+                            candle_vulkan_kernels::KernelName::GemmF16,
+                            &input,
+                            &rhs_buf,
+                            &out_buf,
+                            &params,
+                            bsz,
+                            m,
+                            n,
+                        )
+                        .map_err(|e| e.to_string())
+                    })?;
+                }
             }
             DType::F64 => {
                 let input: Subbuffer<[f64]> = match &self.buffer {

@@ -32,12 +32,12 @@ typealias MatA_t =
 typealias MatB_t =
     linalg.CoopMat<half, MemoryScope.Subgroup, 16, 16, linalg.CoopMatMatrixUse.MatrixB>;
 typealias MatC_t =
-    linalg.CoopMat<half, MemoryScope.Subgroup, 16, 16,
+    linalg.CoopMat<float, MemoryScope.Subgroup, 16, 16,
                    linalg.CoopMatMatrixUse.MatrixAccumulator>;
 
 StructuredBuffer<half> g_Lhs;
 StructuredBuffer<half> g_Rhs;
-RWStructuredBuffer<half> g_Out;
+RWStructuredBuffer<float> g_Out;
 layout(push_constant) Params g_Params;
 
 [shader("compute")]
@@ -55,7 +55,7 @@ void main_gemm(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_
     uint sn = (uint)g_Params.sn;
 
     MatC_t matC;
-    matC.fill(0.0h);
+    matC.fill(0.0f);
     for (uint k0 = 0u; k0 < k; k0 += 16u)
     {
         MatA_t matA = MatA_t.Load<linalg.CoopMatMatrixLayout.RowMajor>(
@@ -71,7 +71,7 @@ void main_gemm(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID : SV_
             matB = MatB_t.Load<linalg.CoopMatMatrixLayout.RowMajor>(
                 g_Rhs, batch * k * n + k0 * n + col, sn);
         }
-        matC = linalg.coopMatMulAdd<half, false, half, half, half,
+        matC = linalg.coopMatMulAdd<float, false, half, half, float,
             MemoryScope.Subgroup, 16, 16, 16>(matA, matB, matC);
     }
     matC.Store<linalg.CoopMatMatrixLayout.RowMajor>(

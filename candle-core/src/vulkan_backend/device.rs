@@ -844,11 +844,14 @@ impl VulkanDevice {
         source: candle_vulkan_kernels::Source,
         name: candle_vulkan_kernels::KernelName,
     ) -> bool {
-        let a = vec![f16::from_f32(1.0); 256];
-        let b: Vec<f16> = (0..256)
+        // m = n = 16, k = 32 (two slabs): the multi-slab K catches devices
+        // (e.g. RDNA 3.5 iGPU drivers) that miscompute the f32 cooperative-
+        // matrix accumulator beyond a single 16-wide slab.
+        let a = vec![f16::from_f32(1.0); 16 * 32];
+        let b: Vec<f16> = (0..32 * 16)
             .map(|i| f16::from_f32((i % 16) as f32 * 0.5))
             .collect();
-        let out = vec![f16::from_f32(0.0); 256];
+        let out = vec![0.0f32; 16 * 16];
         let a_s = match self.storage_from_cpu_storage(&crate::CpuStorage::F16(a)) {
             Ok(s) => s,
             Err(_) => return false,
@@ -857,7 +860,7 @@ impl VulkanDevice {
             Ok(s) => s,
             Err(_) => return false,
         };
-        let out_s = match self.storage_from_cpu_storage(&crate::CpuStorage::F16(out)) {
+        let out_s = match self.storage_from_cpu_storage(&crate::CpuStorage::F32(out)) {
             Ok(s) => s,
             Err(_) => return false,
         };
@@ -866,7 +869,7 @@ impl VulkanDevice {
             (
                 super::VulkanStorageBuffer::F16(a),
                 crate::vulkan_backend::VulkanStorageBuffer::F16(b),
-                super::VulkanStorageBuffer::F16(o),
+                super::VulkanStorageBuffer::F32(o),
             ) => (a.clone(), b.clone(), o.clone()),
             _ => return false,
         };
@@ -874,16 +877,16 @@ impl VulkanDevice {
             batch: 1,
             m: 16,
             n: 16,
-            k: 16,
+            k: 32,
             rhs_transposed: 0,
-            sk: 16,
+            sk: 32,
             sn: 16,
         };
         let kernels = self.kernels();
         let (a_b, b_b, out_b) = (a_b.clone(), b_b.clone(), out_b.clone());
         if self
             .execute(move |cbb| {
-                candle_vulkan_kernels::call_gemm_slang::<f16>(
+                candle_vulkan_kernels::call_gemm_coopmat_f32_out::<f16>(
                     cbb, &kernels, source, name, &a_b, &b_b, &out_b, &params, 1, 16, 16,
                 )
                 .map_err(|e| e.to_string())
@@ -893,11 +896,11 @@ impl VulkanDevice {
             return false;
         }
         match out_s.to_cpu_storage() {
-            Ok(cpu) => match cpu.as_slice::<f16>() {
+            Ok(cpu) => match cpu.as_slice::<f32>() {
                 Ok(got) => got
                     .iter()
                     .enumerate()
-                    .all(|(i, v)| (v.to_f32() - 8.0 * (i % 16) as f32).abs() < 0.5),
+                    .all(|(i, v)| (v - 16.0 * (i % 16) as f32).abs() < 0.05),
                 Err(_) => false,
             },
             Err(_) => false,

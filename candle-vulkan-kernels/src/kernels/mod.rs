@@ -69,6 +69,7 @@ pub use fused_moe_gemm_slang::call_fused_moe_gemm_slang;
 pub use fused_quant_gemm_slang::call_fused_quant_gemm_slang;
 pub use gather_idx_slang::call_gather_idx_slang;
 pub use gemm::call_gemm_slang;
+pub use gemm::call_gemm_coopmat_f32_out;
 pub use index_add_slang::call_index_add_slang;
 pub use kv_row_copy_slang::call_kv_row_copy_slang;
 pub use layer_norm_slang::call_layer_norm_slang;
