@@ -32,6 +32,7 @@ pub enum KernelName {
     ReduceMaxF32,
     ArgsortAscF32,
     ArgsortDescF32,
+    Dp4aProbe,
     GemmF32,
     GemmF16,
     GemmF64,
@@ -553,6 +554,7 @@ impl AsRef<str> for KernelName {
             Self::ReduceMaxF32 => "main_reduce_max",
             Self::ArgsortAscF32 => "main_argsort_asc",
             Self::ArgsortDescF32 => "main_argsort_desc",
+            Self::Dp4aProbe => "main",
             Self::GemmF32 => "main",
             Self::GemmF16 => "main",
             Self::GemmF64 => "main",
@@ -1868,6 +1870,8 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::ReduceArgMaxU8 => 3,
         // argsort: in/out (params are push constants).
         KernelName::ArgsortAscF32 | KernelName::ArgsortDescF32 => 2,
+        // dp4a probe: A/B/out (no push constants).
+        KernelName::Dp4aProbe => 3,
         // conv: in/w/out (params are push constants).
         KernelName::Conv1dF32
         | KernelName::Conv2dF32

@@ -109,6 +109,7 @@ const COPY2D_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy2d_i
 const GATHER_IDX_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gather_idx_i64.spv"));
 const REDUCE_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_ops.spv"));
 const ARGSORT_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/argsort.spv"));
+const DP4A_PROBE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dp4a_probe.spv"));
 const REDUCE_F16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f16.spv"));
 const REDUCE_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_f64.spv"));
 const REDUCE_BF16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reduce_bf16.spv"));
@@ -561,6 +562,7 @@ pub enum Source {
     ReduceI16,
     ReduceU8,
     ArgsortSlang,
+    Dp4aProbe,
     Pool2dSlang,
     Pool2dF16,
     Pool2dF64,
@@ -1084,6 +1086,8 @@ impl Source {
             | KernelName::ReduceArgMaxU8 => 16,
             // `argsort`: `uint64_t rows; uint64_t cols`.
             KernelName::ArgsortAscF32 | KernelName::ArgsortDescF32 => 16,
+            // `dp4a_probe`: no push constants.
+            KernelName::Dp4aProbe => 0,
             // `cmp`: three scalars + two `uint64_t[4]` arrays.
             KernelName::CmpEqF32
             | KernelName::CmpNeF32
@@ -1337,6 +1341,7 @@ impl Source {
             Self::GatherIdxI64 => GATHER_IDX_I64_SPV,
             Self::ReduceSlang => REDUCE_SLANG_SPV,
             Self::ArgsortSlang => ARGSORT_SPV,
+            Self::Dp4aProbe => DP4A_PROBE_SPV,
             Self::ReduceF16 => REDUCE_F16_SPV,
             Self::ReduceF64 => REDUCE_F64_SPV,
             Self::ReduceBf16 => REDUCE_BF16_SPV,
@@ -1673,6 +1678,7 @@ impl AsRef<str> for Source {
             Self::ReduceI16 => "reduce_i16",
             Self::ReduceU8 => "reduce_u8",
             Self::ArgsortSlang => "argsort",
+            Self::Dp4aProbe => "dp4a_probe",
             Self::Pool2dSlang => "pool2d",
             Self::Pool2dF16 => "pool2d_f16",
             Self::Pool2dF64 => "pool2d_f64",

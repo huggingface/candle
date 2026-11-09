@@ -400,6 +400,16 @@ impl VulkanDevice {
         let cm_robust = cm && supported.cooperative_matrix_robust_buffer_access;
         let cm_bf16 = cm && supported.shader_b_float16_cooperative_matrix;
         let cm_f8 = cm && supported.shader_float8_cooperative_matrix;
+        // Integer dot product (DP4A / V_DOT4C_I32_I8): the
+        // VK_KHR_shader_integer_dot_product device extension plus the
+        // shaderIntegerDotProduct device feature, enabling the Slang
+        // `dot4add_i8packed`/`dot4add_u8packed` intrinsics. Enable only
+        // what the device reports, so creation never fails.
+        let dp4a_ext = physical
+            .extension_properties()
+            .iter()
+            .any(|e| e.extension_name.eq("VK_KHR_shader_integer_dot_product"));
+        let dp4a = dp4a_ext && supported.shader_integer_dot_product;
         // The compiled coop-mat GEMM shaders assume one 64-thread
         // subgroup per workgroup; the device's subgroup size is
         // captured before `physical` is moved into `Device::new`.
@@ -435,6 +445,7 @@ impl VulkanDevice {
             ext_shader_float8: fp8_ext,
             khr_shader_bfloat16: bf16_ext,
             khr_cooperative_matrix: cm_ext,
+            khr_shader_integer_dot_product: dp4a_ext,
             ..Default::default()
         };
         let feats = DeviceFeatures {
@@ -453,6 +464,7 @@ impl VulkanDevice {
             cooperative_matrix_robust_buffer_access: cm_robust,
             shader_b_float16_cooperative_matrix: cm_bf16,
             shader_float8_cooperative_matrix: cm_f8,
+            shader_integer_dot_product: dp4a,
             vulkan_memory_model: vmm,
             vulkan_memory_model_device_scope: vmm_ds,
             shader_buffer_float32_atomic_add: atomic_f32,

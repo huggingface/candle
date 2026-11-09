@@ -10277,3 +10277,60 @@ fn test_vulkan_argsort() {
         assert_eq!(g, c, "argsort asc={asc} indices differ from CPU");
     }
 }
+
+#[test]
+fn test_vulkan_dp4a_probe() {
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+
+    // 256 packed u32: a[i] packs four i8 = i, b[i] packs i8 = (1,2,3,4).
+    // dot4add_u8packed(a[i], b[i], 0) = i*1 + i*2 + i*3 + i*4 = 10*i. This
+    // proves the VK_KHR_shader_integer_dot_product path (OpUDot,
+    // PackedVectorFormat4x8Bit) actually compiles and runs on the device.
+    let a_data: Vec<u32> = (0..256u32)
+        .map(|i| i | (i << 8) | (i << 16) | (i << 24))
+        .collect();
+    let b_data: Vec<u32> = vec![1u32 | (2u32 << 8) | (3u32 << 16) | (4u32 << 24); 256];
+
+    let a_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::U32(a_data))
+        .unwrap();
+    let b_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::U32(b_data))
+        .unwrap();
+    let out_storage = device
+        .zeros_impl(&candle_core::Shape::from(256), candle_core::DType::U32)
+        .unwrap();
+
+    let a_buf = match a_storage.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::U32(b) => b.clone(),
+        _ => panic!("expected U32 storage"),
+    };
+    let b_buf = match b_storage.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::U32(b) => b.clone(),
+        _ => panic!("expected U32 storage"),
+    };
+    let out_buf = match out_storage.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::U32(b) => b.clone(),
+        _ => panic!("expected U32 storage"),
+    };
+
+    let kernels = device.kernels();
+    device
+        .execute(move |cbb| {
+            candle_vulkan_kernels::call_dp4a_probe_slang(cbb, &kernels, &a_buf, &b_buf, &out_buf)
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
+
+    let cpu = out_storage.to_cpu_storage().unwrap();
+    let got = cpu.as_slice::<u32>().unwrap().to_vec();
+    let expected: Vec<u32> = (0..256u32).map(|i| i * 10u32).collect();
+    assert_eq!(got, expected, "dp4a probe result mismatch");
+}
