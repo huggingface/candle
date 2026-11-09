@@ -82,7 +82,7 @@ pub fn call_fused_q8_0_gemm_dp4a(
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     cbb.push_constants(entry.layout.clone(), 0, *params)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
-    unsafe { cbb.dispatch([1, ((n + 31) / 32) as u32, 1]) }
+    unsafe { cbb.dispatch([1, n.div_ceil(32) as u32, 1]) }
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     Ok(())
 }
