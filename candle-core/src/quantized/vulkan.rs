@@ -379,16 +379,27 @@ impl QVulkanStorage {
             }
             _ => None,
         };
-        let out = match fused {
-            Some((source, name)) => {
-                self.fused_quant_gemm(&lhs, lhs_offset, m_total, n, k, source, name)?
-            }
-            None => {
-                let data_f32 = self.dequantize(n * k)?;
-                // The weight is (n, k) contiguous; view it as the (k, n) rhs (transposed).
-                let rhs_l = Layout::new((k, n).into(), vec![1, k], 0);
-                let lhs_l = Layout::new((m_total, k).into(), vec![k, 1], lhs_offset);
-                lhs.matmul(&data_f32, (1, m_total, n, k), &lhs_l, &rhs_l)?
+        // DP4A Q8_0 decode path: single-row lhs quantized to i8, then an
+        // integer-dot GEMM, when the device supports the integer dot-product
+        // extension. Falls back to the exact f32 fused Q8_0 kernel otherwise.
+        let dp4a_q8_0 = self.dtype == GgmlDType::Q8_0
+            && m_total == 1
+            && k.is_multiple_of(32)
+            && self.device.supports_dp4a();
+        let out = if dp4a_q8_0 {
+            self.fused_q8_0_gemm_dp4a(&lhs, lhs_offset, n, k)?
+        } else {
+            match fused {
+                Some((source, name)) => {
+                    self.fused_quant_gemm(&lhs, lhs_offset, m_total, n, k, source, name)?
+                }
+                None => {
+                    let data_f32 = self.dequantize(n * k)?;
+                    // The weight is (n, k) contiguous; view it as the (k, n) rhs (transposed).
+                    let rhs_l = Layout::new((k, n).into(), vec![1, k], 0);
+                    let lhs_l = Layout::new((m_total, k).into(), vec![k, 1], lhs_offset);
+                    lhs.matmul(&data_f32, (1, m_total, n, k), &lhs_l, &rhs_l)?
+                }
             }
         };
         let out = if orig == DType::F32 {
@@ -461,6 +472,62 @@ impl QVulkanStorage {
         if isolated {
             self.device.synchronize()?;
         }
+        Ok(out)
+    }
+
+    /// DP4A Q8_0 decode GEMM: quantizes the single-row f32 lhs to i8
+    /// (`quantize_lhs_i8`), then computes `out[n] = lhsq[k] . dequant(Q8_0
+    /// W[n, k])` with the integer-dot kernel. The lhs i8 rounding is the
+    /// only extra error source vs the exact f32 fused kernel.
+    fn fused_q8_0_gemm_dp4a(
+        &self,
+        lhs: &VulkanStorage,
+        lhs_offset: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<VulkanStorage> {
+        let lhs_buf = match lhs.buffer() {
+            crate::vulkan_backend::VulkanStorageBuffer::F32(b) => {
+                b.clone().slice(lhs_offset as u64..(lhs_offset + k) as u64)
+            }
+            _ => crate::bail!("dp4a q8_0 gemm: lhs must be f32"),
+        };
+        let lhsq = VulkanStorage::new(&self.device, k, DType::U8)?;
+        let lhsq_buf = match lhsq.buffer() {
+            crate::vulkan_backend::VulkanStorageBuffer::U8(b) => b.clone(),
+            _ => crate::bail!("dp4a q8_0 gemm: lhsq was created as U8"),
+        };
+        let scale = VulkanStorage::new(&self.device, 1, DType::F32)?;
+        let scale_buf = match scale.buffer() {
+            crate::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => crate::bail!("dp4a q8_0 gemm: scale was created as F32"),
+        };
+        let out = VulkanStorage::new(&self.device, n, DType::F32)?;
+        let dst = match out.buffer() {
+            crate::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => crate::bail!("dp4a q8_0 gemm: out was created as F32"),
+        };
+        let src = self.src_bytes();
+        let qparams = candle_vulkan_kernels::UnaryParams {
+            count: k as u64,
+            extra: 0.0,
+        };
+        let gparams = candle_vulkan_kernels::push_constants::FusedQuantGemmParams {
+            m: 1,
+            n: n as u64,
+            k: k as u64,
+        };
+        let kernels = self.device.kernels();
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_quantize_lhs_i8(
+                cbb, &kernels, &lhs_buf, &lhsq_buf, &scale_buf, &qparams,
+            )
+            .map_err(|e| e.to_string())?;
+            candle_vulkan_kernels::call_fused_q8_0_gemm_dp4a(
+                cbb, &kernels, &lhsq_buf, &src, &scale_buf, &dst, &gparams, n,
+            )
+            .map_err(|e| e.to_string())
+        })?;
         Ok(out)
     }
 

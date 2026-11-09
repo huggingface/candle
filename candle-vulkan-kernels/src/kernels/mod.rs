@@ -3,6 +3,7 @@
 pub mod add_rms_norm_slang;
 pub mod affine;
 pub mod argsort_slang;
+pub mod dp4a_gemm_slang;
 pub mod dp4a_probe_slang;
 pub mod binary_slang;
 pub mod cmp_slang;
@@ -53,6 +54,7 @@ pub use affine::{call_affine_coopmat_slang, call_affine_slang};
 
 pub use add_rms_norm_slang::call_add_rms_norm_slang;
 pub use argsort_slang::call_argsort_slang;
+pub use dp4a_gemm_slang::{call_fused_q8_0_gemm_dp4a, call_quantize_lhs_i8};
 pub use dp4a_probe_slang::call_dp4a_probe_slang;
 pub use binary_slang::call_binary_slang;
 pub use cmp_slang::call_cmp_slang;

@@ -10334,3 +10334,117 @@ fn test_vulkan_dp4a_probe() {
     let expected: Vec<u32> = (0..256u32).map(|i| i * 10u32).collect();
     assert_eq!(got, expected, "dp4a probe result mismatch");
 }
+
+#[test]
+fn test_vulkan_dp4a_q8_0_gemm() {
+    (*INIT);
+
+    let gpu_id = *GPU_ID;
+
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+
+    let cpu = candle_core::Device::Cpu;
+
+    // Single-row lhs (decode), k = 64 (two Q8_0 blocks), n = 32 columns.
+    let k = 64usize;
+    let n = 32usize;
+    let lhs: Vec<f32> = (0..k).map(|i| (i % 17) as f32 - 8.0).collect();
+    let w: Vec<f32> = (0..n * k)
+        .map(|i| ((i % 23) as f32 - 11.0) * 0.05)
+        .collect();
+
+    // CPU reference: lhs @ dequant(Q8_0(W)).
+    let lhs_cpu = candle_core::Tensor::new(lhs.as_slice(), &cpu)
+        .unwrap()
+        .reshape((1, k))
+        .unwrap();
+    let w_cpu = candle_core::Tensor::new(w.as_slice(), &cpu)
+        .unwrap()
+        .reshape((n, k))
+        .unwrap();
+    let w_q =
+        candle_core::quantized::QTensor::quantize(&w_cpu, candle_core::quantized::GgmlDType::Q8_0)
+            .unwrap();
+    let w_deq = w_q.dequantize(&cpu).unwrap();
+    let ref_t = lhs_cpu.matmul(&w_deq.t().unwrap()).unwrap();
+    let ref_vals: Vec<f32> = ref_t.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    let w_bytes = w_q.data().unwrap().to_vec();
+
+    // DP4A path: quantize the lhs to i8, then the integer-dot GEMM.
+    let lhs_s = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(lhs))
+        .unwrap();
+    let lhsq_s = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::U8(vec![0u8; k]))
+        .unwrap();
+    let scale_s = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(vec![0.0f32]))
+        .unwrap();
+    let w_s = device.upload_u8(&w_bytes).unwrap();
+    let out_s = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(vec![0.0f32; n]))
+        .unwrap();
+
+    let lhs_b = match lhs_s.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
+        _ => panic!("expected F32"),
+    };
+    let lhsq_b = match lhsq_s.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::U8(b) => b.clone(),
+        _ => panic!("expected U8"),
+    };
+    let scale_b = match scale_s.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
+        _ => panic!("expected F32"),
+    };
+    let out_b = match out_s.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
+        _ => panic!("expected F32"),
+    };
+
+    let kernels = device.kernels();
+    let qparams = candle_vulkan_kernels::UnaryParams {
+        count: k as u64,
+        extra: 0.0,
+    };
+    let gparams = candle_vulkan_kernels::push_constants::FusedQuantGemmParams {
+        m: 1,
+        n: n as u64,
+        k: k as u64,
+    };
+    device
+        .execute(move |cbb| {
+            candle_vulkan_kernels::call_quantize_lhs_i8(
+                cbb, &kernels, &lhs_b, &lhsq_b, &scale_b, &qparams,
+            )
+            .map_err(|e| e.to_string())?;
+            candle_vulkan_kernels::call_fused_q8_0_gemm_dp4a(
+                cbb, &kernels, &lhsq_b, &w_s, &scale_b, &out_b, &gparams, n,
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+
+    let got_cpu = out_s.to_cpu_storage().unwrap();
+    let got = got_cpu.as_slice::<f32>().unwrap();
+
+    // The activation is quantized to i8, which adds a ~0.4% relative error
+    // on top of the Q8_0 weight quantization; compare loosely.
+    let bads: Vec<(usize, f32, f32)> = got
+        .iter()
+        .zip(ref_vals.iter())
+        .enumerate()
+        .filter(|(_, (a, b))| (*a - *b).abs() > 0.03 * (1.0 + b.abs()))
+        .map(|(i, (a, b))| (i, *a, *b))
+        .collect();
+    assert!(
+        bads.is_empty(),
+        "dp4a q8_0 gemm: {} mismatches, first: {:?}",
+        bads.len(),
+        &bads[..bads.len().min(8)]
+    );
+}

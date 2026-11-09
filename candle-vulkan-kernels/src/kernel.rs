@@ -47,6 +47,8 @@ pub enum KernelName {
     FusedQ50GemmF32,
     FusedQ51GemmF32,
     FusedQ80GemmF32,
+    FusedQ80GemmDp4aF32,
+    QuantizeLhsI8F32,
     FusedQ81GemmF32,
     FusedQ5kGemmF32,
     FusedQ8kGemmF32,
@@ -569,6 +571,8 @@ impl AsRef<str> for KernelName {
             Self::FusedQ50GemmF32 => "main",
             Self::FusedQ51GemmF32 => "main",
             Self::FusedQ80GemmF32 => "main",
+            Self::FusedQ80GemmDp4aF32 => "main",
+            Self::QuantizeLhsI8F32 => "main",
             Self::FusedQ81GemmF32 => "main",
             Self::FusedQ5kGemmF32 => "main",
             Self::FusedQ8kGemmF32 => "main",
@@ -1665,6 +1669,10 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         | KernelName::FusedQ8kGemmMF32
         | KernelName::FusedQ6kGemmF32
         | KernelName::FusedQ6kGemmMF32 => 3,
+        // DP4A q8_0 gemm: lhsq/w/scale/out (params are push constants).
+        KernelName::FusedQ80GemmDp4aF32 => 4,
+        // lhs i8 quantization: lhs/lhsq/scale (params are push constants).
+        KernelName::QuantizeLhsI8F32 => 3,
         // fused routed-MoE gemm: lhs/out/w/ids (params are push constants).
         KernelName::FusedQ2kMoeGemmF32
         | KernelName::FusedQ3kMoeGemmF32

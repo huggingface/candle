@@ -23,6 +23,9 @@ const FUSED_Q4K_GEMM_M_SPV: &[u8] =
 const FUSED_Q50_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5_0_gemm.spv"));
 const FUSED_Q51_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5_1_gemm.spv"));
 const FUSED_Q80_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8_0_gemm.spv"));
+const FUSED_Q80_GEMM_DP4A_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8_0_gemm_dp4a.spv"));
+const QUANTIZE_LHS_I8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/quantize_lhs_i8.spv"));
 const FUSED_Q81_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8_1_gemm.spv"));
 const FUSED_Q5K_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q5k_gemm.spv"));
 const FUSED_Q8K_GEMM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fused_q8k_gemm.spv"));
@@ -480,6 +483,8 @@ pub enum Source {
     FusedQ50Gemm,
     FusedQ51Gemm,
     FusedQ80Gemm,
+    FusedQ80GemmDp4a,
+    QuantizeLhsI8,
     FusedQ81Gemm,
     FusedQ5kGemm,
     FusedQ8kGemm,
@@ -1239,6 +1244,10 @@ impl Source {
             | KernelName::FusedQ8kGemmMF32
             | KernelName::FusedQ6kGemmF32
             | KernelName::FusedQ6kGemmMF32 => 24,
+            // DP4A q8_0 gemm: same `{m, n, k}` params.
+            KernelName::FusedQ80GemmDp4aF32 => 24,
+            // `quantize_lhs_i8`: `common_unary::Params` (count + extra).
+            KernelName::QuantizeLhsI8F32 => 16,
             // fused routed-MoE GEMM: three `uint64_t` fields.
             KernelName::FusedQ2kMoeGemmF32
             | KernelName::FusedQ3kMoeGemmF32
@@ -1267,6 +1276,8 @@ impl Source {
             Self::FusedQ50Gemm => FUSED_Q50_GEMM_SPV,
             Self::FusedQ51Gemm => FUSED_Q51_GEMM_SPV,
             Self::FusedQ80Gemm => FUSED_Q80_GEMM_SPV,
+            Self::FusedQ80GemmDp4a => FUSED_Q80_GEMM_DP4A_SPV,
+            Self::QuantizeLhsI8 => QUANTIZE_LHS_I8_SPV,
             Self::FusedQ81Gemm => FUSED_Q81_GEMM_SPV,
             Self::FusedQ5kGemm => FUSED_Q5K_GEMM_SPV,
             Self::FusedQ8kGemm => FUSED_Q8K_GEMM_SPV,
@@ -1595,6 +1606,8 @@ impl AsRef<str> for Source {
             Self::FusedQ50Gemm => "fused_q5_0_gemm",
             Self::FusedQ51Gemm => "fused_q5_1_gemm",
             Self::FusedQ80Gemm => "fused_q8_0_gemm",
+            Self::FusedQ80GemmDp4a => "fused_q8_0_gemm_dp4a",
+            Self::QuantizeLhsI8 => "quantize_lhs_i8",
             Self::FusedQ81Gemm => "fused_q8_1_gemm",
             Self::FusedQ5kGemm => "fused_q5k_gemm",
             Self::FusedQ8kGemm => "fused_q8k_gemm",

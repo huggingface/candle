@@ -161,6 +161,12 @@ struct DeviceInner {
     /// physical device. When true, the `linalg.CoopMat` Slang type (and
     /// the cooperative-matrix GEMM kernels) can be used in shaders.
     supports_coopmat: bool,
+    /// Integer dot-product (DP4A / V_DOT4C_I32_I8) support, as enabled
+    /// at device creation: the VK_KHR_shader_integer_dot_product device
+    /// extension plus the shaderIntegerDotProduct device feature. When
+    /// true, the `dot4add_i8packed`/`dot4add_u8packed` shader intrinsics
+    /// (and the DP4A Q8_0 GEMM kernel) can be used.
+    supports_dp4a: bool,
     /// BFloat16 cooperative-matrix support, as enabled at device
     /// creation: the `shaderBFloat16CooperativeMatrix` device feature
     /// (the base `cooperativeMatrix` feature is not enough for the bf16
@@ -544,6 +550,7 @@ impl VulkanDevice {
                 supports_f8e4m3: fp8,
                 supports_bf16: bf16,
                 supports_coopmat: cm,
+                supports_dp4a: dp4a,
                 coopmat_bf16: cm_bf16,
                 subgroup_size,
                 vulkan_memory_model: vmm,
@@ -787,6 +794,13 @@ impl VulkanDevice {
         self.inner.supports_coopmat
             && self.inner.vulkan_memory_model
             && self.inner.subgroup_size == 64
+    }
+
+    /// True when the DP4A (integer dot-product) kernels can run: the
+    /// VK_KHR_shader_integer_dot_product extension + shaderIntegerDotProduct
+    /// feature were enabled at device creation.
+    pub fn supports_dp4a(&self) -> bool {
+        self.inner.supports_dp4a
     }
 
     /// True when the cooperative-matrix GEMM pipeline for `dtype` can
