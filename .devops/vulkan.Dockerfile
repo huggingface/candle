@@ -96,7 +96,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 # The -dev packages are used instead of the versioned runtime libraries
 # (libncurses-dev pulls in the libtinfo6 runtime, libxml2-dev pulls in
 # libxml2-16 on 26.04) so the image does not depend on the exact
-# versioned runtime package names.
+# versioned runtime package names. libx11-dev (which pulls libxcb1-dev)
+# is needed to link the workspace: vulkano, the Vulkan wrapper candle
+# uses, depends on x11rb/x11-dl for window-system integration, so tests
+# and examples link against libxcb.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
@@ -108,6 +111,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     libncurses-dev \
     libxml2-dev \
+    libx11-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Vulkan loader, tools, Mesa ICD drivers (AMD, Intel, software) and

@@ -30,7 +30,7 @@ Build and run dependencies:
 
 | Package | Provides |
 | --- | --- |
-| `build-essential`, `cmake`, `pkg-config`, `git`, `curl`, `wget`, `ca-certificates`, `libncurses-dev`, `libxml2-dev` | Core build tools. The `-dev` packages pull in the runtime libraries (`libncurses-dev` → `libtinfo6`, `libxml2-dev` → `libxml2-16` on 26.04), so the image does not depend on the exact versioned runtime package names. |
+| `build-essential`, `cmake`, `pkg-config`, `git`, `curl`, `wget`, `ca-certificates`, `libncurses-dev`, `libxml2-dev`, `libx11-dev` | Core build tools. The `-dev` packages pull in the runtime libraries (`libncurses-dev` → `libtinfo6`, `libxml2-dev` → `libxml2-16` on 26.04), so the image does not depend on the exact versioned runtime package names. `libx11-dev` (pulling `libxcb1-dev`) is needed to link the workspace: vulkano, the Vulkan wrapper candle uses, depends on `x11rb`/`x11-dl` for window-system integration. |
 | `libvulkan-dev` | Vulkan loader (installs `libvulkan1`) and development headers. |
 | `vulkan-tools` | `vulkaninfo` and friends. |
 | `mesa-vulkan-drivers` | Mesa Vulkan ICD drivers: AMD (radv), Intel (ANV/HASVK), and the llvmpipe software driver. NVIDIA GPUs are not covered by these drivers. |
