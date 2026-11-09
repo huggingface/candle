@@ -617,7 +617,10 @@ fn cpu_moe_matmul<T: k_quants::GgmlType>(
     // The caller (`cpu_indexed_moe_forward`) guarantees `in_dim` is a multiple
     // of the block size before dispatching here; integer division below would
     // silently truncate if that invariant is ever violated.
-    debug_assert!(in_dim % T::BLCK_SIZE == 0, "MoE in-dim must be a block-size multiple");
+    debug_assert!(
+        in_dim % T::BLCK_SIZE == 0,
+        "MoE in-dim must be a block-size multiple"
+    );
     let k_in_blocks = in_dim / T::BLCK_SIZE;
     let weight_blocks = out_dim * k_in_blocks;
     let block_bytes = std::mem::size_of::<T>();
