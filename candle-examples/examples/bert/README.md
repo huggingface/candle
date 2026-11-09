@@ -44,6 +44,19 @@ Tensor[[1, 9, 1024], f32]
 Took 176.744667ms
 ```
 
+### CPU linear weights
+
+For repeated CPU inference, `--transpose-linear-weights` prepares contiguous
+transposes of the linear weights once at load time. This can reduce time spent
+packing weights in the default CPU GEMM backend. The gain depends on the model
+and input shape.
+
+```bash
+RAYON_NUM_THREADS=1 cargo run --example bert --release -- --cpu \
+    --model-id BAAI/bge-small-en-v1.5 --transpose-linear-weights \
+    --prompt "Here is a test sentence" --n 10
+```
+
 ### Gelu approximation
 
 You can get a speedup by using an approximation of the gelu activation, with a
