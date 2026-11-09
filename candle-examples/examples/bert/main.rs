@@ -19,6 +19,10 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
+    /// Prepare contiguous transposes of fixed CPU linear weights at load time.
+    #[arg(long)]
+    transpose_linear_weights: bool,
+
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
@@ -87,6 +91,11 @@ impl Args {
             VarBuilder::from_pth(&weights_filename, DTYPE, &device)?
         } else {
             unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? }
+        };
+        let vb = if self.transpose_linear_weights {
+            vb.with_transposed_linear_weights()
+        } else {
+            vb
         };
         if self.approximate_gelu {
             config.hidden_act = HiddenAct::GeluApproximate;

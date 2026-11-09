@@ -17,7 +17,7 @@
 //! assert_eq!(ys.to_vec2::<f32>()?, &[[210.0, 430.0, 650.0]]);
 //! # Ok(()) }
 //! ```
-use candle::{Result, Tensor};
+use candle::{DType, Result, Tensor};
 
 #[derive(Clone, Debug)]
 pub struct Linear {
@@ -78,12 +78,25 @@ impl super::Module for Linear {
     }
 }
 
+fn linear_weight(in_dim: usize, out_dim: usize, vb: &crate::VarBuilder) -> Result<Tensor> {
+    let init = crate::init::DEFAULT_KAIMING_NORMAL;
+    let weight = vb.get_with_hints((out_dim, in_dim), "weight", init)?;
+    if vb.transpose_linear_weights
+        && weight.device().is_cpu()
+        && weight.dtype() == DType::F32
+        && !weight.track_op()
+    {
+        weight.t()?.contiguous()?.t()
+    } else {
+        Ok(weight)
+    }
+}
+
 /// Create or initialize a new linear layer.
 ///
 /// This uses some default names for weights and biases, namely `"weight"` and `"bias"`.
 pub fn linear(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Result<Linear> {
-    let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vb.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
+    let ws = linear_weight(in_dim, out_dim, &vb)?;
     let bound = 1. / (in_dim as f64).sqrt();
     let init_bs = crate::Init::Uniform {
         lo: -bound,
@@ -95,8 +108,7 @@ pub fn linear(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Result<Li
 
 /// Create or initialize a new linear layer without biases.
 pub fn linear_no_bias(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Result<Linear> {
-    let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vb.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
+    let ws = linear_weight(in_dim, out_dim, &vb)?;
     Ok(Linear::new(ws, None))
 }
 
