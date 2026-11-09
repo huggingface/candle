@@ -5,10 +5,15 @@
 #   .devops/run-vulkan-dev.sh                     # interactive shell
 #   .devops/run-vulkan-dev.sh -- cargo test ...   # run a command instead
 #
-# The host checkout ($HOME/workspace/candle, override with CANDLE_DIR) is
-# mounted at /mnt/workspace, the host's GPU (/dev/dri) is passed through,
-# and the host's Hugging Face cache is mounted so models (and the HF
-# token) do not have to be re-downloaded inside the container.
+# The candle checkout is mounted at /mnt/workspace. It is located
+# automatically (the parent directory of this script), so the script works
+# from anywhere and for any checkout location; override with CANDLE_DIR. The
+# host's GPU (/dev/dri) is passed through, and the host's Hugging Face cache
+# is mounted so models (and the HF token) do not have to be re-downloaded
+# inside the container.
+#
+# SYS_PTRACE and PERFMON are granted so the debugging and profiling tools in
+# the image (gdb, samply, flamegraph) can inspect the processes they launch.
 #
 # Environment variables set on the host are forwarded into the container:
 #   CANDLE_BACKEND          example backend selection (cpu, cuda, metal, vulkan)
@@ -19,7 +24,15 @@
 set -eu
 
 IMAGE=${CANDLE_VULKAN_IMAGE:-candle-vulkan-dev}
-CANDLE_DIR=${CANDLE_DIR:-$HOME/workspace/candle}
+
+# Locate the candle checkout: the parent of this script's directory,
+# resolved to an absolute path so the mount is correct no matter where the
+# script is invoked from or where the checkout lives.
+# shellcheck disable=SC1007 # CDPATH= is a temporary empty assignment prefix
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# SCRIPT_DIR is absolute, so the ".." path is absolute and CDPATH is not
+# consulted; no CDPATH= prefix is needed here.
+CANDLE_DIR=${CANDLE_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd)}
 
 if [ ! -d "$CANDLE_DIR" ]; then
     echo "error: candle checkout not found at $CANDLE_DIR (set CANDLE_DIR)" >&2
@@ -68,6 +81,8 @@ fi
 # shellcheck disable=SC2086
 docker run ${TTY_FLAG} --rm \
     --device /dev/dri \
+    --cap-add=SYS_PTRACE \
+    --cap-add=PERFMON \
     --volume "${CANDLE_DIR}:/mnt/workspace" \
     ${HF_MOUNT} \
     ${ENV_ARGS} \
