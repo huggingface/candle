@@ -187,7 +187,7 @@ fn select_tile_config(
 /// Conditions for batch collapse:
 /// 1. batch_size > 1
 /// 2. !transpose_a (A is not transposed, i.e., row-major for M dimension)
-/// 3. A is contiguous in batch dimension (batch_stride_a == M * K)
+/// 3. A has dense rows and is contiguous in batch dimension (batch_stride_a == M * K)
 /// 4. B is broadcasted (batch_stride_b == 0, meaning B is 2D)
 ///
 /// Returns (effective_batch, effective_m, should_collapse)
@@ -223,9 +223,9 @@ fn check_batch_collapse(
     };
 
     // For batch collapse:
-    // - A must be contiguous: batch_stride_a == M * K
+    // - A must have dense rows and be contiguous: batch_stride_a == M * K
     // - B must be broadcasted: batch_stride_b == 0
-    let a_contiguous = a_batch_stride == m * k;
+    let a_contiguous = a_batch_stride == m * k && lhs_stride[lhs_stride.len() - 2] == k;
     let b_broadcasted = b_batch_stride == 0;
 
     if a_contiguous && b_broadcasted {
@@ -253,6 +253,27 @@ fn should_use_split_k(b: usize, m: usize, n: usize, k: usize) -> bool {
     let tn = n / 16;
     let tk = k / 16;
     (tm * tn) <= 32 && tk >= 8
+}
+
+fn leading_dimension(ld: usize) -> Result<i32, MetalKernelError> {
+    i32::try_from(ld).map_err(|_| {
+        MetalKernelError::InvalidInput(format!("matmul leading dimension {ld} exceeds i32::MAX"))
+            .bt()
+    })
+}
+
+fn check_gemv_span(rows: usize, cols: usize, ld: usize) -> Result<(), MetalKernelError> {
+    let span = rows
+        .checked_sub(1)
+        .and_then(|row| row.checked_mul(ld))
+        .and_then(|offset| offset.checked_add(cols));
+    if span.is_none_or(|span| span > i32::MAX as usize) {
+        return Err(MetalKernelError::InvalidInput(
+            "gemv matrix span exceeds i32::MAX".to_string(),
+        )
+        .bt());
+    }
+    Ok(())
 }
 
 /// M=1 -> gemv_t (vec[K] x mat[K,N] -> vec[N])
@@ -283,10 +304,10 @@ pub fn call_mlx_gemv(
     let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
     let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
 
-    let (lda, a_trans) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
-        (k as i32, false)
-    } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
-        (m as i32, true)
+    let (lda, a_trans) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 >= k || m == 1) {
+        (leading_dimension(lhs_m2)?, false)
+    } else if (lhs_m1 >= m || k == 1) && (lhs_m2 == 1 || m == 1) {
+        (leading_dimension(lhs_m1)?, true)
     } else {
         return Err(MetalKernelError::MatMulNonContiguous {
             lhs_stride: lhs_stride.to_vec(),
@@ -296,10 +317,10 @@ pub fn call_mlx_gemv(
         .bt())?;
     };
 
-    let (ldb, b_trans) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
-        (n as i32, false)
-    } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
-        (k as i32, true)
+    let (ldb, b_trans) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 >= n || k == 1) {
+        (leading_dimension(rhs_m2)?, false)
+    } else if (rhs_m1 >= k || n == 1) && (rhs_m2 == 1 || k == 1) {
+        (leading_dimension(rhs_m1)?, true)
     } else {
         return Err(MetalKernelError::MatMulNonContiguous {
             lhs_stride: lhs_stride.to_vec(),
@@ -308,17 +329,30 @@ pub fn call_mlx_gemv(
         }
         .bt())?;
     };
+
+    // GEMV does not take an element stride for its input vector.
+    if k > 1 && ((n != 1 && lhs_m1 != 1) || (n == 1 && rhs_m2 != 1)) {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        }
+        .bt());
+    }
 
     // Figure out if transpose is needed.
     let is_b_matrix = n != 1;
     let transpose_mat = if is_b_matrix { !b_trans } else { a_trans };
-    let mat_ld = if is_b_matrix {
-        ldb as usize
-    } else {
-        lda as usize
-    };
+    let mat_ld = if is_b_matrix { ldb } else { lda };
     let in_vec_size = k;
     let out_vec_size = if is_b_matrix { n } else { m };
+    let (rows, cols) = if transpose_mat {
+        (in_vec_size, out_vec_size)
+    } else {
+        (out_vec_size, in_vec_size)
+    };
+    // gemv.metal computes row * matrix_ld and the column offset using signed int.
+    check_gemv_span(rows, cols, mat_ld as usize)?;
 
     let (mat_buffer, mat_offset, vec_buffer, vec_offset) = if is_b_matrix {
         (rhs_buffer, rhs_offset, lhs_buffer, lhs_offset)
@@ -417,7 +451,7 @@ pub fn call_mlx_gemv(
             Output::new(output),
             in_vec_size as i32,
             out_vec_size as i32,
-            mat_ld as i32,
+            mat_ld,
             1.0f32, // alpha
             0.0f32, // beta
             1i32,   // batch_ndim
@@ -491,10 +525,10 @@ pub fn call_mlx_gemm(
     // lhs has shape b, m, k
     // We also allow for the case where the stride on the minor dimension is not as expected but
     // there is a single element.
-    let (lda, a_trans) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
-        (k as i32, false)
-    } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
-        (m as i32, true)
+    let (lda, a_trans) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 >= k || m == 1) {
+        (leading_dimension(lhs_m2)?, false)
+    } else if (lhs_m1 >= m || k == 1) && (lhs_m2 == 1 || m == 1) {
+        (leading_dimension(lhs_m1)?, true)
     } else {
         return Err(MetalKernelError::MatMulNonContiguous {
             lhs_stride: lhs_stride.to_vec(),
@@ -504,10 +538,10 @@ pub fn call_mlx_gemm(
         .bt())?;
     };
     // rhs has shape b, k, n
-    let (ldb, b_trans) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
-        (n as i32, false)
-    } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
-        (k as i32, true)
+    let (ldb, b_trans) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 >= n || k == 1) {
+        (leading_dimension(rhs_m2)?, false)
+    } else if (rhs_m1 >= k || n == 1) && (rhs_m2 == 1 || k == 1) {
+        (leading_dimension(rhs_m1)?, true)
     } else {
         return Err(MetalKernelError::MatMulNonContiguous {
             lhs_stride: lhs_stride.to_vec(),
@@ -517,7 +551,9 @@ pub fn call_mlx_gemm(
         .bt())?;
     };
 
-    if m == 1 || n == 1 {
+    // GEMV cannot stride through its input vector; GEMM can use its leading dimension.
+    let vector_contiguous = k == 1 || if n == 1 { rhs_m2 == 1 } else { lhs_m1 == 1 };
+    if (m == 1 || n == 1) && vector_contiguous {
         return call_mlx_gemv(
             device,
             ep,
@@ -592,7 +628,11 @@ pub fn call_mlx_gemm(
         m: m as i32,
         n: n as i32,
         k: k as i32,
-        lda: if batch_collapsed { k as i32 } else { lda }, // After collapse, lda = K
+        lda: if batch_collapsed {
+            leading_dimension(k)?
+        } else {
+            lda
+        }, // After collapse, lda = K
         ldb,
         ldd: n as i32,
         tiles_n: tn as i32,
@@ -665,4 +705,21 @@ pub fn call_mlx_gemm(
     };
     encoder.dispatch_thread_groups(grid_size, group_size);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_gemv_span, leading_dimension};
+
+    #[test]
+    fn mlx_gemm_leading_dimension_bounds() {
+        let max = i32::MAX as usize;
+        assert_eq!(leading_dimension(max).unwrap(), i32::MAX);
+        assert!(leading_dimension(max + 1).is_err());
+        assert!(leading_dimension(usize::MAX).is_err());
+        assert!(check_gemv_span(2, 1, max - 1).is_ok());
+        assert!(check_gemv_span(2, 2, max - 1).is_err());
+        assert!(check_gemv_span(3, 2, max / 2).is_err());
+        assert!(check_gemv_span(usize::MAX, 2, max).is_err());
+    }
 }

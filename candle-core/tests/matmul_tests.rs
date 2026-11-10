@@ -49,6 +49,103 @@ fn matmul(device: &Device) -> Result<()> {
     Ok(())
 }
 
+// https://github.com/huggingface/candle/issues/2737
+fn matmul_strided(device: &Device) -> Result<()> {
+    // CUDA still requires dense matrix strides.
+    if device.is_cuda() {
+        return Ok(());
+    }
+    // SAM --generate-masks: https://github.com/huggingface/candle/issues/3307
+    let lhs_data: Vec<_> = (0..64 * 1792).map(|i| (i % 7) as f32 - 3.).collect();
+    let rhs_data: Vec<_> = (0..256 * 256).map(|i| (i % 11) as f32 - 5.).collect();
+    let lhs = Tensor::from_vec(lhs_data, (64, 1792), device)?.narrow(1, 0, 256)?;
+    let rhs = Tensor::from_vec(rhs_data, (256, 256), device)?.t()?;
+    assert_eq!(lhs.stride(), &[1792, 1]);
+    assert_eq!(rhs.stride(), &[1, 256]);
+    let expected = lhs.force_contiguous()?.matmul(&rhs.force_contiguous()?)?;
+    assert_eq!(
+        lhs.matmul(&rhs)?.flatten_all()?.to_vec1::<f32>()?,
+        expected.flatten_all()?.to_vec1::<f32>()?
+    );
+
+    let matrix = |batch, heads, rows, cols, transposed| -> Result<Tensor> {
+        let (rows, cols) = if transposed {
+            (cols, rows)
+        } else {
+            (rows, cols)
+        };
+        let data: Vec<_> = (0..batch * rows * heads * cols)
+            .map(|i| (i % 7) as f32 - 3.)
+            .collect();
+        let t = Tensor::from_vec(data, (batch, rows, heads * cols), device)?
+            .reshape((batch, rows, heads, cols))?
+            .transpose(1, 2)?;
+        if transposed {
+            t.t()
+        } else {
+            Ok(t)
+        }
+    };
+    for (batch, heads) in [(2, 1), (1, 2)] {
+        for (m, n, k) in [(5, 4, 3), (1, 4, 3), (5, 1, 3), (1, 1, 3), (5, 4, 1)] {
+            for a_trans in [false, true] {
+                for b_trans in [false, true] {
+                    let lhs = matrix(batch, heads, m, k, a_trans)?;
+                    let rhs = matrix(batch, heads, k, n, b_trans)?;
+                    let singleton = if batch == 1 { 0 } else { 1 };
+                    for (lhs, rhs) in [
+                        (lhs.clone(), rhs.clone()),
+                        (lhs.squeeze(singleton)?, rhs.squeeze(singleton)?),
+                        (
+                            lhs.i((batch - 1, heads - 1))?,
+                            rhs.i((batch - 1, heads - 1))?,
+                        ),
+                    ] {
+                        // Singleton-head views can be contiguous with a noncanonical batch stride.
+                        let expected = lhs.force_contiguous()?.matmul(&rhs.force_contiguous()?)?;
+                        let actual = lhs.matmul(&rhs)?;
+                        assert_eq!(
+                            actual.flatten_all()?.to_vec1::<f32>()?,
+                            expected.flatten_all()?.to_vec1::<f32>()?,
+                            "batch={batch}, heads={heads}, m={m}, n={n}, k={k}, a_trans={a_trans}, b_trans={b_trans}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn matmul_strided_batches_metal() -> Result<()> {
+    let device = Device::new_metal(0)?;
+    for (m, n, k) in [(5, 4, 3), (1, 4, 3), (5, 1, 3)] {
+        let lhs = Tensor::arange(0f32, (2 * m * 3 * k) as f32, &device)?
+            .reshape((2, m, 3, k))?
+            .transpose(1, 2)?;
+        let rhs = Tensor::arange(0f32, (2 * k * 3 * n) as f32, &device)?
+            .reshape((2, k, 3, n))?
+            .transpose(1, 2)?;
+        for (lhs, rhs) in [
+            (lhs.clone(), rhs.contiguous()?),
+            (lhs.contiguous()?, rhs.clone()),
+        ] {
+            // Interleaved heads cannot be flattened across multiple outer batches.
+            // A contiguous operand (e.g. m=1 on lhs) does not need this guard.
+            if !lhs.is_contiguous() || !rhs.is_contiguous() {
+                let err = lhs.matmul(&rhs).unwrap_err();
+                assert!(
+                    err.to_string().contains("Invalid matmul arguments"),
+                    "{err}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn matmul_bf16(device: &Device) -> Result<()> {
     if !device.supports_bf16() {
         return Ok(());
@@ -250,6 +347,12 @@ fn mm_layout(device: &Device) -> Result<()> {
 }
 
 test_device!(matmul, matmul_cpu, matmul_gpu, matmul_metal);
+test_device!(
+    matmul_strided,
+    matmul_strided_cpu,
+    matmul_strided_gpu,
+    matmul_strided_metal
+);
 test_device!(
     matmul_bf16,
     matmul_bf16_cpu,
