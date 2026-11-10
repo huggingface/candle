@@ -103,7 +103,7 @@ zip = { version = "9.1.3", default-features = false }
 zerocopy = "0.8"
 objc2-metal = { version = "0.3.1" }
 objc2-foundation = { version = "0.3.1" }
-vulkano = { git = "https://github.com/amejia1/vulkano.git", branch = "master" }
+vulkano = { git = "https://github.com/amejia1/vulkano.git", rev = "5486164260b78756d01ea26f7f6667f87c66e6fc" }
 
 [profile.release-with-debug]
 inherits = "release"

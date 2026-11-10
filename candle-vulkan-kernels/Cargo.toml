@@ -17,7 +17,7 @@ default = []
 thiserror = "2"
 bytemuck = "1"
 half = "2.5.0"
-vulkano = { git = "https://github.com/amejia1/vulkano.git", branch = "master" }
+vulkano = { git = "https://github.com/amejia1/vulkano.git", rev = "5486164260b78756d01ea26f7f6667f87c66e6fc" }
 parking_lot = "0.12"
 
 [build-dependencies]
