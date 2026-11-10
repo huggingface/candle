@@ -55,6 +55,8 @@ enum Which {
     Mistral7bInstruct,
     #[value(name = "7b-mistral-instruct-v0.2")]
     Mistral7bInstructV02,
+    #[value(name = "12b-mn-violet-lotus")]
+    MNVioletLotus,
     #[value(name = "7b-zephyr-a")]
     Zephyr7bAlpha,
     #[value(name = "7b-zephyr-b")]
@@ -104,6 +106,7 @@ impl Which {
             | Self::Starling7bAlpha
             | Self::Zephyr7bAlpha
             | Self::Zephyr7bBeta
+            | Self::MNVioletLotus
             | Self::Mixtral
             | Self::MixtralInstruct
             | Self::Mistral7b
@@ -130,6 +133,7 @@ impl Which {
             | Self::Mistral7b
             | Self::Mistral7bInstruct
             | Self::Mistral7bInstructV02
+            | Self::MNVioletLotus
             | Self::OpenChat35
             | Self::Starling7bAlpha
             | Self::L8b
@@ -159,6 +163,7 @@ impl Which {
             | Self::Mistral7b
             | Self::Mistral7bInstruct
             | Self::Mistral7bInstructV02
+            | Self::MNVioletLotus
             | Self::Zephyr7bAlpha
             | Self::Zephyr7bBeta
             | Self::L8b
@@ -188,6 +193,7 @@ impl Which {
             | Self::Mistral7b
             | Self::Mistral7bInstruct
             | Self::Mistral7bInstructV02
+            | Self::MNVioletLotus
             | Self::Zephyr7bAlpha
             | Self::Zephyr7bBeta
             | Self::L8b
@@ -219,6 +225,7 @@ impl Which {
             | Self::Mistral7bInstructV02
             | Self::Zephyr7bAlpha
             | Self::Zephyr7bBeta => "mistralai/Mistral-7B-v0.1",
+            Self::MNVioletLotus => "FallenMerick/MN-Violet-Lotus-12B",
             Self::OpenChat35 => "openchat/openchat_3.5",
             Self::Starling7bAlpha => "berkeley-nest/Starling-LM-7B-alpha",
             Self::L8b => "meta-llama/Meta-Llama-3-8B",
@@ -369,6 +376,10 @@ impl Args {
                         "TheBloke/Mistral-7B-Instruct-v0.2-GGUF",
                         "mistral-7b-instruct-v0.2.Q4_K_S.gguf",
                     ),
+                    Which::MNVioletLotus => (
+                        "backyardai/MN-Violet-Lotus-12B-GGUF",
+                        "MN-Violet-Lotus-12B.Q4_K_M.gguf",
+                    ),
                     Which::Zephyr7bAlpha => (
                         "TheBloke/zephyr-7B-alpha-GGUF",
                         "zephyr-7b-alpha.Q4_K_M.gguf",
@@ -518,6 +529,7 @@ fn main() -> anyhow::Result<()> {
                 | Which::Mistral7b
                 | Which::Mistral7bInstruct
                 | Which::Mistral7bInstructV02
+                | Which::MNVioletLotus
                 | Which::Zephyr7bAlpha
                 | Which::Zephyr7bBeta
                 | Which::L70b
