@@ -41,6 +41,34 @@ __device__ __forceinline__ T gelu_fwd(T x) {
     return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + tanhg(static_cast<T>(M_2_SQRTPI * M_SQRT1_2) * alpha));
 }
 
+// GELU (tanh approximation) evaluated in ACC (f32 for the half types) with
+// one rounding at the store, forward and backward, contiguous tensors. The
+// `UNARY_OP` gelu above computes in T, which for bf16 rounds at every
+// intermediate; its composed backward rounds more.
+#define GELU_TANH_OPS(TYPENAME, ACC, FWD_NAME, BWD_NAME) \
+extern "C" __global__ void FWD_NAME( \
+    const size_t numel, const TYPENAME *inp, TYPENAME *out \
+) { \
+    for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
+        const ACC x = static_cast<ACC>(inp[i]); \
+        const ACC u = static_cast<ACC>(M_2_SQRTPI * M_SQRT1_2) * (x + static_cast<ACC>(0.044715) * x * x * x); \
+        out[i] = static_cast<TYPENAME>(static_cast<ACC>(0.5) * x * (static_cast<ACC>(1) + tanhg(u))); \
+    } \
+} \
+extern "C" __global__ void BWD_NAME( \
+    const size_t numel, const TYPENAME *inp, const TYPENAME *dy, TYPENAME *out \
+) { \
+    for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
+        const ACC x = static_cast<ACC>(inp[i]); \
+        const ACC k = static_cast<ACC>(M_2_SQRTPI * M_SQRT1_2); \
+        const ACC x_sq = x * x; \
+        const ACC t = tanhg(k * (x + static_cast<ACC>(0.044715) * x_sq * x)); \
+        const ACC d = static_cast<ACC>(0.5) * (static_cast<ACC>(1) + t) \
+            + static_cast<ACC>(0.5) * x * (static_cast<ACC>(1) - t * t) * k * (static_cast<ACC>(1) + static_cast<ACC>(3 * 0.044715) * x_sq); \
+        out[i] = static_cast<TYPENAME>(static_cast<ACC>(dy[i]) * d); \
+    } \
+} \
+
 template<typename T>
 __device__ __forceinline__ T elu_fwd(T x, T alpha) {
   if (x > static_cast<T>(0)) {
@@ -199,6 +227,7 @@ UNARY_OP(__nv_bfloat16, uabs_bf16, absg(x))
 UNARY_OP(__nv_bfloat16, usqr_bf16, x*x)
 UNARY_OP(__nv_bfloat16, usqrt_bf16, sqrtg(x))
 UNARY_OP(__nv_bfloat16, ugelu_bf16, gelu_fwd(x))
+GELU_TANH_OPS(__nv_bfloat16, float, gelu_tanh_fwd_bf16, gelu_tanh_bwd_bf16)
 UNARY_OP(__nv_bfloat16, ugelu_erf_bf16, gelu_erf_fwd(x))
 UNARY_OP(__nv_bfloat16, urelu_bf16, relu_fwd(x))
 UNARY_OP1(__nv_bfloat16, uelu_bf16, elu_fwd(x, param))
@@ -253,6 +282,7 @@ UNARY_OP(__half, uabs_f16, absg(x))
 UNARY_OP(__half, usqr_f16, x*x)
 UNARY_OP(__half, usqrt_f16, sqrtg(x))
 UNARY_OP(__half, ugelu_f16, gelu_fwd(x))
+GELU_TANH_OPS(__half, float, gelu_tanh_fwd_f16, gelu_tanh_bwd_f16)
 UNARY_OP(__half, ugelu_erf_f16, gelu_erf_fwd(x))
 UNARY_OP(__half, urelu_f16, relu_fwd(x))
 UNARY_OP1(__half, uelu_f16, elu_fwd(x, param))
@@ -298,7 +328,9 @@ UNARY_OP(double, usqr_f64, x*x)
 UNARY_OP(float, usqrt_f32, sqrtg(x))
 UNARY_OP(double, usqrt_f64, sqrtg(x))
 UNARY_OP(float, ugelu_f32, gelu_fwd(x))
+GELU_TANH_OPS(float, float, gelu_tanh_fwd_f32, gelu_tanh_bwd_f32)
 UNARY_OP(double, ugelu_f64, gelu_fwd(x))
+GELU_TANH_OPS(double, double, gelu_tanh_fwd_f64, gelu_tanh_bwd_f64)
 UNARY_OP(float, ugelu_erf_f32, gelu_erf_fwd(x))
 UNARY_OP(double, ugelu_erf_f64, gelu_erf_fwd(x))
 UNARY_OP(float, urelu_f32, relu_fwd(x))
