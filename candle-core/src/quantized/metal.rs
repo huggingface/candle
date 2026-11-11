@@ -27,6 +27,20 @@ impl QMetalStorage {
         })
     }
 
+    /// Wraps a Metal buffer provided by the caller, without copying, zero-filling or
+    /// synchronizing. The buffer must hold the quantized blocks of `dtype`, laid out as
+    /// `QStorage::from_data` would lay them out; its length is not checked.
+    ///
+    /// This lets a caller allocate a shared buffer and fill it directly (for example by reading
+    /// GGUF tensor data from disk into it), instead of going through a host copy.
+    pub fn from_buffer(buffer: Arc<Buffer>, device: MetalDevice, dtype: GgmlDType) -> Self {
+        Self {
+            dtype,
+            device,
+            buffer,
+        }
+    }
+
     pub fn dtype(&self) -> GgmlDType {
         self.dtype
     }
