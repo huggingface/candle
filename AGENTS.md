@@ -1,5 +1,35 @@
 # Candle Development Notes
 
+## Vendored Vulkan dependencies
+
+The Vulkan backend depends on two crates whose unreleased changes live in the
+`amejia1` forks, neither of which is expected to see a crates.io release soon
+(ash is blocked on ash-rs/ash#1001):
+
+- `vulkano` — `https://github.com/amejia1/vulkano.git` @ `f37721a7b4cf930f963793aca6d137346f939e24`
+- `ash` — `https://github.com/amejia1/ash` @ `69ef938a8f94602defc6a5862faebe26b661e7e4`
+
+`vulkano` depends on `ash` (via its `[workspace.dependencies]`), so both are
+vendored under `vendor/` (with no `.git` metadata) and wired up as path
+dependencies:
+
+- `vendor/vulkano/Cargo.toml`: `ash = { path = "../ash/ash", ... }`
+- `Cargo.toml`: `vulkano = { path = "vendor/vulkano/vulkano" }`
+- `candle-vulkan-kernels/Cargo.toml`: `vulkano = { path = "../vendor/vulkano/vulkano" }`
+
+`vendor` is listed in the workspace `exclude` so cargo treats the vendored
+trees as nested workspaces (vulkano uses workspace inheritance, which would
+otherwise resolve against candle's root manifest and fail).
+
+To re-vendor (e.g. after bumping a revision), run:
+
+```sh
+.devops/vendor-vulkano-ash.sh
+```
+
+The script shallow-clones both repos at the pinned revisions (with shallow
+submodules), strips the `.git` metadata, and applies the path patches above.
+
 ## Shader-Slang Debug Printing
 
 The Slang compute shaders support `printf()` for debug output.
