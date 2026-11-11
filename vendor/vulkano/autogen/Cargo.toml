@@ -1,0 +1,20 @@
+[package]
+name = "autogen"
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+foldhash = { workspace = true }
+heck = { workspace = true }
+indexmap = { workspace = true }
+nom = { workspace = true }
+prettyplease = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+syn = { workspace = true }
+vk-parse = { workspace = true }
+
+[lints]
+workspace = true

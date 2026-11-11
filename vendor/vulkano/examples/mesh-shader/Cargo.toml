@@ -1,0 +1,17 @@
+[package]
+name = "mesh-shader"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "mesh-shader"
+path = "main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+vulkano = { workspace = true, default-features = true }
+vulkano-shaders = { workspace = true }
+winit = { workspace = true, default-features = true }

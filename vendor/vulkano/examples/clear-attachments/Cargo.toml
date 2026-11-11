@@ -1,0 +1,16 @@
+[package]
+name = "clear-attachments"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "clear-attachments"
+path = "main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+vulkano = { workspace = true, default-features = true }
+winit = { workspace = true, default-features = true }

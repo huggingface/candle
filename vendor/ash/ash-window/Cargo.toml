@@ -1,0 +1,34 @@
+[package]
+name = "ash-window"
+version = "0.13.0"
+authors = [
+    "msiglreith <m.siglreith@gmail.com>",
+    "Marijn Suijten <marijn@traverseresearch.nl>",
+]
+license = "MIT OR Apache-2.0"
+description = "Interop library between ash and raw-window-handle"
+repository = "https://github.com/ash-rs/ash"
+keywords = ["windowing", "ash", "graphics", "vulkan", "raw-window-handle"]
+categories = [
+    "api-bindings",
+    "game-development",
+    "graphics",
+    "rendering::graphics-api"
+]
+edition = "2021"
+rust-version = "1.69.0"
+
+[dependencies]
+ash = { path = "../ash", version = "0.38", default-features = false, features = ["std"] }
+raw-window-handle = "0.6.2"
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+raw-window-metal = "0.4"
+
+[dev-dependencies]
+winit = { version = "0.29", features = ["rwh_06"] }
+ash = { path = "../ash", version = "0.38", default-features = false, features = ["linked"] }
+
+[[example]]
+name = "winit"
+required-features = ["ash/linked"]
