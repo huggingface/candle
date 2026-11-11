@@ -128,8 +128,19 @@ impl Shape {
     }
 
     /// The total number of elements, this is the product of all dimension sizes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the product of the dimensions overflows `usize`. Release builds compile
+    /// arithmetic with overflow checks disabled, so a plain `Iterator::product` would
+    /// otherwise wrap silently instead of panicking, leaving a `Shape` whose reported
+    /// `elem_count` disagrees with its `dims` (and with the backing storage it was used to
+    /// size), matching debug-build behavior instead of diverging from it.
     pub fn elem_count(&self) -> usize {
-        self.0.iter().product()
+        self.0
+            .iter()
+            .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+            .unwrap_or_else(|| panic!("Shape {:?} overflows usize element count", self.0))
     }
 
     /// The strides given in number of elements for a contiguous n-dimensional
@@ -638,5 +649,19 @@ mod tests {
         assert_eq!(shape.dims(), &[2, 3, 4, 5, 6]);
         let shape = Shape::from((2, 3, 4, 5, 6, 7));
         assert_eq!(shape.dims(), &[2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn elem_count() {
+        assert_eq!(Shape::from(()).elem_count(), 1);
+        assert_eq!(Shape::from((2, 3, 4)).elem_count(), 24);
+    }
+
+    /// https://github.com/huggingface/candle/issues/3816
+    #[test]
+    #[should_panic(expected = "overflows usize element count")]
+    fn elem_count_overflow_panics_instead_of_wrapping() {
+        let shape = Shape::from((usize::MAX, 2));
+        shape.elem_count();
     }
 }
