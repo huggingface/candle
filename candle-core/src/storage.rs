@@ -2,7 +2,10 @@ use crate::backend::BackendStorage;
 use crate::custom_op::{all_distinct, InplaceOpN, Src};
 use crate::op::{self, CmpOp, ReduceOp};
 use crate::scalar::Scalar;
-use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
+use crate::{
+    CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape,
+    VulkanStorage,
+};
 use crate::{CustomOp1, CustomOp2, CustomOp3};
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 
@@ -13,6 +16,7 @@ pub enum Storage {
     Cpu(CpuStorage),
     Cuda(CudaStorage),
     Metal(MetalStorage),
+    Vulkan(VulkanStorage),
 }
 
 pub type StorageRef<'a> = RwLockReadGuard<'a, Storage>;
@@ -30,6 +34,10 @@ impl Storage {
                 let storage = storage.try_clone(layout)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Vulkan(storage) => {
+                let storage = storage.try_clone(layout)?;
+                Ok(Self::Vulkan(storage))
+            }
         }
     }
 
@@ -38,6 +46,7 @@ impl Storage {
             Self::Cpu(_) => Device::Cpu,
             Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
             Self::Metal(storage) => Device::Metal(storage.device().clone()),
+            Self::Vulkan(storage) => Device::Vulkan(storage.device().clone()),
         }
     }
 
@@ -46,6 +55,7 @@ impl Storage {
             Self::Cpu(storage) => storage.dtype(),
             Self::Cuda(storage) => storage.dtype(),
             Self::Metal(storage) => storage.dtype(),
+            Self::Vulkan(storage) => storage.dtype(),
         }
     }
 
@@ -54,7 +64,7 @@ impl Storage {
         let rhs_device = rhs.device();
         let lhs = lhs_device.location();
         let rhs = rhs_device.location();
-        let same_device = if self.device().is_metal() {
+        let same_device = if self.device().is_metal() || self.device().is_vulkan() {
             // On metal, we require the device to be exactly the same rather than
             // having the same location. In cuda this is not necessary as all CudaDevice on the
             // same GPU will use the same cuda stream.
@@ -78,12 +88,24 @@ impl Storage {
             Ok(())
         }
     }
+    /// Determine the common dtype for a binary op between two operands.
+    fn promote_binary_dtype(lhs: DType, rhs: DType) -> DType {
+        if lhs == rhs {
+            return lhs;
+        }
+        if matches!(lhs, DType::F64) || matches!(rhs, DType::F64) {
+            DType::F64
+        } else {
+            DType::F32
+        }
+    }
 
     pub(crate) fn const_set(&mut self, v: Scalar, l: &Layout) -> Result<()> {
         match self {
             Storage::Cpu(storage) => storage.const_set(v, l),
             Storage::Cuda(storage) => storage.const_set(v, l),
             Storage::Metal(storage) => storage.const_set(v, l),
+            Storage::Vulkan(storage) => storage.const_set(v, l),
         }
     }
 
@@ -100,6 +122,10 @@ impl Storage {
             Self::Metal(storage) => {
                 let storage = storage.affine(layout, mul, add)?;
                 Ok(Self::Metal(storage))
+            }
+            Self::Vulkan(storage) => {
+                let storage = storage.affine(layout, mul, add)?;
+                Ok(Self::Vulkan(storage))
             }
         }
     }
@@ -118,6 +144,10 @@ impl Storage {
                 let storage = storage.powf(layout, alpha)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Vulkan(storage) => {
+                let storage = storage.powf(layout, alpha)?;
+                Ok(Self::Vulkan(storage))
+            }
         }
     }
 
@@ -134,6 +164,10 @@ impl Storage {
             Self::Metal(storage) => {
                 let storage = storage.elu(layout, alpha)?;
                 Ok(Self::Metal(storage))
+            }
+            Self::Vulkan(storage) => {
+                let storage = storage.elu(layout, alpha)?;
+                Ok(Self::Vulkan(storage))
             }
         }
     }
@@ -159,6 +193,10 @@ impl Storage {
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::Vulkan(lhs), Self::Vulkan(rhs)) => {
+                let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::Vulkan(storage))
             }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
@@ -187,6 +225,10 @@ impl Storage {
                 let storage = storage.reduce_op(op, layout, s)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Vulkan(storage) => {
+                let storage = storage.reduce_op(op, layout, s)?;
+                Ok(Self::Vulkan(storage))
+            }
         }
     }
 
@@ -204,6 +246,10 @@ impl Storage {
                 let storage = storage.to_dtype(layout, dtype)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Vulkan(storage) => {
+                let storage = storage.to_dtype(layout, dtype)?;
+                Ok(Self::Vulkan(storage))
+            }
         }
     }
 
@@ -220,6 +266,10 @@ impl Storage {
             Self::Metal(storage) => {
                 let (storage, shape) = c.metal_fwd(storage, l)?;
                 Ok((Self::Metal(storage), shape))
+            }
+            Self::Vulkan(storage) => {
+                let (storage, shape) = c.vulkan_fwd(storage, l)?;
+                Ok((Self::Vulkan(storage), shape))
             }
         }
     }
@@ -244,6 +294,10 @@ impl Storage {
             (Self::Metal(s1), Self::Metal(s2)) => {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2)?;
                 Ok((Self::Metal(s), shape))
+            }
+            (Self::Vulkan(s1), Self::Vulkan(s2)) => {
+                let (s, shape) = c.vulkan_fwd(s1, l1, s2, l2)?;
+                Ok((Self::Vulkan(s), shape))
             }
             _ => unreachable!(),
         }
@@ -272,6 +326,10 @@ impl Storage {
             (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
                 Ok((Self::Metal(s), shape))
+            }
+            (Self::Vulkan(s1), Self::Vulkan(s2), Self::Vulkan(s3)) => {
+                let (s, shape) = c.vulkan_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok((Self::Vulkan(s), shape))
             }
             _ => unreachable!(),
         }
@@ -320,6 +378,7 @@ impl Storage {
             Storage::Cpu(dst) => inplace_dispatch!(dst, Cpu, cpu_fwd, cpu_fwd_aliased),
             Storage::Cuda(dst) => inplace_dispatch!(dst, Cuda, cuda_fwd, cuda_fwd_aliased),
             Storage::Metal(dst) => inplace_dispatch!(dst, Metal, metal_fwd, metal_fwd_aliased),
+            Storage::Vulkan(dst) => inplace_dispatch!(dst, Vulkan, vulkan_fwd, vulkan_fwd_aliased),
         }
     }
 
@@ -337,6 +396,10 @@ impl Storage {
                 let storage = storage.unary_impl::<B>(layout)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Vulkan(storage) => {
+                let storage = storage.unary_impl::<B>(layout)?;
+                Ok(Self::Vulkan(storage))
+            }
         }
     }
 
@@ -347,8 +410,26 @@ impl Storage {
         rhs_layout: &Layout,
     ) -> Result<Self> {
         self.same_device(rhs, B::NAME)?;
-        self.same_dtype(rhs, B::NAME)?;
-        match (self, rhs) {
+        // Promote mixed dtypes to a common type before dispatching.
+        let (lhs_s, rhs_s) = if self.dtype() != rhs.dtype() {
+            let target = Self::promote_binary_dtype(self.dtype(), rhs.dtype());
+            let lhs_s = if self.dtype() != target {
+                Some(self.to_dtype(lhs_layout, target)?)
+            } else {
+                None
+            };
+            let rhs_s = if rhs.dtype() != target {
+                Some(rhs.to_dtype(rhs_layout, target)?)
+            } else {
+                None
+            };
+            (lhs_s, rhs_s)
+        } else {
+            (None, None)
+        };
+        let lhs = lhs_s.as_ref().unwrap_or(self);
+        let rhs = rhs_s.as_ref().unwrap_or(rhs);
+        match (lhs, rhs) {
             (Storage::Cpu(lhs), Storage::Cpu(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Cpu(storage))
@@ -360,6 +441,10 @@ impl Storage {
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::Vulkan(lhs), Self::Vulkan(rhs)) => {
+                let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::Vulkan(storage))
             }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
@@ -396,6 +481,10 @@ impl Storage {
                 let s = inp.conv1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            (Storage::Vulkan(inp), Storage::Vulkan(kernel)) => {
+                let s = inp.conv1d(l, kernel, kernel_l, params)?;
+                Ok(Self::Vulkan(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -426,6 +515,10 @@ impl Storage {
             (Storage::Metal(inp), Storage::Metal(kernel)) => {
                 let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
+            }
+            (Storage::Vulkan(inp), Storage::Vulkan(kernel)) => {
+                let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
+                Ok(Self::Vulkan(s))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -458,6 +551,10 @@ impl Storage {
                 let s = inp.conv2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            (Storage::Vulkan(inp), Storage::Vulkan(kernel)) => {
+                let s = inp.conv2d(l, kernel, kernel_l, params)?;
+                Ok(Self::Vulkan(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -489,6 +586,10 @@ impl Storage {
                 let s = inp.conv_transpose2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            (Storage::Vulkan(inp), Storage::Vulkan(kernel)) => {
+                let s = inp.conv_transpose2d(l, kernel, kernel_l, params)?;
+                Ok(Self::Vulkan(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -517,6 +618,10 @@ impl Storage {
                 let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Vulkan(storage) => {
+                let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
+                Ok(Self::Vulkan(storage))
+            }
         }
     }
 
@@ -539,6 +644,10 @@ impl Storage {
                 let storage = storage.max_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Vulkan(storage) => {
+                let storage = storage.max_pool2d(layout, kernel_size, stride)?;
+                Ok(Self::Vulkan(storage))
+            }
         }
     }
 
@@ -556,6 +665,10 @@ impl Storage {
                 let storage = storage.upsample_nearest1d(layout, sz)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Vulkan(storage) => {
+                let storage = storage.upsample_nearest1d(layout, sz)?;
+                Ok(Self::Vulkan(storage))
+            }
         }
     }
 
@@ -572,6 +685,10 @@ impl Storage {
             Self::Metal(storage) => {
                 let storage = storage.upsample_nearest2d(layout, h, w)?;
                 Ok(Self::Metal(storage))
+            }
+            Self::Vulkan(storage) => {
+                let storage = storage.upsample_nearest2d(layout, h, w)?;
+                Ok(Self::Vulkan(storage))
             }
         }
     }
@@ -601,6 +718,11 @@ impl Storage {
                     storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Vulkan(storage) => {
+                let storage =
+                    storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
+                Ok(Self::Vulkan(storage))
+            }
         }
     }
 
@@ -627,6 +749,10 @@ impl Storage {
             (Self::Metal(cond), Self::Metal(t), Self::Metal(f)) => {
                 let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::Vulkan(cond), Self::Vulkan(t), Self::Vulkan(f)) => {
+                let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
+                Ok(Self::Vulkan(storage))
             }
             (_, lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -658,6 +784,10 @@ impl Storage {
                 let storage = s.gather(l, indexes, indexes_l, d)?;
                 Ok(Self::Metal(storage))
             }
+            (Self::Vulkan(s), Self::Vulkan(indexes)) => {
+                let storage = s.gather(l, indexes, indexes_l, d)?;
+                Ok(Self::Vulkan(storage))
+            }
             _ => unreachable!(),
         }
     }
@@ -681,6 +811,9 @@ impl Storage {
                 s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
+                s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
+            (Self::Vulkan(s), Self::Vulkan(indexes), Self::Vulkan(source)) => {
                 s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             _ => unreachable!(),
@@ -707,6 +840,9 @@ impl Storage {
                 s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
+                s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
+            (Self::Vulkan(s), Self::Vulkan(indexes), Self::Vulkan(source)) => {
                 s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             _ => unreachable!(),
@@ -738,6 +874,10 @@ impl Storage {
                 let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
                 Ok(Self::Metal(storage))
             }
+            (Self::Vulkan(s), Self::Vulkan(indexes), Self::Vulkan(source)) => {
+                let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
+                Ok(Self::Vulkan(storage))
+            }
             _ => unreachable!(),
         }
     }
@@ -763,6 +903,10 @@ impl Storage {
                 let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
                 Ok(Self::Metal(storage))
             }
+            (Self::Vulkan(lhs), Self::Vulkan(rhs)) => {
+                let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
+                Ok(Self::Vulkan(storage))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -780,8 +924,15 @@ impl Storage {
         rhs_layout: &Layout,
     ) -> Result<Self> {
         self.same_device(rhs, "matmul")?;
-        self.same_dtype(rhs, "matmul")?;
-        match (self, rhs) {
+        // Allow mixed dtypes: convert rhs to match self.dtype if needed.
+        let rhs_converted;
+        let rhs_ref = if self.dtype() == rhs.dtype() {
+            rhs
+        } else {
+            rhs_converted = rhs.to_dtype(rhs_layout, self.dtype())?;
+            &rhs_converted
+        };
+        match (self, rhs_ref) {
             (Self::Cpu(lhs), Self::Cpu(rhs)) => {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Cpu(storage))
@@ -794,10 +945,55 @@ impl Storage {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
             }
+            (Self::Vulkan(lhs), Self::Vulkan(rhs)) => {
+                let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
+                Ok(Self::Vulkan(storage))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
                 op: "matmul",
+            }
+            .bt()),
+        }
+    }
+
+    pub(crate) fn affine_matmul(
+        &self,
+        rhs: &Self,
+        bias: &Self,
+        bmnk: (usize, usize, usize, usize),
+        lhs_layout: &Layout,
+        rhs_layout: &Layout,
+        bias_layout: &Layout,
+    ) -> Result<Self> {
+        self.same_device(rhs, "affine_matmul")?;
+        self.same_device(bias, "affine_matmul")?;
+        match (self, rhs, bias) {
+            (Self::Cpu(lhs), Self::Cpu(rhs), Self::Cpu(bias)) => {
+                let storage =
+                    lhs.affine_matmul(rhs, bias, bmnk, lhs_layout, rhs_layout, bias_layout)?;
+                Ok(Self::Cpu(storage))
+            }
+            (Self::Cuda(lhs), Self::Cuda(rhs), Self::Cuda(bias)) => {
+                let storage =
+                    lhs.affine_matmul(rhs, bias, bmnk, lhs_layout, rhs_layout, bias_layout)?;
+                Ok(Self::Cuda(storage))
+            }
+            (Self::Metal(lhs), Self::Metal(rhs), Self::Metal(bias)) => {
+                let storage =
+                    lhs.affine_matmul(rhs, bias, bmnk, lhs_layout, rhs_layout, bias_layout)?;
+                Ok(Self::Metal(storage))
+            }
+            (Self::Vulkan(lhs), Self::Vulkan(rhs), Self::Vulkan(bias)) => {
+                let storage =
+                    lhs.affine_matmul(rhs, bias, bmnk, lhs_layout, rhs_layout, bias_layout)?;
+                Ok(Self::Vulkan(storage))
+            }
+            (lhs, rhs, _) => Err(Error::DeviceMismatchBinaryOp {
+                lhs: lhs.device().location(),
+                rhs: rhs.device().location(),
+                op: "affine_matmul",
             }
             .bt()),
         }
@@ -814,6 +1010,9 @@ impl Storage {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy_strided_src(dst, dst_offset, src_l),
             (Self::Cuda(src), Self::Cuda(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
             (Self::Metal(src), Self::Metal(dst)) => {
+                Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
+            }
+            (Self::Vulkan(src), Self::Vulkan(dst)) => {
                 Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
@@ -842,6 +1041,9 @@ impl Storage {
                 Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
             }
             (Self::Metal(src), Self::Metal(dst)) => {
+                Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
+            }
+            (Self::Vulkan(src), Self::Vulkan(dst)) => {
                 Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {

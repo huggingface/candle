@@ -152,7 +152,7 @@ impl Tensor {
                 f.write_all(&vs)?;
             }
             DType::F8E4M3 => {
-                let vs = vs.to_vec1::<float8::F8E4M3>()?;
+                let vs = vs.to_vec1::<microfloat::f8e4m3>()?;
                 for v in vs {
                     f.write_u8(v.to_bits())?
                 }

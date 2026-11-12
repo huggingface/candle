@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a bug in vulkano
+type: Bug
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version of vulkano
+      placeholder: '0.35.2'
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS (incl. version)
+      placeholder: >
+        Linux nixos 6.12.50 #1-NixOS SMP PREEMPT_DYNAMIC Thu Oct  2 11:44:15 UTC 2025 x86_64
+        GNU/Linux
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Selected physical device
+      placeholder: Radeon RX 6600
+    validations:
+      required: true
+  - type: input
+    id: driver
+    attributes:
+      label: Driver (incl. version)
+      placeholder: mesa 25.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Issue description
+      description: >
+        Please describe the issue in as much detail as possible and provide any additional
+        information that would help us resolve it.
+    validations:
+      required: true
+  - type: textarea
+    id: mre
+    attributes:
+      label: Minimal reproducible example
+      description: >
+        Please upload a reasonably minimal reproducible example demonstrating the issue, or link to
+        an existing example that reproduces the issue.
+    validations:
+      required: true

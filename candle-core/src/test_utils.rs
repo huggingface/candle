@@ -4,7 +4,7 @@ use crate::{Result, Tensor};
 macro_rules! test_device {
     // TODO: Switch to generating the two last arguments automatically once concat_idents is
     // stable. https://github.com/rust-lang/rust/issues/29599
-    ($fn_name: ident, $test_cpu: ident, $test_cuda: ident, $test_metal: ident) => {
+    ($fn_name: ident, $test_cpu: ident, $test_cuda: ident, $test_metal: ident, $test_vulkan: ident) => {
         #[test]
         fn $test_cpu() -> Result<()> {
             $fn_name(&Device::Cpu)
@@ -20,6 +20,15 @@ macro_rules! test_device {
         #[test]
         fn $test_metal() -> Result<()> {
             $fn_name(&Device::new_metal(0)?)
+        }
+
+        #[cfg(feature = "vulkan")]
+        #[test]
+        fn $test_vulkan() -> Result<()> {
+            let gpu_id: usize = std::env::var("CANDLE_VULKAN_TEST_GPU")
+                .map(|value| value.parse().unwrap())
+                .unwrap_or_default();
+            $fn_name(&Device::new_vulkan(gpu_id)?)
         }
     };
 }

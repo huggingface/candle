@@ -43,38 +43,65 @@ impl super::Module for Linear {
     fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
         // When possible, we avoid using a broadcasted matmul as it is much slower
         // than the standard matmul for the cuda and cpu backends.
+        let w = self.weight.t()?;
+        // The fused affine path needs a rank-1 bias of length n
+        // (affine_matmul does not broadcast); anything else (no bias,
+        // scalar or broadcast bias) uses matmul + broadcast add.
+        let fused_bias = self.bias.as_ref().filter(|b| b.dims().len() == 1).cloned();
         let x = match *x.dims() {
-            [b1, b2, m, k] => {
-                if x.is_contiguous() {
-                    let w = self.weight.t()?;
-                    x.reshape((b1 * b2 * m, k))?
-                        .matmul(&w)?
-                        .reshape((b1, b2, m, ()))?
-                } else {
-                    let w = self.weight.broadcast_left((b1, b2))?.t()?;
-                    x.matmul(&w)?
+            [b1, b2, m, k] if x.is_contiguous() => {
+                let x2 = x.reshape((b1 * b2 * m, k))?;
+                let y = match &fused_bias {
+                    Some(bias) if bias.dims()[0] == w.dims()[1] => x2.affine_matmul(&w, bias)?,
+                    _ => {
+                        let y = x2.matmul(&w)?;
+                        match &self.bias {
+                            None => y,
+                            Some(bias) => y.broadcast_add(bias)?,
+                        }
+                    }
+                };
+                y.reshape((b1, b2, m, ()))?
+            }
+            [bsize, m, k] if x.is_contiguous() => {
+                let x2 = x.reshape((bsize * m, k))?;
+                let y = match &fused_bias {
+                    Some(bias) if bias.dims()[0] == w.dims()[1] => x2.affine_matmul(&w, bias)?,
+                    _ => {
+                        let y = x2.matmul(&w)?;
+                        match &self.bias {
+                            None => y,
+                            Some(bias) => y.broadcast_add(bias)?,
+                        }
+                    }
+                };
+                y.reshape((bsize, m, ()))?
+            }
+            [b1, b2, ..] if x.dims().len() == 4 => {
+                let w = self.weight.broadcast_left((b1, b2))?.t()?;
+                let y = x.matmul(&w)?;
+                match &self.bias {
+                    None => y,
+                    Some(bias) => y.broadcast_add(bias)?,
                 }
             }
-            [bsize, m, k] => {
-                if x.is_contiguous() {
-                    let w = self.weight.t()?;
-                    x.reshape((bsize * m, k))?
-                        .matmul(&w)?
-                        .reshape((bsize, m, ()))?
-                } else {
-                    let w = self.weight.broadcast_left(bsize)?.t()?;
-                    x.matmul(&w)?
+            [bsize, ..] if x.dims().len() == 3 => {
+                let w = self.weight.broadcast_left(bsize)?.t()?;
+                let y = x.matmul(&w)?;
+                match &self.bias {
+                    None => y,
+                    Some(bias) => y.broadcast_add(bias)?,
                 }
             }
             _ => {
-                let w = self.weight.t()?;
-                x.matmul(&w)?
+                let y = x.matmul(&w)?;
+                match &self.bias {
+                    None => y,
+                    Some(bias) => y.broadcast_add(bias)?,
+                }
             }
         };
-        match &self.bias {
-            None => Ok(x),
-            Some(bias) => x.broadcast_add(bias),
-        }
+        Ok(x)
     }
 }
 

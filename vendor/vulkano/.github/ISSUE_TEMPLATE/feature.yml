@@ -1,0 +1,10 @@
+name: Feature request
+description: Request a feature to be added to vulkano
+type: Feature
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature description
+    validations:
+      required: true

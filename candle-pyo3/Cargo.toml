@@ -21,7 +21,7 @@ candle-onnx = { workspace = true, optional = true }
 half = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py313"] }
-float8 = { workspace = true }
+microfloat = { workspace = true }
 
 [build-dependencies]
 pyo3-build-config = "0.29"
@@ -30,5 +30,6 @@ pyo3-build-config = "0.29"
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
+vulkan = ["candle/vulkan"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
 onnx = ["dep:candle-onnx"]

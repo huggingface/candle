@@ -3,7 +3,7 @@
 //! Spec: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
 
 use super::{GgmlDType, QTensor};
-use crate::{Context, Device, Result};
+use crate::{Context, Device, Result, Shape};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashMap;
 
@@ -85,12 +85,13 @@ pub struct TensorInfo {
 }
 
 impl TensorInfo {
-    pub fn read<R: std::io::Seek + std::io::Read>(
+    /// Reads the raw quantized bytes of the tensor (with its dtype and
+    /// dimensions) without uploading them to a device.
+    pub fn read_raw<R: std::io::Seek + std::io::Read>(
         &self,
         reader: &mut R,
         tensor_data_offset: u64,
-        device: &Device,
-    ) -> Result<QTensor> {
+    ) -> Result<(Vec<u8>, GgmlDType, Shape)> {
         let tensor_elems = self.shape.elem_count();
         let block_size = self.ggml_dtype.block_size();
         if !tensor_elems.is_multiple_of(block_size) {
@@ -110,12 +111,17 @@ impl TensorInfo {
         let mut raw_data = vec![0u8; size_in_bytes];
         reader.seek(std::io::SeekFrom::Start(tensor_start))?;
         reader.read_exact(&mut raw_data)?;
-        super::ggml_file::qtensor_from_ggml(
-            self.ggml_dtype,
-            &raw_data,
-            self.shape.dims().to_vec(),
-            device,
-        )
+        Ok((raw_data, self.ggml_dtype, self.shape.clone()))
+    }
+
+    pub fn read<R: std::io::Seek + std::io::Read>(
+        &self,
+        reader: &mut R,
+        tensor_data_offset: u64,
+        device: &Device,
+    ) -> Result<QTensor> {
+        let (raw_data, dtype, shape) = self.read_raw(reader, tensor_data_offset)?;
+        super::ggml_file::qtensor_from_ggml(dtype, &raw_data, shape.dims().to_vec(), device)
     }
 }
 
@@ -577,6 +583,22 @@ impl Content {
             None => crate::bail!("cannot find tensor info for {name}"),
         };
         tensor_info.read(reader, self.tensor_data_offset, device)
+    }
+
+    /// Reads the raw quantized bytes of tensor `name` (with its dtype and
+    /// dimensions) without uploading them to a device. Used to build fused
+    /// weight tensors (qkv / gate+up row concatenation) straight from the
+    /// file.
+    pub fn tensor_raw<R: std::io::Seek + std::io::Read>(
+        &self,
+        reader: &mut R,
+        name: &str,
+    ) -> Result<(Vec<u8>, GgmlDType, Shape)> {
+        let tensor_info = match self.tensor_infos.get(name) {
+            Some(tensor_info) => tensor_info,
+            None => crate::bail!("cannot find tensor info for {name}"),
+        };
+        tensor_info.read_raw(reader, self.tensor_data_offset)
     }
 }
 

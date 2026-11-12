@@ -1,0 +1,20 @@
+[package]
+name = "multi-window-game-of-life"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "multi-window-game-of-life"
+path = "main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+glam = { workspace = true }
+rand = { workspace = true }
+vulkano = { workspace = true, default-features = true }
+vulkano-shaders = { workspace = true }
+vulkano-util = { workspace = true }
+winit = { workspace = true, default-features = true }

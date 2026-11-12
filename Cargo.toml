@@ -16,7 +16,9 @@ exclude = [
     "candle-flash-attn-v3",
     "candle-kernels",
     "candle-metal-kernels",
+    "candle-vulkan-kernels",
     "candle-onnx",
+    "vendor",
 ]
 resolver = "2"
 
@@ -40,6 +42,7 @@ candle-flash-attn = { path = "./candle-flash-attn", version = "0.11.1" }
 candle-flash-attn-v3 = { path = "./candle-flash-attn-v3", version = "0.11.1" }
 candle-kernels = { path = "./candle-kernels", version = "0.11.1" }
 candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.11.1" }
+candle-vulkan-kernels = { path = "./candle-vulkan-kernels", version = "0.11.1" }
 candle-nn = { path = "./candle-nn", version = "0.11.1" }
 candle-onnx = { path = "./candle-onnx", version = "0.11.1" }
 candle-transformers = { path = "./candle-transformers", version = "0.11.1" }
@@ -67,7 +70,7 @@ half = { version = "2.5.0", features = [
     "rand_distr",
     "zerocopy"
 ] }
-float8 = { version = "0.7.0", features = ["num-traits", "rand_distr"] }
+microfloat = { version = "0.1", features = ["bytemuck", "num-traits", "rand_distr"] }
 hound = "3.5.1"
 image = { version = "0.25.2", default-features = false, features = [
     "jpeg",
@@ -101,6 +104,7 @@ zip = { version = "9.1.3", default-features = false }
 zerocopy = "0.8"
 objc2-metal = { version = "0.3.1" }
 objc2-foundation = { version = "0.3.1" }
+vulkano = { path = "vendor/vulkano/vulkano" }
 
 [profile.release-with-debug]
 inherits = "release"

@@ -1,6 +1,6 @@
 use super::quantized_qwen3::{Gguf, RotaryEmbedding};
 use super::with_tracing::QMatMul;
-use crate::fused_moe::{FusedMoeGGUF, MoeCfg};
+use crate::fused_moe::{pack_gate_up_experts, FusedMoeGGUF, MoeCfg};
 use crate::quantized_nn::RmsNorm;
 use crate::utils::repeat_kv;
 use candle::quantized::gguf_file;
@@ -332,10 +332,20 @@ impl GGUFQWenMoE {
                 let gate_experts = Arc::new(gg.tensor(&format!("{prefix}.ffn_gate_exps.weight"))?);
                 let up_experts = Arc::new(gg.tensor(&format!("{prefix}.ffn_up_exps.weight"))?);
                 let down_experts = Arc::new(gg.tensor(&format!("{prefix}.ffn_down_exps.weight"))?);
+                // The packed gate+up tensor is only needed by the non-CUDA path (the
+                // CUDA forward uses gate/up separately), so skip the copy there to
+                // avoid holding a redundant duplicate of the expert weights.
+                let gate_up_experts = if device.is_cuda() {
+                    None
+                } else {
+                    Some(Arc::new(pack_gate_up_experts(&gate_experts, &up_experts)?))
+                };
                 let moe = FusedMoeGGUF {
                     gate,
                     gate_experts,
                     up_experts,
+                    gate_up_experts,
+                    w_size_n: moe_cfg.moe_intermediate_size,
                     down_experts,
                     act: candle_nn::Activation::Silu,
                     norm_topk_prob: moe_cfg.norm_topk_prob,

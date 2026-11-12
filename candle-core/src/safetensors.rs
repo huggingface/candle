@@ -13,6 +13,7 @@ use crate::op::BackpropOp;
 use crate::storage::Storage;
 use crate::tensor::from_storage;
 use crate::{DType, Device, Error, Result, Tensor, WithDType};
+use half::{bf16, f16};
 use safetensors::tensor as st;
 use safetensors::tensor::SafeTensors;
 use std::borrow::Cow;
@@ -195,6 +196,77 @@ fn convert_back_<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {
     unsafe { Vec::from_raw_parts(ptr, length, capacity) }
 }
 
+/// Convert a stream of little-endian 16-bit floats using a 2^16-entry
+/// lookup table.
+fn convert_stream_u16(src: &[u8], table: &[u16; 65536]) -> Vec<u8> {
+    let mut out = vec![0u8; src.len()];
+    for (o, s) in out
+        .as_chunks_mut::<2>()
+        .0
+        .iter_mut()
+        .zip(src.as_chunks::<2>().0.iter())
+    {
+        let v = table[(s[0] as u16 | (s[1] as u16) << 8) as usize];
+        o[0] = v as u8;
+        o[1] = (v >> 8) as u8;
+    }
+    out
+}
+
+/// Convert a stream of little-endian 16-bit floats to a stream of f32.
+fn convert_stream_u16_f32(src: &[u8], f: impl Fn(u16) -> f32) -> Vec<u8> {
+    let mut out = vec![0u8; src.len() * 2];
+    for (o, s) in out
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(src.as_chunks::<2>().0.iter())
+    {
+        let v = f(s[0] as u16 | (s[1] as u16) << 8);
+        o.copy_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+/// Convert a stream of little-endian f32 to a stream of 16-bit floats.
+fn convert_stream_f32(src: &[u8], f: impl Fn(f32) -> u16) -> Vec<u8> {
+    let mut out = vec![0u8; src.len() / 2];
+    for (o, s) in out
+        .as_chunks_mut::<2>()
+        .0
+        .iter_mut()
+        .zip(src.as_chunks::<4>().0.iter())
+    {
+        let x = f32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+        let v = f(x);
+        o[0] = v as u8;
+        o[1] = (v >> 8) as u8;
+    }
+    out
+}
+
+fn bf16_to_f16_table() -> &'static [u16; 65536] {
+    static T: std::sync::OnceLock<[u16; 65536]> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let mut t = [0u16; 65536];
+        for (i, slot) in t.iter_mut().enumerate() {
+            *slot = f16::from_f32(bf16::from_bits(i as u16).to_f32()).to_bits();
+        }
+        t
+    })
+}
+
+fn f16_to_bf16_table() -> &'static [u16; 65536] {
+    static T: std::sync::OnceLock<[u16; 65536]> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let mut t = [0u16; 65536];
+        for (i, slot) in t.iter_mut().enumerate() {
+            *slot = bf16::from_f32(f16::from_bits(i as u16).to_f32()).to_bits();
+        }
+        t
+    })
+}
+
 pub trait Load {
     fn load(&self, device: &Device) -> Result<Tensor>;
 }
@@ -222,16 +294,36 @@ impl Tensor {
             DType::F16 => convert_slice::<half::f16>(data, shape, device),
             DType::F32 => convert_slice::<f32>(data, shape, device),
             DType::F64 => convert_slice::<f64>(data, shape, device),
-            DType::F8E4M3 => convert_slice::<float8::F8E4M3>(data, shape, device),
+            DType::F8E4M3 => convert_slice::<microfloat::f8e4m3>(data, shape, device),
             DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
                 // For dummy types, create storage with raw bytes
                 let storage = match device {
                     Device::Cpu => {
                         let cpu_storage = match dtype {
-                            DType::F6E2M3 => crate::cpu_backend::CpuStorage::F6E2M3(data.to_vec()),
-                            DType::F6E3M2 => crate::cpu_backend::CpuStorage::F6E3M2(data.to_vec()),
-                            DType::F4 => crate::cpu_backend::CpuStorage::F4(data.to_vec()),
-                            DType::F8E8M0 => crate::cpu_backend::CpuStorage::F8E8M0(data.to_vec()),
+                            DType::F6E2M3 => crate::cpu_backend::CpuStorage::F6E2M3(
+                                data.iter()
+                                    .copied()
+                                    .map(microfloat::f6e2m3fn::from_bits)
+                                    .collect(),
+                            ),
+                            DType::F6E3M2 => crate::cpu_backend::CpuStorage::F6E3M2(
+                                data.iter()
+                                    .copied()
+                                    .map(microfloat::f6e3m2fn::from_bits)
+                                    .collect(),
+                            ),
+                            DType::F4 => crate::cpu_backend::CpuStorage::F4(
+                                data.iter()
+                                    .copied()
+                                    .map(microfloat::f4e2m1fn::from_bits)
+                                    .collect(),
+                            ),
+                            DType::F8E8M0 => crate::cpu_backend::CpuStorage::F8E8M0(
+                                data.iter()
+                                    .copied()
+                                    .map(microfloat::f8e8m0fnu::from_bits)
+                                    .collect(),
+                            ),
                             _ => unreachable!(),
                         };
                         Storage::Cpu(cpu_storage)
@@ -278,6 +370,16 @@ impl Tensor {
                     Device::Metal(_) => {
                         return Err(Error::Msg("Metal support not compiled".to_string()));
                     }
+                    #[cfg(feature = "vulkan")]
+                    Device::Vulkan(device) => {
+                        let storage =
+                            crate::vulkan_backend::VulkanStorage::new(device, shape.len(), dtype)?;
+                        Storage::Vulkan(storage)
+                    }
+                    #[cfg(not(feature = "vulkan"))]
+                    Device::Vulkan(_) => {
+                        return Err(Error::Msg("Vulkan support not compiled".to_string()));
+                    }
                 };
 
                 let op = BackpropOp::none();
@@ -302,7 +404,7 @@ fn convert(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
         st::Dtype::F16 => convert_::<half::f16>(view, device),
         st::Dtype::F32 => convert_::<f32>(view, device),
         st::Dtype::F64 => convert_::<f64>(view, device),
-        st::Dtype::F8_E4M3 => convert_::<float8::F8E4M3>(view, device),
+        st::Dtype::F8_E4M3 => convert_::<microfloat::f8e4m3>(view, device),
         st::Dtype::F6_E2M3 | st::Dtype::F6_E3M2 | st::Dtype::F4 | st::Dtype::F8_E8M0 => {
             // For dummy types, we need to handle loading by creating a dummy tensor
             // Since these types don't have actual data representation, we'll create
@@ -332,10 +434,30 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
     let storage = match device {
         Device::Cpu => {
             let cpu_storage = match dtype {
-                DType::F6E2M3 => crate::cpu_backend::CpuStorage::F6E2M3(data.to_vec()),
-                DType::F6E3M2 => crate::cpu_backend::CpuStorage::F6E3M2(data.to_vec()),
-                DType::F4 => crate::cpu_backend::CpuStorage::F4(data.to_vec()),
-                DType::F8E8M0 => crate::cpu_backend::CpuStorage::F8E8M0(data.to_vec()),
+                DType::F6E2M3 => crate::cpu_backend::CpuStorage::F6E2M3(
+                    data.iter()
+                        .copied()
+                        .map(microfloat::f6e2m3fn::from_bits)
+                        .collect(),
+                ),
+                DType::F6E3M2 => crate::cpu_backend::CpuStorage::F6E3M2(
+                    data.iter()
+                        .copied()
+                        .map(microfloat::f6e3m2fn::from_bits)
+                        .collect(),
+                ),
+                DType::F4 => crate::cpu_backend::CpuStorage::F4(
+                    data.iter()
+                        .copied()
+                        .map(microfloat::f4e2m1fn::from_bits)
+                        .collect(),
+                ),
+                DType::F8E8M0 => crate::cpu_backend::CpuStorage::F8E8M0(
+                    data.iter()
+                        .copied()
+                        .map(microfloat::f8e8m0fnu::from_bits)
+                        .collect(),
+                ),
                 _ => unreachable!(),
             };
             Storage::Cpu(cpu_storage)
@@ -378,6 +500,15 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
         Device::Metal(_) => {
             return Err(Error::Msg("Metal support not compiled".to_string()));
         }
+        #[cfg(feature = "vulkan")]
+        Device::Vulkan(device) => {
+            let storage = crate::vulkan_backend::VulkanStorage::new(device, shape.len(), dtype)?;
+            Storage::Vulkan(storage)
+        }
+        #[cfg(not(feature = "vulkan"))]
+        Device::Vulkan(_) => {
+            return Err(Error::Msg("Vulkan support not compiled".to_string()));
+        }
     };
 
     // Create tensor with correct dtype
@@ -398,7 +529,7 @@ fn convert_back(tensor: &Tensor) -> Result<Vec<u8>> {
         DType::BF16 => Ok(convert_back_::<half::bf16>(tensor.to_vec1()?)),
         DType::F32 => Ok(convert_back_::<f32>(tensor.to_vec1()?)),
         DType::F64 => Ok(convert_back_::<f64>(tensor.to_vec1()?)),
-        DType::F8E4M3 => Ok(convert_back_::<float8::F8E4M3>(tensor.to_vec1()?)),
+        DType::F8E4M3 => Ok(convert_back_::<microfloat::f8e4m3>(tensor.to_vec1()?)),
         DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
             Err(Error::Msg("Internal error: dtype mismatch in storage".to_string()).bt())
         }
@@ -496,6 +627,64 @@ impl MmapedSafetensors {
 
     pub fn load(&self, name: &str, dev: &Device) -> Result<Tensor> {
         self.get(name)?.load(dev)
+    }
+
+    /// Load a tensor as `dtype`, converting on the CPU first when the file
+    /// dtype differs from `dtype` and the target is a Vulkan device.
+    ///
+    /// On the Vulkan backend a device-side `to_dtype` is recorded in the
+    /// deferred batch, and the source-dtype buffer stays alive until the
+    /// next synchronize. Loading a bf16 checkpoint as f16 that way would
+    /// hold roughly twice the weights in VRAM at the same time, which
+    /// overflows a 32 GB GPU with an 8B model and loses the GPU context.
+    /// Converting on the CPU first costs a few seconds and keeps the peak
+    /// VRAM at one copy of the weights.
+    pub fn load_dtype(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        let view = self.get(name)?;
+        if !matches!(dev, Device::Vulkan(_)) || view.dtype() == dtype.into() {
+            return convert(&view, dev)?.to_dtype(dtype);
+        }
+        let shape = view.shape().to_vec();
+        let data = view.data();
+        match (view.dtype(), dtype) {
+            (st::Dtype::BF16, DType::F16) => Tensor::from_raw_buffer(
+                &convert_stream_u16(data, bf16_to_f16_table()),
+                DType::F16,
+                &shape,
+                dev,
+            ),
+            (st::Dtype::F16, DType::BF16) => Tensor::from_raw_buffer(
+                &convert_stream_u16(data, f16_to_bf16_table()),
+                DType::BF16,
+                &shape,
+                dev,
+            ),
+            (st::Dtype::BF16, DType::F32) => Tensor::from_raw_buffer(
+                &convert_stream_u16_f32(data, |b| bf16::from_bits(b).to_f32()),
+                DType::F32,
+                &shape,
+                dev,
+            ),
+            (st::Dtype::F16, DType::F32) => Tensor::from_raw_buffer(
+                &convert_stream_u16_f32(data, |b| f16::from_bits(b).to_f32()),
+                DType::F32,
+                &shape,
+                dev,
+            ),
+            (st::Dtype::F32, DType::F16) => Tensor::from_raw_buffer(
+                &convert_stream_f32(data, |x| f16::from_f32(x).to_bits()),
+                DType::F16,
+                &shape,
+                dev,
+            ),
+            (st::Dtype::F32, DType::BF16) => Tensor::from_raw_buffer(
+                &convert_stream_f32(data, |x| bf16::from_f32(x).to_bits()),
+                DType::BF16,
+                &shape,
+                dev,
+            ),
+            _ => convert(&view, dev)?.to_dtype(dtype),
+        }
     }
 
     pub fn tensors(&self) -> Vec<(String, st::TensorView<'_>)> {

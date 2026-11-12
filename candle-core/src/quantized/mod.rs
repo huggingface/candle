@@ -8,10 +8,17 @@ use std::borrow::Cow;
 pub mod avx;
 mod dummy_cuda;
 mod dummy_metal;
+mod dummy_vulkan;
 pub mod ggml_file;
 pub mod gguf_file;
 pub mod imatrix_file;
 pub mod k_quants;
+#[cfg(feature = "vulkan")]
+pub mod vulkan;
+#[cfg(not(feature = "vulkan"))]
+mod vulkan {
+    pub use super::dummy_vulkan::*;
+}
 #[cfg(feature = "metal")]
 pub mod metal;
 pub mod repack;
@@ -80,6 +87,10 @@ impl Device {
                 let storage = metal::QMetalStorage::zeros(metal, elem_count, dtype)?;
                 Ok(QStorage::Metal(storage))
             }
+            Device::Vulkan(v) => {
+                let storage = vulkan::QVulkanStorage::zeros(v, elem_count, dtype)?;
+                Ok(QStorage::Vulkan(Box::new(storage)))
+            }
             Device::Cuda(cuda) => {
                 let storage = cuda::QCudaStorage::zeros(cuda, elem_count, dtype)?;
                 Ok(QStorage::Cuda(storage))
@@ -91,6 +102,13 @@ impl Device {
 pub enum QStorage {
     Cpu(Box<dyn QuantizedType>),
     Metal(metal::QMetalStorage),
+    // Boxed: `QVulkanStorage` is by far the largest variant of this enum
+    // (it embeds a `VulkanStorage` and a `VulkanDevice`). Storing it by
+    // value would grow `QStorage` — and every `Storage` / quantized tensor
+    // that embeds it — by the full size of the struct, and triggers
+    // `clippy::large_enum_variant`. The box keeps the enum pointer-sized
+    // at the cost of one allocation per quantized tensor.
+    Vulkan(Box<vulkan::QVulkanStorage>),
     Cuda(cuda::QCudaStorage),
 }
 
@@ -116,6 +134,23 @@ impl QStorage {
                 GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
             },
+            Device::Vulkan(v) => match dtype {
+                GgmlDType::F32 => vulkan::load_quantized(v, as_t_slice::<f32>(data)),
+                GgmlDType::F16 => vulkan::load_quantized(v, as_t_slice::<f16>(data)),
+                GgmlDType::BF16 => vulkan::load_quantized(v, as_t_slice::<bf16>(data)),
+                GgmlDType::Q4_0 => vulkan::load_quantized(v, as_t_slice::<BlockQ4_0>(data)),
+                GgmlDType::Q4_1 => vulkan::load_quantized(v, as_t_slice::<BlockQ4_1>(data)),
+                GgmlDType::Q5_0 => vulkan::load_quantized(v, as_t_slice::<BlockQ5_0>(data)),
+                GgmlDType::Q5_1 => vulkan::load_quantized(v, as_t_slice::<BlockQ5_1>(data)),
+                GgmlDType::Q8_0 => vulkan::load_quantized(v, as_t_slice::<BlockQ8_0>(data)),
+                GgmlDType::Q8_1 => vulkan::load_quantized(v, as_t_slice::<BlockQ8_1>(data)),
+                GgmlDType::Q2K => vulkan::load_quantized(v, as_t_slice::<BlockQ2K>(data)),
+                GgmlDType::Q3K => vulkan::load_quantized(v, as_t_slice::<BlockQ3K>(data)),
+                GgmlDType::Q4K => vulkan::load_quantized(v, as_t_slice::<BlockQ4K>(data)),
+                GgmlDType::Q5K => vulkan::load_quantized(v, as_t_slice::<BlockQ5K>(data)),
+                GgmlDType::Q6K => vulkan::load_quantized(v, as_t_slice::<BlockQ6K>(data)),
+                GgmlDType::Q8K => vulkan::load_quantized(v, as_t_slice::<BlockQ8K>(data)),
+            },
             Device::Cuda(d) => match dtype {
                 GgmlDType::F32 => cuda::load_quantized(d, as_t_slice::<f32>(data)),
                 GgmlDType::F16 => cuda::load_quantized(d, as_t_slice::<f16>(data)),
@@ -140,6 +175,7 @@ impl QStorage {
         match self {
             QStorage::Cpu(storage) => storage.block_size(),
             QStorage::Metal(storage) => storage.dtype().block_size(),
+            QStorage::Vulkan(storage) => storage.dtype().block_size(),
             QStorage::Cuda(storage) => storage.dtype().block_size(),
         }
     }
@@ -148,6 +184,7 @@ impl QStorage {
         match self {
             QStorage::Cpu(storage) => storage.dtype(),
             QStorage::Metal(storage) => storage.dtype(),
+            QStorage::Vulkan(storage) => storage.dtype(),
             QStorage::Cuda(storage) => storage.dtype(),
         }
     }
@@ -156,6 +193,7 @@ impl QStorage {
         match self {
             QStorage::Cpu(_storage) => Device::Cpu,
             QStorage::Metal(storage) => Device::Metal(storage.device().clone()),
+            QStorage::Vulkan(storage) => Device::Vulkan(storage.device().clone()),
             QStorage::Cuda(storage) => Device::Cuda(storage.device().clone()),
         }
     }
@@ -164,6 +202,7 @@ impl QStorage {
         match self {
             QStorage::Cpu(storage) => storage.storage_size_in_bytes(),
             QStorage::Metal(storage) => storage.storage_size_in_bytes(),
+            QStorage::Vulkan(storage) => storage.storage_size_in_bytes(),
             QStorage::Cuda(storage) => storage.storage_size_in_bytes(),
         }
     }
@@ -175,6 +214,7 @@ impl QStorage {
             }
             (QStorage::Metal(storage), Storage::Metal(src)) => storage.quantize(src)?,
             (QStorage::Cuda(storage), Storage::Cuda(src)) => storage.quantize(src)?,
+            (QStorage::Vulkan(storage), Storage::Vulkan(src)) => storage.quantize(src)?,
             _ => crate::bail!("Invalid quantize storage locations do not match"),
         }
         Ok(())
@@ -196,6 +236,9 @@ impl QStorage {
             (QStorage::Cuda(storage), Storage::Cuda(src)) => {
                 storage.quantize_imatrix(src, imatrix_weights, n_per_row)?
             }
+            (QStorage::Vulkan(storage), Storage::Vulkan(src)) => {
+                storage.quantize_imatrix(src, imatrix_weights, n_per_row)?
+            }
             _ => crate::bail!("Invalid quantize storage locations do not match"),
         }
         Ok(())
@@ -208,6 +251,7 @@ impl QStorage {
             }
             (QStorage::Metal(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
             (QStorage::Cuda(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
+            (QStorage::Vulkan(storage), Storage::Cpu(src)) => storage.quantize_onto(src)?,
             _ => crate::bail!("Invalid quantize source storage locations: not on cpu"),
         }
         Ok(())
@@ -229,6 +273,9 @@ impl QStorage {
             (QStorage::Cuda(storage), Storage::Cpu(src)) => {
                 storage.quantize_imatrix_onto(src, imatrix_weights, n_per_row)?
             }
+            (QStorage::Vulkan(storage), Storage::Cpu(src)) => {
+                storage.quantize_imatrix_onto(src, imatrix_weights, n_per_row)?
+            }
             _ => crate::bail!("Invalid quantize storage locations do not match"),
         }
         Ok(())
@@ -238,6 +285,7 @@ impl QStorage {
         match self {
             QStorage::Cpu(storage) => Ok(Storage::Cpu(storage.dequantize(elem_count)?)),
             QStorage::Metal(storage) => Ok(Storage::Metal(storage.dequantize(elem_count)?)),
+            QStorage::Vulkan(storage) => Ok(Storage::Vulkan(storage.dequantize(elem_count)?)),
             QStorage::Cuda(storage) => Ok(Storage::Cuda(storage.dequantize(elem_count)?)),
         }
     }
@@ -252,6 +300,7 @@ impl QStorage {
             }
             QStorage::Cuda(storage) => Ok(Cow::from(storage.data()?)),
             QStorage::Metal(storage) => Ok(Cow::from(storage.data()?)),
+            QStorage::Vulkan(storage) => Ok(Cow::from(storage.data()?)),
         }
     }
 
@@ -261,6 +310,7 @@ impl QStorage {
             QStorage::Metal(_) | QStorage::Cpu(_) => {
                 crate::bail!("not implemented");
             }
+            QStorage::Vulkan(storage) => storage.device_ptr(),
         }
     }
 
@@ -277,6 +327,7 @@ impl QStorage {
             QStorage::Metal(_) | QStorage::Cpu(_) => {
                 crate::bail!("not implemented");
             }
+            QStorage::Vulkan(_) => crate::bail!("not implemented"),
         }
     }
 }
@@ -533,6 +584,76 @@ fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
     Ok(())
 }
 
+/// Shape and routing parameters for the CPU MoE dequant-on-the-fly GEMM.
+#[derive(Clone, Copy)]
+struct CpuMoeShape {
+    experts: usize,
+    out_dim: usize,
+    in_dim: usize,
+    slots: usize,
+    topk: usize,
+}
+
+/// Run the per-expert dequant-on-the-fly quantized GEMM for the CPU MoE
+/// projection. `x_rows` is the contiguous `[tokens, slots, in_dim]` f32
+/// activation; `by_expert[e]` holds the `(token, topk_index)` routes that
+/// select expert `e`; `data_ptr` points at the `[experts, n, k]` quantized
+/// weight stored as `T` blocks; the per-route outputs are written to `out`,
+/// laid out `[tokens, topk, out_dim]`.
+fn cpu_moe_matmul<T: k_quants::GgmlType>(
+    shape: &CpuMoeShape,
+    x_rows: &[f32],
+    by_expert: &[Vec<(usize, usize)>],
+    data_ptr: *const u8,
+    out: &mut [f32],
+) -> Result<()> {
+    let CpuMoeShape {
+        experts,
+        out_dim,
+        in_dim,
+        slots,
+        topk,
+    } = *shape;
+    // The caller (`cpu_indexed_moe_forward`) guarantees `in_dim` is a multiple
+    // of the block size before dispatching here; integer division below would
+    // silently truncate if that invariant is ever violated.
+    debug_assert!(
+        in_dim % T::BLCK_SIZE == 0,
+        "MoE in-dim must be a block-size multiple"
+    );
+    let k_in_blocks = in_dim / T::BLCK_SIZE;
+    let weight_blocks = out_dim * k_in_blocks;
+    let block_bytes = std::mem::size_of::<T>();
+    for (e, routes) in by_expert.iter().enumerate().take(experts) {
+        if routes.is_empty() {
+            continue;
+        }
+        let m = routes.len();
+        // Gather this expert's activation rows (each route uses one row of x).
+        let mut lhs = vec![0f32; m * in_dim];
+        for (i, (t, j)) in routes.iter().enumerate() {
+            let slot = if slots == 1 { 0 } else { *j };
+            let src = (t * slots + slot) * in_dim;
+            lhs[i * in_dim..(i + 1) * in_dim].copy_from_slice(&x_rows[src..src + in_dim]);
+        }
+        // SAFETY: `data_ptr` is the base of the CPU quantized storage (a
+        // `Vec<T>`), aligned to `T`. Each expert offset is a multiple of
+        // `size_of::<T>()` (hence of `align_of::<T>()`), and the buffer holds
+        // exactly `experts * weight_blocks` blocks, so every per-expert slice
+        // is within bounds and properly aligned.
+        let off = e * weight_blocks * block_bytes;
+        let rhs: &[T] =
+            unsafe { std::slice::from_raw_parts(data_ptr.add(off) as *const T, weight_blocks) };
+        let mut dst = vec![0f32; m * out_dim];
+        k_quants::matmul::<T>((m, in_dim, out_dim), &lhs, rhs, &mut dst)?;
+        for (i, (t, j)) in routes.iter().enumerate() {
+            let pos = (t * topk + j) * out_dim;
+            out[pos..pos + out_dim].copy_from_slice(&dst[i * out_dim..(i + 1) * out_dim]);
+        }
+    }
+    Ok(())
+}
+
 impl QTensor {
     pub fn new<S: Into<Shape>>(storage: QStorage, shape: S) -> Result<Self> {
         let shape = shape.into();
@@ -746,6 +867,12 @@ impl QTensor {
                 }
                 _ => unreachable!("ids were moved to the QTensor device"),
             },
+            QStorage::Vulkan(storage) => match &*ids.storage() {
+                Storage::Vulkan(ids_storage) => {
+                    Storage::Vulkan(storage.embedding(rows, hidden, ids_storage, ids.layout())?)
+                }
+                _ => unreachable!("ids were moved to the QTensor device"),
+            },
         };
         let none = crate::op::BackpropOp::none();
         Ok(crate::tensor::from_storage(storage, out_shape, none, false))
@@ -804,10 +931,266 @@ impl QTensor {
                 }
                 _ => crate::bail!("Metal indexed MoE requires Metal input and expert ids"),
             },
+            QStorage::Cpu(_) => self.cpu_indexed_moe_forward(x, ids),
+            QStorage::Vulkan(_) => self.vulkan_moe_forward(x, ids),
             _ => {
-                panic!("indexed_moe_forward is not implemented in this platform!");
+                crate::bail!("indexed_moe_forward is not implemented on this backend");
             }
         }
+    }
+
+    /// Generic routed quantized MoE projection for the CPU and Vulkan
+    /// backends: dequantize the expert weights, gather the per-route expert,
+    /// and reduce the per-route products. `x` is `[tokens, slots, k]` (f32),
+    /// `ids` is `[tokens, topk]` (u32), the weights are `[experts, n, k]`,
+    /// and the result is `[tokens, topk, n]` with
+    /// `out[t, j, n] = sum_k x[t, slot(t, j), k] * dequant(w[ids[t, j], n, k])`.
+    fn generic_indexed_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+        let (experts, out_dim, in_dim) = self.shape().dims3()?;
+        let (tokens, slots, x_k) = x.dims3()?;
+        let (id_tokens, topk) = ids.dims2()?;
+        if x_k != in_dim {
+            crate::bail!("indexed_moe_forward: input width {x_k} != weight in-dim {in_dim}");
+        }
+        if tokens != id_tokens {
+            crate::bail!("indexed_moe_forward: token mismatch ({tokens} vs {id_tokens})");
+        }
+        if slots != 1 && slots != topk {
+            crate::bail!("indexed_moe_forward: slots {slots} must be 1 or match topk {topk}");
+        }
+        if !x.is_contiguous() || !ids.is_contiguous() {
+            crate::bail!("indexed_moe_forward: input and ids must be contiguous");
+        }
+        let x = if x.dtype() == DType::F32 {
+            x.to_owned()
+        } else {
+            x.to_dtype(DType::F32)?
+        };
+        let device = x.device();
+        // Dequantize the expert weights `[experts, out_dim, in_dim]` to f32.
+        let w = self.dequantize(device)?;
+        // Gather the per-route expert along the expert dim (flattened route ids).
+        let n = out_dim * in_dim;
+        let ids_flat = ids.flatten_all()?;
+        let w_g = w.reshape((experts, n))?.index_select(&ids_flat, 0)?;
+        let w_g = w_g.reshape((tokens, topk, out_dim, in_dim))?;
+        // Per-route activations: insert a size-1 dim before in_dim so the
+        // activation broadcasts across the expert (topk) and output (out_dim)
+        // dims, then broadcast explicitly for an elementwise multiply.
+        let a = x.unsqueeze(2)?; // [tokens, slots, in_dim] -> [tokens, slots, 1, in_dim]
+        let a = a.broadcast_as((tokens, topk, out_dim, in_dim))?;
+        (a * w_g)?.sum(D::Minus1)
+    }
+
+    /// CPU routed quantized MoE projection: dequant-on-the-fly, with no f32
+    /// materialization of the expert weights. Unlike the generic path (which
+    /// dequantizes all `experts` to f32 on every call), group the routes by
+    /// the expert each one selects and run the SIMD quantized GEMM directly
+    /// on each used expert's quantized weight, so only the experts actually
+    /// selected are touched. `x` is `[tokens, slots, k]` (f32), `ids` is
+    /// `[tokens, topk]` (u32), the weights are `[experts, n, k]`, and the
+    /// result is `[tokens, topk, n]` with
+    /// `out[t, j, n] = sum_k x[t, slot(t, j), k] * dequant(w[ids[t, j], n, k])`.
+    fn cpu_indexed_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+        let (experts, out_dim, in_dim) = self.shape().dims3()?;
+        let (tokens, slots, x_k) = x.dims3()?;
+        let (id_tokens, topk) = ids.dims2()?;
+        if x_k != in_dim {
+            crate::bail!("indexed_moe_forward: input width {x_k} != weight in-dim {in_dim}");
+        }
+        if tokens != id_tokens {
+            crate::bail!("indexed_moe_forward: token mismatch ({tokens} vs {id_tokens})");
+        }
+        if slots != 1 && slots != topk {
+            crate::bail!("indexed_moe_forward: slots {slots} must be 1 or match topk {topk}");
+        }
+        if !x.is_contiguous() || !ids.is_contiguous() {
+            crate::bail!("indexed_moe_forward: input and ids must be contiguous");
+        }
+        let s = match &self.storage {
+            QStorage::Cpu(s) => s,
+            _ => return self.generic_indexed_moe_forward(x, ids),
+        };
+        let dtype = self.dtype();
+        if !in_dim.is_multiple_of(dtype.block_size()) {
+            return self.generic_indexed_moe_forward(x, ids);
+        }
+        let x = if x.dtype() == DType::F32 {
+            x.to_owned()
+        } else {
+            x.to_dtype(DType::F32)?
+        };
+        let x_rows: Vec<f32> = x.flatten_all()?.to_vec1()?;
+        let ids_t = if ids.dtype() == DType::U32 {
+            ids.to_owned()
+        } else {
+            ids.to_dtype(DType::U32)?
+        };
+        let ids_v: Vec<u32> = ids_t.flatten_all()?.to_vec1()?;
+        // Group the routes (token, topk slot) by the expert each one selects.
+        let num_routes = tokens * topk;
+        let mut by_expert: Vec<Vec<(usize, usize)>> = vec![Vec::new(); experts];
+        for t in 0..tokens {
+            for j in 0..topk {
+                let e = ids_v[t * topk + j] as usize;
+                // Invalid expert ids produce zero rows (matching the Metal
+                // path); the corresponding output lane stays zeroed in that
+                // case.
+                if e >= experts {
+                    continue;
+                }
+                by_expert[e].push((t, j));
+            }
+        }
+        let mut out = vec![0f32; num_routes * out_dim];
+        let data_ptr = s.as_ptr();
+        let cpu_shape = CpuMoeShape {
+            experts,
+            out_dim,
+            in_dim,
+            slots,
+            topk,
+        };
+        match dtype {
+            GgmlDType::Q4_0 => {
+                cpu_moe_matmul::<k_quants::BlockQ4_0>(
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q4_1 => {
+                cpu_moe_matmul::<k_quants::BlockQ4_1>(
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q5_0 => {
+                cpu_moe_matmul::<k_quants::BlockQ5_0>(
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q5_1 => {
+                cpu_moe_matmul::<k_quants::BlockQ5_1>(
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q8_0 => {
+                cpu_moe_matmul::<k_quants::BlockQ8_0>(
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q8_1 => {
+                cpu_moe_matmul::<k_quants::BlockQ8_1>(
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q2K => {
+                cpu_moe_matmul::<k_quants::BlockQ2K>(
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q3K => {
+                cpu_moe_matmul::<k_quants::BlockQ3K>(
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q4K => {
+                cpu_moe_matmul::<k_quants::BlockQ4K>(
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q5K => {
+                cpu_moe_matmul::<k_quants::BlockQ5K>(
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q6K => {
+                cpu_moe_matmul::<k_quants::BlockQ6K>(
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            GgmlDType::Q8K => {
+                cpu_moe_matmul::<k_quants::BlockQ8K>(
+                    &cpu_shape, &x_rows, &by_expert, data_ptr, &mut out,
+                )?;
+            }
+            _ => return self.generic_indexed_moe_forward(&x, ids),
+        }
+        let none = crate::op::BackpropOp::none();
+        Ok(crate::tensor::from_storage(
+            Storage::Cpu(CpuStorage::F32(out)),
+            (tokens, topk, out_dim),
+            none,
+            false,
+        ))
+    }
+
+    /// Vulkan routed quantized MoE projection: for the quantized dtypes
+    /// that have a fused on-the-fly dequant+GEMM kernel (Q2_K, Q4_K,
+    /// Q6_K, Q8_0), run the fused kernel (no f32 materialization of the
+    /// expert weights); otherwise fall back to the generic
+    /// dequant+gather+matmul path. `x` is `[tokens, slots, k]`, `ids` is
+    /// `[tokens, topk]` (u32), the weights are `[experts, n, k]`, and the
+    /// result is `[tokens, topk, n]`.
+    fn vulkan_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+        let (experts, out_dim, in_dim) = self.shape().dims3()?;
+        let (tokens, slots, x_k) = x.dims3()?;
+        let (id_tokens, topk) = ids.dims2()?;
+        if x_k != in_dim {
+            crate::bail!("indexed_moe_forward: input width {x_k} != weight in-dim {in_dim}");
+        }
+        if tokens != id_tokens {
+            crate::bail!("indexed_moe_forward: token mismatch ({tokens} vs {id_tokens})");
+        }
+        if slots != 1 && slots != topk {
+            crate::bail!("indexed_moe_forward: slots {slots} must be 1 or match topk {topk}");
+        }
+        if !x.is_contiguous() || !ids.is_contiguous() {
+            crate::bail!("indexed_moe_forward: input and ids must be contiguous");
+        }
+        let s = match &self.storage {
+            QStorage::Vulkan(s) => s,
+            _ => return self.generic_indexed_moe_forward(x, ids),
+        };
+        if !in_dim.is_multiple_of(s.dtype().block_size()) {
+            return self.generic_indexed_moe_forward(x, ids);
+        }
+        let num_routes = tokens * topk;
+        // The fused kernel reads the lhs as `(num_routes, k)`: broadcast the
+        // slots==1 case (one input shared by all routes of a token) to a
+        // per-route row.
+        let lhs_t = if slots == 1 {
+            x.broadcast_as((tokens, topk, in_dim))?.contiguous()?
+        } else {
+            x.contiguous()?
+        };
+        let lhs = if lhs_t.dtype() == DType::F32 {
+            lhs_t.to_owned()
+        } else {
+            lhs_t.to_dtype(DType::F32)?
+        };
+        let ids_t = if ids.dtype() == DType::U32 {
+            ids.to_owned()
+        } else {
+            ids.to_dtype(DType::U32)?
+        };
+        let out_storage = match (&*lhs.storage(), &*ids_t.storage()) {
+            (Storage::Vulkan(lhs_storage), Storage::Vulkan(ids_storage)) => s.fused_moe_gemm(
+                lhs_storage,
+                ids_storage,
+                experts,
+                out_dim,
+                in_dim,
+                num_routes,
+            )?,
+            _ => {
+                crate::bail!("vulkan indexed_moe_forward: lhs and ids must be on the Vulkan device")
+            }
+        };
+        Ok(crate::tensor::from_storage(
+            Storage::Vulkan(out_storage),
+            (tokens, topk, out_dim),
+            crate::op::BackpropOp::none(),
+            false,
+        ))
     }
 
     pub fn device_ptr(&self) -> Result<*const u8> {
@@ -816,6 +1199,7 @@ impl QTensor {
             QStorage::Metal(_) | QStorage::Cpu(_) => {
                 crate::bail!("not implemented");
             }
+            QStorage::Vulkan(storage) => storage.device_ptr(),
         }
     }
 
@@ -924,152 +1308,6 @@ impl QMatMul {
 }
 
 impl QTensor {
-    /// Fused m==1 matmul over same-dtype tensors sharing one lhs (e.g. qkv or gate+up in
-    /// decode): one lhs quantization and one parallel region. None when unsupported.
-    pub fn gemv_fused_shared_lhs(ts: &[&Self], lhs: &Tensor) -> Result<Option<Vec<Tensor>>> {
-        #[cfg(target_arch = "aarch64")]
-        {
-            if ts.is_empty() || !lhs.device().is_cpu() || lhs.dtype() != crate::DType::F32 {
-                return Ok(None);
-            }
-            if !lhs.is_contiguous() {
-                return Ok(None);
-            }
-            let dims = lhs.dims();
-            let Some((&k, batch)) = dims.split_last() else {
-                return Ok(None);
-            };
-            if batch.iter().product::<usize>() != 1 {
-                return Ok(None);
-            }
-            let mut ns = Vec::with_capacity(ts.len());
-            let mut parts: Vec<(&dyn QuantizedType, &repack::PackedCache)> =
-                Vec::with_capacity(ts.len());
-            for t in ts {
-                let (n, tk) = t.shape.dims2()?;
-                if tk != k {
-                    return Ok(None);
-                }
-                let QStorage::Cpu(s) = &t.storage else {
-                    return Ok(None);
-                };
-                ns.push(n);
-                parts.push((s.as_ref(), &t.repacked_qs));
-            }
-            let storage = lhs.storage();
-            let crate::Storage::Cpu(cpu) = &*storage else {
-                return Ok(None);
-            };
-            let slice = cpu.as_slice::<f32>()?;
-            let offset = lhs.layout().start_offset();
-            let slice = &slice[offset..offset + k];
-            let mut dsts: Vec<Vec<f32>> = ns.iter().map(|&n| vec![0f32; n]).collect();
-            if !repack::try_gemv_fused(k, slice, &parts, &mut dsts)? {
-                return Ok(None);
-            }
-            drop(storage);
-            let outs = dsts
-                .into_iter()
-                .zip(&ns)
-                .map(|(d, &n)| {
-                    let mut shape = dims.to_vec();
-                    *shape.last_mut().unwrap() = n;
-                    Tensor::from_vec(d, shape, &crate::Device::Cpu)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(Some(outs))
-        }
-        #[cfg(target_arch = "x86_64")]
-        {
-            // the fused kernel is 512-bit only; downlevel tiers fall through to
-            // per-matmul calls which dispatch to the 256-bit kernels
-            if repack_x86::level() != Some(repack_x86::X86Level::Avx512Vnni) {
-                return Ok(None);
-            }
-            if ts.is_empty() || !lhs.device().is_cpu() || lhs.dtype() != crate::DType::F32 {
-                return Ok(None);
-            }
-            if !lhs.is_contiguous() {
-                return Ok(None);
-            }
-            let dims = lhs.dims();
-            let Some((&k, batch)) = dims.split_last() else {
-                return Ok(None);
-            };
-            let m: usize = batch.iter().product();
-            if m == 0 {
-                return Ok(None);
-            }
-            let dtype = ts[0].dtype();
-            let mut shapes = Vec::with_capacity(ts.len());
-            for t in ts {
-                let Ok((n, tk)) = t.shape.dims2() else {
-                    return Ok(None);
-                };
-                if tk != k
-                    || t.dtype() != dtype
-                    || !matches!(&t.storage, QStorage::Cpu(_))
-                    || !repack_x86::select(dtype, m, n, k)
-                {
-                    return Ok(None);
-                }
-                shapes.push(n);
-            }
-            let guard = lhs.storage();
-            let crate::Storage::Cpu(cpu) = &*guard else {
-                return Ok(None);
-            };
-            let slice = cpu.as_slice::<f32>()?;
-            let offset = lhs.layout().start_offset();
-            let lhs_data = &slice[offset..offset + m * k];
-            let lhs_q = repack_x86::quantize_lhs(lhs_data, m, k);
-            let packs: Vec<&repack_x86::PackedX86> = ts
-                .iter()
-                .enumerate()
-                .map(|(i, t)| {
-                    let n = shapes[i];
-                    t.repacked_qs
-                        .x86_get_or_init(|| repack_x86::pack(dtype, t.storage_ref(), n, k))
-                })
-                .collect();
-            let parts: Vec<(&repack_x86::PackedX86, usize)> = packs
-                .iter()
-                .zip(shapes.iter())
-                .map(|(p, &n)| (*p, n))
-                .collect();
-            let mut dsts: Vec<Vec<f32>> = shapes.iter().map(|&n| vec![0f32; m * n]).collect();
-            repack_x86::gemv_fused(&parts, &lhs_q, m, k, &mut dsts);
-            drop(guard);
-            let mut out = Vec::with_capacity(ts.len());
-            let mut out_dims = dims.to_vec();
-            for (dst, &n) in dsts.into_iter().zip(shapes.iter()) {
-                *out_dims.last_mut().unwrap() = n;
-                out.push(Tensor::from_vec(
-                    dst,
-                    out_dims.clone(),
-                    &crate::Device::Cpu,
-                )?);
-            }
-            Ok(Some(out))
-        }
-
-        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-        {
-            let _ = (ts, lhs);
-            Ok(None)
-        }
-    }
-}
-
-impl QTensor {
-    #[cfg(target_arch = "x86_64")]
-    pub(crate) fn storage_ref(&self) -> &dyn QuantizedType {
-        match &self.storage {
-            QStorage::Cpu(s) => s.as_ref(),
-            _ => unreachable!("cpu-only path"),
-        }
-    }
-
     /// Indexed (MoE) matmul over stacked expert weights [n_experts, n_out, k]: each
     /// (token, expert-id) pair gemvs against its expert's rows via the repacked cache.
     /// Returns None when the layout, dtype, or device is unsupported.
@@ -1220,7 +1458,9 @@ impl crate::CustomOp1 for QTensor {
         #[allow(clippy::infallible_destructuring_match)]
         let self_storage = match &self.storage {
             QStorage::Cpu(storage) => storage,
-            QStorage::Metal(_) | QStorage::Cuda(_) => crate::bail!("Invalid storage"),
+            QStorage::Metal(_) | QStorage::Cuda(_) | QStorage::Vulkan(_) => {
+                crate::bail!("Invalid storage")
+            }
         };
         match storage.dtype() {
             DType::F32 => {
@@ -1302,6 +1542,17 @@ impl crate::CustomOp1 for QTensor {
         let self_storage = match &self.storage {
             QStorage::Cuda(cuda) => cuda,
             _ => unreachable!("Cannot call cuda matmul on non cuda QTensor"),
+        };
+        self_storage.fwd(&self.shape, storage, layout)
+    }
+    fn vulkan_fwd(
+        &self,
+        storage: &crate::VulkanStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::VulkanStorage, Shape)> {
+        let self_storage = match &self.storage {
+            QStorage::Vulkan(vulkan) => vulkan,
+            _ => unreachable!("Cannot call vulkan matmul on non vulkan QTensor"),
         };
         self_storage.fwd(&self.shape, storage, layout)
     }

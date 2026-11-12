@@ -1,0 +1,99 @@
+on: [push, pull_request]
+
+name: CI
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: cargo check --workspace --all-targets --all-features
+
+  check_msrv:
+    name: Check ash and ash-window MSRV (1.69.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.69.0
+      - name: Downgrade incompatible dependencies
+        run: |
+          cargo update -p libloading --precise 0.8.8
+      - name: Check ash and ash-window
+        run: cargo check -p ash -p ash-window --all-features
+      - name: Check ash with no_std
+        run: cargo check -p ash --no-default-features
+
+  generated:
+    name: Generated
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Checkout submodule
+        # Manually update submodules with --checkout because they are configured with update=none and will be skipped otherwise
+        run: git submodule update --recursive --init --force --checkout
+      - name: Run generator
+        run: cargo run -p generator
+      - name: Diff autogen result
+        run: test -z "$(git status --porcelain)" || (echo "::error::Generated files are different, please regenerate with cargo run -p generator!"; git diff; false)
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Vulkan loader
+        run: sudo apt-get install libvulkan-dev
+      - uses: actions/checkout@v6
+      - name: Test all targets
+        run: cargo test --workspace --all-targets
+      - name: Test docs
+        run: cargo test --workspace --doc
+      - name: Test all targets
+        run: cargo test --workspace --all-targets -F provisional
+      - name: Test docs
+        run: cargo test --workspace --doc -F provisional
+
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+          - x86_64-unknown-linux-gnu
+          - x86_64-apple-darwin
+          - aarch64-apple-ios
+    steps:
+      - uses: actions/checkout@v6
+      - name: Add Rust target ${{ matrix.target }}
+        run: rustup target add ${{ matrix.target }}
+      - name: Clippy lint without features
+        # Only test the core ash and ash-window crate, where features reside.
+        # The examples crate would otherwise enable all default features again,
+        # making this test moot.
+        run: cargo clippy --target ${{ matrix.target }} -p ash -p ash-window --no-default-features -- -D warnings
+      - name: Clippy lint with all features
+        # Examples don't compile for iOS currently due to lacking run_return()
+        if: ${{ matrix.target != 'aarch64-apple-ios' }}
+        run: cargo clippy --target ${{ matrix.target }} --workspace --all-targets --all-features -- -D warnings
+      - name: Clippy lint with default features
+        # Examples don't compile for iOS currently due to lacking run_return()
+        if: ${{ matrix.target != 'aarch64-apple-ios' }}
+        run: cargo clippy --target ${{ matrix.target }} --workspace --all-targets -- -D warnings
+
+  docs:
+    name: Build-test docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Document all crates
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: cargo doc --all --all-features --no-deps --document-private-items
