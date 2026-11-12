@@ -1155,6 +1155,47 @@ fn test_unsqueeze() -> Result<()> {
     Ok(())
 }
 
+// "Unsqueeze" with several axes: the axes index the output tensor.
+#[test]
+fn test_unsqueeze_multiple_axes() -> Result<()> {
+    let x = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
+    let cases: [(&[i64], &[usize]); 7] = [
+        (&[1, 2], &[2, 1, 1, 3]),
+        (&[0, 1], &[1, 1, 2, 3]),
+        (&[2, 3], &[2, 3, 1, 1]),
+        (&[-1, -2], &[2, 3, 1, 1]),
+        (&[0, 3], &[1, 2, 3, 1]),
+        (&[3, 0], &[1, 2, 3, 1]),
+        (&[0, -1], &[1, 2, 3, 1]),
+    ];
+    for (axes, expected) in cases {
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Unsqueeze".to_string(),
+                input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        let y = Tensor::new(axes, &Device::Cpu)?;
+        let inputs =
+            HashMap::from_iter([(INPUT_X.to_string(), x.clone()), (INPUT_Y.to_string(), y)]);
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        assert_eq!(z.dims(), expected, "axes {axes:?}");
+        assert_eq!(
+            z.flatten_all()?.to_vec1::<f32>()?,
+            x.flatten_all()?.to_vec1::<f32>()?
+        );
+    }
+    Ok(())
+}
+
 // "Clip"
 // #[test]
 
