@@ -55,6 +55,21 @@ impl Cache {
         self.all_data = None;
     }
 
+    /// Keeps only the first `len` positions. The buffer is not changed: the
+    /// positions after `len` are no longer returned, and the next `append`
+    /// writes over them. This is the rollback of speculative decoding, where
+    /// the positions of rejected draft tokens are removed.
+    pub fn truncate(&mut self, len: usize) -> Result<()> {
+        if len > self.current_seq_len {
+            candle::bail!(
+                "cannot truncate the cache to {len}, it holds {}",
+                self.current_seq_len
+            )
+        }
+        self.current_seq_len = len;
+        Ok(())
+    }
+
     pub fn append(&mut self, src: &Tensor) -> Result<()> {
         let seq_len = src.dim(self.dim)?;
         // This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
@@ -147,6 +162,13 @@ impl KvCache {
     pub fn reset(&mut self) {
         self.k.reset();
         self.v.reset();
+    }
+
+    /// Keeps only the first `len` positions of the keys and values. See
+    /// [`Cache::truncate`].
+    pub fn truncate(&mut self, len: usize) -> Result<()> {
+        self.k.truncate(len)?;
+        self.v.truncate(len)
     }
 }
 
