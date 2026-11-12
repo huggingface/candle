@@ -81,7 +81,6 @@ static GPU_ID: LazyLock<usize> = LazyLock::new(|| {
 ///
 /// read and printed.
 #[test]
-
 fn test_vulkan_device_properties() {
     (*INIT);
 
@@ -145,7 +144,6 @@ fn test_vulkan_device_properties() {
 }
 
 #[test]
-
 fn test_vulkan_device_f8e4m3_support() {
     (*INIT);
 
@@ -188,7 +186,6 @@ fn test_vulkan_device_f8e4m3_support() {
 }
 
 #[test]
-
 fn test_vulkan_device_bf16_support() {
     (*INIT);
 
@@ -233,7 +230,6 @@ fn test_vulkan_device_bf16_support() {
 }
 
 #[test]
-
 fn test_vulkan_device_storage() {
     (*INIT);
 
@@ -267,7 +263,6 @@ fn test_vulkan_device_storage() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_f16() {
     (*INIT);
 
@@ -318,7 +313,6 @@ fn test_vulkan_device_fill_f16() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_u8() {
     (*INIT);
 
@@ -359,7 +353,6 @@ fn test_vulkan_device_fill_u8() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_i16() {
     (*INIT);
 
@@ -406,7 +399,6 @@ fn test_vulkan_device_fill_i16() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_bf16() {
     (*INIT);
 
@@ -457,7 +449,6 @@ fn test_vulkan_device_fill_bf16() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_bf16_emulated() {
     (*INIT);
 
@@ -507,7 +498,6 @@ fn test_vulkan_device_fill_bf16_emulated() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_bf16_native() {
     (*INIT);
 
@@ -558,7 +548,6 @@ fn test_vulkan_device_fill_bf16_native() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_u32() {
     (*INIT);
 
@@ -606,7 +595,6 @@ fn test_vulkan_device_fill_u32() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_i32() {
     (*INIT);
 
@@ -654,7 +642,6 @@ fn test_vulkan_device_fill_i32() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_f32() {
     (*INIT);
 
@@ -705,7 +692,6 @@ fn test_vulkan_device_fill_f32() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_i64() {
     (*INIT);
 
@@ -753,7 +739,6 @@ fn test_vulkan_device_fill_i64() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_f64() {
     (*INIT);
 
@@ -804,7 +789,6 @@ fn test_vulkan_device_fill_f64() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_f4() {
     (*INIT);
 
@@ -856,7 +840,6 @@ fn test_vulkan_device_fill_f4() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_f6e2m3() {
     (*INIT);
 
@@ -910,7 +893,6 @@ fn test_vulkan_device_fill_f6e2m3() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_f6e3m2() {
     (*INIT);
 
@@ -964,7 +946,6 @@ fn test_vulkan_device_fill_f6e3m2() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_f8e4m3() {
     (*INIT);
 
@@ -1018,7 +999,6 @@ fn test_vulkan_device_fill_f8e4m3() {
 }
 
 #[test]
-
 fn test_vulkan_device_fill_f8e8m0() {
     (*INIT);
 
@@ -1073,7 +1053,6 @@ fn test_vulkan_device_fill_f8e8m0() {
 
 /// `synchronize` must drain all deferred GPU work on the device.
 #[test]
-
 fn test_vulkan_device_synchronize() {
     (*INIT);
 
@@ -1101,7 +1080,6 @@ fn test_vulkan_device_synchronize() {
 
 /// `set_seed` must store the seed on the device.
 #[test]
-
 fn test_vulkan_device_set_seed() {
     (*INIT);
 
@@ -1124,7 +1102,6 @@ fn test_vulkan_device_set_seed() {
 
 /// `get_current_seed` must return the seed stored on the device.
 #[test]
-
 fn test_vulkan_device_get_current_seed() {
     (*INIT);
 
@@ -1142,7 +1119,6 @@ fn test_vulkan_device_get_current_seed() {
 
 /// `storage_from_slice` must upload host data to the device.
 #[test]
-
 fn test_vulkan_device_storage_from_slice() {
     (*INIT);
 
@@ -1172,7 +1148,6 @@ fn test_vulkan_device_storage_from_slice() {
 
 /// `storage_from_cpu_storage` must upload a CPU tensor to the device.
 #[test]
-
 fn test_vulkan_device_storage_from_cpu_storage() {
     (*INIT);
 
@@ -1204,7 +1179,6 @@ fn test_vulkan_device_storage_from_cpu_storage() {
 
 /// `storage_from_cpu_storage_owned` must consume the CPU storage.
 #[test]
-
 fn test_vulkan_device_storage_from_cpu_storage_owned() {
     (*INIT);
 
@@ -1236,7 +1210,6 @@ fn test_vulkan_device_storage_from_cpu_storage_owned() {
 
 /// `rand_uniform` must draw in [min, max] and be reproducible per seed.
 #[test]
-
 fn test_vulkan_device_rand_uniform() {
     (*INIT);
 
@@ -1291,7 +1264,6 @@ fn test_vulkan_device_rand_uniform() {
 
 /// `rand_normal` must be reproducible per seed with the right moment.
 #[test]
-
 fn test_vulkan_device_rand_normal() {
     (*INIT);
 
@@ -1351,7 +1323,6 @@ fn test_vulkan_device_rand_normal() {
 
 /// `const_set` fills a contiguous region with a constant value.
 #[test]
-
 fn test_vulkan_const_set() {
     (*INIT);
 
@@ -1389,7 +1360,6 @@ fn test_vulkan_const_set() {
 
 /// All 19 `UnaryOp`s, compared element-wise against the CPU backend.
 #[test]
-
 fn test_vulkan_unary_ops() {
     (*INIT);
 
@@ -1497,7 +1467,6 @@ fn test_vulkan_unary_ops() {
 
 /// Binary ops (all 6) including scalar and rank-broadcast against CPU.
 #[test]
-
 fn test_vulkan_binary_ops() {
     (*INIT);
 
@@ -1624,7 +1593,6 @@ fn sbcast_cpu(t: candle_core::Tensor, shape: &candle_core::Shape) -> candle_core
 
 /// All 6 CmpOps, same-shape and scalar rhs, compared against the CPU backend.
 #[test]
-
 fn test_vulkan_cmp_ops() {
     (*INIT);
 
@@ -1701,7 +1669,6 @@ fn test_vulkan_cmp_ops() {
 
 /// `where_cond` with a cmp predicate, incl. a broadcast on_false.
 #[test]
-
 fn test_vulkan_where_cond() {
     (*INIT);
 
@@ -1794,7 +1761,6 @@ fn test_vulkan_where_cond() {
 
 /// `affine` (y = x * mul + add) vs the CPU backend.
 #[test]
-
 fn test_vulkan_affine() {
     (*INIT);
 
@@ -1874,7 +1840,6 @@ fn test_vulkan_affine() {
 
 /// `powf` (x^e) vs the CPU backend.
 #[test]
-
 fn test_vulkan_powf() {
     (*INIT);
 
@@ -1919,7 +1884,6 @@ fn test_vulkan_powf() {
 
 /// `elu` (x >= 0 ? x : alpha * (exp(x) - 1)) vs the CPU backend.
 #[test]
-
 fn test_vulkan_elu() {
     (*INIT);
 
@@ -1964,7 +1928,6 @@ fn test_vulkan_elu() {
 
 /// `to_dtype` conversions (F32/F16/BF16) vs the CPU backend.
 #[test]
-
 fn test_vulkan_to_dtype() {
     (*INIT);
 
@@ -2092,7 +2055,6 @@ fn test_vulkan_to_dtype() {
 ///
 /// offset) and via `contiguous()` on a transposed view.
 #[test]
-
 fn test_vulkan_to_dtype_ints_f8() {
     (*INIT);
 
@@ -2412,7 +2374,6 @@ fn test_vulkan_to_dtype_ints_f8() {
 }
 
 #[test]
-
 fn test_vulkan_copy_strided_src() {
     (*INIT);
 
@@ -2480,7 +2441,6 @@ fn test_vulkan_copy_strided_src() {
 
 /// `copy2d` via `Tensor::cat` on a non-contiguous (transposed) source.
 #[test]
-
 fn test_vulkan_copy2d() {
     (*INIT);
 
@@ -2548,7 +2508,6 @@ fn test_vulkan_copy2d() {
 
 /// `reduce_op` over the last axis: sum, max, min, argmax, argmin.
 #[test]
-
 fn test_vulkan_reduce_op() {
     (*INIT);
 
@@ -2790,7 +2749,6 @@ fn test_vulkan_reduce_int() {
 /// fill value travels through a native-width push constant, not an f32 (which
 /// only keeps 24 significant bits and would silently round >= 2^24 values).
 #[test]
-
 fn test_vulkan_const_set_wide() {
     (*INIT);
 
@@ -2825,7 +2783,6 @@ fn test_vulkan_const_set_wide() {
 /// is the additive identity (zeros), while `min`/`max`/`argmin`/`argmax` over
 /// zero elements have no identity and error.
 #[test]
-
 fn test_vulkan_reduce_empty() {
     (*INIT);
 
@@ -2852,7 +2809,6 @@ fn test_vulkan_reduce_empty() {
 /// Reduce over a non-last axis (exercises the permute/materialize path),
 /// `sum_all`, and `mean`, each against the CPU reference.
 #[test]
-
 fn test_vulkan_reduce_coverage() {
     (*INIT);
 
@@ -2923,7 +2879,6 @@ fn test_vulkan_reduce_coverage() {
 /// converts to 0, and +/-inf/out-of-range values clamp to the destination range
 /// (a C-style cast would be UB on the out-of-range/NaN cases).
 #[test]
-
 fn test_vulkan_to_dtype_float_to_int_saturating() {
     (*INIT);
 
@@ -2980,7 +2935,6 @@ fn test_vulkan_to_dtype_float_to_int_saturating() {
 
 /// `matmul` (2D and 3D, standard and transposed rhs) vs the CPU backend.
 #[test]
-
 fn test_vulkan_matmul() {
     (*INIT);
 
@@ -3114,7 +3068,6 @@ fn test_vulkan_matmul() {
 
 /// `gather` along dim 0 (embedding lookup) vs the CPU backend.
 #[test]
-
 fn test_vulkan_gather() {
     (*INIT);
 
@@ -3170,7 +3123,6 @@ fn test_vulkan_gather() {
 
 /// `index_select` along dim 0 vs the CPU backend.
 #[test]
-
 fn test_vulkan_index_select() {
     (*INIT);
 
@@ -3216,7 +3168,6 @@ fn test_vulkan_index_select() {
 
 /// `avg_pool2d` vs the CPU backend.
 #[test]
-
 fn test_vulkan_avg_pool2d() {
     (*INIT);
 
@@ -3270,7 +3221,6 @@ fn test_vulkan_avg_pool2d() {
 
 /// `max_pool2d` vs the CPU backend.
 #[test]
-
 fn test_vulkan_max_pool2d() {
     (*INIT);
 
@@ -3322,7 +3272,6 @@ fn test_vulkan_max_pool2d() {
 
 /// `upsample_nearest1d` vs the CPU backend.
 #[test]
-
 fn test_vulkan_upsample_nearest1d() {
     (*INIT);
 
@@ -3371,7 +3320,6 @@ fn test_vulkan_upsample_nearest1d() {
 
 /// `upsample_nearest2d` vs the CPU backend.
 #[test]
-
 fn test_vulkan_upsample_nearest2d() {
     (*INIT);
 
@@ -3420,7 +3368,6 @@ fn test_vulkan_upsample_nearest2d() {
 
 /// `upsample_bilinear2d` (align_corners on/off, with/without scale) vs CPU.
 #[test]
-
 fn test_vulkan_upsample_bilinear2d() {
     (*INIT);
 
@@ -3487,7 +3434,6 @@ fn test_vulkan_upsample_bilinear2d() {
 
 /// `conv1d` vs the CPU backend.
 #[test]
-
 fn test_vulkan_conv1d() {
     (*INIT);
 
@@ -3566,7 +3512,6 @@ fn test_vulkan_conv1d() {
 
 /// `conv2d` vs the CPU backend.
 #[test]
-
 fn test_vulkan_conv2d() {
     (*INIT);
 
@@ -3647,7 +3592,6 @@ fn test_vulkan_conv2d() {
 
 /// `conv_transpose1d` vs the CPU backend.
 #[test]
-
 fn test_vulkan_conv_transpose1d() {
     (*INIT);
 
@@ -3731,7 +3675,6 @@ fn test_vulkan_conv_transpose1d() {
 
 /// `conv_transpose2d` vs the CPU backend.
 #[test]
-
 fn test_vulkan_conv_transpose2d() {
     (*INIT);
 
@@ -3819,7 +3762,6 @@ fn test_vulkan_conv_transpose2d() {
 
 /// `scatter` (scatter_set) vs the CPU backend.
 #[test]
-
 fn test_vulkan_scatter() {
     (*INIT);
 
@@ -3934,7 +3876,6 @@ fn test_vulkan_scatter() {
 
 /// `scatter_add` vs the CPU backend (host-side implementation on Vulkan).
 #[test]
-
 fn test_vulkan_scatter_add() {
     (*INIT);
 
@@ -4114,7 +4055,6 @@ fn test_vulkan_scatter_add_view() {
 
 /// `index_add` vs the CPU backend (host-side implementation on Vulkan).
 #[test]
-
 fn test_vulkan_index_add() {
     (*INIT);
 
@@ -4197,7 +4137,6 @@ fn test_vulkan_index_add() {
 ///
 /// must match for u32, u8, and i64 index tensors.
 #[test]
-
 fn test_vulkan_index_add_sentinel() {
     (*INIT);
 
@@ -4297,7 +4236,6 @@ fn test_vulkan_index_add_sentinel() {
 ///
 /// Verify the GPU neither crashes nor adds the out-of-bounds contribution.
 #[test]
-
 fn test_vulkan_index_add_oob() {
     (*INIT);
 
@@ -4413,7 +4351,6 @@ fn test_vulkan_index_add_oob() {
 ///
 /// indexes. Duplicates are included; the CPU backend is the reference.
 #[test]
-
 fn test_vulkan_index_add_dtypes() {
     (*INIT);
 
@@ -4586,7 +4523,6 @@ fn test_vulkan_index_add_dtypes() {
 
 /// Binary ops for BF16 (emulated) vs the CPU backend.
 #[test]
-
 fn test_vulkan_binary_ops_bf16() {
     (*INIT);
 
@@ -4695,7 +4631,6 @@ fn test_vulkan_binary_ops_bf16() {
 
 /// Binary ops for F8E4M3 (emulated) vs the CPU backend.
 #[test]
-
 fn test_vulkan_binary_ops_f8e4m3() {
     (*INIT);
 
@@ -4803,7 +4738,6 @@ fn test_vulkan_binary_ops_f8e4m3() {
 
 /// Cmp ops for BF16 (emulated) vs the CPU backend.
 #[test]
-
 fn test_vulkan_cmp_ops_bf16() {
     (*INIT);
 
@@ -4894,7 +4828,6 @@ fn test_vulkan_cmp_ops_bf16() {
 
 /// Cmp ops for F8E4M3 (emulated) vs the CPU backend.
 #[test]
-
 fn test_vulkan_cmp_ops_f8e4m3() {
     (*INIT);
 
@@ -5022,7 +4955,6 @@ fn close64(a: f64, b: f64, tol: f64) -> bool {
 
 /// All 19 unary ops for BF16 (emulated) vs the CPU backend.
 #[test]
-
 fn test_vulkan_unary_ops_bf16() {
     (*INIT);
 
@@ -5108,7 +5040,6 @@ fn test_vulkan_unary_ops_bf16() {
 
 /// All 19 unary ops for F8E4M3 (emulated) vs the CPU backend.
 #[test]
-
 fn test_vulkan_unary_ops_f8e4m3() {
     (*INIT);
 
@@ -5202,7 +5133,6 @@ fn test_vulkan_unary_ops_f8e4m3() {
 
 /// affine (x*mul+add) for BF16 and F8E4M3 vs the CPU backend.
 #[test]
-
 fn test_vulkan_affine_dtype() {
     (*INIT);
 
@@ -5296,7 +5226,6 @@ fn test_vulkan_affine_dtype() {
 
 /// powf (x^e) for BF16 and F8E4M3 vs the CPU backend.
 #[test]
-
 fn test_vulkan_powf_dtype() {
     (*INIT);
 
@@ -5391,7 +5320,6 @@ fn test_vulkan_powf_dtype() {
 
 /// elu for BF16 and F8E4M3 vs the CPU backend.
 #[test]
-
 fn test_vulkan_elu_dtype() {
     (*INIT);
 
@@ -5486,7 +5414,6 @@ fn test_vulkan_elu_dtype() {
 
 /// where_cond for BF16 and F8E4M3 vs the CPU backend.
 #[test]
-
 fn test_vulkan_where_dtype() {
     (*INIT);
 
@@ -5662,7 +5589,6 @@ fn test_vulkan_where_dtype() {
 
 /// Binary ops for F16 (native half) vs the CPU backend.
 #[test]
-
 fn test_vulkan_binary_ops_f16() {
     (*INIT);
 
@@ -5745,7 +5671,6 @@ fn test_vulkan_binary_ops_f16() {
 
 /// Binary ops for F64 (native double) vs the CPU backend.
 #[test]
-
 fn test_vulkan_binary_ops_f64() {
     (*INIT);
 
@@ -5813,7 +5738,6 @@ fn test_vulkan_binary_ops_f64() {
 
 /// Cmp ops for F16 (native half) vs the CPU backend.
 #[test]
-
 fn test_vulkan_cmp_ops_f16() {
     (*INIT);
 
@@ -5879,7 +5803,6 @@ fn test_vulkan_cmp_ops_f16() {
 
 /// Cmp ops for F64 (native double) vs the CPU backend.
 #[test]
-
 fn test_vulkan_cmp_ops_f64() {
     (*INIT);
 
@@ -5942,7 +5865,6 @@ fn test_vulkan_cmp_ops_f64() {
 
 /// Unary ops for F16 (native half) vs the CPU backend.
 #[test]
-
 fn test_vulkan_unary_ops_f16() {
     (*INIT);
 
@@ -6015,7 +5937,6 @@ fn test_vulkan_unary_ops_f16() {
 
 /// Unary ops for F64 (native double) vs the CPU backend.
 #[test]
-
 fn test_vulkan_unary_ops_f64() {
     (*INIT);
 
@@ -6076,7 +5997,6 @@ fn test_vulkan_unary_ops_f64() {
 
 /// affine for F16 and F64 (native) vs the CPU backend.
 #[test]
-
 fn test_vulkan_affine_f16_f64() {
     (*INIT);
 
@@ -6160,7 +6080,6 @@ fn test_vulkan_affine_f16_f64() {
 
 /// where_cond for F16 and F64 (native) vs the CPU backend.
 #[test]
-
 fn test_vulkan_where_f16_f64() {
     (*INIT);
 
@@ -6336,7 +6255,6 @@ fn test_vulkan_where_f16_f64() {
 
 /// Binary ops for U8 vs the CPU backend.
 #[test]
-
 fn test_vulkan_binary_ops_u8() {
     (*INIT);
 
@@ -6397,7 +6315,6 @@ fn test_vulkan_binary_ops_u8() {
 
 /// Cmp ops for U8 vs the CPU backend.
 #[test]
-
 fn test_vulkan_cmp_ops_u8() {
     (*INIT);
 
@@ -6458,7 +6375,6 @@ fn test_vulkan_cmp_ops_u8() {
 
 /// Binary ops for U32 vs the CPU backend.
 #[test]
-
 fn test_vulkan_binary_ops_u32() {
     (*INIT);
 
@@ -6519,7 +6435,6 @@ fn test_vulkan_binary_ops_u32() {
 
 /// Cmp ops for U32 vs the CPU backend.
 #[test]
-
 fn test_vulkan_cmp_ops_u32() {
     (*INIT);
 
@@ -6580,7 +6495,6 @@ fn test_vulkan_cmp_ops_u32() {
 
 /// Binary ops for I16 vs the CPU backend.
 #[test]
-
 fn test_vulkan_binary_ops_i16() {
     (*INIT);
 
@@ -6641,7 +6555,6 @@ fn test_vulkan_binary_ops_i16() {
 
 /// Cmp ops for I16 vs the CPU backend.
 #[test]
-
 fn test_vulkan_cmp_ops_i16() {
     (*INIT);
 
@@ -6702,7 +6615,6 @@ fn test_vulkan_cmp_ops_i16() {
 
 /// Binary ops for I32 vs the CPU backend.
 #[test]
-
 fn test_vulkan_binary_ops_i32() {
     (*INIT);
 
@@ -6763,7 +6675,6 @@ fn test_vulkan_binary_ops_i32() {
 
 /// Cmp ops for I32 vs the CPU backend.
 #[test]
-
 fn test_vulkan_cmp_ops_i32() {
     (*INIT);
 
@@ -6824,7 +6735,6 @@ fn test_vulkan_cmp_ops_i32() {
 
 /// Binary ops for I64 vs the CPU backend.
 #[test]
-
 fn test_vulkan_binary_ops_i64() {
     (*INIT);
 
@@ -6885,7 +6795,6 @@ fn test_vulkan_binary_ops_i64() {
 
 /// Cmp ops for I64 vs the CPU backend.
 #[test]
-
 fn test_vulkan_cmp_ops_i64() {
     (*INIT);
 
@@ -6946,7 +6855,6 @@ fn test_vulkan_cmp_ops_i64() {
 
 /// Matmul for F16 (native half, F32 accumulate) vs the CPU backend.
 #[test]
-
 fn test_vulkan_matmul_f16() {
     (*INIT);
 
@@ -7011,7 +6919,6 @@ fn test_vulkan_matmul_f16() {
 
 /// Matmul for F64 (native double) vs the CPU backend.
 #[test]
-
 fn test_vulkan_matmul_f64() {
     (*INIT);
 
@@ -7074,7 +6981,6 @@ fn test_vulkan_matmul_f64() {
 ///
 /// 16), so this exercises the f16-widening fallback path.
 #[test]
-
 fn test_vulkan_matmul_bf16() {
     (*INIT);
 
@@ -7151,7 +7057,6 @@ fn test_vulkan_matmul_bf16() {
 ///
 /// covered by the plain matmul tests).
 #[test]
-
 fn test_vulkan_matmul_coopmat_aligned() {
     (*INIT);
 
@@ -7311,7 +7216,6 @@ fn test_vulkan_matmul_coopmat_aligned() {
 
 /// Reduce ops for F16 (native half, F32 accumulate) vs the CPU backend.
 #[test]
-
 fn test_vulkan_reduce_op_f16() {
     (*INIT);
 
@@ -7383,7 +7287,6 @@ fn test_vulkan_reduce_op_f16() {
 
 /// Reduce ops for F64 (native double) vs the CPU backend.
 #[test]
-
 fn test_vulkan_reduce_op_f64() {
     (*INIT);
 
@@ -7516,7 +7419,6 @@ fn test_vulkan_reduce_op_bf16() {
 
 /// conv1d for F16 (native half, F32 accumulate) vs the CPU backend.
 #[test]
-
 fn test_vulkan_conv1d_f16() {
     (*INIT);
 
@@ -7607,7 +7509,6 @@ fn test_vulkan_conv1d_f16() {
 
 /// conv1d for F64 (native double) vs the CPU backend.
 #[test]
-
 fn test_vulkan_conv1d_f64() {
     (*INIT);
 
@@ -7681,7 +7582,6 @@ fn test_vulkan_conv1d_f64() {
 }
 
 #[test]
-
 fn test_vulkan_avg_pool2d_f16() {
     (*INIT);
 
@@ -7737,7 +7637,6 @@ fn test_vulkan_avg_pool2d_f16() {
 }
 
 #[test]
-
 fn test_vulkan_max_pool2d_f64() {
     (*INIT);
 
@@ -7782,7 +7681,6 @@ fn test_vulkan_max_pool2d_f64() {
 }
 
 #[test]
-
 fn test_vulkan_upsample_nearest2d_f16() {
     (*INIT);
 
@@ -7837,7 +7735,6 @@ fn test_vulkan_upsample_nearest2d_f16() {
 }
 
 #[test]
-
 fn test_vulkan_gather_f16() {
     (*INIT);
 
@@ -7906,7 +7803,6 @@ fn test_vulkan_gather_f16() {
 }
 
 #[test]
-
 fn test_vulkan_to_dtype_f64() {
     (*INIT);
 
@@ -7954,7 +7850,6 @@ fn test_vulkan_to_dtype_f64() {
 ///
 /// original tensor's storage.
 #[test]
-
 fn test_vulkan_try_clone() {
     (*INIT);
 
@@ -8064,7 +7959,6 @@ fn test_vulkan_try_clone() {
 ///
 /// dequantizations must agree. This validates all 15 Slang dequantize kernels.
 #[test]
-
 fn test_vulkan_dequantize_all_dtypes() {
     (*INIT);
 
@@ -8164,7 +8058,6 @@ fn test_vulkan_dequantize_all_dtypes() {
 ///
 /// This validates `QVulkanStorage::fwd` for all 15 dtypes.
 #[test]
-
 fn test_vulkan_quantized_matmul() {
     use candle_core::Module;
 
@@ -8434,7 +8327,6 @@ fn test_vulkan_moe_gemm() {
 ///
 /// all 15 dtypes.
 #[test]
-
 fn test_vulkan_quantized_embedding() {
     (*INIT);
 
@@ -8538,7 +8430,6 @@ fn test_vulkan_quantized_embedding() {
 }
 
 #[test]
-
 fn test_vulkan_rms_norm() {
     use candle_core::backend::BackendDevice;
 
@@ -8747,7 +8638,6 @@ fn test_vulkan_layer_norm() {
 }
 
 #[test]
-
 fn test_vulkan_softmax_last_dim() {
     use candle_core::backend::BackendDevice;
 
@@ -8931,7 +8821,6 @@ fn test_vulkan_softmax_wide_row() {
 }
 
 #[test]
-
 fn test_vulkan_rotary_emb() {
     use candle_core::backend::BackendDevice;
 
@@ -9091,42 +8980,25 @@ fn run_test_printf(
 }
 
 /// Validates the slang `printf()` debug statements on the Vulkan backend
-///
 /// for every supported data type (u8, u32, i16, i32, i64, bf16, f16, f32,
-///
 /// f64).
 ///
-///
-///
 /// The `test_printf` kernel copies 18 64-bit words — the lowest and
-///
 /// highest representable value of each dtype — from an input buffer to an
-///
 /// output buffer, printing one "Expected ..., actual ..." line per value.
 ///
 /// The data path is always verified. The printed lines are verified when
-///
 /// the Khronos validation layer is enabled, which is what captures and
-///
 /// routes the shader `printf` output. The layer writes that output to fd 1
-///
 /// (C-level stdout), bypassing Rust's stdout, and its flush timing is not
-///
 /// observable from within the process, so the test re-runs itself in a
-///
 /// child process with a piped stdout and validates the child's captured
-///
 /// output after it exits:
 ///
-///
-///
 ///   VK_LAYER_PRINTF_ENABLE=1 VK_LAYER_PRINTF_TO_STDOUT=1 \
-///
 ///     cargo test --features vulkan --test vulkan_integration_tests \
-///
 ///     -- test_vulkan_shader_printf --exact
 #[test]
-
 fn test_vulkan_shader_printf() {
     (*INIT);
 
@@ -9356,7 +9228,6 @@ fn assert_printf_lines(captured: &str) {
 ///
 /// h * num_kv_heads / num_heads, matching `repeat_kv`).
 #[test]
-
 fn test_vulkan_fused_decode_attention() {
     (*INIT);
 
@@ -9569,7 +9440,6 @@ fn check_fused_decode_attention(
 
 /// Fused add + RMSNorm: `residual = x + h`, `norm = RMSNorm(residual) * alpha`.
 #[test]
-
 fn test_vulkan_fused_add_rms_norm() {
     (*INIT);
 
@@ -9681,7 +9551,6 @@ fn test_vulkan_fused_add_rms_norm() {
 ///
 /// fallback to the classic kernel).
 #[test]
-
 fn test_vulkan_matmul_f16_16x16() {
     (*INIT);
 
@@ -9786,7 +9655,6 @@ fn test_vulkan_matmul_f16_16x16() {
 // ============================================================================
 
 #[test]
-
 fn test_vulkan_const_fill_transfer_paths() {
     (*INIT);
 
@@ -10168,7 +10036,6 @@ fn affine_case(
 }
 
 #[test]
-
 fn test_vulkan_affine_matmul() {
     (*INIT);
 
