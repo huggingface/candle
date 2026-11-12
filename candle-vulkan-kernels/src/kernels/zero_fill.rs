@@ -29,10 +29,8 @@ pub fn call_zero_fill(
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(Source::ZeroFill, KernelName::ZeroFill)?;
     let info0 = buf_info(dst);
-    
-    let writes = vec![
-        WriteDescriptorSet::buffer(0, &info0),
-    ];
+
+    let writes = vec![WriteDescriptorSet::buffer(0, &info0)];
     let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
         .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())

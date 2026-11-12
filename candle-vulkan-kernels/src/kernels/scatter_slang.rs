@@ -31,7 +31,7 @@ pub fn call_scatter_slang<T>(
     let src_info = buf_info(src);
     let dst_info = buf_info(dst);
     let ids_info = buf_info(ids);
-    
+
     let writes = vec![
         WriteDescriptorSet::buffer(0, &src_info),
         WriteDescriptorSet::buffer(1, &dst_info),

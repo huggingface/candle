@@ -51,7 +51,7 @@ pub fn call_fused_quant_gemm_slang(
     let info0 = buf_info(lhs);
     let info1 = buf_info(output);
     let info2 = buf_info(w);
-    
+
     let writes = vec![
         WriteDescriptorSet::buffer(0, &info0),
         WriteDescriptorSet::buffer(1, &info1),
@@ -66,7 +66,7 @@ pub fn call_fused_quant_gemm_slang(
     cbb.push_constants(entry.layout.clone(), 0, *params)
         .map_err(|e| VulkanKernelError::CommandBuffer(e.to_string()))?;
     // The prefill (*GemmM) kernels are tiled 8 rows per workgroup (dequant-once
-// per 8-row block); the decode kernels map one workgroup per row (m == 1).
+    // per 8-row block); the decode kernels map one workgroup per row (m == 1).
     let z = match source {
         Source::FusedQ40GemmM
         | Source::FusedQ4kGemmM

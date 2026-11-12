@@ -42,7 +42,7 @@ pub fn call_gemm_slang<T>(
     let info0 = buf_info(lhs);
     let info1 = buf_info(rhs);
     let info2 = buf_info(output);
-    
+
     let writes = vec![
         WriteDescriptorSet::buffer(0, &info0),
         WriteDescriptorSet::buffer(1, &info1),

@@ -31,7 +31,7 @@ pub fn call_reduce_slang<T>(
 ) -> Result<(), VulkanKernelError> {
     let entry = kernels.load_entry(source, name)?;
     let in_info = buf_info(input);
-    
+
     let out_f_info = out_f.map(buf_info);
     let out_i_info = out_i.map(buf_info);
     // Always bind all three layout slots. The unused output path (min/sum/max
@@ -39,8 +39,14 @@ pub fn call_reduce_slang<T>(
     // input buffer so no descriptor is left null. The unused global is
     // eliminated by Slang DCE and never dereferenced.
     let mut writes = vec![WriteDescriptorSet::buffer(0, &in_info)];
-    writes.push(WriteDescriptorSet::buffer(1, out_f_info.as_ref().unwrap_or(&in_info)));
-    writes.push(WriteDescriptorSet::buffer(2, out_i_info.as_ref().unwrap_or(&in_info)));
+    writes.push(WriteDescriptorSet::buffer(
+        1,
+        out_f_info.as_ref().unwrap_or(&in_info),
+    ));
+    writes.push(WriteDescriptorSet::buffer(
+        2,
+        out_i_info.as_ref().unwrap_or(&in_info),
+    ));
     let set = DescriptorSet::new(kernels.dss_alloc(), &entry.set_layout, &writes, &[])
         .map_err(|e| VulkanKernelError::DescriptorSet(e.to_string()))?;
     cbb.bind_pipeline_compute(entry.pipeline.clone())

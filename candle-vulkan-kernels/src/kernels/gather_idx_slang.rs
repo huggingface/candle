@@ -33,7 +33,7 @@ pub fn call_gather_idx_slang<T>(
     let src_info = buf_info(src);
     let dst_info = buf_info(dst);
     let idx_info = buf_info(idx);
-    
+
     let writes = vec![
         WriteDescriptorSet::buffer(0, &src_info),
         WriteDescriptorSet::buffer(1, &dst_info),

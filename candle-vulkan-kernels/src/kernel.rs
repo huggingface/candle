@@ -1321,12 +1321,8 @@ impl Kernels {
         let layout = PipelineLayout::new(&self.device, &create_info).map_err(pipeline_error)?;
         let stage = PipelineShaderStageCreateInfo::new(&entry_point);
         let create_info = ComputePipelineCreateInfo::new(stage, &layout);
-        let pipeline = ComputePipeline::new(
-            &self.device,
-            Some(&self.pipeline_cache),
-            &create_info,
-        )
-        .map_err(pipeline_error)?;
+        let pipeline = ComputePipeline::new(&self.device, Some(&self.pipeline_cache), &create_info)
+            .map_err(pipeline_error)?;
 
         Ok(PipelineEntry {
             pipeline,
@@ -1582,7 +1578,9 @@ fn descriptor_bindings(name: KernelName) -> u32 {
         // zero_fill: dst (params are push constants).
         KernelName::ZeroFill => 1,
         // const_set: output (params are push constants).
-        KernelName::ConstSetBf16 | KernelName::ConstSetF16 | KernelName::ConstSetF32
+        KernelName::ConstSetBf16
+        | KernelName::ConstSetF16
+        | KernelName::ConstSetF32
         | KernelName::ConstSetU32
         | KernelName::ConstSetI64
         | KernelName::ConstSetU8

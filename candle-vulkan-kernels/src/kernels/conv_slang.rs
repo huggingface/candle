@@ -32,7 +32,7 @@ pub fn call_conv_slang<T>(
     let in_info = buf_info(input);
     let w_info = buf_info(weights);
     let out_info = buf_info(output);
-    
+
     let writes = vec![
         WriteDescriptorSet::buffer(0, &in_info),
         WriteDescriptorSet::buffer(1, &w_info),

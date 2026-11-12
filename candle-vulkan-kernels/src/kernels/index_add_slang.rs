@@ -40,7 +40,7 @@ pub fn call_index_add_slang<D, I>(
     let dst_info = buf_info(dst);
     let src_info = buf_info(src);
     let ids_info = buf_info(ids);
-    
+
     let writes = vec![
         WriteDescriptorSet::buffer(0, &dst_info),
         WriteDescriptorSet::buffer(1, &src_info),

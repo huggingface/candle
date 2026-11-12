@@ -31,7 +31,7 @@ pub fn call_copy2d_slang<T>(
     let entry = kernels.load_entry(source, name)?;
     let src_info = buf_info(src);
     let dst_info = buf_info(dst);
-    
+
     let writes = vec![
         WriteDescriptorSet::buffer(0, &src_info),
         WriteDescriptorSet::buffer(1, &dst_info),

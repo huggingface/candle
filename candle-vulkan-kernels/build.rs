@@ -208,7 +208,10 @@ fn slang_opt_flag() -> Option<String> {
             return None;
         }
     }
-    if std::env::var("PROFILE").map(|p| p == "release").unwrap_or(false) {
+    if std::env::var("PROFILE")
+        .map(|p| p == "release")
+        .unwrap_or(false)
+    {
         return Some("-O3".to_string());
     }
     None

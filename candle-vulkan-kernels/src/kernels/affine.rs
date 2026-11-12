@@ -84,7 +84,7 @@ pub fn call_affine_coopmat_slang<T>(
     let info1 = super::gemm::buf_info(rhs);
     let info2 = super::gemm::buf_info(bias);
     let info3 = super::gemm::buf_info(output);
-    
+
     let writes = vec![
         WriteDescriptorSet::buffer(0, &info0),
         WriteDescriptorSet::buffer(1, &info1),

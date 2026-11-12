@@ -36,7 +36,7 @@ pub fn call_rope_slang(
     let cos_info = buf_info(cos);
     let sin_info = buf_info(sin);
     let dst_info = buf_info(dst);
-    
+
     let writes = vec![
         WriteDescriptorSet::buffer(0, &src_info),
         WriteDescriptorSet::buffer(1, &cos_info),

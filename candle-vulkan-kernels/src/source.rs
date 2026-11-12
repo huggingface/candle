@@ -59,8 +59,10 @@ const CONST_SET_U32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const
 const CONST_SET_I64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_i64.spv"));
 const CONST_SET_U8_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_u8.spv"));
 const CONST_SET_F64_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f64.spv"));
-const CONST_SET_F8E4M3_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f8e4m3.spv"));
-const CONST_FILL_BYTES_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/const_fill_bytes.spv"));
+const CONST_SET_F8E4M3_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/const_set_f8e4m3.spv"));
+const CONST_FILL_BYTES_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/const_fill_bytes.spv"));
 const UNARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unary.spv"));
 const BINARY_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/binary.spv"));
 const CMP_SLANG_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cmp.spv"));
@@ -931,7 +933,9 @@ impl Source {
             | KernelName::UnaryTanhF64
             | KernelName::UnaryTanhF8e4m3 => 16,
             // `const_set`: `uint64_t count; float value;`
-            KernelName::ConstSetBf16 | KernelName::ConstSetF16 | KernelName::ConstSetF32
+            KernelName::ConstSetBf16
+            | KernelName::ConstSetF16
+            | KernelName::ConstSetF32
             | KernelName::ConstSetU32
             | KernelName::ConstSetI64
             | KernelName::ConstSetU8
