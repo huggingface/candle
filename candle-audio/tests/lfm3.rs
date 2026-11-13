@@ -279,3 +279,126 @@ fn lfm3_realtime_descriptor_uses_source_frame_clock() {
         assert_eq!(AsrModel::descriptor(&fork).max_input_frames, Some(480000));
     }
 }
+
+#[test]
+#[ignore = "requires pinned native LFM3 checkpoint; compares realtime coalescing with shared weights"]
+fn lfm3_realtime_coalescing_preserves_answer_eos_context_and_recovery() {
+    let directory =
+        PathBuf::from(std::env::var("CANDLE_AUDIO_LFM3").expect("set CANDLE_AUDIO_LFM3"));
+    let device = match std::env::var("CANDLE_AUDIO_TEST_DEVICE").as_deref() {
+        Ok("vulkan") => Device::new_vulkan(0).unwrap(),
+        Ok("cpu") | Err(_) => Device::Cpu,
+        Ok(other) => panic!("unsupported test device {other}"),
+    };
+    let format = AudioFormat::mono(16000).unwrap();
+    let fixture = format!(
+        "{}/tests/fixtures/question-en.wav",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let audio = wav(&fixture);
+    let model = Lfm3::load(
+        &directory,
+        &device,
+        format,
+        &serde_json::json!({"max_steps":256}),
+    )
+    .unwrap();
+    assert_eq!(model.audio_prefill_frames(), 32000);
+    let mut legacy = model.fork(format).unwrap();
+    legacy.set_audio_prefill_frames(1600).unwrap();
+    assert_eq!(legacy.fork(format).unwrap().audio_prefill_frames(), 1600);
+    let mut coalesced = model.fork(format).unwrap();
+    let mut outcomes = vec![];
+    for (label, model) in [
+        ("legacy1600", &mut legacy),
+        ("coalesced32000", &mut coalesced),
+    ] {
+        let started = Instant::now();
+        let token = CancellationToken::default();
+        for part in audio.samples().chunks(1600) {
+            model
+                .push_audio(
+                    &AudioBuffer::new(format, part.to_vec()).unwrap(),
+                    &token,
+                    &mut |_| Ok(()),
+                )
+                .unwrap();
+            assert!(model.pending_audio_prefill_frames() < model.audio_prefill_frames());
+        }
+        assert!(model.set_audio_prefill_frames(1).is_err());
+        let input_time = started.elapsed();
+        let mut text = String::new();
+        let mut frames = 0;
+        let mut first_audio = None;
+        model
+            .commit(&token, &mut |event| {
+                match event {
+                    AudioEvent::Text { text: delta, .. } => text.push_str(&delta),
+                    AudioEvent::Audio { audio, .. } => {
+                        first_audio.get_or_insert_with(|| started.elapsed());
+                        frames += audio.frames();
+                        assert!(audio.samples().iter().all(|v| v.is_finite()));
+                    }
+                    _ => {}
+                }
+                Ok(())
+            })
+            .unwrap();
+        let context = model.context_tokens();
+        let reason = RealtimeModel::finish_reason(model);
+        assert!(normalize(&text).contains("four"), "{label}: {text}");
+        assert_eq!(reason, FinishReason::EndOfSequence);
+        assert!(frames > 2400);
+        assert_eq!(model.pending_audio_prefill_frames(), 0);
+        model.end_turn().unwrap();
+        assert_eq!(model.context_tokens(), context);
+        eprintln!("LFM3 {label}: prefill={:.3}s first_audio={:.3}s total={:.3}s text={text:?} PCM={frames} context={context} finish={reason:?}",input_time.as_secs_f64(),first_audio.unwrap().as_secs_f64(),started.elapsed().as_secs_f64());
+        outcomes.push((normalize(&text), frames, context, reason));
+    }
+    assert_eq!(
+        outcomes[0], outcomes[1],
+        "batching must preserve answer, duration, context and EOS"
+    );
+    // Text boundaries flush earlier audio but keep the acoustic stream open.
+    let mut ordered = model.fork(format).unwrap();
+    let mut ordered_legacy = model.fork(format).unwrap();
+    ordered_legacy.set_audio_prefill_frames(1600).unwrap();
+    let token = CancellationToken::default();
+    let part = AudioBuffer::new(format, audio.samples()[..3200].to_vec()).unwrap();
+    for session in [&mut ordered, &mut ordered_legacy] {
+        session.push_audio(&part, &token, &mut |_| Ok(())).unwrap();
+        session
+            .push_text("Answer the question.", &token, &mut |_| Ok(()))
+            .unwrap();
+        assert_eq!(session.pending_audio_prefill_frames(), 0);
+    }
+    assert_eq!(ordered.context_tokens(), ordered_legacy.context_tokens());
+    ordered.cancel_turn().unwrap();
+    ordered_legacy.cancel_turn().unwrap();
+    assert_eq!(ordered.context_tokens(), 0);
+    assert_eq!(ordered.pending_audio_prefill_frames(), 0);
+    let committed = coalesced.context_tokens();
+    let token = CancellationToken::default();
+    let short = AudioBuffer::new(format, audio.samples()[..800].to_vec()).unwrap();
+    coalesced
+        .push_audio(&short, &token, &mut |_| Ok(()))
+        .unwrap();
+    assert_eq!(coalesced.pending_audio_prefill_frames(), 800);
+    token.cancel();
+    assert!(matches!(
+        coalesced.push_audio(&short, &token, &mut |_| Ok(())),
+        Err(Error::Cancelled)
+    ));
+    coalesced.cancel_turn().unwrap();
+    assert_eq!(coalesced.context_tokens(), committed);
+    assert_eq!(coalesced.pending_audio_prefill_frames(), 0);
+    coalesced
+        .push_audio(&short, &CancellationToken::default(), &mut |_| Ok(()))
+        .unwrap();
+    assert_eq!(coalesced.pending_audio_prefill_frames(), 800);
+    coalesced.cancel_turn().unwrap();
+    coalesced.reset_conversation().unwrap();
+    assert_eq!(coalesced.context_tokens(), 0);
+    assert_eq!(coalesced.pending_audio_prefill_frames(), 0);
+    coalesced.set_audio_prefill_frames(1600).unwrap();
+}

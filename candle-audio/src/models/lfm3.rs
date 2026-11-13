@@ -27,6 +27,85 @@ const LANGUAGES: &[(&str, &str)] = &[
     ("zh", "Chinese"),
 ];
 
+const DEFAULT_AUDIO_PREFILL_FRAMES: usize = 32_000;
+const MAX_AUDIO_PREFILL_FRAMES: usize = 480_000;
+
+fn audio_prefill_frames(options: &serde_json::Value) -> Result<usize> {
+    if !options.is_null() && !options.is_object() {
+        return Err(Error::InvalidInput("LFM3 options must be an object".into()));
+    }
+    let frames = match options.get("audio_prefill_frames") {
+        None => DEFAULT_AUDIO_PREFILL_FRAMES,
+        Some(value) => value.as_u64().and_then(|n|usize::try_from(n).ok())
+            .ok_or_else(|| Error::InvalidInput("audio_prefill_frames must be an integer in1..480000, measured in mono16kHz PCM frames".into()))?,
+    };
+    if !(1..=MAX_AUDIO_PREFILL_FRAMES).contains(&frames) {
+        return Err(Error::InvalidInput(
+            "audio_prefill_frames must be in1..480000 mono16kHz PCM frames".into(),
+        ));
+    }
+    Ok(frames)
+}
+
+/// Only the unencoded PCM tail is queued. Complete batches are immediately
+/// prefetched; native AudioStream still owns its unchanged causal prefix state.
+struct AudioPrefillQueue {
+    frames: usize,
+    samples: Vec<f32>,
+    finished: bool,
+}
+impl AudioPrefillQueue {
+    fn new(frames: usize) -> Self {
+        Self {
+            frames,
+            samples: Vec::with_capacity(frames),
+            finished: false,
+        }
+    }
+    fn push(
+        &mut self,
+        mut samples: &[f32],
+        cancel: &CancellationToken,
+        emit: &mut impl FnMut(&[f32], bool) -> Result<()>,
+    ) -> Result<()> {
+        if self.finished {
+            return Err(Error::InvalidState("LFM3 audio prefill is finished".into()));
+        }
+        cancel.check()?;
+        while !samples.is_empty() {
+            cancel.check()?;
+            let count = (self.frames - self.samples.len()).min(samples.len());
+            self.samples.extend_from_slice(&samples[..count]);
+            samples = &samples[count..];
+            if self.samples.len() == self.frames {
+                self.flush(false, cancel, emit)?;
+            }
+        }
+        Ok(())
+    }
+    fn flush(
+        &mut self,
+        finalize: bool,
+        cancel: &CancellationToken,
+        emit: &mut impl FnMut(&[f32], bool) -> Result<()>,
+    ) -> Result<()> {
+        if self.finished {
+            return Err(Error::InvalidState("LFM3 audio prefill is finished".into()));
+        }
+        cancel.check()?;
+        if finalize || !self.samples.is_empty() {
+            emit(&self.samples, finalize)?;
+            self.samples.clear();
+        }
+        self.finished = finalize;
+        cancel.check()
+    }
+    fn reset(&mut self) {
+        self.samples.clear();
+        self.finished = false;
+    }
+}
+
 pub struct Lfm3 {
     model: native::Model,
     tokenizer: Arc<Tokenizer>,
@@ -34,6 +113,7 @@ pub struct Lfm3 {
     source: AudioFormat,
     converter: AudioConverter,
     audio_stream: native::AudioStream,
+    audio_prefill: AudioPrefillQueue,
     saved_context: Option<CacheState>,
     started: bool,
     has_audio: bool,
@@ -51,6 +131,8 @@ impl Lfm3 {
         source: AudioFormat,
         options: &serde_json::Value,
     ) -> Result<Self> {
+        // Reject bad batching options before opening checkpoint artifacts.
+        let audio_prefill_frames = audio_prefill_frames(options)?;
         let cfg = native::Config::from_json(&std::fs::read(directory.join("config.json"))?)?;
         let tokenizer = Arc::new(super::load::tokenizer(directory)?);
         for token in [
@@ -104,6 +186,7 @@ impl Lfm3 {
             source,
             converter: AudioConverter::new(source, 16000)?,
             audio_stream: native::AudioStream::new(480000)?,
+            audio_prefill: AudioPrefillQueue::new(audio_prefill_frames),
             saved_context: None,
             started: false,
             has_audio: false,
@@ -124,6 +207,7 @@ impl Lfm3 {
             source,
             converter: AudioConverter::new(source, 16000)?,
             audio_stream: native::AudioStream::new(self.max_audio_frames)?,
+            audio_prefill: AudioPrefillQueue::new(self.audio_prefill.frames),
             saved_context: None,
             started: false,
             has_audio: false,
@@ -137,6 +221,28 @@ impl Lfm3 {
     }
     pub fn context_tokens(&self) -> usize {
         self.model.language.position()
+    }
+    /// PCM16kHz frames coalesced before realtime acoustic prefill. This does not
+    /// change offline ASR/TTS and may only be changed between completed turns.
+    pub fn set_audio_prefill_frames(&mut self, frames: usize) -> Result<()> {
+        if !(1..=MAX_AUDIO_PREFILL_FRAMES).contains(&frames) {
+            return Err(Error::InvalidInput(
+                "audio_prefill_frames must be in1..480000".into(),
+            ));
+        }
+        if self.started || !self.audio_prefill.samples.is_empty() {
+            return Err(Error::InvalidState(
+                "change audio_prefill_frames only between turns".into(),
+            ));
+        }
+        self.audio_prefill = AudioPrefillQueue::new(frames);
+        Ok(())
+    }
+    pub fn audio_prefill_frames(&self) -> usize {
+        self.audio_prefill.frames
+    }
+    pub fn pending_audio_prefill_frames(&self) -> usize {
+        self.audio_prefill.samples.len()
     }
     fn embed(&self, text: &str) -> Result<Tensor> {
         let ids = self
@@ -244,6 +350,7 @@ impl Lfm3 {
         self.model.reset_audio();
         self.converter.reset();
         self.audio_stream.reset();
+        self.audio_prefill.reset();
         self.started = false;
         self.has_audio = false;
         self.received = 0;
@@ -269,21 +376,39 @@ impl Lfm3 {
         self.started = true;
         Ok(())
     }
-    fn prefill_audio(
+    fn prefill_queued_audio(
         &mut self,
         pcm: &[f32],
-        finalize: bool,
+        flush: Option<bool>,
         cancel: &CancellationToken,
     ) -> Result<()> {
-        cancel.check()?;
-        let embedding = self
-            .model
-            .encode_audio_chunk(&mut self.audio_stream, pcm, finalize)?;
-        if embedding.dim(1)? > 0 {
-            self.capacity(embedding.dim(1)?, self.generation_steps + 16)?;
-            self.model.language.forward_hidden(&embedding)?;
+        let model = &mut self.model;
+        let stream = &mut self.audio_stream;
+        let reserve = self.generation_steps + 16;
+        let maximum = self.max_context;
+        let mut prefill = |pcm: &[f32], finalize| {
+            cancel.check()?;
+            let embedding = model.encode_audio_chunk(stream, pcm, finalize)?;
+            let rows = embedding.dim(1)?;
+            if model
+                .language
+                .position()
+                .checked_add(rows)
+                .and_then(|n| n.checked_add(reserve))
+                .is_none_or(|n| n > maximum)
+            {
+                return Err(Error::LimitExceeded("LFM3 conversation context is full; reset the conversation or select a larger validated context budget".into()));
+            }
+            if rows > 0 {
+                model.language.forward_hidden(&embedding)?;
+            }
+            cancel.check()
+        };
+        self.audio_prefill.push(pcm, cancel, &mut prefill)?;
+        if let Some(finalize) = flush {
+            self.audio_prefill.flush(finalize, cancel, &mut prefill)?;
         }
-        cancel.check()
+        Ok(())
     }
     fn descriptor_for(&self, tasks: Vec<AudioTask>, languages: Vec<String>) -> ModelCapabilities {
         ModelCapabilities {
@@ -492,6 +617,7 @@ impl RealtimeModel for Lfm3 {
         cancel: &CancellationToken,
         _sink: &mut dyn EventSink,
     ) -> Result<()> {
+        cancel.check()?;
         if audio.format() != self.source {
             return Err(Error::InvalidInput(
                 "LFM3 source format changed during turn".into(),
@@ -508,7 +634,7 @@ impl RealtimeModel for Lfm3 {
             .checked_add(pcm.frames())
             .filter(|n| *n <= self.max_audio_frames)
             .ok_or_else(|| Error::LimitExceeded("LFM3 audio exceeds30-second turn limit".into()))?;
-        self.prefill_audio(pcm.samples(), false, cancel)
+        self.prefill_queued_audio(pcm.samples(), None, cancel)
     }
     fn push_text(
         &mut self,
@@ -525,6 +651,9 @@ impl RealtimeModel for Lfm3 {
             return Err(Error::InvalidInput("LFM3 text input is empty".into()));
         }
         self.start_turn(cancel)?;
+        // Preserve audio/text ordering: queued earlier audio must reach the
+        // causal encoder before this text is appended to the language context.
+        self.prefill_queued_audio(&[], Some(false), cancel)?;
         let embeddings = self.embed(text)?;
         self.capacity(embeddings.dim(1)?, self.generation_steps + 16)?;
         self.model.language.forward_hidden(&embeddings)?;
@@ -538,7 +667,7 @@ impl RealtimeModel for Lfm3 {
         if self.has_audio {
             let tail = self.converter.finish()?;
             self.received += tail.frames();
-            self.prefill_audio(tail.samples(), true, cancel)?;
+            self.prefill_queued_audio(tail.samples(), Some(true), cancel)?;
         }
         let suffix = self.embed("<|im_end|>\n<|im_start|>assistant\n<|mixed_start|>")?;
         self.generate(
@@ -572,5 +701,156 @@ impl RealtimeModel for Lfm3 {
     }
     fn finish_reason(&self) -> FinishReason {
         self.last_finish
+    }
+}
+
+#[cfg(test)]
+mod prefill_tests {
+    use super::*;
+    #[test]
+    fn prefill_options_reject_invalid_values_before_checkpoint_io() {
+        assert_eq!(
+            audio_prefill_frames(&serde_json::Value::Null).unwrap(),
+            32000
+        );
+        for value in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(480001),
+            serde_json::json!(1.5),
+            serde_json::json!("1600"),
+            serde_json::Value::Null,
+        ] {
+            let options = serde_json::json!({"audio_prefill_frames":value});
+            assert!(matches!(
+                Lfm3::load(
+                    Path::new("missing-model"),
+                    &Device::Cpu,
+                    AudioFormat::mono(16000).unwrap(),
+                    &options
+                ),
+                Err(Error::InvalidInput(_))
+            ));
+        }
+        for n in [1, 1600, 32000, 480000] {
+            assert_eq!(
+                audio_prefill_frames(&serde_json::json!({"audio_prefill_frames":n})).unwrap(),
+                n
+            );
+        }
+    }
+    #[test]
+    fn irregular_prefill_batches_are_bounded_lossless_and_finalize_once() {
+        let mut queue = AudioPrefillQueue::new(4);
+        let token = CancellationToken::default();
+        let samples = (0..19).map(|n| n as f32).collect::<Vec<_>>();
+        let mut calls = vec![];
+        let mut emit = |pcm: &[f32], finalize| {
+            assert!(pcm.len() <= 4);
+            calls.push((pcm.to_vec(), finalize));
+            Ok(())
+        };
+        let mut offset = 0;
+        for size in [1, 3, 9, 2, 4] {
+            queue
+                .push(&samples[offset..offset + size], &token, &mut emit)
+                .unwrap();
+            offset += size;
+            assert!(queue.samples.len() < 4);
+        }
+        queue.flush(true, &token, &mut emit).unwrap();
+        assert!(queue.flush(true, &token, &mut emit).is_err());
+        assert!(queue.push(&[99.], &token, &mut emit).is_err());
+        assert_eq!(calls.len(), 5);
+        assert_eq!(
+            calls
+                .iter()
+                .flat_map(|(pcm, _)| pcm.iter().copied())
+                .collect::<Vec<_>>(),
+            samples
+        );
+        assert!(calls[..4]
+            .iter()
+            .all(|(pcm, finalize)| pcm.len() == 4 && !finalize));
+        assert_eq!(calls.last().unwrap(), &(vec![16., 17., 18.], true));
+    }
+    #[test]
+    fn text_boundary_flushes_earlier_audio_without_finalizing_the_stream() {
+        let token = CancellationToken::default();
+        let mut queue = AudioPrefillQueue::new(4);
+        let mut events = vec![];
+        queue
+            .push(&[1., 2.], &token, &mut |pcm, done| {
+                events.push((pcm.to_vec(), done));
+                Ok(())
+            })
+            .unwrap();
+        assert!(events.is_empty());
+        queue
+            .flush(false, &token, &mut |pcm, done| {
+                events.push((pcm.to_vec(), done));
+                Ok(())
+            })
+            .unwrap();
+        events.push((vec![], false)); // the text insertion occurs after this flush
+        queue
+            .push(&[3., 4., 5., 6., 7.], &token, &mut |pcm, done| {
+                events.push((pcm.to_vec(), done));
+                Ok(())
+            })
+            .unwrap();
+        queue
+            .flush(true, &token, &mut |pcm, done| {
+                events.push((pcm.to_vec(), done));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![
+                (vec![1., 2.], false),
+                (vec![], false),
+                (vec![3., 4., 5., 6.], false),
+                (vec![7.], true)
+            ]
+        );
+    }
+    #[test]
+    fn cancelled_or_failed_prefill_keeps_a_bounded_tail_until_reset() {
+        let mut queue = AudioPrefillQueue::new(4);
+        let token = CancellationToken::default();
+        let result = queue.push(&[1., 2., 3., 4., 5.], &token, &mut |_, _| {
+            token.cancel();
+            Err(Error::Cancelled)
+        });
+        assert!(matches!(result, Err(Error::Cancelled)));
+        assert_eq!(queue.samples, [1., 2., 3., 4.]);
+        assert!(matches!(
+            queue.flush(true, &token, &mut |_, _| panic!("cancelled prefill")),
+            Err(Error::Cancelled)
+        ));
+        queue.reset();
+        assert!(queue.samples.is_empty() && !queue.finished);
+        let fresh = CancellationToken::default();
+        queue
+            .push(&[9.], &fresh, &mut |_, _| panic!("tail is not full"))
+            .unwrap();
+        let mut output = vec![];
+        queue
+            .flush(true, &fresh, &mut |pcm, _| {
+                output.extend_from_slice(pcm);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(output, [9.]);
+        queue.reset();
+        assert!(queue
+            .push(&[0.; 4], &fresh, &mut |_, _| Err(Error::InvalidInput(
+                "sink failed".into()
+            )))
+            .is_err());
+        assert_eq!(queue.samples.len(), 4);
+        queue.reset();
+        assert!(queue.samples.is_empty());
     }
 }

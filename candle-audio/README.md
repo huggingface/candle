@@ -431,3 +431,14 @@ candle-audio --model-family dac --model-options dac-options.json codec encode \
 
 This selects the codec, rather than treating the Parler speech generator as a
 codec task. Existing checkpoint files remain unchanged.
+
+LFM3 realtime acoustic prefill coalesces up to 32000 mono 16 kHz frames (two
+seconds) before running the causal encoder. This avoids recomputing its bounded
+prefix for every microphone packet. Complete batches are processed as they arrive;
+commit flushes the short final tail, and text flushes preceding audio before its
+insertion. ASR and TTS calls use their existing paths. Cancellation/reset discard
+the queued tail. `--model-options` may set `audio_prefill_frames` in `1..480000`;
+smaller batches trade more encoder work for a shorter input processing delay.
+Native callers can change it between turns through
+`Lfm3::set_audio_prefill_frames`; forks preserve the selected setting. Streaming
+and coalescing do not promise inference faster than playback on the chosen device.
