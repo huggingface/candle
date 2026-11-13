@@ -1,0 +1,404 @@
+#![cfg(feature = "cli")]
+//! Explicit native-checkpoint task tests; no downloads, external inference or silent skips.
+use candle::Device;
+use candle_audio::{models::lfm3::Lfm3, *};
+use std::{path::PathBuf, time::Instant};
+fn wav(path: &str) -> AudioBuffer {
+    let mut r = hound::WavReader::open(path).unwrap();
+    let s = r.spec();
+    assert_eq!(
+        (s.channels, s.sample_rate, s.bits_per_sample),
+        (1, 16000, 16)
+    );
+    AudioBuffer::new(
+        AudioFormat::mono(16000).unwrap(),
+        r.samples::<i16>()
+            .map(|s| s.unwrap() as f32 / 32768.)
+            .collect(),
+    )
+    .unwrap()
+}
+fn normalize(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .replace("two", "2")
+}
+#[test]
+#[ignore = "requires native LFM3 GGUF/tokenizer directory and English+Spanish WAV fixtures"]
+fn lfm3_native_recognition_synthesis_and_conversation() {
+    let dir = PathBuf::from(std::env::var("CANDLE_AUDIO_LFM3").expect("set CANDLE_AUDIO_LFM3"));
+    let english = wav(
+        &std::env::var("CANDLE_AUDIO_LFM3_EN_WAV").unwrap_or_else(|_| {
+            format!(
+                "{}/tests/fixtures/question-en.wav",
+                env!("CARGO_MANIFEST_DIR")
+            )
+        }),
+    );
+    let spanish = wav(
+        &std::env::var("CANDLE_AUDIO_LFM3_ES_WAV").unwrap_or_else(|_| {
+            format!(
+                "{}/tests/fixtures/question-es.wav",
+                env!("CARGO_MANIFEST_DIR")
+            )
+        }),
+    );
+    let device = match std::env::var("CANDLE_AUDIO_TEST_DEVICE").as_deref() {
+        Ok("vulkan") => Device::new_vulkan(0).unwrap(),
+        Ok("cpu") | Err(_) => Device::Cpu,
+        Ok(other) => panic!("unsupported test device {other}"),
+    };
+    let start = Instant::now();
+    let model = Lfm3::load(
+        &dir,
+        &device,
+        AudioFormat::mono(16000).unwrap(),
+        &serde_json::json!({"max_steps":256}),
+    )
+    .unwrap();
+    eprintln!(
+        "Native LFM3 loaded in {:.3}s",
+        start.elapsed().as_secs_f64()
+    );
+    let mut asr = model.fork(AudioFormat::mono(16000).unwrap()).unwrap();
+    let en = asr
+        .transcribe_detailed(
+            &english,
+            &TranscriptionOptions {
+                language: Some("en".into()),
+                translate: false,
+            },
+            &CancellationToken::default(),
+        )
+        .unwrap();
+    eprintln!(
+        "Native English ASR: {:?} {:?}",
+        en.transcript.text, en.finish_reason
+    );
+    let es = asr
+        .transcribe_detailed(
+            &spanish,
+            &TranscriptionOptions {
+                language: Some("es".into()),
+                translate: false,
+            },
+            &CancellationToken::default(),
+        )
+        .unwrap();
+    eprintln!(
+        "Native Spanish ASR: {:?} {:?}",
+        es.transcript.text, es.finish_reason
+    );
+    let mut tts = model.fork(AudioFormat::mono(16000).unwrap()).unwrap();
+    let mut pcm = vec![];
+    let synthesis_start = Instant::now();
+    let mut first_audio = None;
+    let request = SynthesisRequest {
+        text: "Hola, ¿cómo estás?".into(),
+        language: Some("es".into()),
+        voice: Some("female".into()),
+        max_steps: 128,
+        ..SynthesisRequest::new("")
+    };
+    tts.synthesize(&request, &CancellationToken::default(), &mut |event| {
+        if let AudioEvent::Audio { audio, .. } = event {
+            assert_eq!(audio.format().sample_rate(), 24000);
+            first_audio.get_or_insert_with(|| synthesis_start.elapsed());
+            pcm.extend_from_slice(audio.samples());
+        }
+        Ok(())
+    })
+    .unwrap();
+    eprintln!(
+        "Native Spanish TTS: {} PCM frames; first audio {:.3}s; total {:.3}s",
+        pcm.len(),
+        first_audio.unwrap().as_secs_f64(),
+        synthesis_start.elapsed().as_secs_f64()
+    );
+    if let Ok(directory) = std::env::var("CANDLE_AUDIO_TEST_OUTPUT_DIR") {
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = PathBuf::from(directory).join("lfm3-native-spanish.wav");
+        let mut wav = hound::WavWriter::create(
+            path,
+            hound::WavSpec {
+                channels: 1,
+                sample_rate: 24000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            },
+        )
+        .unwrap();
+        for &sample in &pcm {
+            wav.write_sample((sample.clamp(-1., 1.) * 32767.).round() as i16)
+                .unwrap();
+        }
+        wav.finalize().unwrap();
+    }
+    assert!(pcm.len() > 2400);
+    assert!(pcm.iter().all(|s| s.is_finite()));
+    let output = AudioConverter::convert(
+        &AudioBuffer::new(AudioFormat::mono(24000).unwrap(), pcm).unwrap(),
+        16000,
+    )
+    .unwrap();
+    let roundtrip = asr
+        .transcribe(
+            &output,
+            &TranscriptionOptions {
+                language: Some("es".into()),
+                translate: false,
+            },
+            &CancellationToken::default(),
+        )
+        .unwrap();
+    eprintln!("Native Spanish TTS roundtrip: {:?}", roundtrip.text);
+    let mut realtime = model.fork(AudioFormat::mono(16000).unwrap()).unwrap();
+    let cancel = CancellationToken::default();
+    let mut text = String::new();
+    let mut frames = 0;
+    let mut sink = |event| {
+        match event {
+            AudioEvent::Text { text: delta, .. } => text.push_str(&delta),
+            AudioEvent::Audio { audio, .. } => frames += audio.frames(),
+            _ => {}
+        }
+        Ok(())
+    };
+    for chunk in english.samples().chunks(1600) {
+        realtime
+            .push_audio(
+                &AudioBuffer::new(english.format(), chunk.to_vec()).unwrap(),
+                &cancel,
+                &mut sink,
+            )
+            .unwrap();
+    }
+    realtime.commit(&cancel, &mut sink).unwrap();
+    let before = realtime.context_tokens();
+    realtime.end_turn().unwrap();
+    assert_eq!(realtime.context_tokens(), before);
+    realtime
+        .push_text("Repeat your previous answer.", &cancel, &mut |_| Ok(()))
+        .unwrap();
+    assert!(realtime.context_tokens() > before);
+    realtime.cancel_turn().unwrap();
+    assert_eq!(realtime.context_tokens(), before);
+    // Cancel after an actual codec chunk, not just before generation starts.
+    let active = CancellationToken::default();
+    realtime
+        .push_text(
+            "Tell me a long story about the ocean.",
+            &active,
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+    let mut cancelled_frames = 0;
+    let result = realtime.commit(&active, &mut |event| {
+        if let AudioEvent::Audio { audio, .. } = event {
+            cancelled_frames += audio.frames();
+            active.cancel();
+        }
+        Ok(())
+    });
+    assert!(
+        matches!(result, Err(Error::Cancelled)),
+        "active generation must observe cancellation"
+    );
+    assert!(
+        cancelled_frames > 0,
+        "must cancel after real vocoder output"
+    );
+    realtime.cancel_turn().unwrap();
+    assert_eq!(
+        realtime.context_tokens(),
+        before,
+        "cancelled generated audio must roll context back"
+    );
+    let recovery = CancellationToken::default();
+    realtime
+        .push_text("Hello.", &recovery, &mut |_| Ok(()))
+        .unwrap();
+    realtime.cancel_turn().unwrap();
+    assert_eq!(realtime.context_tokens(), before);
+    eprintln!("Active native generation cancellation after {cancelled_frames} audio frames; next-input recovery passed");
+    realtime.reset_conversation().unwrap();
+    assert_eq!(realtime.context_tokens(), 0);
+    eprintln!(
+        "Native realtime: text={text:?}, audio={frames}frames; history/rollback/reset passed"
+    );
+    assert!(
+        normalize(&en.transcript.text).contains("whatis2plus2"),
+        "English recognition failed: {}",
+        en.transcript.text
+    );
+    assert_eq!(
+        normalize(&es.transcript.text),
+        normalize("Hola, ¿cómo estás?")
+    );
+    assert_eq!(normalize(&roundtrip.text), normalize("Hola, ¿cómo estás?"));
+    assert!(
+        text.to_lowercase().contains("four"),
+        "Realtime answer: {text}"
+    );
+    assert!(frames > 2400);
+}
+
+#[test]
+#[ignore = "requires pinned native LFM3 checkpoint; checks shared-weight forks without generation"]
+fn lfm3_realtime_descriptor_uses_source_frame_clock() {
+    let directory =
+        PathBuf::from(std::env::var("CANDLE_AUDIO_LFM3").expect("set CANDLE_AUDIO_LFM3"));
+    let device = match std::env::var("CANDLE_AUDIO_TEST_DEVICE").as_deref() {
+        Ok("vulkan") => Device::new_vulkan(0).unwrap(),
+        Ok("cpu") | Err(_) => Device::Cpu,
+        Ok(other) => panic!("unsupported test device {other}"),
+    };
+    let model = Lfm3::load(
+        &directory,
+        &device,
+        AudioFormat::mono(16000).unwrap(),
+        &serde_json::json!({}),
+    )
+    .unwrap();
+    for source in [
+        AudioFormat::mono(8000).unwrap(),
+        AudioFormat::mono(16000).unwrap(),
+        AudioFormat::new(48000, 2).unwrap(),
+    ] {
+        let fork = model.fork(source).unwrap();
+        let caps = RealtimeModel::capabilities(&fork);
+        let descriptor = RealtimeModel::descriptor(&fork);
+        assert_eq!(descriptor.input_formats, vec![source]);
+        assert_eq!(
+            descriptor.max_input_frames,
+            Some(source.sample_rate() as usize * 30)
+        );
+        assert_eq!(descriptor.max_input_frames, caps.max_input_frames_per_turn);
+        assert_eq!(AsrModel::descriptor(&fork).max_input_frames, Some(480000));
+    }
+}
+
+#[test]
+#[ignore = "requires pinned native LFM3 checkpoint; compares realtime coalescing with shared weights"]
+fn lfm3_realtime_coalescing_preserves_answer_eos_context_and_recovery() {
+    let directory =
+        PathBuf::from(std::env::var("CANDLE_AUDIO_LFM3").expect("set CANDLE_AUDIO_LFM3"));
+    let device = match std::env::var("CANDLE_AUDIO_TEST_DEVICE").as_deref() {
+        Ok("vulkan") => Device::new_vulkan(0).unwrap(),
+        Ok("cpu") | Err(_) => Device::Cpu,
+        Ok(other) => panic!("unsupported test device {other}"),
+    };
+    let format = AudioFormat::mono(16000).unwrap();
+    let fixture = format!(
+        "{}/tests/fixtures/question-en.wav",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let audio = wav(&fixture);
+    let model = Lfm3::load(
+        &directory,
+        &device,
+        format,
+        &serde_json::json!({"max_steps":256}),
+    )
+    .unwrap();
+    assert_eq!(model.audio_prefill_frames(), 32000);
+    let mut legacy = model.fork(format).unwrap();
+    legacy.set_audio_prefill_frames(1600).unwrap();
+    assert_eq!(legacy.fork(format).unwrap().audio_prefill_frames(), 1600);
+    let mut coalesced = model.fork(format).unwrap();
+    let mut outcomes = vec![];
+    for (label, model) in [
+        ("legacy1600", &mut legacy),
+        ("coalesced32000", &mut coalesced),
+    ] {
+        let started = Instant::now();
+        let token = CancellationToken::default();
+        for part in audio.samples().chunks(1600) {
+            model
+                .push_audio(
+                    &AudioBuffer::new(format, part.to_vec()).unwrap(),
+                    &token,
+                    &mut |_| Ok(()),
+                )
+                .unwrap();
+            assert!(model.pending_audio_prefill_frames() < model.audio_prefill_frames());
+        }
+        assert!(model.set_audio_prefill_frames(1).is_err());
+        let input_time = started.elapsed();
+        let mut text = String::new();
+        let mut frames = 0;
+        let mut first_audio = None;
+        model
+            .commit(&token, &mut |event| {
+                match event {
+                    AudioEvent::Text { text: delta, .. } => text.push_str(&delta),
+                    AudioEvent::Audio { audio, .. } => {
+                        first_audio.get_or_insert_with(|| started.elapsed());
+                        frames += audio.frames();
+                        assert!(audio.samples().iter().all(|v| v.is_finite()));
+                    }
+                    _ => {}
+                }
+                Ok(())
+            })
+            .unwrap();
+        let context = model.context_tokens();
+        let reason = RealtimeModel::finish_reason(model);
+        assert!(normalize(&text).contains("four"), "{label}: {text}");
+        assert_eq!(reason, FinishReason::EndOfSequence);
+        assert!(frames > 2400);
+        assert_eq!(model.pending_audio_prefill_frames(), 0);
+        model.end_turn().unwrap();
+        assert_eq!(model.context_tokens(), context);
+        eprintln!("LFM3 {label}: prefill={:.3}s first_audio={:.3}s total={:.3}s text={text:?} PCM={frames} context={context} finish={reason:?}",input_time.as_secs_f64(),first_audio.unwrap().as_secs_f64(),started.elapsed().as_secs_f64());
+        outcomes.push((normalize(&text), frames, context, reason));
+    }
+    assert_eq!(
+        outcomes[0], outcomes[1],
+        "batching must preserve answer, duration, context and EOS"
+    );
+    // Text boundaries flush earlier audio but keep the acoustic stream open.
+    let mut ordered = model.fork(format).unwrap();
+    let mut ordered_legacy = model.fork(format).unwrap();
+    ordered_legacy.set_audio_prefill_frames(1600).unwrap();
+    let token = CancellationToken::default();
+    let part = AudioBuffer::new(format, audio.samples()[..3200].to_vec()).unwrap();
+    for session in [&mut ordered, &mut ordered_legacy] {
+        session.push_audio(&part, &token, &mut |_| Ok(())).unwrap();
+        session
+            .push_text("Answer the question.", &token, &mut |_| Ok(()))
+            .unwrap();
+        assert_eq!(session.pending_audio_prefill_frames(), 0);
+    }
+    assert_eq!(ordered.context_tokens(), ordered_legacy.context_tokens());
+    ordered.cancel_turn().unwrap();
+    ordered_legacy.cancel_turn().unwrap();
+    assert_eq!(ordered.context_tokens(), 0);
+    assert_eq!(ordered.pending_audio_prefill_frames(), 0);
+    let committed = coalesced.context_tokens();
+    let token = CancellationToken::default();
+    let short = AudioBuffer::new(format, audio.samples()[..800].to_vec()).unwrap();
+    coalesced
+        .push_audio(&short, &token, &mut |_| Ok(()))
+        .unwrap();
+    assert_eq!(coalesced.pending_audio_prefill_frames(), 800);
+    token.cancel();
+    assert!(matches!(
+        coalesced.push_audio(&short, &token, &mut |_| Ok(())),
+        Err(Error::Cancelled)
+    ));
+    coalesced.cancel_turn().unwrap();
+    assert_eq!(coalesced.context_tokens(), committed);
+    assert_eq!(coalesced.pending_audio_prefill_frames(), 0);
+    coalesced
+        .push_audio(&short, &CancellationToken::default(), &mut |_| Ok(()))
+        .unwrap();
+    assert_eq!(coalesced.pending_audio_prefill_frames(), 800);
+    coalesced.cancel_turn().unwrap();
+    coalesced.reset_conversation().unwrap();
+    assert_eq!(coalesced.context_tokens(), 0);
+    assert_eq!(coalesced.pending_audio_prefill_frames(), 0);
+    coalesced.set_audio_prefill_frames(1600).unwrap();
+}

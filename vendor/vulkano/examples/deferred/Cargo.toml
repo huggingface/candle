@@ -1,0 +1,19 @@
+[package]
+name = "deferred"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "deferred"
+path = "main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+glam = { workspace = true }
+vulkano = { workspace = true, default-features = true }
+vulkano-shaders = { workspace = true }
+vulkano-taskgraph = { workspace = true }
+winit = { workspace = true, default-features = true }

@@ -4,7 +4,7 @@
 //! - [GitHub](https://github.com/metavoiceio/metavoice-src)
 //! - [Website](https://studio.metavoice.ai/)
 
-use candle::{DType, Device, Error as E, IndexOp, Module, Result, Tensor, D};
+use candle::{DType, Error as E, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{embedding, linear_b, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 
 // Equivalent to torch.repeat_interleave
@@ -14,167 +14,7 @@ pub(crate) fn repeat_interleave(img: &Tensor, repeats: usize, dim: usize) -> Res
     dims[dim + 1] = repeats;
     img.broadcast_as(dims)?.flatten(dim, dim + 1)
 }
-pub mod speaker_encoder {
-    use super::*;
-
-    #[derive(Debug, Clone, serde::Deserialize)]
-    pub struct Config {
-        pub sampling_rate: usize,
-        pub partial_n_frames: usize,
-        pub model_hidden_size: usize,
-        pub model_embedding_size: usize,
-        pub model_num_layers: usize,
-        pub mel_window_length: usize,
-        pub mel_window_step: usize,
-        pub mel_n_channels: usize,
-    }
-
-    impl Config {
-        pub fn cfg() -> Self {
-            Self {
-                sampling_rate: 16_000,
-                partial_n_frames: 160,
-                model_hidden_size: 256,
-                model_embedding_size: 256,
-                model_num_layers: 3,
-                mel_window_length: 25,
-                mel_window_step: 10,
-                mel_n_channels: 40,
-            }
-        }
-    }
-
-    pub struct Model {
-        lstms: Vec<candle_nn::LSTM>,
-        linear: Linear,
-        cfg: Config,
-    }
-
-    type Slice = (usize, usize);
-
-    impl Model {
-        pub fn new(cfg: Config, vb: VarBuilder) -> Result<Self> {
-            let mut lstms = Vec::with_capacity(cfg.model_num_layers);
-            let vb_l = vb.pp("lstm");
-            for layer_idx in 0..cfg.model_num_layers {
-                let c = candle_nn::LSTMConfig {
-                    layer_idx,
-                    ..Default::default()
-                };
-                let lstm = candle_nn::lstm(
-                    cfg.mel_n_channels,
-                    cfg.model_hidden_size,
-                    c,
-                    vb_l.pp(layer_idx),
-                )?;
-                lstms.push(lstm)
-            }
-            let linear = linear_b(
-                cfg.model_hidden_size,
-                cfg.model_embedding_size,
-                true,
-                vb.pp("linear"),
-            )?;
-            Ok(Self { lstms, linear, cfg })
-        }
-
-        fn compute_partial_slices(
-            &self,
-            n_samples: usize,
-            rate: f64,
-            min_coverage: f64,
-        ) -> (Vec<Slice>, Vec<Slice>) {
-            let c = &self.cfg;
-            // Compute how many frames separate two partial utterances
-            let samples_per_frame = c.sampling_rate * c.mel_window_step / 1000;
-            let n_frames = n_samples / samples_per_frame + 1;
-            let frame_step =
-                (c.sampling_rate as f64 / rate / samples_per_frame as f64).round() as usize;
-            let steps = (n_frames + frame_step).saturating_sub(c.partial_n_frames) + 1;
-            // Compute the slices.
-            let mut wav_slices = vec![];
-            let mut mel_slices = vec![];
-            for i in (0..steps).step_by(frame_step) {
-                let mel_range = (i, i + c.partial_n_frames);
-                let wav_range = (
-                    i * samples_per_frame,
-                    (i + c.partial_n_frames) * samples_per_frame,
-                );
-                mel_slices.push(mel_range);
-                wav_slices.push(wav_range);
-            }
-            // Evaluate whether extra padding is warranted or not.
-            let last_wav_range = match wav_slices.last() {
-                None => return (wav_slices, mel_slices),
-                Some(l) => *l,
-            };
-            let coverage = (n_samples - last_wav_range.0) as f64
-                / (last_wav_range.1 - last_wav_range.0) as f64;
-            if coverage > min_coverage && mel_slices.len() > 1 {
-                mel_slices.pop();
-                wav_slices.pop();
-            }
-            (wav_slices, mel_slices)
-        }
-
-        pub fn embed_utterance(
-            &self,
-            wav: &[f32],
-            mel_filters: &[f32],
-            rate: f64,
-            min_c: f64,
-            device: &Device,
-        ) -> Result<Tensor> {
-            let (wav_slices, mel_slices) = self.compute_partial_slices(wav.len(), rate, min_c);
-            let max_wave_length = match wav_slices.last() {
-                Some(v) => v.1,
-                None => candle::bail!("empty wav slices"),
-            };
-            let wav = if max_wave_length > wav.len() {
-                let mut wav = wav.to_vec();
-                wav.resize(max_wave_length - wav.len(), 0.0);
-                std::borrow::Cow::Owned(wav)
-            } else {
-                std::borrow::Cow::Borrowed(wav)
-            };
-            let mel = crate::models::whisper::audio::log_mel_spectrogram_(
-                wav.as_ref(),
-                mel_filters,
-                /* fft_size */ self.cfg.mel_window_length,
-                /* fft_step */ self.cfg.mel_window_step,
-                self.cfg.mel_n_channels,
-                false,
-            );
-            let mels = mel_slices
-                .iter()
-                .flat_map(|s| [mel[s.0], mel[s.1]])
-                .collect::<Vec<_>>();
-            let mels = Tensor::from_vec(mels, (mel_slices.len(), 2), device)?;
-            let partial_embeds = self.forward(&mels)?;
-            let raw_embed = partial_embeds.mean(0)?;
-            let norm = raw_embed.sqr()?.sum_all()?.sqrt()?;
-            raw_embed.broadcast_div(&norm)
-        }
-    }
-
-    impl Module for Model {
-        fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-            use candle_nn::RNN;
-
-            // This is different from the Python transformers version as candle LSTM is batch first.
-            let xs = xs.t()?;
-            let mut xs = xs.clone();
-            for layer in self.lstms.iter() {
-                let states = layer.seq(&xs)?;
-                xs = layer.states_to_tensor(&states)?;
-            }
-            let xs = xs.t()?;
-            let embeds_raw = xs.apply(&self.linear)?.relu()?;
-            let norm = embeds_raw.sqr()?.sum_keepdim(1)?.sqrt()?;
-            embeds_raw.broadcast_div(&norm)
-        }
-    }
-}
+pub mod speaker_encoder;
 
 type Rank = u32;
 
@@ -643,6 +483,17 @@ pub mod gpt {
         }
 
         pub fn forward(&self, idx: &Tensor) -> Result<Vec<Tensor>> {
+            self.forward_with_callback(idx, |_| Ok(()))
+        }
+
+        /// Check cooperative cancellation between refinement transformer layers
+        /// and output heads. The original forward method retains its behavior.
+        pub fn forward_with_callback(
+            &self,
+            idx: &Tensor,
+            mut check: impl FnMut(usize) -> Result<()>,
+        ) -> Result<Vec<Tensor>> {
+            check(0)?;
             let _enter = self.span.enter();
             let device = idx.device();
             let (b, _num_hierarchies, t) = idx.dims3()?;
@@ -656,12 +507,14 @@ pub mod gpt {
             // TODO: speaker embs.
             let spk_emb = 0f64;
             let mut xs = (pos_emb.broadcast_add(&tok_emb)? + spk_emb)?;
-            for block in self.h.iter() {
+            for (index, block) in self.h.iter().enumerate() {
+                check(index)?;
                 xs = xs.apply(block)?
             }
             let xs = xs.apply(&self.ln_f)?;
             let mut logits = Vec::with_capacity(self.lm_heads.len());
-            for lm_head in self.lm_heads.iter() {
+            for (index, lm_head) in self.lm_heads.iter().enumerate() {
+                check(self.h.len() + index)?;
                 // non-causal mode only.
                 let ys = xs.apply(lm_head)?;
                 logits.push(ys)
@@ -928,6 +781,18 @@ pub mod transformer {
         }
 
         pub fn forward(&mut self, xs: &Tensor, spk_emb: &Tensor, pos: usize) -> Result<Tensor> {
+            self.forward_with_callback(xs, spk_emb, pos, |_| Ok(()))
+        }
+
+        /// Check cooperative cancellation before each autoregressive transformer layer.
+        pub fn forward_with_callback(
+            &mut self,
+            xs: &Tensor,
+            spk_emb: &Tensor,
+            pos: usize,
+            mut check: impl FnMut(usize) -> Result<()>,
+        ) -> Result<Tensor> {
+            check(0)?;
             let _enter = self.span.enter();
             let (_b_sz, seqlen) = xs.dims2()?;
             let mask: Vec<_> = (0..seqlen)
@@ -945,7 +810,8 @@ pub mod transformer {
                         .broadcast_mul(&self.spk_cond_mask)?,
                 )?;
             let mask = mask.to_dtype(xs.dtype())?;
-            for layer in self.layers.iter_mut() {
+            for (index, layer) in self.layers.iter_mut().enumerate() {
+                check(index)?;
                 xs = layer.forward(&xs, pos, &mask)?
             }
             xs.narrow(1, seqlen - 1, 1)?

@@ -7,16 +7,22 @@
 //! - [Qwen3 Models](https://huggingface.co/Qwen/Qwen3-0.6B) (architecture based on official implementations)
 //!
 use super::with_tracing::QMatMul;
-use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
+use crate::{
+    quantized_nn::{cat_quantized_weights, RmsNorm},
+    utils::repeat_kv,
+};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Storage, Tensor};
 use candle_nn::attention::cpu_flash::causal::causal_decode_f32_interleaved;
 use candle_nn::attention::{flash_attn, AttnMask};
-use candle_nn::kv_cache::{ConcatKvCache, InterleavedKvCache, RawInterleavedKvCache};
+use candle_nn::kv_cache::{InterleavedKvCache, PreallocKvCache, RawInterleavedKvCache};
 use candle_nn::{Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
+/// Maximum number of cached positions in the GPU (pre-allocated) KV
+/// cache; decode fails with a clear error past this limit.
+pub const MAX_KV_CACHE_LEN: usize = 8192;
 pub struct Gguf<R: Read + Seek> {
     ct: gguf_file::Content,
     reader: R,
@@ -47,10 +53,65 @@ impl<R: Read + Seek> Gguf<R> {
     }
 }
 
+/// The Q/K/V projections: either one fused matmul over the concatenated
+/// weight rows (one dispatch per token instead of three) or three
+/// separate matmuls when the weights cannot be fused at load time.
+#[derive(Debug, Clone)]
+enum QkvProj {
+    Fused(QMatMul),
+    Separate(QMatMul, QMatMul, QMatMul),
+}
+
+impl QkvProj {
+    fn forward(&self, x: &Tensor, q_dim: usize, kv_dim: usize) -> Result<(Tensor, Tensor, Tensor)> {
+        match self {
+            Self::Fused(w) => {
+                let out = w.forward(x)?;
+                // The fused output's rows are strided (stride q+2kv); the
+                // Vulkan binary/unary op kernels only index dense or
+                // broadcast layouts, so make each projection's view
+                // contiguous (no-op at decode, one small copy at prefill).
+                Ok((
+                    out.narrow(2, 0, q_dim)?.contiguous()?,
+                    out.narrow(2, q_dim, kv_dim)?.contiguous()?,
+                    out.narrow(2, q_dim + kv_dim, kv_dim)?.contiguous()?,
+                ))
+            }
+            Self::Separate(q, k, v) => Ok((q.forward(x)?, k.forward(x)?, v.forward(x)?)),
+        }
+    }
+}
+
+/// The MLP gate/up projections: either one fused matmul over the
+/// concatenated weight rows (one dispatch per token instead of two) or
+/// two separate matmuls.
+#[derive(Debug, Clone)]
+enum GateUpProj {
+    Fused(QMatMul, usize),
+    Separate(QMatMul, QMatMul),
+}
+
+impl GateUpProj {
+    fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
+        match self {
+            Self::Fused(w, inter) => {
+                let out = w.forward(x)?;
+                // Make the strided narrow views contiguous: the Vulkan
+                // binary-op kernel (silu, mul, ...) only indexes dense or
+                // broadcast layouts, so gappy views must be materialized.
+                Ok((
+                    out.narrow(2, 0, *inter)?.contiguous()?,
+                    out.narrow(2, *inter, *inter)?.contiguous()?,
+                ))
+            }
+            Self::Separate(gate, up) => Ok((gate.forward(x)?, up.forward(x)?)),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct MlpWeights {
-    gate_proj: QMatMul,
-    up_proj: QMatMul,
+    gate_up_proj: GateUpProj,
     down_proj: QMatMul,
     act_fn: Activation,
     span: tracing::Span,
@@ -58,14 +119,31 @@ struct MlpWeights {
 
 impl MlpWeights {
     fn new<R: Read + Seek>(gg: &mut Gguf<R>, prefix: &str) -> Result<Self> {
-        let gate_proj = gg.qmatmul(&format!("{prefix}.ffn_gate.weight"))?;
-        let up_proj = gg.qmatmul(&format!("{prefix}.ffn_up.weight"))?;
+        let gate_up_proj = match cat_quantized_weights(
+            &gg.ct,
+            &mut gg.reader,
+            &[
+                format!("{prefix}.ffn_gate.weight"),
+                format!("{prefix}.ffn_up.weight"),
+            ],
+            &gg.device,
+        )? {
+            Some((w, ns)) => {
+                if ns.len() != 2 || ns[0] != ns[1] {
+                    candle::bail!("ffn gate/up weights {:?} have mismatched dims", ns);
+                }
+                GateUpProj::Fused(QMatMul::from_weights(w.into())?, ns[0])
+            }
+            None => GateUpProj::Separate(
+                gg.qmatmul(&format!("{prefix}.ffn_gate.weight"))?,
+                gg.qmatmul(&format!("{prefix}.ffn_up.weight"))?,
+            ),
+        };
         let down_proj = gg.qmatmul(&format!("{prefix}.ffn_down.weight"))?;
         let act_fn = Activation::Silu;
         let span = tracing::span!(tracing::Level::TRACE, "mlp");
         Ok(Self {
-            gate_proj,
-            up_proj,
+            gate_up_proj,
             down_proj,
             act_fn,
             span,
@@ -76,8 +154,8 @@ impl MlpWeights {
 impl Module for MlpWeights {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let gate = self.gate_proj.forward(x)?.apply(&self.act_fn)?;
-        let up = self.up_proj.forward(x)?;
+        let (gate, up) = self.gate_up_proj.forward(x)?;
+        let gate = gate.apply(&self.act_fn)?;
         let gated = (gate * up)?;
         self.down_proj.forward(&gated)
     }
@@ -153,9 +231,7 @@ impl RotaryEmbedding {
 
 #[derive(Debug, Clone)]
 struct AttentionWeights {
-    q_proj: QMatMul,
-    k_proj: QMatMul,
-    v_proj: QMatMul,
+    qkv_proj: QkvProj,
     o_proj: QMatMul,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
@@ -165,7 +241,7 @@ struct AttentionWeights {
     head_dim: usize,
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: Option<ConcatKvCache>,
+    kv_cache: Option<PreallocKvCache>,
     interleaved_cache: Option<InterleavedKvCache>,
     raw_cache: Option<RawInterleavedKvCache>,
     span_attn: tracing::Span,
@@ -186,21 +262,66 @@ impl AttentionWeights {
         let num_kv_groups = num_heads / num_kv_heads;
         let hidden_size = num_heads * head_dim;
 
-        let q_proj = gg.qmatmul(&format!("{prefix}.attn_q.weight"))?;
-        let k_proj = gg.qmatmul(&format!("{prefix}.attn_k.weight"))?;
-        let v_proj = gg.qmatmul(&format!("{prefix}.attn_v.weight"))?;
+        // Fused qkv: one weight matrix -> one matmul per token (fewer
+        // dispatches); falls back to three separate matmuls when the
+        // weights cannot be concatenated.
+        let qkv_proj = match cat_quantized_weights(
+            &gg.ct,
+            &mut gg.reader,
+            &[
+                format!("{prefix}.attn_q.weight"),
+                format!("{prefix}.attn_k.weight"),
+                format!("{prefix}.attn_v.weight"),
+            ],
+            &gg.device,
+        )? {
+            Some((w, ns)) => {
+                let kv_dim = num_kv_heads * head_dim;
+                if ns != vec![hidden_size, kv_dim, kv_dim] {
+                    candle::bail!(
+                        "attn qkv weights {:?} do not match the expected dims ({}, {}, {})",
+                        ns,
+                        hidden_size,
+                        kv_dim,
+                        kv_dim
+                    );
+                }
+                QkvProj::Fused(QMatMul::from_weights(w.into())?)
+            }
+            None => QkvProj::Separate(
+                gg.qmatmul(&format!("{prefix}.attn_q.weight"))?,
+                gg.qmatmul(&format!("{prefix}.attn_k.weight"))?,
+                gg.qmatmul(&format!("{prefix}.attn_v.weight"))?,
+            ),
+        };
         let o_proj = gg.qmatmul(&format!("{prefix}.attn_output.weight"))?;
 
         let q_norm = gg.rms_norm(&format!("{prefix}.attn_q_norm.weight"), rms_norm_eps)?;
         let k_norm = gg.rms_norm(&format!("{prefix}.attn_k_norm.weight"), rms_norm_eps)?;
 
-        // CPU: use interleaved + raw caches for flash attention
-        // GPU: use standard concat KV cache (fallback path)
+        // CPU: interleaved + raw caches for the fused decode kernel.
+        // GPU: KV cache pre-allocated for up to MAX_KV_CACHE_LEN rows;
+        // decode appends one row per token in place (no per-token cat or
+        // reallocation), and the Vulkan decode kernel reads the strided
+        // cache directly via its kv_stride parameter.
         let on_cpu = device.is_cpu();
         let kv_cache = if on_cpu {
             None
         } else {
-            Some(ConcatKvCache::new(2))
+            Some(PreallocKvCache::new(
+                1,
+                num_kv_heads,
+                MAX_KV_CACHE_LEN,
+                head_dim,
+                // f16 on Vulkan: halves the per-token KV read bandwidth of
+                // the fused decode (the kernel loads f16, accumulates in f32).
+                if device.is_vulkan() {
+                    DType::F16
+                } else {
+                    DType::F32
+                },
+                device,
+            )?)
         };
         let interleaved_cache = if on_cpu {
             Some(InterleavedKvCache::new(head_dim))
@@ -216,9 +337,7 @@ impl AttentionWeights {
         let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
 
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
+            qkv_proj,
             o_proj,
             q_norm,
             k_norm,
@@ -239,10 +358,11 @@ impl AttentionWeights {
         let _enter = self.span_attn.enter();
         let (b, l, _) = x.dims3()?;
 
-        // QKV projections
-        let q = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
+        // QKV projections (fused into one matmul when the weights were
+        // concatenated at load time).
+        let (q, k, v) =
+            self.qkv_proj
+                .forward(x, self.hidden_size, self.num_kv_heads * self.head_dim)?;
 
         let q = q
             .reshape((b, l, self.num_heads, self.head_dim))?
@@ -356,6 +476,35 @@ impl AttentionWeights {
             // Standard matmul attention (no flash)
             let (k, v) = self.kv_cache.as_mut().unwrap().append(&k, &v)?;
 
+            // Fused single-query decode attention (Vulkan): one kernel instead
+            // of repeat_kv + matmul + softmax + matmul. GQA uses the same
+            // block grouping as repeat_kv (query head h -> kv head
+            // h * num_kv_heads / num_heads). Falls back to the decomposed path
+            // when the shapes/dtype don't match the kernel's contract.
+            if b == 1 && l == 1 && attn_mask.is_none() && q.dtype() == DType::F32 {
+                let q2 = q.reshape((self.num_heads, self.head_dim))?.contiguous()?;
+                // k2/v2 keep the pre-allocated cache's row stride
+                // (MAX_KV_CACHE_LEN * head_dim); the kernel consumes it via
+                // its kv_stride parameter.
+                let k2 = k.squeeze(0)?;
+                let v2 = v.squeeze(0)?;
+                let scale = (1.0 / (self.head_dim as f64).sqrt()) as f32;
+                let ctx = q2.fused_decode_attention(&k2, &v2, scale, self.num_kv_heads)?;
+                let reshaped_ctx = ctx.reshape((b, l, self.hidden_size))?;
+                return self.o_proj.forward(&reshaped_ctx);
+            }
+            // Prefill runs the matmul chain in the activation dtype; the
+            // cache is f16 on Vulkan, so convert the views back if needed.
+            let k = if k.dtype() != q.dtype() {
+                k.to_dtype(q.dtype())?
+            } else {
+                k
+            };
+            let v = if v.dtype() != q.dtype() {
+                v.to_dtype(q.dtype())?
+            } else {
+                v
+            };
             let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
             let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
@@ -436,8 +585,9 @@ impl LayerWeights {
     fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let h = self.ln1.forward(x)?;
         let h = self.self_attn.forward(&h, mask, offset)?;
-        let x = (x + h)?;
-        let h2 = self.ln2.forward(&x)?;
+        // Fused add + RMSNorm: one kernel instead of add + RMSNorm (Vulkan f32);
+        // falls back to the decomposed path on other backends.
+        let (x, h2) = self.ln2.fused_add_forward(x, &h)?;
         let h2 = h2.apply(&self.mlp)?;
         x + h2
     }
@@ -538,7 +688,51 @@ impl ModelWeights {
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (_b, l) = input.dims2()?;
+        if std::env::var("QWV_DEBUG").is_ok() {
+            let w = self.embed_tokens.embeddings().clone();
+            tracing::debug!(
+                "EMBEDDING_WEIGHT dtype={:?} shape={:?} dev={:?}",
+                w.dtype(),
+                w.dims(),
+                w.device()
+            );
+            let vals = w.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+            let mut nz = 0usize;
+            for b in vals.iter().take(2048) {
+                if *b != 0.0 {
+                    nz += 1;
+                }
+            }
+            tracing::debug!(
+                "EMBEDDING_WEIGHT first 2048 vals nonzero={}/2048 max={:?}",
+                nz,
+                vals.iter()
+                    .take(2048)
+                    .cloned()
+                    .fold(f32::NEG_INFINITY, f32::max)
+            );
+            tracing::debug!(
+                "EMBEDDING_WEIGHT vals[0..8] = {:?}",
+                vals.iter().take(8).collect::<Vec<_>>()
+            );
+        }
         let mut h = self.embed_tokens.forward(input)?;
+        if std::env::var("QWV_DEBUG").is_ok() {
+            let ev = h.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+            let mut nz = 0usize;
+            for v in ev.iter() {
+                if *v != 0.0 {
+                    nz += 1;
+                }
+            }
+            tracing::debug!(
+                "EMBEDDING shape={:?} nonzero={}/{} max={:?}",
+                h.dims(),
+                nz,
+                ev.len(),
+                ev.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            );
+        }
         // Skip mask materialization when using CPU flash attention
         let causal_mask = if l == 1 || self.device.is_cpu() {
             None
@@ -551,12 +745,55 @@ impl ModelWeights {
                 self.dtype,
             )?)
         };
-        for layer in &mut self.layers {
+        for (li, layer) in self.layers.iter_mut().enumerate() {
             h = layer.forward(&h, causal_mask.as_ref(), offset)?;
+            if let Ok(dir) = std::env::var("QWV_LAYER_DUMP") {
+                let hv = h.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+                let mut nz = 0usize;
+                for v in hv.iter() {
+                    if *v != 0.0 {
+                        nz += 1;
+                    }
+                }
+                tracing::debug!(
+                    "[dump] LAYER{} shape={:?} nonzero={}/{} max={:?} min={:?}",
+                    li,
+                    h.dims(),
+                    nz,
+                    hv.len(),
+                    hv.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
+                    hv.iter().cloned().fold(f32::INFINITY, f32::min)
+                );
+                let bytes: Vec<u8> = hv.iter().flat_map(|f| f.to_le_bytes()).collect();
+                let _ = std::fs::write(
+                    std::path::Path::new(&dir).join(format!("layer-{li}.bin")),
+                    bytes,
+                );
+            }
         }
         let h = self.norm.forward(&h)?;
         let _enter = self.span_output.enter();
-        let last_hidden = h.narrow(1, l - 1, 1)?;
+        let last_hidden = h.narrow(1, l - 1, 1)?.contiguous()?;
+        if std::env::var("QWV_DEBUG").is_ok() {
+            let hv = last_hidden
+                .to_device(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let mut nz = 0usize;
+            for v in hv.iter() {
+                if *v != 0.0 {
+                    nz += 1;
+                }
+            }
+            tracing::debug!(
+                "FINAL_HID shape={:?} nonzero={}/{} max={:?}",
+                last_hidden.dims(),
+                nz,
+                hv.len(),
+                hv.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+            );
+        }
+
         self.lm_head.forward(&last_hidden)?.squeeze(1)
     }
 

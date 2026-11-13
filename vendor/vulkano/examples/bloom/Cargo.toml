@@ -1,0 +1,18 @@
+[package]
+name = "bloom"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "bloom"
+path = "main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+vulkano = { workspace = true, default-features = true }
+vulkano-shaders = { workspace = true }
+vulkano-taskgraph = { workspace = true }
+winit = { workspace = true, default-features = true }

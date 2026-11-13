@@ -15,10 +15,12 @@ pub struct VoxtralLlamaConfig {
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
     pub head_dim: Option<usize>, // explicit head_dim from config
+    #[serde(default)]
     pub use_flash_attn: bool,
     pub rms_norm_eps: f64,
     pub rope_theta: f32,
     pub max_position_embeddings: usize,
+    #[serde(default)]
     pub tie_word_embeddings: bool,
 }
 
@@ -81,6 +83,10 @@ fn calculate_default_inv_freq(cfg: &VoxtralLlamaConfig) -> Vec<f32> {
 }
 
 impl VoxtralLlamaCache {
+    pub fn reset(&mut self) {
+        self.kvs.fill(None);
+        self.masks.clear();
+    }
     pub fn new(
         use_kv_cache: bool,
         dtype: DType,
@@ -260,7 +266,8 @@ impl CausalSelfAttention {
                 masked_fill(&att, &mask, f32::NEG_INFINITY)?
             };
 
-            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
+                .to_dtype(q.dtype())?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
             att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
         };
@@ -327,7 +334,9 @@ struct Mlp {
 impl Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let x = (candle_nn::ops::silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
+        let gate = self.c_fc1.forward(x)?;
+        let gate = candle_nn::ops::silu(&gate.to_dtype(DType::F32)?)?.to_dtype(x.dtype())?;
+        let x = (gate * self.c_fc2.forward(x)?)?;
         self.c_proj.forward(&x)
     }
 
@@ -456,8 +465,8 @@ impl VoxtralLlama {
         };
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
-            .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), cfg).unwrap())
-            .collect();
+            .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), cfg))
+            .collect::<Result<_>>()?;
 
         Ok(Self {
             wte,

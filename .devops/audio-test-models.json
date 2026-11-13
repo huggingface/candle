@@ -1,0 +1,418 @@
+{
+  "schema_version": 1,
+  "description": "Pinned native audio checkpoint test fixtures; no executable model code.",
+  "families": {
+    "whisper-tiny": [
+      {
+        "repo": "openai/whisper-tiny",
+        "revision": "169d4a4341b33bc18d8881c4b69c2e104e1cc0af",
+        "source": "config.json",
+        "destination": "config.json",
+        "sha256": "ffdccec4f3211f4c63310f2b7098f309fe70f3952cedc5e4d11e43f5b2379b98",
+        "size": 1983
+      },
+      {
+        "repo": "openai/whisper-tiny",
+        "revision": "169d4a4341b33bc18d8881c4b69c2e104e1cc0af",
+        "source": "tokenizer.json",
+        "destination": "tokenizer.json",
+        "sha256": "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566",
+        "size": 2480466
+      },
+      {
+        "repo": "openai/whisper-tiny",
+        "revision": "169d4a4341b33bc18d8881c4b69c2e104e1cc0af",
+        "source": "model.safetensors",
+        "destination": "model.safetensors",
+        "sha256": "7ebd0e69e78190ffe1438491fa05cc1f5c1aa3a4c4db3bc1723adbb551ea2395",
+        "size": 151061672
+      }
+    ],
+    "mimi": [
+      {
+        "repo": "kyutai/mimi",
+        "revision": "89091b3e466eb6a9d11e537bf26b144f194978f7",
+        "source": "config.json",
+        "destination": "config.json",
+        "sha256": "aca6f44b04f7bc2e7466b71597d2d51e463ed1cf3cd7025d8848595580546c36",
+        "size": 1117
+      },
+      {
+        "repo": "kyutai/mimi",
+        "revision": "89091b3e466eb6a9d11e537bf26b144f194978f7",
+        "source": "model.safetensors",
+        "destination": "model.safetensors",
+        "sha256": "bac7e85083dcded655d24eaadde7e6eea34c0da1b35fa2d284e641bd2b942a5e",
+        "size": 384649828
+      }
+    ],
+    "parler-tts-mini-v1": [
+      {
+        "repo": "parler-tts/parler-tts-mini-v1",
+        "revision": "0392b9451a601e528fd863bbb0598431fee810d9",
+        "source": "config.json",
+        "destination": "config.json",
+        "sha256": "d8d2afa72bf3b098263a073c4d4df18627b76e1eb454c48f60bc5f787b2433b1",
+        "size": 6930
+      },
+      {
+        "repo": "parler-tts/parler-tts-mini-v1",
+        "revision": "0392b9451a601e528fd863bbb0598431fee810d9",
+        "source": "tokenizer.json",
+        "destination": "tokenizer.json",
+        "sha256": "4d4b21a8cc7c0407dafd8ac6215269cd05c8e49a521c3580479b567879526160",
+        "size": 2422234
+      },
+      {
+        "repo": "parler-tts/parler-tts-mini-v1",
+        "revision": "0392b9451a601e528fd863bbb0598431fee810d9",
+        "source": "model.safetensors",
+        "destination": "model.safetensors",
+        "sha256": "bc430eb6752b96ffb3f67036d1a6e207fbd031575a775716ffa64ef1eeb03692",
+        "size": 3511490560
+      }
+    ],
+    "whisper-tiny-q80": [
+      {
+        "repo": "openai/whisper-tiny",
+        "revision": "169d4a4341b33bc18d8881c4b69c2e104e1cc0af",
+        "source": "config.json",
+        "destination": "config.json",
+        "sha256": "ffdccec4f3211f4c63310f2b7098f309fe70f3952cedc5e4d11e43f5b2379b98",
+        "size": 1983
+      },
+      {
+        "repo": "lmz/candle-whisper",
+        "revision": "02d8350e5402f18725eadb6101b4963d181b0b5e",
+        "source": "tokenizer-tiny.json",
+        "destination": "tokenizer.json",
+        "sha256": "dfc530298b6fbed1a97c6472c575b026453706e2a204c7f7038f2c9d208b0759",
+        "size": 2480452
+      },
+      {
+        "repo": "lmz/candle-whisper",
+        "revision": "02d8350e5402f18725eadb6101b4963d181b0b5e",
+        "source": "model-tiny-q80.gguf",
+        "destination": "model.gguf",
+        "sha256": "edcc907db61aef092f1244dc1e53c55056b472be343e9bbb4dc12ebd4740392f",
+        "size": 41841632
+      }
+    ],
+    "lfm3-audio": [
+      {
+        "repo": "LiquidAI/LFM3-Audio-2B-GGUF",
+        "revision": "39670cb5c42e9c4bfe046519ba7ffbe47f9552ad",
+        "source": "LFM3-Audio-2B-Q4_K_M.gguf",
+        "destination": "model.gguf",
+        "sha256": "9a773289bd321ed879cd3a76545f6aca506e403851a45fb315420aee45625be2",
+        "size": 1099626016
+      },
+      {
+        "repo": "LiquidAI/LFM3-Audio-2B-GGUF",
+        "revision": "39670cb5c42e9c4bfe046519ba7ffbe47f9552ad",
+        "source": "mmproj-LFM3-Audio-2B-Q8_0.gguf",
+        "destination": "mmproj.gguf",
+        "sha256": "2b6648b1fd48af16aa0877b0592b144d15070783673e038a379fdbc51d40e365",
+        "size": 303811840
+      },
+      {
+        "repo": "LiquidAI/LFM3-Audio-2B",
+        "revision": "2d6c1f99c129b3ef07a8d168bc0ff08e2bdb93f1",
+        "source": "tokenizer.json",
+        "destination": "tokenizer.json",
+        "sha256": "41927bd314d17d7d7fadb44e10cd0919f7b71528d7741596d8cbd15c6945ec44",
+        "size": 17908634
+      },
+      {
+        "repo": "LiquidAI/LFM3-Audio-2B",
+        "revision": "2d6c1f99c129b3ef07a8d168bc0ff08e2bdb93f1",
+        "source": "tokenizer_config.json",
+        "destination": "tokenizer_config.json",
+        "sha256": "89ecfb695110334b5f7883aeca8e6b9a2e53b71701adf16db8b700c7f857ef16",
+        "size": 674
+      },
+      {
+        "repo": "LiquidAI/LFM3-Audio-2B",
+        "revision": "2d6c1f99c129b3ef07a8d168bc0ff08e2bdb93f1",
+        "source": "special_tokens_map.json",
+        "destination": "special_tokens_map.json",
+        "sha256": "7946f864cbfb62a1b041bda937244210a1a87f4a6cab3a48b791131b2cd57f88",
+        "size": 92
+      },
+      {
+        "local_source": "candle-audio/tests/fixtures/lfm3-audio-config.json",
+        "destination": "config.json",
+        "sha256": "1eb2a8349a1ec9eda2ed8e8bb1a8788007ae2ae9baa38a7d959743c5379d30d8",
+        "size": 6243
+      }
+    ],
+    "samples": [
+      {
+        "url": "https://raw.githubusercontent.com/ggml-org/whisper.cpp/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav",
+        "destination": "jfk.wav",
+        "sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+        "size": 352078
+      }
+    ],
+    "encodec-24khz": [
+      {
+        "repo": "facebook/encodec_24khz",
+        "revision": "c1dbe2ae3f1de713481a3b3e7c47f357092ee040",
+        "source": "config.json",
+        "destination": "config.json",
+        "sha256": "cd7da7da3b3b34daee262e213e3daa24dc01b4fdc3aadd38ed760f0d6f955871",
+        "size": 809
+      },
+      {
+        "repo": "facebook/encodec_24khz",
+        "revision": "c1dbe2ae3f1de713481a3b3e7c47f357092ee040",
+        "source": "model.safetensors",
+        "destination": "model.safetensors",
+        "sha256": "37a7cb100f71a29e6c1d815aca8666a1d7ea8885ebe44c306c751a5103559d57",
+        "size": 93119608
+      }
+    ],
+    "snac-24khz": [
+      {
+        "repo": "hubertsiuzdak/snac_24khz",
+        "revision": "d73ad176a12188fcf4f360ba3bf2c2fbbe8f58ec",
+        "source": "config.json",
+        "destination": "config.json",
+        "sha256": "e119b9366d4f5e73c6ca5f31137c4ff361578bbb132953a5203afe037c4012be",
+        "size": 300
+      },
+      {
+        "repo": "hubertsiuzdak/snac_24khz",
+        "revision": "d73ad176a12188fcf4f360ba3bf2c2fbbe8f58ec",
+        "source": "pytorch_model.bin",
+        "destination": "pytorch_model.bin",
+        "sha256": "4b8164cc6606bfa627f1a784734c1e539891518f1191ed9194fe1e3b9b4bff40",
+        "size": 79488254
+      }
+    ],
+    "musicgen-small": [
+      {
+        "repo": "facebook/musicgen-small",
+        "revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
+        "source": "config.json",
+        "destination": "config.json",
+        "sha256": "36bba569a817511fa54ddd1c42b157c24c8f6a178b7b85484d7475e71ce30f6d",
+        "size": 7866
+      },
+      {
+        "repo": "facebook/musicgen-small",
+        "revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
+        "source": "generation_config.json",
+        "destination": "generation_config.json",
+        "sha256": "3126e10627aad71cce75772137b1043bae6a066751f0aaebf7a1ba440a5fc3c4",
+        "size": 224
+      },
+      {
+        "repo": "facebook/musicgen-small",
+        "revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
+        "source": "model.safetensors",
+        "destination": "model.safetensors",
+        "sha256": "1bdc99d43eb6c775967df24b65b0a9f847c0907e95664698d93b5a1c35f5090d",
+        "size": 2364427288
+      },
+      {
+        "repo": "facebook/musicgen-small",
+        "revision": "4c8334b02c6ec4e8664a91979669a501ec497792",
+        "source": "tokenizer.json",
+        "destination": "tokenizer.json",
+        "sha256": "5f0ed8ab5b8cfa9812bb73752f1d80c292e52bcf5a87a144dc9ab2d251056cbb",
+        "size": 2422095
+      }
+    ],
+    "metavoice-v0.1": [
+      {
+        "repo": "lmz/candle-metavoice",
+        "revision": "be4f5758c5a50bdb57777f7c7b1a6c39ec1a491d",
+        "source": "first_stage.meta.json",
+        "destination": "first_stage.meta.json",
+        "sha256": "24e68d06c5040c2590502e47ea4adbcccd0cd1af9dec5c2f1ea827e4ded31a45",
+        "size": 6409
+      },
+      {
+        "repo": "lmz/candle-metavoice",
+        "revision": "be4f5758c5a50bdb57777f7c7b1a6c39ec1a491d",
+        "source": "first_stage.model_args.json",
+        "destination": "first_stage.model_args.json",
+        "sha256": "b5f43364d8d4776bd910a278ac2d574df01c532be9544e210e3487eb47ca0171",
+        "size": 321
+      },
+      {
+        "repo": "lmz/candle-metavoice",
+        "revision": "be4f5758c5a50bdb57777f7c7b1a6c39ec1a491d",
+        "source": "first_stage.safetensors",
+        "destination": "first_stage.safetensors",
+        "sha256": "5ffbebad2b338f47b5d0a61423c11a99f4a3a02cb419142adc5cef5a532bb56e",
+        "size": 4993771712
+      },
+      {
+        "repo": "lmz/candle-metavoice",
+        "revision": "be4f5758c5a50bdb57777f7c7b1a6c39ec1a491d",
+        "source": "first_stage_q4k.gguf",
+        "destination": "first_stage_q4k.gguf",
+        "sha256": "8bd2c4951d3600f5c17e70c4b01f0104d774cd44e485f6244cc2dd71edbbc2b2",
+        "size": 702603488
+      },
+      {
+        "repo": "lmz/candle-metavoice",
+        "revision": "be4f5758c5a50bdb57777f7c7b1a6c39ec1a491d",
+        "source": "second_stage.safetensors",
+        "destination": "second_stage.safetensors",
+        "sha256": "d201aeaae8c4672a7b57a3aecbe438e88bc3f004bc992e2c0e82c07062194ccd",
+        "size": 57841232
+      },
+      {
+        "repo": "lmz/candle-metavoice",
+        "revision": "be4f5758c5a50bdb57777f7c7b1a6c39ec1a491d",
+        "source": "spk_emb.safetensors",
+        "destination": "spk_emb.safetensors",
+        "sha256": "3122fb56bc11df4ec7c07b65e6e9ebecd4b59654d139504081e37960757d21ba",
+        "size": 592
+      },
+      {
+        "repo": "lmz/candle-metavoice",
+        "revision": "be4f5758c5a50bdb57777f7c7b1a6c39ec1a491d",
+        "source": "speaker_encoder.safetensors",
+        "destination": "speaker_encoder.safetensors",
+        "sha256": "3f2f3650622aa42c2b99c10189c16040bc04df170d1ec7ea91af44f92485f3e0",
+        "size": 5695800
+      },
+      {
+        "repo": "facebook/encodec_24khz",
+        "revision": "c1dbe2ae3f1de713481a3b3e7c47f357092ee040",
+        "source": "config.json",
+        "destination": "encodec/config.json",
+        "sha256": "cd7da7da3b3b34daee262e213e3daa24dc01b4fdc3aadd38ed760f0d6f955871",
+        "size": 809
+      },
+      {
+        "repo": "facebook/encodec_24khz",
+        "revision": "c1dbe2ae3f1de713481a3b3e7c47f357092ee040",
+        "source": "model.safetensors",
+        "destination": "encodec/model.safetensors",
+        "sha256": "37a7cb100f71a29e6c1d815aca8666a1d7ea8885ebe44c306c751a5103559d57",
+        "size": 93119608
+      }
+    ],
+    "voxtral-mini-3b": [
+      {
+        "repo": "mistralai/Voxtral-Mini-3B-2507",
+        "revision": "3060fe34b35ba5d44202ce9ff3c097642914f8f3",
+        "source": "model.safetensors.index.json",
+        "destination": "model.safetensors.index.json",
+        "size": 68088,
+        "sha256": "7506794dd65e4324685f9634b3d83f20d36a723543650c1e6b72d81965289930"
+      },
+      {
+        "repo": "mistralai/Voxtral-Mini-3B-2507",
+        "revision": "3060fe34b35ba5d44202ce9ff3c097642914f8f3",
+        "source": "generation_config.json",
+        "destination": "generation_config.json",
+        "size": 108,
+        "sha256": "cebeed3d4a1680c9b311863385d32b91008480dfbf8cf7abc2142447b8f73b76"
+      },
+      {
+        "repo": "mistralai/Voxtral-Mini-3B-2507",
+        "revision": "3060fe34b35ba5d44202ce9ff3c097642914f8f3",
+        "source": "preprocessor_config.json",
+        "destination": "preprocessor_config.json",
+        "size": 357,
+        "sha256": "86d67d926e17d3a9bb0bae334c9fc46bc163181992357a0357c0aec2c7e131d1"
+      },
+      {
+        "repo": "mistralai/Voxtral-Mini-3B-2507",
+        "revision": "3060fe34b35ba5d44202ce9ff3c097642914f8f3",
+        "source": "config.json",
+        "destination": "config.json",
+        "size": 1361,
+        "sha256": "368124c9a9171b3a6c0cdb35cd7fedeff465eefecf315e2a621684bbed7dcd7e"
+      },
+      {
+        "repo": "mistralai/Voxtral-Mini-3B-2507",
+        "revision": "3060fe34b35ba5d44202ce9ff3c097642914f8f3",
+        "source": "tekken.json",
+        "destination": "tekken.json",
+        "size": 14894206,
+        "sha256": "4aaf3836c2a5332f029ce85a7a62255c966f47b6797ef81dedd0ade9c862e4a8"
+      },
+      {
+        "repo": "mistralai/Voxtral-Mini-3B-2507",
+        "revision": "3060fe34b35ba5d44202ce9ff3c097642914f8f3",
+        "source": "model-00002-of-00002.safetensors",
+        "destination": "model-00002-of-00002.safetensors",
+        "size": 4379088336,
+        "sha256": "0a103ba715bc0d656e94bf79d637d4f8f0f4fe6d76fb1d4db7ee46c6b940f631"
+      },
+      {
+        "repo": "mistralai/Voxtral-Mini-3B-2507",
+        "revision": "3060fe34b35ba5d44202ce9ff3c097642914f8f3",
+        "source": "model-00001-of-00002.safetensors",
+        "destination": "model-00001-of-00002.safetensors",
+        "size": 4977385976,
+        "sha256": "1facdc4c5a0e84f2881a59c4756441b7030a1f1036b2124c117540408d0e5fe9"
+      }
+    ],
+    "gemma4-e2b": [
+      {
+        "repo": "google/gemma-4-E2B-it",
+        "revision": "4adf15748de9e1a0097b6274cee9c15836c41c37",
+        "source": "tokenizer_config.json",
+        "destination": "tokenizer_config.json",
+        "size": 3082,
+        "sha256": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633"
+      },
+      {
+        "repo": "google/gemma-4-E2B-it",
+        "revision": "4adf15748de9e1a0097b6274cee9c15836c41c37",
+        "source": "chat_template.jinja",
+        "destination": "chat_template.jinja",
+        "size": 18569,
+        "sha256": "0a2c8073c878ab1da004bee933a998606537bbb62016310352c7285c3f01c5b5"
+      },
+      {
+        "repo": "google/gemma-4-E2B-it",
+        "revision": "4adf15748de9e1a0097b6274cee9c15836c41c37",
+        "source": "generation_config.json",
+        "destination": "generation_config.json",
+        "size": 208,
+        "sha256": "d4226bbe3117d2d253ba4609720ba82c6c4ce4627a9a6ae05387c78983ac03de"
+      },
+      {
+        "repo": "google/gemma-4-E2B-it",
+        "revision": "4adf15748de9e1a0097b6274cee9c15836c41c37",
+        "source": "processor_config.json",
+        "destination": "processor_config.json",
+        "size": 1689,
+        "sha256": "32bdf45d2ad4cc29a0822ddd157a182de76644f0419a6228d151495256e9813c"
+      },
+      {
+        "repo": "google/gemma-4-E2B-it",
+        "revision": "4adf15748de9e1a0097b6274cee9c15836c41c37",
+        "source": "config.json",
+        "destination": "config.json",
+        "size": 4954,
+        "sha256": "1b28f3d2c3100f6c594754b81107428bd7b822a7f48272ca681dae9d2ec38330"
+      },
+      {
+        "repo": "google/gemma-4-E2B-it",
+        "revision": "4adf15748de9e1a0097b6274cee9c15836c41c37",
+        "source": "model.safetensors",
+        "destination": "model.safetensors",
+        "size": 10246621918,
+        "sha256": "2db5482b20d746879bb3ef79b5203e9075a2e2b98f54ec7c2f281c1477ddc550"
+      },
+      {
+        "repo": "google/gemma-4-E2B-it",
+        "revision": "4adf15748de9e1a0097b6274cee9c15836c41c37",
+        "source": "tokenizer.json",
+        "destination": "tokenizer.json",
+        "size": 32155733,
+        "sha256": "ab26b2add729e6f645bd869f228f14190a06615538f3be6f7786f33d13d78ad2"
+      }
+    ]
+  }
+}

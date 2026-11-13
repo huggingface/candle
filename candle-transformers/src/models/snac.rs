@@ -27,6 +27,59 @@ pub struct Config {
     pub depthwise: bool,
 }
 
+impl Config {
+    pub fn validate(&self) -> Result<()> {
+        if self.sampling_rate == 0
+            || self.encoder_dim == 0
+            || self.decoder_dim == 0
+            || self.encoder_rates.is_empty()
+            || self.decoder_rates.is_empty()
+            || self.encoder_rates.contains(&0)
+            || self.decoder_rates.contains(&0)
+            || self.vq_strides.is_empty()
+            || self.vq_strides.contains(&0)
+            || self.attn_window_size == Some(0)
+            || self.codebook_size < 2
+            || self.codebook_dim == 0
+        {
+            candle::bail!("invalid SNAC configuration");
+        }
+        if self.encoder_rates.len() >= usize::BITS as usize
+            || self.decoder_rates.len() >= usize::BITS as usize
+        {
+            candle::bail!("SNAC layer scale overflow");
+        }
+        let latent = self
+            .encoder_dim
+            .checked_shl(self.encoder_rates.len() as u32)
+            .ok_or_else(|| candle::Error::Msg("SNAC latent scale overflow".into()))?;
+        let decoder_scale = 1usize << self.decoder_rates.len();
+        if !self.decoder_dim.is_multiple_of(decoder_scale) || self.decoder_dim / decoder_scale == 0
+        {
+            candle::bail!("SNAC decoder channel scale is invalid");
+        }
+        if self.attn_window_size.is_some()
+            && (!latent.is_multiple_of(64) || !self.decoder_dim.is_multiple_of(64))
+        {
+            candle::bail!("SNAC attention channels must be divisible by head dimension 64");
+        }
+        let hop = self
+            .encoder_rates
+            .iter()
+            .try_fold(1usize, |n, stride| n.checked_mul(*stride))
+            .ok_or_else(|| candle::Error::Msg("SNAC encoder hop overflow".into()))?;
+        let decoder = self
+            .decoder_rates
+            .iter()
+            .try_fold(1usize, |n, stride| n.checked_mul(*stride))
+            .ok_or_else(|| candle::Error::Msg("SNAC decoder hop overflow".into()))?;
+        if hop != decoder {
+            candle::bail!("SNAC encoder and decoder rates disagree");
+        }
+        Ok(())
+    }
+}
+
 // Equivalent to torch.repeat_interleave
 pub fn repeat_interleave<D: candle::shape::Dim>(
     img: &Tensor,
@@ -147,6 +200,7 @@ struct LocalMHA {
     to_out: Linear,
     num_heads: usize,
     head_dim: usize,
+    window_size: usize,
     rel_pos: Option<SinusoidalEmbeddings>,
 }
 
@@ -158,6 +212,13 @@ impl LocalMHA {
         use_rotary_pos_emb: bool,
         vb: VarBuilder,
     ) -> Result<Self> {
+        if window_size == 0
+            || dim_head == 0
+            || !dim.is_multiple_of(dim_head)
+            || !dim_head.is_multiple_of(2)
+        {
+            candle::bail!("invalid SNAC local attention dimensions");
+        }
         let norm = candle_nn::layer_norm(dim, 1e-5, vb.pp("norm"))?;
         let to_qkv = linear_b(dim, dim * 3, false, vb.pp("to_qkv"))?;
         let to_out = linear_b(dim, dim, false, vb.pp("to_out"))?;
@@ -175,47 +236,69 @@ impl LocalMHA {
             rel_pos,
             num_heads: dim / dim_head,
             head_dim: dim_head,
+            window_size,
         })
     }
 }
 
 impl Module for LocalMHA {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let (b, c, t) = xs.dims3()?;
-        let residual = xs.clone();
-        let xs = xs.transpose(1, 2)?.apply(&self.norm)?;
-        let qkv = xs.apply(&self.to_qkv)?;
-        let q = qkv.narrow(D::Minus1, 0, c)?;
-        let k = qkv.narrow(D::Minus1, c, c)?;
-        let v = qkv.narrow(D::Minus1, 2 * c, c)?;
-        let q = q
-            .reshape((b, t, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let k = k
-            .reshape((b, t, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let v = v
-            .reshape((b, t, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let (q, k) = match self.rel_pos {
-            Some(_) => todo!(),
-            None => (q, k),
+        let (batch, channels, time) = xs.dims3()?;
+        if time == 0 || !time.is_multiple_of(self.window_size) {
+            candle::bail!("SNAC attention length must be divisible by the local window");
+        }
+        let windows = time / self.window_size;
+        let normalized = xs.transpose(1, 2)?.apply(&self.norm)?;
+        let projected = normalized.apply(&self.to_qkv)?;
+        let shape = (
+            batch,
+            windows,
+            self.window_size,
+            self.num_heads,
+            self.head_dim,
+        );
+        let project = |offset| -> Result<Tensor> {
+            projected
+                .narrow(D::Minus1, offset, channels)?
+                .reshape(shape)?
+                .permute((0, 3, 1, 2, 4))?
+                .contiguous()?
+                .reshape((
+                    batch * self.num_heads * windows,
+                    1,
+                    self.window_size,
+                    self.head_dim,
+                ))
         };
-        let out = {
-            let scale = 1f64 / f64::sqrt(self.head_dim as f64);
-            let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-            // Non-causal attention
-            let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-            attn_weights.matmul(&v)?
-        };
-        let out = out
-            .transpose(1, 2)?
-            .reshape((b, t, self.num_heads * self.head_dim))?
-            .apply(&self.to_out)?;
-        out.transpose(1, 2)? + residual
+        let (mut q, mut k, v) = (project(0)?, project(channels)?, project(2 * channels)?);
+        if let Some(relative) = &self.rel_pos {
+            let positions = Tensor::arange(0u32, self.window_size as u32, xs.device())?
+                .to_dtype(DType::F32)?
+                .unsqueeze(1)?;
+            let frequencies = positions.matmul(&relative.inv_freq.unsqueeze(0)?)?;
+            let cos = frequencies.cos()?.to_dtype(q.dtype())?;
+            let sin = frequencies.sin()?.to_dtype(q.dtype())?;
+            q = candle_nn::rotary_emb::rope(&q, &cos, &sin)?;
+            k = candle_nn::rotary_emb::rope(&k, &cos, &sin)?;
+        }
+        let weights = candle_nn::ops::softmax_last_dim(
+            &(q.matmul(&k.transpose(2, 3)?)? / (self.head_dim as f64).sqrt())?,
+        )?;
+        let out = weights
+            .matmul(&v)?
+            .reshape((
+                batch,
+                self.num_heads,
+                windows,
+                self.window_size,
+                self.head_dim,
+            ))?
+            .permute((0, 2, 3, 1, 4))?
+            .contiguous()?
+            .reshape((batch, time, channels))?
+            .apply(&self.to_out)?
+            .transpose(1, 2)?;
+        out + xs
     }
 }
 
@@ -440,6 +523,9 @@ impl candle::Module for Encoder {
         for block in self.blocks.iter() {
             xs = xs.apply(block)?
         }
+        if let Some(attention) = &self.local_mha {
+            xs = xs.apply(attention)?;
+        }
         xs.apply(&self.conv2)
     }
 }
@@ -579,15 +665,18 @@ impl candle::Module for Decoder {
             ConvInit::Standard(c) => xs.apply(c)?,
             ConvInit::Depthwise(c1, c2) => xs.apply(c1)?.apply(c2)?,
         };
+        if let Some(attention) = &self.local_mha {
+            xs = xs.apply(attention)?;
+        }
         for block in self.blocks.iter() {
             xs = xs.apply(block)?
         }
-        xs.apply(&self.snake1)?.apply(&self.conv2)
+        xs.apply(&self.snake1)?.apply(&self.conv2)?.tanh()
     }
 }
 
 fn normalize(v: &Tensor) -> Result<Tensor> {
-    v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)
+    v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?.clamp(1e-12f32, f32::MAX)?)
 }
 
 // https://github.com/hubertsiuzdak/snac/blob/main/snac/vq.py
@@ -745,6 +834,7 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        cfg.validate()?;
         let encoder = Encoder::new(
             cfg.encoder_dim,
             &cfg.encoder_rates,
@@ -782,10 +872,12 @@ impl Model {
 
     fn preprocess(&self, audio_data: &Tensor) -> Result<Tensor> {
         let len = audio_data.dim(D::Minus1)?;
-        let lcm = lcm(
-            self.config.vq_strides[0],
-            self.config.attn_window_size.unwrap_or(1),
-        );
+        let lcm = self
+            .config
+            .vq_strides
+            .iter()
+            .copied()
+            .fold(self.config.attn_window_size.unwrap_or(1), lcm);
         let pad_to = self.hop_length * lcm;
         let right_pad = len.div_ceil(pad_to) * pad_to - len;
         let audio_data = audio_data.pad_with_zeros(D::Minus1, 0, right_pad)?;
@@ -800,6 +892,9 @@ impl Model {
     }
 
     pub fn decode(&self, audio_codes: &[&Tensor]) -> Result<Tensor> {
+        if audio_codes.len() != self.num_codebooks() {
+            candle::bail!("SNAC codebook count mismatch");
+        }
         let audio_values = self.quantizer.from_codes(audio_codes)?;
         audio_values.apply(&self.decoder)
     }
@@ -810,5 +905,66 @@ impl Model {
 
     pub fn num_codebooks(&self) -> usize {
         self.quantizer.quantizers.len()
+    }
+}
+
+#[cfg(test)]
+mod codec_tests {
+    use super::*;
+    #[test]
+    fn local_rotary_attention_matches_official_torch_reference_and_stays_windowed() -> Result<()> {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/snac_attention.json"))
+                .map_err(candle::Error::wrap)?;
+        let values = |name: &str| {
+            fixture[name]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_f64().unwrap() as f32)
+                .collect::<Vec<_>>()
+        };
+        let device = Device::Cpu;
+        let mut weights = std::collections::HashMap::new();
+        weights.insert("norm.weight".into(), Tensor::ones(4, DType::F32, &device)?);
+        weights.insert("norm.bias".into(), Tensor::zeros(4, DType::F32, &device)?);
+        weights.insert(
+            "to_qkv.weight".into(),
+            Tensor::from_vec(values("qkv"), (12, 4), &device)?,
+        );
+        weights.insert(
+            "to_out.weight".into(),
+            Tensor::from_vec(values("out_weight"), (4, 4), &device)?,
+        );
+        let layer = LocalMHA::new(
+            4,
+            2,
+            2,
+            true,
+            VarBuilder::from_tensors(weights, DType::F32, &device),
+        )?;
+        let source = Tensor::from_vec(values("input"), (1, 4, 4), &device)?;
+        let actual = layer.forward(&source)?.flatten_all()?.to_vec1::<f32>()?;
+        let expected = values("expected");
+        let difference = actual
+            .iter()
+            .zip(expected)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0f32, f32::max);
+        assert!(difference < 2e-6, "attention diff={difference}");
+        let mut changed = values("input");
+        for value in &mut changed[2..4] {
+            *value += 10.;
+        }
+        let changed = layer
+            .forward(&Tensor::from_vec(changed, (1, 4, 4), &device)?)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        for channel in 0..4 {
+            for time in 0..2 {
+                assert!((actual[channel * 4 + time] - changed[channel * 4 + time]).abs() < 1e-6);
+            }
+        }
+        Ok(())
     }
 }

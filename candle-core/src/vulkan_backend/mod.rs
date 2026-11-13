@@ -1,0 +1,13818 @@
+//! The Vulkan backend: storage + device trait implementations.
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo, PrimaryAutoCommandBuffer,
+};
+
+use vulkano::memory::allocator::{AllocationCreateInfo, DeviceLayout, MemoryTypeFilter};
+use vulkano::sync::GpuFuture;
+
+pub use crate::vulkan_backend::device::{PipedId, VBuf, VulkanDevice};
+
+use crate::backend::{BackendDevice, BackendStorage};
+use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
+use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
+
+mod device;
+
+/// Errors from the Vulkan backend.
+#[derive(thiserror::Error, Debug)]
+pub enum VulkanError {
+    #[error("kernel error: {0}")]
+    KernelError(#[from] candle_vulkan_kernels::VulkanKernelError),
+
+    #[error("{0}")]
+    Message(String),
+}
+
+impl From<String> for VulkanError {
+    fn from(e: String) -> Self {
+        VulkanError::Message(e)
+    }
+}
+/// Uploads `bytes` (`n` elements of `dtype`) to a new device storage via a
+/// host-visible staging buffer and a deferred device copy.
+fn upload_bytes(
+    device: &VulkanDevice,
+    bytes: &[u8],
+    n: usize,
+    dtype: DType,
+) -> Result<VulkanStorage> {
+    // A zero-element upload still allocates a one-element device buffer
+    // (see `create_vram_buffer`); the staging buffer must be non-empty for
+    // the same reason, so a single zero byte stands in for it.
+    let staging = if bytes.is_empty() {
+        Buffer::from_iter(
+            device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            std::iter::once(0u8),
+        )
+        .map_err(|e| Error::Vulkan(format!("upload staging: {e:?}").into()))?
+    } else {
+        Buffer::from_iter(
+            device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            bytes.iter().copied(),
+        )
+        .map_err(|e| Error::Vulkan(format!("upload staging: {e:?}").into()))?
+    };
+    let storage = VulkanStorage::new(device, n, dtype)?;
+    let dst = storage.buffer().as_u8();
+    device.execute(move |cbb| {
+        cbb.copy_buffer(CopyBufferInfo::new(staging, dst))
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })?;
+    Ok(storage)
+}
+
+impl BackendDevice for VulkanDevice {
+    type Storage = VulkanStorage;
+
+    fn new(gpu_id: usize) -> Result<Self> {
+        Self::new(gpu_id)
+    }
+
+    fn location(&self) -> crate::DeviceLocation {
+        crate::DeviceLocation::Vulkan {
+            gpu_id: self.gpu_id(),
+        }
+    }
+
+    fn same_device(&self, other: &Self) -> bool {
+        self.gpu_id() == other.gpu_id()
+    }
+
+    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
+        let storage = VulkanStorage::new(self, shape.elem_count(), dtype)?;
+        // Storage is allocated uninitialized; zero it on the GPU.
+        storage.zero_fill()?;
+        Ok(storage)
+    }
+
+    unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
+        VulkanStorage::new(self, shape.elem_count(), dtype)
+    }
+
+    fn storage_from_slice<T: crate::WithDType>(&self, data: &[T]) -> Result<Self::Storage> {
+        let n = data.len();
+        // Upload through a byte view so every element type works with one
+        // code path.
+        let bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
+        };
+        upload_bytes(self, bytes, n, T::DTYPE)
+    }
+
+    fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
+        match storage {
+            CpuStorage::U8(d) => self.storage_from_slice(d),
+            CpuStorage::U32(d) => self.storage_from_slice(d),
+            CpuStorage::I16(d) => self.storage_from_slice(d),
+            CpuStorage::I32(d) => self.storage_from_slice(d),
+            CpuStorage::I64(d) => self.storage_from_slice(d),
+            CpuStorage::BF16(d) => self.storage_from_slice(d),
+            CpuStorage::F16(d) => self.storage_from_slice(d),
+            CpuStorage::F32(d) => self.storage_from_slice(d),
+            CpuStorage::F64(d) => self.storage_from_slice(d),
+            CpuStorage::F8E4M3(d) => self.storage_from_slice(d),
+            // Byte-width dummy types have no `WithDType` impl: upload the
+            // raw bytes and tag the storage with the target dtype.
+            CpuStorage::F6E2M3(d) => {
+                let bytes: Vec<u8> = d.iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, d.len(), DType::F6E2M3)
+            }
+            CpuStorage::F6E3M2(d) => {
+                let bytes: Vec<u8> = d.iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, d.len(), DType::F6E3M2)
+            }
+            CpuStorage::F4(d) => {
+                let bytes: Vec<u8> = d.iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, d.len(), DType::F4)
+            }
+            CpuStorage::F8E8M0(d) => {
+                let bytes: Vec<u8> = d.iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, d.len(), DType::F8E8M0)
+            }
+        }
+    }
+
+    fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<Self::Storage> {
+        match storage {
+            CpuStorage::U8(d) => self.storage_from_slice(&d),
+            CpuStorage::U32(d) => self.storage_from_slice(&d),
+            CpuStorage::I16(d) => self.storage_from_slice(&d),
+            CpuStorage::I32(d) => self.storage_from_slice(&d),
+            CpuStorage::I64(d) => self.storage_from_slice(&d),
+            CpuStorage::BF16(d) => self.storage_from_slice(&d),
+            CpuStorage::F16(d) => self.storage_from_slice(&d),
+            CpuStorage::F32(d) => self.storage_from_slice(&d),
+            CpuStorage::F64(d) => self.storage_from_slice(&d),
+            CpuStorage::F8E4M3(d) => self.storage_from_slice(&d),
+            CpuStorage::F6E2M3(d) => {
+                let bytes: Vec<u8> = d.into_iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, bytes.len(), DType::F6E2M3)
+            }
+            CpuStorage::F6E3M2(d) => {
+                let bytes: Vec<u8> = d.into_iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, bytes.len(), DType::F6E3M2)
+            }
+            CpuStorage::F4(d) => {
+                let bytes: Vec<u8> = d.into_iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, bytes.len(), DType::F4)
+            }
+            CpuStorage::F8E8M0(d) => {
+                let bytes: Vec<u8> = d.into_iter().map(|v| v.to_bits()).collect();
+                upload_bytes(self, &bytes, bytes.len(), DType::F8E8M0)
+            }
+        }
+    }
+
+    fn rand_uniform(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        min: f64,
+        max: f64,
+    ) -> Result<Self::Storage> {
+        use rand::prelude::*;
+        let elem_count = shape.elem_count();
+        // Host-side generation seeded from the device seed, then uploaded:
+        // keeps the distribution semantics of the CPU backend while the
+        // device stays free of RNG plumbing.
+        let seed = self
+            .seed_atomic()
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let mut rng = StdRng::seed_from_u64(seed);
+        // Advance the device seed so consecutive draws produce different
+        // sequences (the host-side StdRng is a snapshot of the seed).
+        self.seed_atomic()
+            .fetch_add(elem_count as u64, std::sync::atomic::Ordering::Relaxed);
+        let cpu = match dtype {
+            DType::U8
+            | DType::U32
+            | DType::I16
+            | DType::I32
+            | DType::I64
+            | DType::F6E2M3
+            | DType::F6E3M2
+            | DType::F4
+            | DType::F8E8M0 => return Err(Error::UnsupportedDTypeForOp(dtype, "rand_uniform").bt()),
+            DType::BF16 => {
+                let uniform =
+                    rand::distr::Uniform::new(half::bf16::from_f64(min), half::bf16::from_f64(max))
+                        .map_err(Error::wrap)?;
+                let data: Vec<half::bf16> = (0..elem_count).map(|_| rng.sample(uniform)).collect();
+                CpuStorage::BF16(data)
+            }
+            DType::F16 => {
+                let uniform =
+                    rand::distr::Uniform::new(half::f16::from_f64(min), half::f16::from_f64(max))
+                        .map_err(Error::wrap)?;
+                let data: Vec<half::f16> = (0..elem_count).map(|_| rng.sample(uniform)).collect();
+                CpuStorage::F16(data)
+            }
+            DType::F32 => {
+                let uniform =
+                    rand::distr::Uniform::new(min as f32, max as f32).map_err(Error::wrap)?;
+                let data: Vec<f32> = (0..elem_count).map(|_| rng.sample(uniform)).collect();
+                CpuStorage::F32(data)
+            }
+            DType::F64 => {
+                let uniform = rand::distr::Uniform::new(min, max).map_err(Error::wrap)?;
+                let data: Vec<f64> = (0..elem_count).map(|_| rng.sample(uniform)).collect();
+                CpuStorage::F64(data)
+            }
+            DType::F8E4M3 => {
+                let uniform = rand::distr::Uniform::new(
+                    microfloat::f8e4m3::from_f64(min),
+                    microfloat::f8e4m3::from_f64(max),
+                )
+                .map_err(Error::wrap)?;
+                let data: Vec<microfloat::f8e4m3> =
+                    (0..elem_count).map(|_| rng.sample(uniform)).collect();
+                CpuStorage::F8E4M3(data)
+            }
+        };
+        self.storage_from_cpu_storage_owned(cpu)
+    }
+
+    fn rand_normal(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        mean: f64,
+        std: f64,
+    ) -> Result<Self::Storage> {
+        use rand::prelude::*;
+        let elem_count = shape.elem_count();
+        // Host-side generation seeded from the device seed, then uploaded.
+        let seed = self
+            .seed_atomic()
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let mut rng = StdRng::seed_from_u64(seed);
+        // Advance the device seed so consecutive draws produce different
+        // sequences (the host-side StdRng is a snapshot of the seed).
+        self.seed_atomic()
+            .fetch_add(elem_count as u64, std::sync::atomic::Ordering::Relaxed);
+        let cpu = match dtype {
+            DType::U8
+            | DType::U32
+            | DType::I16
+            | DType::I32
+            | DType::I64
+            | DType::F6E2M3
+            | DType::F6E3M2
+            | DType::F4
+            | DType::F8E8M0 => return Err(Error::UnsupportedDTypeForOp(dtype, "rand_normal").bt()),
+            DType::BF16 => {
+                let normal =
+                    rand_distr::Normal::new(half::bf16::from_f64(mean), half::bf16::from_f64(std))
+                        .map_err(Error::wrap)?;
+                let data: Vec<half::bf16> =
+                    (0..elem_count).map(|_| normal.sample(&mut rng)).collect();
+                CpuStorage::BF16(data)
+            }
+            DType::F16 => {
+                let normal =
+                    rand_distr::Normal::new(half::f16::from_f64(mean), half::f16::from_f64(std))
+                        .map_err(Error::wrap)?;
+                let data: Vec<half::f16> =
+                    (0..elem_count).map(|_| normal.sample(&mut rng)).collect();
+                CpuStorage::F16(data)
+            }
+            DType::F32 => {
+                let normal =
+                    rand_distr::Normal::new(mean as f32, std as f32).map_err(Error::wrap)?;
+                let data: Vec<f32> = (0..elem_count).map(|_| normal.sample(&mut rng)).collect();
+                CpuStorage::F32(data)
+            }
+            DType::F64 => {
+                let normal = rand_distr::Normal::new(mean, std).map_err(Error::wrap)?;
+                let data: Vec<f64> = (0..elem_count).map(|_| normal.sample(&mut rng)).collect();
+                CpuStorage::F64(data)
+            }
+            DType::F8E4M3 => {
+                // f8e4m3 has no Float impl: draw in f64 and convert.
+                let normal = rand_distr::Normal::new(mean, std).map_err(Error::wrap)?;
+                let data: Vec<microfloat::f8e4m3> = (0..elem_count)
+                    .map(|_| microfloat::f8e4m3::from_f64(normal.sample(&mut rng)))
+                    .collect();
+                CpuStorage::F8E4M3(data)
+            }
+        };
+        self.storage_from_cpu_storage_owned(cpu)
+    }
+
+    fn set_seed(&self, seed: u64) -> Result<()> {
+        self.seed_atomic()
+            .store(seed, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn get_current_seed(&self) -> Result<u64> {
+        Ok(self
+            .seed_atomic()
+            .load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    fn synchronize(&self) -> Result<()> {
+        self.synchronize()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum VulkanStorageBuffer {
+    U8(Subbuffer<[u8]>),
+    U32(Subbuffer<[u32]>),
+    I16(Subbuffer<[i16]>),
+    I32(Subbuffer<[i32]>),
+    I64(Subbuffer<[i64]>),
+    BF16(Subbuffer<[half::bf16]>),
+    F16(Subbuffer<[half::f16]>),
+    F32(Subbuffer<[f32]>),
+    F64(Subbuffer<[f64]>),
+    F8E4M3(Subbuffer<[microfloat::f8e4m3]>),
+    // Dummy types that store raw bytes
+    F6E2M3(Subbuffer<[microfloat::f6e2m3fn]>),
+    F6E3M2(Subbuffer<[microfloat::f6e3m2fn]>),
+    F4(Subbuffer<[microfloat::f4e2m1fn]>),
+    F8E8M0(Subbuffer<[microfloat::f8e8m0fnu]>),
+}
+
+impl VulkanStorageBuffer {
+    /// The underlying device buffer (regardless of element type).
+    pub fn buffer(&self) -> std::sync::Arc<vulkano::buffer::Buffer> {
+        match self {
+            Self::U8(b) => b.buffer().clone(),
+            Self::U32(b) => b.buffer().clone(),
+            Self::I16(b) => b.buffer().clone(),
+            Self::I32(b) => b.buffer().clone(),
+            Self::I64(b) => b.buffer().clone(),
+            Self::BF16(b) => b.buffer().clone(),
+            Self::F16(b) => b.buffer().clone(),
+            Self::F32(b) => b.buffer().clone(),
+            Self::F64(b) => b.buffer().clone(),
+            Self::F8E4M3(b) => b.buffer().clone(),
+            Self::F6E2M3(b) => b.buffer().clone(),
+            Self::F6E3M2(b) => b.buffer().clone(),
+            Self::F4(b) => b.buffer().clone(),
+            Self::F8E8M0(b) => b.buffer().clone(),
+        }
+    }
+    /// A byte view over the whole device buffer.
+    pub fn as_u8(&self) -> Subbuffer<[u8]> {
+        match self {
+            Self::U8(b) => b.clone(),
+            other => Subbuffer::<[u8]>::new(other.buffer().clone()),
+        }
+    }
+}
+#[derive(Debug)]
+pub struct VulkanStorage {
+    buffer: VulkanStorageBuffer,
+    device: VulkanDevice,
+    dtype: DType,
+}
+
+impl Clone for VulkanStorage {
+    fn clone(&self) -> Self {
+        self.device.buffer_instance_add(&self.buffer.buffer());
+        VulkanStorage {
+            buffer: self.buffer.clone(),
+            device: self.device.clone(),
+            dtype: self.dtype,
+        }
+    }
+}
+
+/// The outcome of a constant-fill attempt with the transfer commands
+/// (`vkCmdFillBuffer`/`vkCmdUpdateBuffer`), as reported by
+/// `VulkanStorage::try_fill_const`.
+enum ConstFillPlan<T> {
+    /// The whole region was enqueued.
+    Done,
+    /// A 4-byte-multiple prefix was transferred; the caller writes the
+    /// remaining bytes (1-3; exactly one element for 2-byte element
+    /// types) with its const-set/zero-fill kernel over `tail`.
+    Tail(Subbuffer<[T]>),
+    /// No transfer command fits; the caller dispatches its kernel over
+    /// the whole region.
+    Kernel,
+}
+
+impl VulkanStorage {
+    /// Creates a new storage of `size` elements of `dtype`.
+    ///
+    /// The device buffer is allocated **uninitialized**: no zero-fill, no
+    /// host upload, no fence. The caller must initialize the contents
+    /// (kernel write, copy, or `zero_fill`) before any read.
+    pub fn new(device: &VulkanDevice, size: usize, dtype: DType) -> Result<Self> {
+        let slice = match dtype {
+            DType::U8 => VulkanStorageBuffer::U8(Self::new_pooled::<u8>(device, dtype, size)?),
+            DType::U32 => VulkanStorageBuffer::U32(Self::new_pooled::<u32>(device, dtype, size)?),
+            DType::I16 => VulkanStorageBuffer::I16(Self::new_pooled::<i16>(device, dtype, size)?),
+            DType::I32 => VulkanStorageBuffer::I32(Self::new_pooled::<i32>(device, dtype, size)?),
+            DType::I64 => VulkanStorageBuffer::I64(Self::new_pooled::<i64>(device, dtype, size)?),
+            DType::BF16 => {
+                VulkanStorageBuffer::BF16(Self::new_pooled::<half::bf16>(device, dtype, size)?)
+            }
+            DType::F16 => {
+                VulkanStorageBuffer::F16(Self::new_pooled::<half::f16>(device, dtype, size)?)
+            }
+            DType::F32 => VulkanStorageBuffer::F32(Self::new_pooled::<f32>(device, dtype, size)?),
+            DType::F64 => VulkanStorageBuffer::F64(Self::new_pooled::<f64>(device, dtype, size)?),
+            DType::F8E4M3 => VulkanStorageBuffer::F8E4M3(Self::new_pooled::<microfloat::f8e4m3>(
+                device, dtype, size,
+            )?),
+            DType::F6E2M3 => VulkanStorageBuffer::F6E2M3(Self::new_pooled::<microfloat::f6e2m3fn>(
+                device, dtype, size,
+            )?),
+            DType::F6E3M2 => VulkanStorageBuffer::F6E3M2(Self::new_pooled::<microfloat::f6e3m2fn>(
+                device, dtype, size,
+            )?),
+            DType::F4 => VulkanStorageBuffer::F4(Self::new_pooled::<microfloat::f4e2m1fn>(
+                device, dtype, size,
+            )?),
+            DType::F8E8M0 => VulkanStorageBuffer::F8E8M0(
+                Self::new_pooled::<microfloat::f8e8m0fnu>(device, dtype, size)?,
+            ),
+        };
+        device.buffer_instance_add(&slice.buffer());
+        Ok(Self {
+            buffer: slice,
+            device: device.clone(),
+            dtype,
+        })
+    }
+
+    /// Zero-fills this storage on the GPU (every byte set to 0).
+    ///
+    /// The fill is batched like every other device command: it is visible to
+    /// subsequent queue work — and to host readback, which drains the queue
+    /// first — once the next `synchronize` runs.
+    pub fn zero_fill(&self) -> Result<()> {
+        let byte_len = self.buffer().as_u8().len() as usize;
+        if byte_len == 0 {
+            return Ok(());
+        }
+        let dst = self.buffer().as_u8();
+        let kernels = self.device.kernels();
+        match self.try_fill_const(&dst, 0u8, 0)? {
+            ConstFillPlan::Done => {}
+            ConstFillPlan::Tail(tail) => {
+                // 1-3 trailing bytes the transfer commands cannot reach
+                // (see `try_fill_const`): the byte-granular zero-fill
+                // kernel finishes the job.
+                let tail_len = tail.size();
+                let tail_params =
+                    candle_vulkan_kernels::push_constants::ZeroFillParams { count: tail_len };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_zero_fill(
+                        cbb,
+                        &kernels,
+                        &tail,
+                        &tail_params,
+                        tail_len as usize,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            ConstFillPlan::Kernel => {
+                // No transfer command fits this size (a multiple of 4
+                // bytes at or below the 64 KiB update cap, or above it
+                // without meeting the fill constraints): the
+                // byte-granular zero-fill kernel.
+                let params = candle_vulkan_kernels::push_constants::ZeroFillParams {
+                    count: byte_len as u64,
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_zero_fill(cbb, &kernels, &dst, &params, byte_len)
+                        .map_err(|e| e.to_string())
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Enqueues a constant fill of `sub` with the cheaper transfer
+    /// commands when the region fits their constraints:
+    /// - `vkCmdFillBuffer` for 4-byte-aligned regions above 64 KiB: the
+    ///   GPU stamps the 4-byte `pattern` (the element's bytes, repeated
+    ///   to 4 bytes for 1- and 2-byte element types);
+    /// - `vkCmdUpdateBuffer` for regions up to 64 KiB (the
+    ///   `vkCmdUpdateBuffer` cap) that are not a multiple of 4 bytes:
+    ///   the repeated value is written from the host. The Vulkan spec
+    ///   (VUID-vkCmdUpdateBuffer-dataSize-00038) requires the data size
+    ///   to be a multiple of 4, so the 4-byte-multiple prefix is
+    ///   transferred and the 1-3 trailing bytes are left for the
+    ///   caller's kernel (`ConstFillPlan::Tail`).
+    ///
+    /// Anything else is `ConstFillPlan::Kernel`: the caller dispatches
+    /// the const-set/zero-fill shader over the whole region.
+    fn try_fill_const<T>(
+        &self,
+        sub: &Subbuffer<[T]>,
+        elem: T,
+        pattern: u32,
+    ) -> Result<ConstFillPlan<T>>
+    where
+        T: BufferContents + Copy,
+    {
+        let byte_len = sub.size() as usize;
+        if byte_len.is_multiple_of(4) && byte_len > 65536 && sub.offset().is_multiple_of(4) {
+            let u32_sub = sub.clone().reinterpret::<[u32]>();
+            self.device.execute(move |cbb| {
+                cbb.fill_buffer(u32_sub, pattern)
+                    .map_err(|e| e.to_string())
+                    .map(|_| ())
+            })?;
+            return Ok(ConstFillPlan::Done);
+        }
+        if byte_len >= 4
+            && !byte_len.is_multiple_of(4)
+            && byte_len <= 65536
+            && sub.offset().is_multiple_of(4)
+        {
+            let elem_len = std::mem::size_of::<T>();
+            let prefix_elems = ((byte_len / 4) * 4 / elem_len) as u64;
+            let data: Box<[T]> = vec![elem; prefix_elems as usize].into_boxed_slice();
+            let sub_owned = (*sub).clone();
+            let prefix_sub = sub_owned.slice(0..prefix_elems);
+            self.device.execute(move |cbb| {
+                cbb.update_buffer(prefix_sub, data)
+                    .map_err(|e| e.to_string())
+                    .map(|_| ())
+            })?;
+            let total_elems = (byte_len / elem_len) as u64;
+            let tail = (*sub).clone().slice(prefix_elems..total_elems);
+            return Ok(if tail.size() > 0 {
+                ConstFillPlan::Tail(tail)
+            } else {
+                ConstFillPlan::Done
+            });
+        }
+        Ok(ConstFillPlan::Kernel)
+    }
+
+    pub fn buffer(&self) -> &VulkanStorageBuffer {
+        &self.buffer
+    }
+
+    /// Allocates a device buffer of `size` elements of `dtype`, taking a
+    /// pooled buffer from the smallest size class that fits when one is
+    /// available (sliced to exactly `size`); otherwise a fresh
+    /// (uninitialized) allocation like `create_vram_buffer`.
+    fn new_pooled<T>(device: &VulkanDevice, dtype: DType, size: usize) -> Result<Subbuffer<[T]>>
+    where
+        T: BufferContents,
+    {
+        let bytes = size * std::mem::size_of::<T>();
+        if bytes >= crate::vulkan_backend::device::POOL_MIN_BYTES {
+            if let Some(sub) = device.pool_take(dtype, bytes) {
+                return Ok(sub.cast_aligned::<T>());
+            }
+        }
+        Self::create_vram_buffer::<T>(device, size)
+    }
+
+    /// Creates an **uninitialized** device-local buffer holding `size`
+    /// elements of `T`. No host-side fill, no staging upload, no fence: the
+    /// contents are undefined until a later operation (kernel write, copy,
+    /// or an explicit `zero_fill`) initializes them.
+    fn create_vram_buffer<T>(device: &VulkanDevice, size: usize) -> Result<Subbuffer<[T]>>
+    where
+        T: BufferContents,
+    {
+        // Zero-size buffers cannot be allocated (the allocator rejects
+        // zero-length layouts, and subbuffer slicing forbids empty ranges),
+        // so a one-element buffer stands in for the empty one: 0-element
+        // layouts never index into it.
+        let len = if size == 0 { 1 } else { size as u64 };
+        let vram_buffer = Buffer::new_slice::<T>(
+            device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC
+                    | BufferUsage::TRANSFER_DST
+                    | BufferUsage::UNIFORM_BUFFER
+                    | BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+            len,
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create vram buffer: {error:?}").into())
+        })?;
+        Ok(vram_buffer)
+    }
+
+    /// Returns the device's reusable host-visible readback buffer, growing
+    /// it when needed: a fresh allocation per readback would page in a new
+    /// host mapping every time.
+    fn readback_buffer(device: &VulkanDevice, bytes: u64) -> Result<std::sync::Arc<Buffer>> {
+        let mut readback = device
+            .readback()
+            .lock()
+            .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+        if readback.as_ref().is_some_and(|b| b.size() >= bytes) {
+            return Ok(readback.clone().unwrap());
+        }
+        let buffer = Buffer::new(
+            device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_DST,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            // Buffer::new takes the size from the layout.
+            DeviceLayout::from_size_alignment(bytes, 1).unwrap(),
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create host readback buffer: {error:?}").into())
+        })?;
+        *readback = Some(buffer.clone());
+        Ok(buffer)
+    }
+
+    /// Copies a device-local (VRAM) buffer to a host-visible buffer and
+    /// returns its contents as an owned `Vec<T>`. The copy is submitted as
+    /// its own immediate command buffer and waited on.
+    fn copy_to_host<T>(device: &VulkanDevice, vram: &Subbuffer<[T]>) -> Result<Vec<T>>
+    where
+        T: BufferContents + Default + Clone,
+    {
+        // Serialize the whole readback: the device has a single shared
+        // host-visible readback buffer, and a concurrent readback could
+        // overwrite it between this copy and the host read.
+        let _readback_guard = device
+            .readback_lock()
+            .lock()
+            .map_err(|e| Error::Vulkan(format!("readback lock poisoned: {e}").into()))?;
+        // Drain any deferred encodes first: the copy is submitted as its own
+        // command buffer, so without this it could read stale data from buffers
+        // whose producing ops are still pinned in the deferred batch.
+        device.synchronize()?;
+        let len = vram.len();
+        let bytes = len * std::mem::size_of::<T>() as u64;
+        let buffer = Self::readback_buffer(device, bytes)?;
+        let destination_buffer: Subbuffer<[T]> =
+            Subbuffer::from(buffer).slice(0..bytes).cast_aligned::<T>();
+        let mut builder = AutoCommandBufferBuilder::primary(
+            device.cbb_alloc().clone(),
+            device.queue().queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
+        })?;
+        builder
+            .copy_buffer(CopyBufferInfo::new(
+                vram.clone(),
+                destination_buffer.clone(),
+            ))
+            .map_err(|error| {
+                Error::Vulkan(format!("Unable to set copy_buffer command: {error:?}").into())
+            })?;
+        let command_buffer = builder.build().map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer: {error:?}").into())
+        })?;
+        let future = vulkano::sync::now(device.device().clone())
+            .then_execute(device.queue().clone(), command_buffer)
+            .map_err(|error| {
+                Error::Vulkan(format!("Unable to execute command buffer: {error:?}").into())
+            })?
+            .then_signal_fence_and_flush()
+            .map_err(|error| {
+                Error::Vulkan(
+                    format!("Unable to signal fence and flush command buffer: {error:?}").into(),
+                )
+            })?;
+        future.wait(None).map_err(|error| {
+            Error::Vulkan(
+                format!("Failure occurred waiting for readback to finish: {error:?}").into(),
+            )
+        })?;
+        let data = destination_buffer.read().map_err(|error| {
+            Error::Vulkan(
+                format!("Unable to acquire read lock on readback buffer: {error:?}").into(),
+            )
+        })?;
+        Ok(data.to_vec())
+    }
+
+    /// Like `copy_to_host`, but records the readback copy on the pending
+    /// batch and drains it with a single `synchronize`, so the copy is
+    /// submitted together with the deferred encodes that produced `vram`:
+    /// one queue submission and one fence wait instead of a second,
+    /// separate immediate submit and wait.
+    fn copy_to_host_batched<T>(device: &VulkanDevice, vram: &Subbuffer<[T]>) -> Result<Vec<T>>
+    where
+        T: BufferContents + Default + Clone,
+    {
+        // Serialize the whole readback (see `copy_to_host`): the shared
+        // host-visible readback buffer must not be overwritten by a
+        // concurrent readback between this copy and the host read.
+        let _readback_guard = device
+            .readback_lock()
+            .lock()
+            .map_err(|e| Error::Vulkan(format!("readback lock poisoned: {e}").into()))?;
+        let len = vram.len();
+        let bytes = len * std::mem::size_of::<T>() as u64;
+        let buffer = Self::readback_buffer(device, bytes)?;
+        let destination: Subbuffer<[T]> =
+            Subbuffer::from(buffer).slice(0..bytes).cast_aligned::<T>();
+        let src = vram.clone();
+        let dst = destination.clone();
+        device.execute(move |cbb| {
+            cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+        device.synchronize()?;
+        let data = destination.read().map_err(|error| {
+            Error::Vulkan(
+                format!("Unable to acquire read lock on readback buffer: {error:?}").into(),
+            )
+        })?;
+        Ok(data.to_vec())
+    }
+
+    /// Runs the `test_fill_f16` slang kernel over this storage: element `i`
+    /// is filled with the bits of `i` reinterpreted as an f16 value, so a
+    /// 65,536-element storage ends up holding every possible f16 value.
+    /// The storage must be F16.
+    pub fn fill_f16(&self) -> Result<()> {
+        // Drain deferred encodes first: this helper submits directly to the
+        // queue and must not land ahead of pending batched work.
+        self.device.synchronize()?;
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F16(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f16 requires F16 storage".to_string().into(),
+                ))
+            }
+        };
+        let device = self.device.clone();
+        let mut builder = AutoCommandBufferBuilder::primary(
+            device.cbb_alloc().clone(),
+            device.queue().queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
+        })?;
+        candle_vulkan_kernels::call_test_fill_f16(
+            &mut builder,
+            device.kernels().as_ref(),
+            buffer,
+            buffer.len() as usize,
+        )
+        .map_err(VulkanError::KernelError)?;
+        let command_buffer = builder.build().map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer: {error:?}").into())
+        })?;
+        let future = vulkano::sync::now(device.device().clone())
+            .then_execute(device.queue().clone(), command_buffer)
+            .map_err(|error| {
+                Error::Vulkan(format!("Unable to execute command buffer: {error:?}").into())
+            })?
+            .then_signal_fence_and_flush()
+            .map_err(|error| {
+                Error::Vulkan(
+                    format!("Unable to signal fence and flush command buffer: {error:?}").into(),
+                )
+            })?;
+        future.wait(None).map_err(|error| {
+            Error::Vulkan(
+                format!("Failure occurred waiting for fill_f16 to finish: {error:?}").into(),
+            )
+        })?;
+        Ok(())
+    }
+    /// Shared machinery for the `fill_*` test methods: build a one-time compute
+    /// command buffer, run `dispatch` inside it, then execute and wait.
+    fn run_fill(
+        &self,
+        label: &str,
+        dispatch: impl FnOnce(
+            &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        )
+            -> std::result::Result<(), candle_vulkan_kernels::VulkanKernelError>,
+    ) -> Result<()> {
+        // Drain deferred encodes first: this helper submits directly to the
+        // queue and must not land ahead of pending batched work.
+        self.device.synchronize()?;
+        let device = self.device.clone();
+        let mut builder = AutoCommandBufferBuilder::primary(
+            device.cbb_alloc().clone(),
+            device.queue().queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer builder: {error:?}").into())
+        })?;
+        dispatch(&mut builder).map_err(VulkanError::KernelError)?;
+        let command_buffer = builder.build().map_err(|error| {
+            Error::Vulkan(format!("Unable to create command buffer: {error:?}").into())
+        })?;
+        let future = vulkano::sync::now(device.device().clone())
+            .then_execute(device.queue().clone(), command_buffer)
+            .map_err(|error| {
+                Error::Vulkan(format!("Unable to execute command buffer: {error:?}").into())
+            })?
+            .then_signal_fence_and_flush()
+            .map_err(|error| {
+                Error::Vulkan(
+                    format!("Unable to signal fence and flush command buffer: {error:?}").into(),
+                )
+            })?;
+        future.wait(None).map_err(|error| {
+            Error::Vulkan(
+                format!("Failure occurred waiting for {label} to finish: {error:?}").into(),
+            )
+        })?;
+        Ok(())
+    }
+    /// Fills this u8 storage with all 256 possible byte values: element `i`
+    /// holds `i`. The storage must be U8.
+    pub fn fill_u8(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::U8(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_u8 requires U8 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_u8", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_u8(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this i16 storage with all 65,536 possible 16-bit bit patterns:
+    /// element `i` holds the bit pattern of `i`. The storage must be I16.
+    pub fn fill_i16(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::I16(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_i16 requires I16 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_i16", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_i16(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this bf16 storage with all 65,536 possible 16-bit bit patterns:
+    /// element `i` holds the bit pattern of `i`. The storage must be BF16.
+    ///
+    /// Uses the emulated (raw 16-bit) fill path; see `fill_bf16_native`
+    /// for the native `BFloat16` path (VK_KHR_shader_bfloat16 +
+    /// shaderBFloat16Type).
+    pub fn fill_bf16(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::BF16(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_bf16 requires BF16 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_bf16", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_bf16_emulated(
+                cbb,
+                kernels.as_ref(),
+                buffer,
+                total,
+            )
+        })
+    }
+    /// Fills this bf16 storage with all 65,536 possible 16-bit bit patterns
+    /// using the emulated (raw 16-bit) path, regardless of native support.
+    /// The storage must be BF16.
+    pub fn fill_bf16_emulated(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::BF16(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_bf16_emulated requires BF16 storage"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_bf16_emulated", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_bf16_emulated(
+                cbb,
+                kernels.as_ref(),
+                buffer,
+                total,
+            )
+        })
+    }
+    /// Fills this bf16 storage with all 65,536 possible 16-bit bit patterns
+    /// using the native `BFloat16` fill path. The storage must be BF16.
+    ///
+    /// Requires the device to have native BFloat16 support (see
+    /// `VulkanDevice::supports_bf16`): the shader stores the patterns as
+    /// native `BFloat16` elements.
+    pub fn fill_bf16_native(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::BF16(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_bf16_native requires BF16 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_bf16_native", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_bf16_native(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this u32 storage with 256 distinct values, each beyond the 16-bit
+    /// unsigned range. The storage must be U32.
+    pub fn fill_u32(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::U32(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_u32 requires U32 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_u32", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_u32(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this i32 storage with 256 distinct signed values straddling the
+    /// 16-bit range. The storage must be I32.
+    pub fn fill_i32(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::I32(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_i32 requires I32 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_i32", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_i32(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this f32 storage with 256 distinct values, some beyond the f16
+    /// range. The storage must be F32.
+    pub fn fill_f32(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F32(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f32 requires F32 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f32", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f32(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this i64 storage with 256 distinct values, each beyond the 32-bit
+    /// signed range. The storage must be I64.
+    pub fn fill_i64(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::I64(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_i64 requires I64 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_i64", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_i64(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+    /// Fills this f64 storage with 256 distinct values not exactly
+    /// representable in f32. The storage must be F64.
+    pub fn fill_f64(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F64(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f64 requires F64 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f64", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f64(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+
+    /// Fills this F4 (4-bit) storage with all possible raw byte values:
+    /// element `i` holds the bit pattern `i`. The storage must be F4.
+    pub fn fill_f4(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F4(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f4 requires F4 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f4", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f4(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+
+    /// Fills this F6E2M3 (6-bit) storage with all possible raw byte values:
+    /// element `i` holds the bit pattern `i`. The storage must be F6E2M3.
+    pub fn fill_f6e2m3(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F6E2M3(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f6e2m3 requires F6E2M3 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f6e2m3", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f6e2m3(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+
+    /// Fills this F6E3M2 (6-bit) storage with all possible raw byte values:
+    /// element `i` holds the bit pattern `i`. The storage must be F6E3M2.
+    pub fn fill_f6e3m2(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F6E3M2(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f6e3m2 requires F6E3M2 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f6e3m2", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f6e3m2(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+
+    /// Fills this F8E4M3 (FP8 E4M3 (emulated as raw bytes)) storage with all possible raw byte values:
+    /// element `i` holds the bit pattern `i`. The storage must be F8E4M3.
+    pub fn fill_f8e4m3(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F8E4M3(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f8e4m3 requires F8E4M3 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f8e4m3", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f8e4m3(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+
+    /// Fills this F8E8M0 (FP8 E8M0 scale (emulated as raw bytes)) storage with all possible raw byte values:
+    /// element `i` holds the bit pattern `i`. The storage must be F8E8M0.
+    pub fn fill_f8e8m0(&self) -> Result<()> {
+        let buffer = match &self.buffer {
+            VulkanStorageBuffer::F8E8M0(buffer) => buffer,
+            _ => {
+                return Err(Error::Vulkan(
+                    "fill_f8e8m0 requires F8E8M0 storage".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels().clone();
+        let total = buffer.len() as usize;
+        self.run_fill("fill_f8e8m0", move |cbb| {
+            candle_vulkan_kernels::call_test_fill_f8e8m0(cbb, kernels.as_ref(), buffer, total)
+        })
+    }
+
+    /// Shared avg/max 2D pool setup (NCHW, F32, contiguous).
+    fn pool2d(
+        &self,
+        l: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+        name: candle_vulkan_kernels::KernelName,
+        op: &'static str,
+    ) -> Result<Self> {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) {
+            return Err(Error::Vulkan(
+                format!("{op}: only F32 supported on the Vulkan backend").into(),
+            ));
+        }
+        let dims = l.dims();
+        if dims.len() != 4 {
+            return Err(Error::Vulkan(
+                format!("{op}: only 4D NCHW layouts supported on the Vulkan backend").into(),
+            ));
+        }
+        let (b_sz, c, h, w) = (dims[0], dims[1], dims[2], dims[3]);
+        let (k_h, k_w) = kernel_size;
+        let (s_h, s_w) = stride;
+        if k_h == 0 || k_w == 0 || s_h == 0 || s_w == 0 {
+            return Err(Error::Vulkan(format!("{op}: zero kernel/stride").into()));
+        }
+        if h < k_h || w < k_w {
+            return Err(Error::Vulkan(
+                format!("{op}: input smaller than the kernel").into(),
+            ));
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("{op}: non-contiguous layouts not supported on the Vulkan backend")
+                        .into(),
+                ))
+            }
+        };
+        if len != b_sz * c * h * w {
+            return Err(Error::Vulkan(format!("{op}: size mismatch").into()));
+        }
+        let h_out = (h - k_h) / s_h + 1;
+        let w_out = (w - k_w) / s_w + 1;
+        let planes = b_sz * c;
+        let total = planes * h_out * w_out;
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
+        if total == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params = candle_vulkan_kernels::push_constants::Pool2dParams {
+            planes: planes as u64,
+            h: h as u64,
+            w: w as u64,
+            k_h: k_h as u64,
+            k_w: k_w as u64,
+            s_h: s_h as u64,
+            s_w: s_w as u64,
+            h_out: h_out as u64,
+            w_out: w_out as u64,
+        };
+        match self.dtype {
+            DType::F32 => {
+                let src_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_pool2d_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Pool2dSlang,
+                        name,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let name16 = match name {
+                    candle_vulkan_kernels::KernelName::AvgPool2dF32 => {
+                        candle_vulkan_kernels::KernelName::AvgPool2dF16
+                    }
+                    _ => candle_vulkan_kernels::KernelName::MaxPool2dF16,
+                };
+                let src_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_pool2d_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Pool2dF16,
+                        name16,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let name64 = match name {
+                    candle_vulkan_kernels::KernelName::AvgPool2dF32 => {
+                        candle_vulkan_kernels::KernelName::AvgPool2dF64
+                    }
+                    _ => candle_vulkan_kernels::KernelName::MaxPool2dF64,
+                };
+                let src_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_pool2d_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Pool2dF64,
+                        name64,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    /// GPU scatter-set: `dst[left, idx, right] = src[left, i, right]`.
+    fn scatter_set_impl(
+        &mut self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<()> {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64)
+            || !matches!(src.dtype, DType::F32 | DType::F16 | DType::F64)
+        {
+            return Err(Error::Vulkan(
+                "scatter: unsupported dtype on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        if ids.dtype != DType::U32 {
+            return Err(Error::Vulkan(
+                "scatter: only U32 index tensors supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (dst_start, dst_len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "scatter: non-contiguous destinations not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (src_start, src_len) = match src_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "scatter: non-contiguous sources not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (ids_start, ids_len) = match ids_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "scatter: non-contiguous index tensors not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let dst_dims = l.dims();
+        let ids_dims = ids_l.dims();
+        if dst_dims.len() != ids_dims.len() || dim >= dst_dims.len() {
+            return Err(Error::Vulkan(
+                "scatter: rank mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        if dst_len != dst_dims.iter().product::<usize>()
+            || src_len != ids_len
+            || ids_len != ids_dims.iter().product::<usize>()
+        {
+            return Err(Error::Vulkan(
+                "scatter: size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let ids_dim_len = ids_dims[dim];
+        let dst_dim_len = dst_dims[dim];
+        let ids_right_len = ids_dims[dim + 1..].iter().product::<usize>();
+        let dst_right_len = dst_dims[dim + 1..].iter().product::<usize>();
+        let ids_left_len = ids_dims[..dim].iter().product::<usize>();
+        let total = ids_left_len * ids_dim_len * ids_right_len;
+        let ids_sub: Subbuffer<[u32]> = match &ids.buffer {
+            VulkanStorageBuffer::U32(b) => b
+                .clone()
+                .slice(ids_start as u64..(ids_start + ids_len) as u64),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let src_sub: Subbuffer<[f32]> = match &src.buffer {
+            VulkanStorageBuffer::F32(b) => b
+                .clone()
+                .slice(src_start as u64..(src_start + src_len) as u64),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let dst_sub: Subbuffer<[f32]> = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b
+                .clone()
+                .slice(dst_start as u64..(dst_start + dst_len) as u64),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if total == 0 {
+            return Ok(());
+        }
+        let kernels = self.device.kernels();
+        let params_sub = candle_vulkan_kernels::push_constants::ScatterParams {
+            dst_dim_len: dst_dim_len as u64,
+            dst_right_len: dst_right_len as u64,
+            ids_dim_len: ids_dim_len as u64,
+            ids_right_len: ids_right_len as u64,
+            ids_left_len: ids_left_len as u64,
+        };
+        match self.dtype {
+            DType::F32 => {
+                let src_sub = src_sub.clone();
+                let dst_sub = dst_sub.clone();
+                let ids_sub = ids_sub.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_scatter_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ScatterSlang,
+                        candle_vulkan_kernels::KernelName::ScatterF32,
+                        &src_sub,
+                        &dst_sub,
+                        &ids_sub,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let src_sub: Subbuffer<[half::f16]> = match &src.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(src_start as u64..(src_start + src_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_sub: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(dst_start as u64..(dst_start + dst_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_sub = src_sub.clone();
+                let dst_sub = dst_sub.clone();
+                let ids_sub = ids_sub.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_scatter_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ScatterF16,
+                        candle_vulkan_kernels::KernelName::ScatterF16,
+                        &src_sub,
+                        &dst_sub,
+                        &ids_sub,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let src_sub: Subbuffer<[f64]> = match &src.buffer {
+                    VulkanStorageBuffer::F64(b) => b
+                        .clone()
+                        .slice(src_start as u64..(src_start + src_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_sub: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b
+                        .clone()
+                        .slice(dst_start as u64..(dst_start + dst_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_sub = src_sub.clone();
+                let dst_sub = dst_sub.clone();
+                let ids_sub = ids_sub.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_scatter_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ScatterF64,
+                        candle_vulkan_kernels::KernelName::ScatterF64,
+                        &src_sub,
+                        &dst_sub,
+                        &ids_sub,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(())
+    }
+    fn dispatch_to_dtype<S: Send + Sync + 'static, D: Send + Sync + 'static>(
+        &self,
+        input: &Subbuffer<[S]>,
+        output: &Subbuffer<[D]>,
+        source: candle_vulkan_kernels::Source,
+        name: candle_vulkan_kernels::KernelName,
+        len: usize,
+    ) -> Result<()> {
+        let kernels = self.device.kernels();
+        let params = candle_vulkan_kernels::ToDtypeParams { count: len as u64 };
+        let (input, output) = (input.clone(), output.clone());
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_to_dtype_slang::<S, D>(
+                cbb, &kernels, source, name, &input, &output, &params, len,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(())
+    }
+}
+
+impl Drop for VulkanStorage {
+    fn drop(&mut self) {
+        // Return eligible buffers to the pool so the next op's same-size
+        // allocation does not hit the allocator. Only the last
+        // `VulkanStorage` instance may return the buffer (tracked per
+        // buffer, see `BufferInstance`): a shallow clone keeps a live
+        // instance alive, while a pending encode's captured subbuffer
+        // does not block the return — the pool's pending gate and the
+        // queue's FIFO order keep the GPU from racing a re-handed-out
+        // buffer.
+        let arc = self.buffer.buffer();
+        let last = self.device.buffer_instance_sub(&arc);
+        if !last {
+            return;
+        }
+        let bytes = self.buffer.as_u8().len() as usize;
+        if bytes < crate::vulkan_backend::device::POOL_MIN_BYTES {
+            return;
+        }
+        self.device.pool_return(self.dtype, arc);
+    }
+}
+
+impl BackendStorage for VulkanStorage {
+    type Device = VulkanDevice;
+
+    fn try_clone(&self, _: &Layout) -> Result<Self> {
+        // Deep copy VRAM→VRAM: allocate a new GPU buffer and use a device-side
+        // buffer copy, so the returned storage is independent of this one.
+        // The device allocation may fail with out-of-memory, hence the
+        // fallible "try" (same contract as the CPU and CUDA backends).
+        let n: usize = match &self.buffer {
+            VulkanStorageBuffer::U8(b) => b.len() as usize,
+            VulkanStorageBuffer::U32(b) => b.len() as usize,
+            VulkanStorageBuffer::I16(b) => b.len() as usize,
+            VulkanStorageBuffer::I32(b) => b.len() as usize,
+            VulkanStorageBuffer::I64(b) => b.len() as usize,
+            VulkanStorageBuffer::BF16(b) => b.len() as usize,
+            VulkanStorageBuffer::F16(b) => b.len() as usize,
+            VulkanStorageBuffer::F32(b) => b.len() as usize,
+            VulkanStorageBuffer::F64(b) => b.len() as usize,
+            VulkanStorageBuffer::F8E4M3(b) => b.len() as usize,
+            VulkanStorageBuffer::F6E2M3(b) => b.len() as usize,
+            VulkanStorageBuffer::F6E3M2(b) => b.len() as usize,
+            VulkanStorageBuffer::F4(b) => b.len() as usize,
+            VulkanStorageBuffer::F8E8M0(b) => b.len() as usize,
+        };
+        let out = VulkanStorage::new(&self.device, n, self.dtype)?;
+        match self.dtype {
+            DType::U8 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::U32 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::I16 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::I32 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::I64 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::BF16 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F16 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F32 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F64 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F6E2M3 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F6E2M3(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F6E2M3(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F6E3M2 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F6E3M2(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F6E3M2(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F4 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F4(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F4(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+            DType::F8E8M0 => {
+                let src = match &self.buffer {
+                    VulkanStorageBuffer::F8E8M0(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                let dst = match &out.buffer {
+                    VulkanStorageBuffer::F8E8M0(b) => b.clone(),
+                    _ => return Err(Error::Vulkan("dtype mismatch".to_string().into())),
+                };
+                self.device.execute(move |cbb| {
+                    cbb.copy_buffer(CopyBufferInfo::new(src, dst))
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })?;
+            }
+        }
+        Ok(out)
+    }
+
+    fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    fn device(&self) -> &Self::Device {
+        &self.device
+    }
+
+    fn to_cpu_storage(&self) -> Result<CpuStorage> {
+        let device = self.device.clone();
+        // The readback copy is recorded on the pending batch and drained
+        // with the deferred encodes by one `synchronize` (one queue
+        // submission), so it runs after all prior work on the queue.
+        Ok(match &self.buffer {
+            VulkanStorageBuffer::U8(b) => CpuStorage::U8(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::U32(b) => CpuStorage::U32(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::I16(b) => CpuStorage::I16(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::I32(b) => CpuStorage::I32(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::I64(b) => CpuStorage::I64(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::BF16(b) => {
+                CpuStorage::BF16(Self::copy_to_host_batched(&device, b)?)
+            }
+            VulkanStorageBuffer::F16(b) => CpuStorage::F16(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::F32(b) => CpuStorage::F32(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::F64(b) => CpuStorage::F64(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::F8E4M3(b) => {
+                CpuStorage::F8E4M3(Self::copy_to_host_batched(&device, b)?)
+            }
+            VulkanStorageBuffer::F6E2M3(b) => {
+                CpuStorage::F6E2M3(Self::copy_to_host_batched(&device, b)?)
+            }
+            VulkanStorageBuffer::F6E3M2(b) => {
+                CpuStorage::F6E3M2(Self::copy_to_host_batched(&device, b)?)
+            }
+            VulkanStorageBuffer::F4(b) => CpuStorage::F4(Self::copy_to_host_batched(&device, b)?),
+            VulkanStorageBuffer::F8E8M0(b) => {
+                CpuStorage::F8E8M0(Self::copy_to_host_batched(&device, b)?)
+            }
+        })
+    }
+
+    fn affine(&self, l: &Layout, mul: f64, add: f64) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        // Integer dtypes: only the identity (mul=1, add=0) is representable.
+        // Any other affine cannot be represented in an integer dtype, so error
+        // instead of silently returning the input unchanged.
+        if matches!(
+            dtype,
+            DType::U8 | DType::U32 | DType::I16 | DType::I32 | DType::I64
+        ) {
+            if mul == 1.0 && add == 0.0 {
+                return Ok(self.clone());
+            }
+            return Err(Error::Vulkan(
+                format!(
+                    "affine: integer dtype {:?} supports only the identity (mul=1, add=0)",
+                    dtype
+                )
+                .into(),
+            ));
+        }
+        let supported = matches!(
+            dtype,
+            DType::F32 | DType::BF16 | DType::F8E4M3 | DType::F16 | DType::F64
+        );
+        if !supported {
+            return Err(Error::Vulkan(
+                format!(
+                    "affine: dtype {:?} not supported on the Vulkan backend",
+                    dtype
+                )
+                .into(),
+            ));
+        }
+        // Materialize non-contiguous inputs first.
+        if !matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            let elem_count = l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, l)?;
+            let mat_l = crate::Layout::contiguous_with_offset(l.shape(), 0);
+            return materialized.affine(&mat_l, mul, add);
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "affine: non-contiguous layouts not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let out = VulkanStorage::new(&self.device, l.shape().elem_count(), dtype)?;
+        if len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        // `mul`/`add` are pushed at full f64 precision; the affine shaders
+        // compute in double.
+        let params = candle_vulkan_kernels::AffineParams {
+            total: len as u64,
+            mul,
+            add,
+        };
+
+        match dtype {
+            DType::F32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_affine_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        Source::Affine,
+                        KernelName::AffineF32,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_affine_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        Source::AffineBf16,
+                        KernelName::AffineBf16,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_affine_slang::<microfloat::f8e4m3>(
+                        cbb,
+                        &kernels,
+                        Source::AffineF8e4m3,
+                        KernelName::AffineF8e4m3,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_affine_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        Source::AffineF16,
+                        KernelName::AffineF16,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_affine_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        Source::AffineF64,
+                        KernelName::AffineF64,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn powf(&self, l: &Layout, exponent: f64) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        let supported = matches!(
+            dtype,
+            DType::F32 | DType::BF16 | DType::F8E4M3 | DType::F16 | DType::F64
+        );
+        if !supported {
+            return Err(Error::Vulkan(
+                format!(
+                    "powf: dtype {:?} not supported on the Vulkan backend",
+                    dtype
+                )
+                .into(),
+            ));
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "powf: non-contiguous layouts not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let out = VulkanStorage::new(&self.device, l.shape().elem_count(), dtype)?;
+        if len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params = candle_vulkan_kernels::UnaryParams {
+            count: len as u64,
+            extra: exponent,
+        };
+
+        match dtype {
+            DType::F32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        Source::UnarySlang,
+                        KernelName::UnaryPowF32,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        Source::UnaryBf16,
+                        KernelName::UnaryPowBf16,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<microfloat::f8e4m3>(
+                        cbb,
+                        &kernels,
+                        Source::UnaryF8e4m3,
+                        KernelName::UnaryPowF8e4m3,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        Source::UnaryF16,
+                        KernelName::UnaryPowF16,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        Source::UnaryF64,
+                        KernelName::UnaryPowF64,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn elu(&self, l: &Layout, alpha: f64) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        let supported = matches!(
+            dtype,
+            DType::F32 | DType::BF16 | DType::F8E4M3 | DType::F16 | DType::F64
+        );
+        if !supported {
+            return Err(Error::Vulkan(
+                format!("elu: dtype {:?} not supported on the Vulkan backend", dtype).into(),
+            ));
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                // Materialize non-contiguous to contiguous, then recurse.
+                let contiguous = Layout::contiguous_with_offset(l.shape(), 0);
+                let mut materialized = unsafe { self.device.alloc_uninit(l.shape(), dtype)? };
+                self.copy_strided_src(&mut materialized, 0, l)?;
+                return materialized.elu(&contiguous, alpha);
+            }
+        };
+        let out = VulkanStorage::new(&self.device, l.shape().elem_count(), dtype)?;
+        if len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params = candle_vulkan_kernels::UnaryParams {
+            count: len as u64,
+            extra: alpha,
+        };
+
+        match dtype {
+            DType::F32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        Source::UnarySlang,
+                        KernelName::UnaryEluF32,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        Source::UnaryBf16,
+                        KernelName::UnaryEluBf16,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<microfloat::f8e4m3>(
+                        cbb,
+                        &kernels,
+                        Source::UnaryF8e4m3,
+                        KernelName::UnaryEluF8e4m3,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        Source::UnaryF16,
+                        KernelName::UnaryEluF16,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        Source::UnaryF64,
+                        KernelName::UnaryEluF64,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn reduce_op(&self, op: ReduceOp, l: &Layout, reduce_dims: &[usize]) -> Result<Self> {
+        if !matches!(
+            self.dtype,
+            DType::F32
+                | DType::F16
+                | DType::F64
+                | DType::BF16
+                | DType::U8
+                | DType::U32
+                | DType::I16
+                | DType::I32
+                | DType::I64
+        ) {
+            return Err(Error::Vulkan(
+                "reduce_op: unsupported dtype on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // Empty-input semantics match the CPU backend: `sum` over zero elements
+        // is the additive identity (the CPU `ReduceSum` seeds with `T::zero()`
+        // and returns the reduced shape filled with zeros), while
+        // `min`/`max`/`argmin`/`argmax` over zero elements have no identity and
+        // error (the CPU `ReduceIndex`).
+        if l.shape().elem_count() == 0 {
+            if matches!(
+                op,
+                ReduceOp::Min | ReduceOp::Max | ReduceOp::ArgMin | ReduceOp::ArgMax
+            ) {
+                return Err(Error::EmptyTensor { op: "reduce" }.bt());
+            }
+            // ReduceOp::Sum: return the additive identity for the reduced shape.
+            let dims = l.dims();
+            let result_dims: Vec<usize> = (0..dims.len())
+                .filter(|&i| !reduce_dims.contains(&i))
+                .map(|i| dims[i])
+                .collect();
+            let result_count = result_dims.iter().product();
+            if result_count > 0 {
+                let out = VulkanStorage::new(&self.device, result_count, self.dtype)?;
+                out.zero_fill()?;
+                return Ok(out);
+            }
+            // result_count == 0 (empty result): fall through to the normal
+            // dispatch, which records zero workgroups and yields the empty tensor.
+        }
+        let dims = l.dims();
+        let ndim = dims.len();
+        if ndim == 0 {
+            return Err(Error::Vulkan(
+                "reduce_op: scalar layouts not supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // If the reduction axis is not the last one, permute the layout to
+        // move it to the last position, materialize, reduce, then permute back.
+        if reduce_dims.len() == 1 && reduce_dims[0] != ndim - 1 {
+            let rd = reduce_dims[0];
+            let perm: Vec<usize> = (0..ndim)
+                .filter(|&i| i != rd)
+                .chain(std::iter::once(rd))
+                .collect();
+            let perm_l = l.permute(&perm)?;
+            let elem_count = perm_l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, &perm_l)?;
+            let mat_l = crate::Layout::contiguous_with_offset(perm_l.shape(), 0);
+            let reduced = materialized.reduce_op(op, &mat_l, &[ndim - 1])?;
+            // Build the result shape: original dims minus the reduced dim
+            let result_dims: Vec<usize> = (0..ndim)
+                .filter(|&i| i != rd)
+                .map(|i| l.shape().dims()[i])
+                .collect();
+            let result_shape = crate::Shape::from(result_dims);
+            // The reduced tensor has shape = perm_l.shape() minus last dim.
+            // We need to reorder it to match the original dim order.
+            // perm = [d0, d1, ..., d_{rd-1}, d_{rd+1}, ..., d_{ndim-2}, rd]
+            // reduced shape = [d0, d1, ..., d_{rd-1}, d_{rd+1}, ..., d_{ndim-2}]
+            // We need to permute the reduced tensor so that dim i in the result
+            // corresponds to the original dim i (skipping rd).
+            // The reduced tensor is already in the correct order (all non-rd dims
+            // in their original relative order), so no permutation is needed.
+            // Just materialize it to ensure it's contiguous.
+            let mut result =
+                VulkanStorage::new(&self.device, result_shape.elem_count(), reduced.dtype)?;
+            let red_l = crate::Layout::contiguous_with_offset(&result_shape, 0);
+            reduced.copy_strided_src(&mut result, 0, &red_l)?;
+            return Ok(result);
+        }
+        // Multi-axis reduction: reduce one axis at a time, starting from the
+        // highest axis index to avoid index shifting issues.
+        if reduce_dims.len() > 1 {
+            let mut current = self.clone();
+            let mut current_l = l.clone();
+            let mut current_ndim = ndim;
+            // Sort reduce_dims in descending order to avoid index shifting
+            let mut sorted_dims: Vec<usize> = reduce_dims.to_vec();
+            sorted_dims.sort_unstable_by(|a, b| b.cmp(a));
+            for &rd in &sorted_dims {
+                current = current.reduce_op(op, &current_l, &[rd])?;
+                // Update the layout: the reduced dim is removed
+                let new_dims: Vec<usize> = (0..current_ndim)
+                    .filter(|&i| i != rd)
+                    .map(|i| current_l.dims()[i])
+                    .collect();
+                current_l = crate::Layout::contiguous(crate::Shape::from(new_dims));
+                current_ndim -= 1;
+            }
+            return Ok(current);
+        }
+        if reduce_dims != [ndim - 1] {
+            return Err(Error::Vulkan(
+                "reduce_op: only last-axis reduction supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // A non-contiguous layout (e.g. a transposed input) is materialized to
+        // a contiguous buffer first, then reduced.
+        if !matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            let elem_count = l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, l)?;
+            let mat_layout = crate::Layout::contiguous_with_offset(l.shape(), 0);
+            return materialized.reduce_op(op, &mat_layout, reduce_dims);
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "reduce_op: non-contiguous layouts not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let rows: usize = dims[..ndim - 1].iter().product();
+        let cols = dims[ndim - 1];
+        let kernels = self.device.kernels();
+        match self.dtype {
+            DType::F32 => {
+                let input: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::F32,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumF32,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxF32,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinF32,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinF32,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxF32,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceSlang,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::F16 => {
+                let input: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::F16,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumF16,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxF16,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinF16,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinF16,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxF16,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceF16,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::F64 => {
+                let input: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::F64,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumF64,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxF64,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinF64,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinF64,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxF64,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceF64,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::BF16 => {
+                let input: Subbuffer<[half::bf16]> = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::BF16,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumBf16,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxBf16,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinBf16,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinBf16,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxBf16,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceBf16,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::I64 => {
+                let input: Subbuffer<[i64]> = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::I64,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumI64,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxI64,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinI64,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinI64,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxI64,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<i64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceI64,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::I32 => {
+                let input: Subbuffer<[i32]> = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::I32,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumI32,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxI32,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinI32,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinI32,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxI32,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<i32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceI32,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::U32 => {
+                let input: Subbuffer<[u32]> = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::U32,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumU32,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxU32,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinU32,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinU32,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxU32,
+                };
+                // U32 is the output type of both the value ops (sum/min/max) and
+                // the index ops (argmin/argmax), so the slot selection is
+                // disambiguated by the op, not just the buffer type.
+                let (out_f, out_i) = match (&out.buffer, op) {
+                    (VulkanStorageBuffer::U32(b), ReduceOp::ArgMin | ReduceOp::ArgMax) => {
+                        (None, Some(b.clone()))
+                    }
+                    (VulkanStorageBuffer::U32(b), _) => (Some(b.clone()), None),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<u32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceU32,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::I16 => {
+                let input: Subbuffer<[i16]> = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::I16,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumI16,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxI16,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinI16,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinI16,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxI16,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<i16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceI16,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            DType::U8 => {
+                let input: Subbuffer<[u8]> = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_dtype = match op {
+                    ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => DType::U8,
+                    ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+                };
+                let out = VulkanStorage::new(&self.device, rows, out_dtype)?;
+                if rows == 0 || cols == 0 {
+                    return Ok(out);
+                }
+                let name = match op {
+                    ReduceOp::Sum => candle_vulkan_kernels::KernelName::ReduceSumU8,
+                    ReduceOp::Max => candle_vulkan_kernels::KernelName::ReduceMaxU8,
+                    ReduceOp::Min => candle_vulkan_kernels::KernelName::ReduceMinU8,
+                    ReduceOp::ArgMin => candle_vulkan_kernels::KernelName::ReduceArgMinU8,
+                    _ => candle_vulkan_kernels::KernelName::ReduceArgMaxU8,
+                };
+                let (out_f, out_i) = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => (Some(b.clone()), None),
+                    VulkanStorageBuffer::U32(b) => (None, Some(b.clone())),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = candle_vulkan_kernels::push_constants::ReduceParams {
+                    rows: rows as u64,
+                    cols: cols as u64,
+                };
+                let input = input.clone();
+                let of = out_f.clone();
+                let oi = out_i.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_reduce_slang::<u8>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ReduceU8,
+                        name,
+                        &input,
+                        of.as_ref(),
+                        oi.as_ref(),
+                        &params,
+                        rows,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }
+            _ => Err(Error::Vulkan(
+                format!("dtype checked above (dtype={:?})", self.dtype)
+                    .to_string()
+                    .into(),
+            )),
+        }
+    }
+
+    fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        if dtype != rhs.dtype {
+            return Err(Error::Vulkan(
+                "cmp: lhs and rhs must have the same dtype"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let supported = matches!(
+            dtype,
+            DType::F32
+                | DType::BF16
+                | DType::F8E4M3
+                | DType::F16
+                | DType::F64
+                | DType::U8
+                | DType::U32
+                | DType::I16
+                | DType::I32
+                | DType::I64
+        );
+        if !supported {
+            return Err(Error::Vulkan(
+                format!("cmp: dtype {:?} not supported on the Vulkan backend", dtype).into(),
+            ));
+        }
+        // Materialize non-contiguous lhs first.
+        if !matches!(
+            lhs_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
+            let elem_count = lhs_l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, lhs_l)?;
+            let mat_l = crate::Layout::contiguous_with_offset(lhs_l.shape(), 0);
+            return materialized.cmp(op, rhs, &mat_l, rhs_l);
+        }
+        // The cmp kernels index the rhs assuming a contiguous layout (the
+        // row-major offset is derived from the trailing dims), so a
+        // non-contiguous rhs must be materialized as well.
+        if !matches!(
+            rhs_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
+            let elem_count = rhs_l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, rhs.dtype)?;
+            rhs.copy_strided_src(&mut materialized, 0, rhs_l)?;
+            let mat_l = crate::Layout::contiguous_with_offset(rhs_l.shape(), 0);
+            return self.cmp(op, &materialized, lhs_l, &mat_l);
+        }
+        let (start, len) = match lhs_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "cmp: non-contiguous lhs not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        // A contiguous rhs view of a larger buffer has a non-zero start_offset;
+        // the per-dtype rhs matches below slice by this (offset, len) instead of
+        // handing the whole buffer to the kernel.
+        let (rhs_start, rhs_len) = match rhs_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "cmp: non-contiguous rhs not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        // U8 output storage (1 where the predicate holds, 0 otherwise).
+        let out = VulkanStorage::new(&self.device, len, DType::U8)?;
+        if len == 0 {
+            return Ok(out);
+        }
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::U8(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels();
+        let lhs_dims: Vec<usize> = lhs_l.dims().to_vec();
+        if lhs_dims.len() > 4 {
+            return Err(Error::Vulkan(
+                "cmp: more than 4 dims not supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let rhs_dims: Vec<usize> = rhs_l
+            .dims()
+            .iter()
+            .zip(rhs_l.stride().iter())
+            .map(|(d, s)| if *s == 0 { 1 } else { *d })
+            .collect();
+        if rhs_dims.len() > 4 {
+            return Err(Error::Vulkan(
+                "cmp: more than 4 rhs dims not supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let mut lhs_dims_arr = [0u64; 4];
+        for (slot, d) in lhs_dims_arr.iter_mut().zip(lhs_dims.iter()) {
+            *slot = *d as u64;
+        }
+        let mut rhs_dims_arr = [0u64; 4];
+        for (slot, d) in rhs_dims_arr.iter_mut().zip(rhs_dims.iter()) {
+            *slot = *d as u64;
+        }
+        let params = candle_vulkan_kernels::push_constants::CmpParams {
+            count: len as u64,
+            lhs_ndim: lhs_dims.len() as u64,
+            rhs_ndim: rhs_dims.len() as u64,
+            lhs_dims: lhs_dims_arr,
+            rhs_dims: rhs_dims_arr,
+        };
+
+        match dtype {
+            DType::F32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::F32(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqF32,
+                    CmpOp::Ne => KernelName::CmpNeF32,
+                    CmpOp::Lt => KernelName::CmpLtF32,
+                    CmpOp::Le => KernelName::CmpLeF32,
+                    CmpOp::Gt => KernelName::CmpGtF32,
+                    CmpOp::Ge => KernelName::CmpGeF32,
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        Source::CmpSlang,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::BF16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqBf16,
+                    CmpOp::Ne => KernelName::CmpNeBf16,
+                    CmpOp::Lt => KernelName::CmpLtBf16,
+                    CmpOp::Le => KernelName::CmpLeBf16,
+                    CmpOp::Gt => KernelName::CmpGtBf16,
+                    CmpOp::Ge => KernelName::CmpGeBf16,
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        Source::CmpBf16,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqF8e4m3,
+                    CmpOp::Ne => KernelName::CmpNeF8e4m3,
+                    CmpOp::Lt => KernelName::CmpLtF8e4m3,
+                    CmpOp::Le => KernelName::CmpLeF8e4m3,
+                    CmpOp::Gt => KernelName::CmpGtF8e4m3,
+                    CmpOp::Ge => KernelName::CmpGeF8e4m3,
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<microfloat::f8e4m3>(
+                        cbb,
+                        &kernels,
+                        Source::CmpF8e4m3,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqF16,
+                    CmpOp::Ne => KernelName::CmpNeF16,
+                    CmpOp::Lt => KernelName::CmpLtF16,
+                    CmpOp::Le => KernelName::CmpLeF16,
+                    CmpOp::Gt => KernelName::CmpGtF16,
+                    CmpOp::Ge => KernelName::CmpGeF16,
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        Source::CmpF16,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::F64(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqF64,
+                    CmpOp::Ne => KernelName::CmpNeF64,
+                    CmpOp::Lt => KernelName::CmpLtF64,
+                    CmpOp::Le => KernelName::CmpLeF64,
+                    CmpOp::Gt => KernelName::CmpGtF64,
+                    CmpOp::Ge => KernelName::CmpGeF64,
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        Source::CmpF64,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::U8 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::U8(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqU8,
+                    CmpOp::Ne => KernelName::CmpNeU8,
+                    CmpOp::Lt => KernelName::CmpLtU8,
+                    CmpOp::Le => KernelName::CmpLeU8,
+                    CmpOp::Gt => KernelName::CmpGtU8,
+                    CmpOp::Ge => KernelName::CmpGeU8,
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<u8>(
+                        cbb,
+                        &kernels,
+                        Source::CmpU8,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+
+            DType::U32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::U32(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqU32,
+                    CmpOp::Ne => KernelName::CmpNeU32,
+                    CmpOp::Lt => KernelName::CmpLtU32,
+                    CmpOp::Le => KernelName::CmpLeU32,
+                    CmpOp::Gt => KernelName::CmpGtU32,
+                    CmpOp::Ge => KernelName::CmpGeU32,
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<u32>(
+                        cbb,
+                        &kernels,
+                        Source::CmpU32,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+
+            DType::I16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::I16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqI16,
+                    CmpOp::Ne => KernelName::CmpNeI16,
+                    CmpOp::Lt => KernelName::CmpLtI16,
+                    CmpOp::Le => KernelName::CmpLeI16,
+                    CmpOp::Gt => KernelName::CmpGtI16,
+                    CmpOp::Ge => KernelName::CmpGeI16,
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<i16>(
+                        cbb,
+                        &kernels,
+                        Source::CmpI16,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+
+            DType::I32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::I32(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqI32,
+                    CmpOp::Ne => KernelName::CmpNeI32,
+                    CmpOp::Lt => KernelName::CmpLtI32,
+                    CmpOp::Le => KernelName::CmpLeI32,
+                    CmpOp::Gt => KernelName::CmpGtI32,
+                    CmpOp::Ge => KernelName::CmpGeI32,
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<i32>(
+                        cbb,
+                        &kernels,
+                        Source::CmpI32,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+
+            DType::I64 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs.buffer {
+                    VulkanStorageBuffer::I64(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match op {
+                    CmpOp::Eq => KernelName::CmpEqI64,
+                    CmpOp::Ne => KernelName::CmpNeI64,
+                    CmpOp::Lt => KernelName::CmpLtI64,
+                    CmpOp::Le => KernelName::CmpLeI64,
+                    CmpOp::Gt => KernelName::CmpGtI64,
+                    CmpOp::Ge => KernelName::CmpGeI64,
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_cmp_slang::<i64>(
+                        cbb,
+                        &kernels,
+                        Source::CmpI64,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    /// Dispatch a `to_dtype` GPU kernel converting `input` (type `S`) to
+    /// `output` (type `D`) for `len` elements starting at `start`.
+    fn to_dtype(&self, l: &Layout, dtype: DType) -> Result<Self> {
+        if self.dtype == dtype {
+            return Ok(self.clone());
+        }
+        use candle_vulkan_kernels::{KernelName, Source};
+        // Materialize non-contiguous inputs first.
+        if !matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            let elem_count = l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, l)?;
+            let mat_l = crate::Layout::contiguous_with_offset(l.shape(), 0);
+            return materialized.to_dtype(&mat_l, dtype);
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "to_dtype: non-contiguous layouts not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if len == 0 {
+            return self.device.zeros_impl(l.shape(), dtype);
+        }
+        let out = VulkanStorage::new(&self.device, l.shape().elem_count(), dtype)?;
+        let start = start as u64;
+        let end = start + len as u64;
+        match (self.dtype, dtype) {
+            (DType::F16, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16F32,
+                    KernelName::ToDtypeF16F32,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16Bf16,
+                    KernelName::ToDtypeF16Bf16,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16F64,
+                    KernelName::ToDtypeF16F64,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16F16,
+                    KernelName::ToDtypeBf16F16,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16F32,
+                    KernelName::ToDtypeBf16F32,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16F64,
+                    KernelName::ToDtypeBf16F64,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32F16,
+                    KernelName::ToDtypeF32F16,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32Bf16,
+                    KernelName::ToDtypeF32Bf16,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32F64,
+                    KernelName::ToDtypeF32F64,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64F16,
+                    KernelName::ToDtypeF64F16,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64Bf16,
+                    KernelName::ToDtypeF64Bf16,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64F32,
+                    KernelName::ToDtypeF64F32,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8U32,
+                    KernelName::ToDtypeU8U32,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8I16,
+                    KernelName::ToDtypeU8I16,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8I32,
+                    KernelName::ToDtypeU8I32,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8I64,
+                    KernelName::ToDtypeU8I64,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8Bf16,
+                    KernelName::ToDtypeU8Bf16,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8F16,
+                    KernelName::ToDtypeU8F16,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8F32,
+                    KernelName::ToDtypeU8F32,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8F64,
+                    KernelName::ToDtypeU8F64,
+                    len,
+                )?;
+            }
+            (DType::U8, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU8F8e4m3,
+                    KernelName::ToDtypeU8F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32U8,
+                    KernelName::ToDtypeU32U8,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32I16,
+                    KernelName::ToDtypeU32I16,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32I32,
+                    KernelName::ToDtypeU32I32,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32I64,
+                    KernelName::ToDtypeU32I64,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32Bf16,
+                    KernelName::ToDtypeU32Bf16,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32F16,
+                    KernelName::ToDtypeU32F16,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32F32,
+                    KernelName::ToDtypeU32F32,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32F64,
+                    KernelName::ToDtypeU32F64,
+                    len,
+                )?;
+            }
+            (DType::U32, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeU32F8e4m3,
+                    KernelName::ToDtypeU32F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16U8,
+                    KernelName::ToDtypeI16U8,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16U32,
+                    KernelName::ToDtypeI16U32,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16I32,
+                    KernelName::ToDtypeI16I32,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16I64,
+                    KernelName::ToDtypeI16I64,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16Bf16,
+                    KernelName::ToDtypeI16Bf16,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16F16,
+                    KernelName::ToDtypeI16F16,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16F32,
+                    KernelName::ToDtypeI16F32,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16F64,
+                    KernelName::ToDtypeI16F64,
+                    len,
+                )?;
+            }
+            (DType::I16, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI16F8e4m3,
+                    KernelName::ToDtypeI16F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32U8,
+                    KernelName::ToDtypeI32U8,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32U32,
+                    KernelName::ToDtypeI32U32,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32I16,
+                    KernelName::ToDtypeI32I16,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32I64,
+                    KernelName::ToDtypeI32I64,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32Bf16,
+                    KernelName::ToDtypeI32Bf16,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32F16,
+                    KernelName::ToDtypeI32F16,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32F32,
+                    KernelName::ToDtypeI32F32,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32F64,
+                    KernelName::ToDtypeI32F64,
+                    len,
+                )?;
+            }
+            (DType::I32, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI32F8e4m3,
+                    KernelName::ToDtypeI32F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64U8,
+                    KernelName::ToDtypeI64U8,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64U32,
+                    KernelName::ToDtypeI64U32,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64I16,
+                    KernelName::ToDtypeI64I16,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64I32,
+                    KernelName::ToDtypeI64I32,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64Bf16,
+                    KernelName::ToDtypeI64Bf16,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64F16,
+                    KernelName::ToDtypeI64F16,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64F32,
+                    KernelName::ToDtypeI64F32,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64F64,
+                    KernelName::ToDtypeI64F64,
+                    len,
+                )?;
+            }
+            (DType::I64, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeI64F8e4m3,
+                    KernelName::ToDtypeI64F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3U8,
+                    KernelName::ToDtypeF8e4m3U8,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3U32,
+                    KernelName::ToDtypeF8e4m3U32,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3I16,
+                    KernelName::ToDtypeF8e4m3I16,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3I32,
+                    KernelName::ToDtypeF8e4m3I32,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3I64,
+                    KernelName::ToDtypeF8e4m3I64,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::BF16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3Bf16,
+                    KernelName::ToDtypeF8e4m3Bf16,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::F16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3F16,
+                    KernelName::ToDtypeF8e4m3F16,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::F32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3F32,
+                    KernelName::ToDtypeF8e4m3F32,
+                    len,
+                )?;
+            }
+            (DType::F8E4M3, DType::F64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF8e4m3F64,
+                    KernelName::ToDtypeF8e4m3F64,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16U8,
+                    KernelName::ToDtypeBf16U8,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16U32,
+                    KernelName::ToDtypeBf16U32,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16I16,
+                    KernelName::ToDtypeBf16I16,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16I32,
+                    KernelName::ToDtypeBf16I32,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16I64,
+                    KernelName::ToDtypeBf16I64,
+                    len,
+                )?;
+            }
+            (DType::BF16, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeBf16F8e4m3,
+                    KernelName::ToDtypeBf16F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16U8,
+                    KernelName::ToDtypeF16U8,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16U32,
+                    KernelName::ToDtypeF16U32,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16I16,
+                    KernelName::ToDtypeF16I16,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16I32,
+                    KernelName::ToDtypeF16I32,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16I64,
+                    KernelName::ToDtypeF16I64,
+                    len,
+                )?;
+            }
+            (DType::F16, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF16F8e4m3,
+                    KernelName::ToDtypeF16F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32U8,
+                    KernelName::ToDtypeF32U8,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32U32,
+                    KernelName::ToDtypeF32U32,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32I16,
+                    KernelName::ToDtypeF32I16,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32I32,
+                    KernelName::ToDtypeF32I32,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32I64,
+                    KernelName::ToDtypeF32I64,
+                    len,
+                )?;
+            }
+            (DType::F32, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF32F8e4m3,
+                    KernelName::ToDtypeF32F8e4m3,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::U8) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64U8,
+                    KernelName::ToDtypeF64U8,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::U32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64U32,
+                    KernelName::ToDtypeF64U32,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::I16) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64I16,
+                    KernelName::ToDtypeF64I16,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::I32) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64I32,
+                    KernelName::ToDtypeF64I32,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::I64) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64I64,
+                    KernelName::ToDtypeF64I64,
+                    len,
+                )?;
+            }
+            (DType::F64, DType::F8E4M3) => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone().slice(start..end),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let output = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.dispatch_to_dtype(
+                    &input,
+                    &output,
+                    Source::ToDtypeF64F8e4m3,
+                    KernelName::ToDtypeF64F8e4m3,
+                    len,
+                )?;
+            }
+
+            _ => {
+                return Err(Error::Vulkan(
+                    format!(
+                        "to_dtype: {:?} -> {:?} not supported on the Vulkan backend",
+                        self.dtype, dtype
+                    )
+                    .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn unary_impl<B: UnaryOpT>(&self, l: &Layout) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        let supported = matches!(
+            dtype,
+            DType::F32 | DType::BF16 | DType::F8E4M3 | DType::F16 | DType::F64
+        );
+        if !supported {
+            return Err(Error::Vulkan(
+                format!(
+                    "unary: dtype {:?} not supported on the Vulkan backend",
+                    dtype
+                )
+                .into(),
+            ));
+        }
+        if !matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            let elem_count = l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, l)?;
+            let mat_layout = crate::Layout::contiguous_with_offset(l.shape(), 0);
+            return materialized.unary_impl::<B>(&mat_layout);
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unary: non-contiguous layout not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let out = VulkanStorage::new(&self.device, l.shape().elem_count(), dtype)?;
+        if len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        // Slang kernels (params: [0] = element count).
+        let params = candle_vulkan_kernels::UnaryParams {
+            count: len as u64,
+            extra: 0.0,
+        };
+
+        match dtype {
+            DType::F32 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "log" => KernelName::UnaryLogF32,
+                    "abs" => KernelName::UnaryAbsF32,
+                    "recip" => KernelName::UnaryRecipF32,
+                    "sqr" => KernelName::UnarySqrF32,
+                    "gelu" => KernelName::UnaryGeluF32,
+                    "gelu_erf" => KernelName::UnaryGeluErfF32,
+                    "erf" => KernelName::UnaryErfF32,
+                    "relu" => KernelName::UnaryReluF32,
+                    "tanh" => KernelName::UnaryTanhF32,
+                    "floor" => KernelName::UnaryFloorF32,
+                    "ceil" => KernelName::UnaryCeilF32,
+                    "round" => KernelName::UnaryRoundF32,
+                    "sign" => KernelName::UnarySignF32,
+                    "exp" => KernelName::UnaryExpF32,
+                    "silu" => KernelName::UnarySiluF32,
+                    "sqrt" => KernelName::UnarySqrtF32,
+                    "sin" => KernelName::UnarySinF32,
+                    "cos" => KernelName::UnaryCosF32,
+                    "neg" => KernelName::UnaryNegF32,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("unary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        Source::UnarySlang,
+                        name,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "log" => KernelName::UnaryLogBf16,
+                    "abs" => KernelName::UnaryAbsBf16,
+                    "recip" => KernelName::UnaryRecipBf16,
+                    "sqr" => KernelName::UnarySqrBf16,
+                    "gelu" => KernelName::UnaryGeluBf16,
+                    "gelu_erf" => KernelName::UnaryGeluErfBf16,
+                    "erf" => KernelName::UnaryErfBf16,
+                    "relu" => KernelName::UnaryReluBf16,
+                    "tanh" => KernelName::UnaryTanhBf16,
+                    "floor" => KernelName::UnaryFloorBf16,
+                    "ceil" => KernelName::UnaryCeilBf16,
+                    "round" => KernelName::UnaryRoundBf16,
+                    "sign" => KernelName::UnarySignBf16,
+                    "exp" => KernelName::UnaryExpBf16,
+                    "silu" => KernelName::UnarySiluBf16,
+                    "sqrt" => KernelName::UnarySqrtBf16,
+                    "sin" => KernelName::UnarySinBf16,
+                    "cos" => KernelName::UnaryCosBf16,
+                    "neg" => KernelName::UnaryNegBf16,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("unary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        Source::UnaryBf16,
+                        name,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "log" => KernelName::UnaryLogF8e4m3,
+                    "abs" => KernelName::UnaryAbsF8e4m3,
+                    "recip" => KernelName::UnaryRecipF8e4m3,
+                    "sqr" => KernelName::UnarySqrF8e4m3,
+                    "gelu" => KernelName::UnaryGeluF8e4m3,
+                    "gelu_erf" => KernelName::UnaryGeluErfF8e4m3,
+                    "erf" => KernelName::UnaryErfF8e4m3,
+                    "relu" => KernelName::UnaryReluF8e4m3,
+                    "tanh" => KernelName::UnaryTanhF8e4m3,
+                    "floor" => KernelName::UnaryFloorF8e4m3,
+                    "ceil" => KernelName::UnaryCeilF8e4m3,
+                    "round" => KernelName::UnaryRoundF8e4m3,
+                    "sign" => KernelName::UnarySignF8e4m3,
+                    "exp" => KernelName::UnaryExpF8e4m3,
+                    "silu" => KernelName::UnarySiluF8e4m3,
+                    "sqrt" => KernelName::UnarySqrtF8e4m3,
+                    "sin" => KernelName::UnarySinF8e4m3,
+                    "cos" => KernelName::UnaryCosF8e4m3,
+                    "neg" => KernelName::UnaryNegF8e4m3,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("unary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<microfloat::f8e4m3>(
+                        cbb,
+                        &kernels,
+                        Source::UnaryF8e4m3,
+                        name,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "log" => KernelName::UnaryLogF16,
+                    "abs" => KernelName::UnaryAbsF16,
+                    "recip" => KernelName::UnaryRecipF16,
+                    "sqr" => KernelName::UnarySqrF16,
+                    "gelu" => KernelName::UnaryGeluF16,
+                    "gelu_erf" => KernelName::UnaryGeluErfF16,
+                    "erf" => KernelName::UnaryErfF16,
+                    "relu" => KernelName::UnaryReluF16,
+                    "tanh" => KernelName::UnaryTanhF16,
+                    "floor" => KernelName::UnaryFloorF16,
+                    "ceil" => KernelName::UnaryCeilF16,
+                    "round" => KernelName::UnaryRoundF16,
+                    "sign" => KernelName::UnarySignF16,
+                    "exp" => KernelName::UnaryExpF16,
+                    "silu" => KernelName::UnarySiluF16,
+                    "sqrt" => KernelName::UnarySqrtF16,
+                    "sin" => KernelName::UnarySinF16,
+                    "cos" => KernelName::UnaryCosF16,
+                    "neg" => KernelName::UnaryNegF16,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("unary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        Source::UnaryF16,
+                        name,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let input = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "log" => KernelName::UnaryLogF64,
+                    "abs" => KernelName::UnaryAbsF64,
+                    "recip" => KernelName::UnaryRecipF64,
+                    "sqr" => KernelName::UnarySqrF64,
+                    "gelu" => KernelName::UnaryGeluF64,
+                    "gelu_erf" => KernelName::UnaryGeluErfF64,
+                    "erf" => KernelName::UnaryErfF64,
+                    "relu" => KernelName::UnaryReluF64,
+                    "tanh" => KernelName::UnaryTanhF64,
+                    "floor" => KernelName::UnaryFloorF64,
+                    "ceil" => KernelName::UnaryCeilF64,
+                    "round" => KernelName::UnaryRoundF64,
+                    "sign" => KernelName::UnarySignF64,
+                    "exp" => KernelName::UnaryExpF64,
+                    "silu" => KernelName::UnarySiluF64,
+                    "sqrt" => KernelName::UnarySqrtF64,
+                    "sin" => KernelName::UnarySinF64,
+                    "cos" => KernelName::UnaryCosF64,
+                    "neg" => KernelName::UnaryNegF64,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("unary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_unary_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        Source::UnaryF64,
+                        name,
+                        &input,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn binary_impl<B: BinaryOpT>(
+        &self,
+        rhs: &Self,
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        // Promote mixed dtypes to a common result dtype.
+        let (self_promoted, rhs_promoted): (Option<Self>, Option<Self>) = if self.dtype != rhs.dtype
+        {
+            let result_dtype = if matches!(self.dtype, DType::F32 | DType::F64)
+                || matches!(rhs.dtype, DType::F32 | DType::F64)
+            {
+                if self.dtype == DType::F64 || rhs.dtype == DType::F64 {
+                    DType::F64
+                } else {
+                    DType::F32
+                }
+            } else if matches!(self.dtype, DType::BF16 | DType::F16 | DType::F8E4M3)
+                || matches!(rhs.dtype, DType::BF16 | DType::F16 | DType::F8E4M3)
+            {
+                DType::F32
+            } else {
+                // Integer ops: keep the wider integer type.
+                if self.dtype == DType::I64 || rhs.dtype == DType::I64 {
+                    DType::I64
+                } else if self.dtype == DType::I32 || rhs.dtype == DType::I32 {
+                    DType::I32
+                } else if self.dtype == DType::U32 || rhs.dtype == DType::U32 {
+                    DType::U32
+                } else if self.dtype == DType::I16 || rhs.dtype == DType::I16 {
+                    DType::I16
+                } else {
+                    DType::U8
+                }
+            };
+            let self_p = if self.dtype != result_dtype {
+                Some(self.to_dtype(lhs_l, result_dtype)?)
+            } else {
+                None
+            };
+            let rhs_p = if rhs.dtype != result_dtype {
+                Some(rhs.to_dtype(rhs_l, result_dtype)?)
+            } else {
+                None
+            };
+            (self_p, rhs_p)
+        } else {
+            (None, None)
+        };
+        let self_ref: &VulkanStorage = match &self_promoted {
+            Some(p) => p,
+            None => self,
+        };
+        let rhs_ref: &VulkanStorage = match &rhs_promoted {
+            Some(p) => p,
+            None => rhs,
+        };
+        let dtype = self_ref.dtype;
+        let supported = matches!(
+            dtype,
+            DType::F32
+                | DType::BF16
+                | DType::F8E4M3
+                | DType::F16
+                | DType::F64
+                | DType::U8
+                | DType::U32
+                | DType::I16
+                | DType::I32
+                | DType::I64
+        );
+        if !supported {
+            return Err(Error::Vulkan(
+                format!(
+                    "binary: dtype {:?} not supported on the Vulkan backend",
+                    dtype
+                )
+                .into(),
+            ));
+        }
+        // A promoted operand is a fresh contiguous buffer at offset 0 laid out
+        // in the full broadcast shape; the original layout's offset/strides
+        // must not be re-applied to it.
+        let lhs_promoted = self_promoted.is_some();
+        let lhs_contiguous = lhs_promoted
+            || matches!(
+                lhs_l.strided_blocks(),
+                crate::StridedBlocks::SingleBlock { .. }
+            );
+        let start = if lhs_promoted {
+            0
+        } else if lhs_contiguous {
+            match lhs_l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, .. } => start_offset,
+                _ => {
+                    return Err(Error::Vulkan(
+                        "lhs_contiguous checked above".to_string().into(),
+                    ))
+                }
+            }
+        } else {
+            0
+        };
+        let len = lhs_l.shape().elem_count();
+        let rhs_promoted = rhs_promoted.is_some();
+        let rhs_contiguous = rhs_promoted
+            || matches!(
+                rhs_l.strided_blocks(),
+                crate::StridedBlocks::SingleBlock { .. }
+            );
+        let rhs_start = if rhs_promoted {
+            0
+        } else if rhs_contiguous {
+            match rhs_l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, .. } => start_offset,
+                _ => {
+                    return Err(Error::Vulkan(
+                        "rhs_contiguous checked above".to_string().into(),
+                    ));
+                }
+            }
+        } else {
+            0
+        };
+        // The binary kernels index operand data assuming row-major strides,
+        // which only holds for a contiguous (single-block) layout. Make any
+        // non-contiguous operand a fresh contiguous copy first.
+        let lhs_own = if !lhs_contiguous {
+            let mut c =
+                VulkanStorage::new(&self.device, lhs_l.shape().elem_count(), self_ref.dtype)?;
+            self_ref.copy_strided_src(&mut c, 0, lhs_l)?;
+            Some(c)
+        } else {
+            None
+        };
+        let rhs_own = if !rhs_contiguous {
+            let mut c =
+                VulkanStorage::new(&self.device, rhs_l.shape().elem_count(), rhs_ref.dtype)?;
+            rhs_ref.copy_strided_src(&mut c, 0, rhs_l)?;
+            Some(c)
+        } else {
+            None
+        };
+        let self_ref: &VulkanStorage = match &lhs_own {
+            Some(c) => c,
+            None => self_ref,
+        };
+        let rhs_ref: &VulkanStorage = match &rhs_own {
+            Some(c) => c,
+            None => rhs_ref,
+        };
+        let out = VulkanStorage::new(&self.device, lhs_l.shape().elem_count(), dtype)?;
+        if len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let lhs_dims: Vec<usize> = lhs_l.dims().to_vec();
+        if lhs_dims.len() > 8 {
+            return Err(Error::Vulkan(
+                "binary: more than 8 dims not supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // Broadcast dims (stride 0) index a single element. An operand
+        // materialized above is a fresh contiguous buffer laid out in the
+        // full broadcast shape, so the kernel must index it with the full
+        // dims; a single-block operand is read in its original layout, where
+        // broadcast dims collapse to 1.
+        let rhs_dims: Vec<usize> = if rhs_own.is_some() || rhs_promoted {
+            rhs_l.dims().to_vec()
+        } else {
+            rhs_l
+                .dims()
+                .iter()
+                .zip(rhs_l.stride().iter())
+                .map(|(d, s)| if *s == 0 { 1 } else { *d })
+                .collect()
+        };
+        let lhs_data_dims: Vec<usize> = if lhs_own.is_some() || lhs_promoted {
+            lhs_l.dims().to_vec()
+        } else {
+            lhs_l
+                .dims()
+                .iter()
+                .zip(lhs_l.stride().iter())
+                .map(|(d, s)| if *s == 0 { 1 } else { *d })
+                .collect()
+        };
+        let mut lhs_dims_arr = [0u64; 8];
+        for (slot, d) in lhs_dims_arr.iter_mut().zip(lhs_dims.iter()) {
+            *slot = *d as u64;
+        }
+        let mut rhs_dims_arr = [0u64; 8];
+        for (slot, d) in rhs_dims_arr.iter_mut().zip(rhs_dims.iter()) {
+            *slot = *d as u64;
+        }
+        let mut lhs_data_dims_arr = [0u64; 8];
+        for (slot, d) in lhs_data_dims_arr.iter_mut().zip(lhs_data_dims.iter()) {
+            *slot = *d as u64;
+        }
+        let params = candle_vulkan_kernels::push_constants::BinaryParams {
+            count: len as u64,
+            lhs_ndim: lhs_dims.len() as u64,
+            rhs_ndim: rhs_dims.len() as u64,
+            lhs_dims: lhs_dims_arr,
+            rhs_dims: rhs_dims_arr,
+            lhs_data_ndim: lhs_data_dims.len() as u64,
+            lhs_data_dims: lhs_data_dims_arr,
+        };
+
+        match dtype {
+            DType::F32 => {
+                let input = match &self_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        if lhs_contiguous {
+                            b.clone().slice(start as u64..(start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddF32,
+                    "sub" => KernelName::BinarySubF32,
+                    "mul" => KernelName::BinaryMulF32,
+                    "div" => KernelName::BinaryDivF32,
+                    "maximum" => KernelName::BinaryMaximumF32,
+                    "minimum" => KernelName::BinaryMinimumF32,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("binary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_binary_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        Source::BinarySlang,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input = match &self_ref.buffer {
+                    VulkanStorageBuffer::BF16(b) => {
+                        if lhs_contiguous {
+                            b.clone().slice(start as u64..(start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::BF16(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddBf16,
+                    "sub" => KernelName::BinarySubBf16,
+                    "mul" => KernelName::BinaryMulBf16,
+                    "div" => KernelName::BinaryDivBf16,
+                    "maximum" => KernelName::BinaryMaximumBf16,
+                    "minimum" => KernelName::BinaryMinimumBf16,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("binary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_binary_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        Source::BinaryBf16,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let input = match &self_ref.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => {
+                        if lhs_contiguous {
+                            b.clone().slice(start as u64..(start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddF8e4m3,
+                    "sub" => KernelName::BinarySubF8e4m3,
+                    "mul" => KernelName::BinaryMulF8e4m3,
+                    "div" => KernelName::BinaryDivF8e4m3,
+                    "maximum" => KernelName::BinaryMaximumF8e4m3,
+                    "minimum" => KernelName::BinaryMinimumF8e4m3,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("binary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_binary_slang::<microfloat::f8e4m3>(
+                        cbb,
+                        &kernels,
+                        Source::BinaryF8e4m3,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let input = match &self_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        if lhs_contiguous {
+                            b.clone().slice(start as u64..(start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddF16,
+                    "sub" => KernelName::BinarySubF16,
+                    "mul" => KernelName::BinaryMulF16,
+                    "div" => KernelName::BinaryDivF16,
+                    "maximum" => KernelName::BinaryMaximumF16,
+                    "minimum" => KernelName::BinaryMinimumF16,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("binary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_binary_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        Source::BinaryF16,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let input = match &self_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        if lhs_contiguous {
+                            b.clone().slice(start as u64..(start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddF64,
+                    "sub" => KernelName::BinarySubF64,
+                    "mul" => KernelName::BinaryMulF64,
+                    "div" => KernelName::BinaryDivF64,
+                    "maximum" => KernelName::BinaryMaximumF64,
+                    "minimum" => KernelName::BinaryMinimumF64,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("binary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_binary_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        Source::BinaryF64,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::U8 => {
+                let input = match &self_ref.buffer {
+                    VulkanStorageBuffer::U8(b) => {
+                        if lhs_contiguous {
+                            b.clone().slice(start as u64..(start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::U8(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddU8,
+                    "sub" => KernelName::BinarySubU8,
+                    "mul" => KernelName::BinaryMulU8,
+                    "div" => KernelName::BinaryDivU8,
+                    "maximum" => KernelName::BinaryMaximumU8,
+                    "minimum" => KernelName::BinaryMinimumU8,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("binary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_binary_slang::<u8>(
+                        cbb,
+                        &kernels,
+                        Source::BinaryU8,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+
+            DType::U32 => {
+                let input = match &self_ref.buffer {
+                    VulkanStorageBuffer::U32(b) => {
+                        if lhs_contiguous {
+                            b.clone().slice(start as u64..(start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::U32(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddU32,
+                    "sub" => KernelName::BinarySubU32,
+                    "mul" => KernelName::BinaryMulU32,
+                    "div" => KernelName::BinaryDivU32,
+                    "maximum" => KernelName::BinaryMaximumU32,
+                    "minimum" => KernelName::BinaryMinimumU32,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("binary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_binary_slang::<u32>(
+                        cbb,
+                        &kernels,
+                        Source::BinaryU32,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+
+            DType::I16 => {
+                let input = match &self_ref.buffer {
+                    VulkanStorageBuffer::I16(b) => {
+                        if lhs_contiguous {
+                            b.clone().slice(start as u64..(start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::I16(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::I16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddI16,
+                    "sub" => KernelName::BinarySubI16,
+                    "mul" => KernelName::BinaryMulI16,
+                    "div" => KernelName::BinaryDivI16,
+                    "maximum" => KernelName::BinaryMaximumI16,
+                    "minimum" => KernelName::BinaryMinimumI16,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("binary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_binary_slang::<i16>(
+                        cbb,
+                        &kernels,
+                        Source::BinaryI16,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+
+            DType::I32 => {
+                let input = match &self_ref.buffer {
+                    VulkanStorageBuffer::I32(b) => {
+                        if lhs_contiguous {
+                            b.clone().slice(start as u64..(start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::I32(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::I32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddI32,
+                    "sub" => KernelName::BinarySubI32,
+                    "mul" => KernelName::BinaryMulI32,
+                    "div" => KernelName::BinaryDivI32,
+                    "maximum" => KernelName::BinaryMaximumI32,
+                    "minimum" => KernelName::BinaryMinimumI32,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("binary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_binary_slang::<i32>(
+                        cbb,
+                        &kernels,
+                        Source::BinaryI32,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+
+            DType::I64 => {
+                let input = match &self_ref.buffer {
+                    VulkanStorageBuffer::I64(b) => {
+                        if lhs_contiguous {
+                            b.clone().slice(start as u64..(start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let rhs_buf = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::I64(b) => {
+                        if rhs_contiguous {
+                            b.clone().slice(rhs_start as u64..(rhs_start + len) as u64)
+                        } else {
+                            b.clone()
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let name = match B::NAME {
+                    "add" => KernelName::BinaryAddI64,
+                    "sub" => KernelName::BinarySubI64,
+                    "mul" => KernelName::BinaryMulI64,
+                    "div" => KernelName::BinaryDivI64,
+                    "maximum" => KernelName::BinaryMaximumI64,
+                    "minimum" => KernelName::BinaryMinimumI64,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("binary: unsupported op {}", B::NAME).into(),
+                        ))
+                    }
+                };
+                let (input, rhs_buf, out_buf) = (input, rhs_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_binary_slang::<i64>(
+                        cbb,
+                        &kernels,
+                        Source::BinaryI64,
+                        name,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn where_cond(
+        &self,
+        l: &Layout,
+        t: &Self,
+        t_l: &Layout,
+        f: &Self,
+        f_l: &Layout,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = t.dtype;
+        if dtype != f.dtype {
+            return Err(Error::Vulkan(
+                "where_cond: on_true and on_false must have the same dtype"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let supported = matches!(
+            dtype,
+            DType::F32 | DType::BF16 | DType::F8E4M3 | DType::F16 | DType::F64
+        );
+        if !supported {
+            return Err(Error::Vulkan(
+                format!(
+                    "where_cond: dtype {:?} not supported on the Vulkan backend",
+                    dtype
+                )
+                .into(),
+            ));
+        }
+        // The where kernel indexes the predicate linearly, so a
+        // non-contiguous predicate (broadcast or narrowed) is materialized
+        // to a contiguous buffer first, then the where kernel runs on it.
+        if !matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            let elem_count = l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, DType::U8)?;
+            self.copy_strided_src(&mut materialized, 0, l)?;
+            let mat_layout = crate::Layout::contiguous_with_offset(l.shape(), 0);
+            return materialized.where_cond(&mat_layout, t, t_l, f, f_l);
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "where_cond: non-contiguous pred not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        // The true/false operands are indexed shape-based by the kernel,
+        // which only matches their data when the operand is a single
+        // contiguous block. Materialize any non-contiguous operand first; a
+        // materialized buffer is laid out in the full shape, so the kernel
+        // is given the full dims for it.
+        let t_mat: Option<VulkanStorage> = if matches!(
+            t_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
+            None
+        } else {
+            let mut c = VulkanStorage::new(&self.device, t_l.shape().elem_count(), dtype)?;
+            t.copy_strided_src(&mut c, 0, t_l)?;
+            Some(c)
+        };
+        let f_mat: Option<VulkanStorage> = if matches!(
+            f_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
+            None
+        } else {
+            let mut c = VulkanStorage::new(&self.device, f_l.shape().elem_count(), dtype)?;
+            f.copy_strided_src(&mut c, 0, f_l)?;
+            Some(c)
+        };
+        let t_ref: &VulkanStorage = t_mat.as_ref().unwrap_or(t);
+        let f_ref: &VulkanStorage = f_mat.as_ref().unwrap_or(f);
+        let t_dims: Vec<usize> = if t_mat.is_some() {
+            t_l.dims().to_vec()
+        } else {
+            t_l.dims()
+                .iter()
+                .zip(t_l.stride().iter())
+                .map(|(d, s)| if *s == 0 { 1 } else { *d })
+                .collect()
+        };
+        let f_dims: Vec<usize> = if f_mat.is_some() {
+            f_l.dims().to_vec()
+        } else {
+            f_l.dims()
+                .iter()
+                .zip(f_l.stride().iter())
+                .map(|(d, s)| if *s == 0 { 1 } else { *d })
+                .collect()
+        };
+        let pred: Subbuffer<[u8]> = if self.dtype == DType::U8 {
+            match &self.buffer {
+                VulkanStorageBuffer::U8(b) => b.clone().slice(start as u64..(start + len) as u64),
+                _ => unreachable!(),
+            }
+        } else {
+            // Non-U8 predicate (I32, F32, etc.): convert to U8 via to_dtype.
+            let u8_self = self.to_dtype(l, DType::U8)?;
+            match &u8_self.buffer {
+                VulkanStorageBuffer::U8(b) => {
+                    // to_dtype returns a contiguous buffer at offset 0
+                    b.clone().slice(0..len as u64)
+                }
+                _ => unreachable!(),
+            }
+        };
+        let out = VulkanStorage::new(&self.device, l.shape().elem_count(), dtype)?;
+        if len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let ndim = l.dims().len();
+        if ndim > 4 {
+            return Err(Error::Vulkan(
+                "where_cond: more than 4 dims not supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let p_dims: Vec<usize> = l
+            .dims()
+            .iter()
+            .zip(l.stride().iter())
+            .map(|(d, s)| if *s == 0 { 1 } else { *d })
+            .collect();
+        if t_dims.len() > 4 || f_dims.len() > 4 {
+            return Err(Error::Vulkan(
+                "where_cond: more than 4 dims not supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let mut p_dims_arr = [0u64; 4];
+        for (slot, d) in p_dims_arr.iter_mut().zip(p_dims.iter()) {
+            *slot = *d as u64;
+        }
+        let mut t_dims_arr = [0u64; 4];
+        for (slot, d) in t_dims_arr.iter_mut().zip(t_dims.iter()) {
+            *slot = *d as u64;
+        }
+        let mut f_dims_arr = [0u64; 4];
+        for (slot, d) in f_dims_arr.iter_mut().zip(f_dims.iter()) {
+            *slot = *d as u64;
+        }
+        let params = candle_vulkan_kernels::push_constants::WhereParams {
+            count: len as u64,
+            ndim: ndim as u64,
+            pred_dims: p_dims_arr,
+            true_dims: t_dims_arr,
+            false_dims: f_dims_arr,
+        };
+        let pred = pred.clone();
+
+        match dtype {
+            DType::F32 => {
+                let t_buf = match &t_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let f_buf = match &f_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let (t_buf, f_buf, out_buf) = (t_buf, f_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_where_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        Source::WhereSlang,
+                        KernelName::WhereF32,
+                        &pred,
+                        &t_buf,
+                        &f_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let t_buf = match &t_ref.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let f_buf = match &f_ref.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let (t_buf, f_buf, out_buf) = (t_buf, f_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_where_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        Source::WhereBf16,
+                        KernelName::WhereBf16,
+                        &pred,
+                        &t_buf,
+                        &f_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F8E4M3 => {
+                let t_buf = match &t_ref.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let f_buf = match &f_ref.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F8E4M3(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let (t_buf, f_buf, out_buf) = (t_buf, f_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_where_slang::<microfloat::f8e4m3>(
+                        cbb,
+                        &kernels,
+                        Source::WhereF8e4m3,
+                        KernelName::WhereF8e4m3,
+                        &pred,
+                        &t_buf,
+                        &f_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let t_buf = match &t_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let f_buf = match &f_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let (t_buf, f_buf, out_buf) = (t_buf, f_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_where_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        Source::WhereF16,
+                        KernelName::WhereF16,
+                        &pred,
+                        &t_buf,
+                        &f_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let t_buf = match &t_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let f_buf = match &f_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                let (t_buf, f_buf, out_buf) = (t_buf, f_buf, out_buf);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_where_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        Source::WhereF64,
+                        KernelName::WhereF64,
+                        &pred,
+                        &t_buf,
+                        &f_buf,
+                        &out_buf,
+                        &params,
+                        len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("supported dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn conv1d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv1D,
+    ) -> Result<Self> {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) || self.dtype != kernel.dtype
+        {
+            return Err(Error::Vulkan(
+                "conv1d: unsupported or mismatched dtype on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // Materialize non-contiguous inputs and kernels first.
+        let in_mat = if matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            None
+        } else {
+            let elem_count = l.shape().elem_count();
+            let mut mat = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut mat, 0, l)?;
+            Some(mat)
+        };
+        let kernel_mat = if matches!(
+            kernel_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
+            None
+        } else {
+            let elem_count = kernel_l.shape().elem_count();
+            let mut mat = VulkanStorage::new(&self.device, elem_count, kernel.dtype)?;
+            kernel.copy_strided_src(&mut mat, 0, kernel_l)?;
+            Some(mat)
+        };
+        let self_ref: &VulkanStorage = in_mat.as_ref().unwrap_or(self);
+        let kernel_ref: &VulkanStorage = kernel_mat.as_ref().unwrap_or(kernel);
+        let in_l = if in_mat.is_some() {
+            crate::Layout::contiguous_with_offset(l.shape(), 0)
+        } else {
+            l.clone()
+        };
+        let kernel_l = if kernel_mat.is_some() {
+            crate::Layout::contiguous_with_offset(kernel_l.shape(), 0)
+        } else {
+            kernel_l.clone()
+        };
+        let (in_start, in_len) = match in_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "conv1d: non-contiguous inputs not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (w_start, w_len) = match kernel_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "conv1d: non-contiguous kernels not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if in_len != params.b_size * params.c_in * params.l_in
+            || w_len != params.c_out * params.c_in * params.k_size
+        {
+            return Err(Error::Vulkan(
+                "conv1d: size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let l_out = params.l_out();
+        let total = params.b_size * params.c_out * l_out;
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
+        if total == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params_sub = candle_vulkan_kernels::push_constants::ConvParams {
+            b: params.b_size as u64,
+            c_in: params.c_in as u64,
+            c_out: params.c_out as u64,
+            k1: params.k_size as u64,
+            k2: 0,
+            i1: params.l_in as u64,
+            i2: 0,
+            o1: l_out as u64,
+            o2: 0,
+            padding: params.padding as u64,
+            stride: params.stride as u64,
+            dilation: params.dilation as u64,
+        };
+        match self.dtype {
+            DType::F32 => {
+                let in_buf: Subbuffer<[f32]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[f32]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvSlang,
+                        candle_vulkan_kernels::KernelName::Conv1dF32,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let in_buf: Subbuffer<[half::f16]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[half::f16]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF16,
+                        candle_vulkan_kernels::KernelName::Conv1dF16,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let in_buf: Subbuffer<[f64]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[f64]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF64,
+                        candle_vulkan_kernels::KernelName::Conv1dF64,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn conv_transpose1d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose1D,
+    ) -> Result<Self> {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) || self.dtype != kernel.dtype
+        {
+            return Err(Error::Vulkan(
+                "conv_transpose1d: unsupported or mismatched dtype on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // Materialize non-contiguous inputs and kernels first.
+        let in_mat = if matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            None
+        } else {
+            let elem_count = l.shape().elem_count();
+            let mut mat = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut mat, 0, l)?;
+            Some(mat)
+        };
+        let kernel_mat = if matches!(
+            kernel_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
+            None
+        } else {
+            let elem_count = kernel_l.shape().elem_count();
+            let mut mat = VulkanStorage::new(&self.device, elem_count, kernel.dtype)?;
+            kernel.copy_strided_src(&mut mat, 0, kernel_l)?;
+            Some(mat)
+        };
+        let self_ref: &VulkanStorage = in_mat.as_ref().unwrap_or(self);
+        let kernel_ref: &VulkanStorage = kernel_mat.as_ref().unwrap_or(kernel);
+        let in_l = if in_mat.is_some() {
+            crate::Layout::contiguous_with_offset(l.shape(), 0)
+        } else {
+            l.clone()
+        };
+        let kernel_l = if kernel_mat.is_some() {
+            crate::Layout::contiguous_with_offset(kernel_l.shape(), 0)
+        } else {
+            kernel_l.clone()
+        };
+        let (in_start, in_len) =
+            match in_l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+                _ => return Err(Error::Vulkan(
+                    "conv_transpose1d: non-contiguous inputs not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                )),
+            };
+        let (w_start, w_len) =
+            match kernel_l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+                _ => return Err(Error::Vulkan(
+                    "conv_transpose1d: non-contiguous kernels not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                )),
+            };
+        if in_len != params.b_size * params.c_in * params.l_in
+            || w_len != params.c_in * params.c_out * params.k_size
+        {
+            return Err(Error::Vulkan(
+                "conv_transpose1d: size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let l_out = params.l_out();
+        let total = params.b_size * params.c_out * l_out;
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
+        if total == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params_sub = candle_vulkan_kernels::push_constants::ConvParams {
+            b: params.b_size as u64,
+            c_in: params.c_in as u64,
+            c_out: params.c_out as u64,
+            k1: params.k_size as u64,
+            k2: 0,
+            i1: params.l_in as u64,
+            i2: 0,
+            o1: l_out as u64,
+            o2: 0,
+            padding: params.padding as u64,
+            stride: params.stride as u64,
+            dilation: params.dilation as u64,
+        };
+        match self.dtype {
+            DType::F32 => {
+                let in_buf: Subbuffer<[f32]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[f32]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvSlang,
+                        candle_vulkan_kernels::KernelName::ConvTranspose1dF32,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let in_buf: Subbuffer<[half::f16]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[half::f16]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF16,
+                        candle_vulkan_kernels::KernelName::ConvTranspose1dF16,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let in_buf: Subbuffer<[f64]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[f64]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF64,
+                        candle_vulkan_kernels::KernelName::ConvTranspose1dF64,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn conv2d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv2D,
+    ) -> Result<Self> {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) || self.dtype != kernel.dtype
+        {
+            return Err(Error::Vulkan(
+                "conv2d: unsupported or mismatched dtype on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // Materialize non-contiguous inputs and kernels first.
+        let in_mat = if matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            None
+        } else {
+            let elem_count = l.shape().elem_count();
+            let mut mat = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut mat, 0, l)?;
+            Some(mat)
+        };
+        let kernel_mat = if matches!(
+            kernel_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
+            None
+        } else {
+            let elem_count = kernel_l.shape().elem_count();
+            let mut mat = VulkanStorage::new(&self.device, elem_count, kernel.dtype)?;
+            kernel.copy_strided_src(&mut mat, 0, kernel_l)?;
+            Some(mat)
+        };
+        let self_ref: &VulkanStorage = in_mat.as_ref().unwrap_or(self);
+        let kernel_ref: &VulkanStorage = kernel_mat.as_ref().unwrap_or(kernel);
+        let in_l = if in_mat.is_some() {
+            crate::Layout::contiguous_with_offset(l.shape(), 0)
+        } else {
+            l.clone()
+        };
+        let kernel_l = if kernel_mat.is_some() {
+            crate::Layout::contiguous_with_offset(kernel_l.shape(), 0)
+        } else {
+            kernel_l.clone()
+        };
+        let (in_start, in_len) = match in_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "conv2d: non-contiguous inputs not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (w_start, w_len) = match kernel_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "conv2d: non-contiguous kernels not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if in_len != params.b_size * params.c_in * params.i_h * params.i_w
+            || w_len != params.c_out * params.c_in * params.k_h * params.k_w
+        {
+            return Err(Error::Vulkan(
+                "conv2d: size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (o_h, o_w) = (params.out_h(), params.out_w());
+        let total = params.b_size * params.c_out * o_h * o_w;
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
+        if total == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params_sub = candle_vulkan_kernels::push_constants::ConvParams {
+            b: params.b_size as u64,
+            c_in: params.c_in as u64,
+            c_out: params.c_out as u64,
+            k1: params.k_h as u64,
+            k2: params.k_w as u64,
+            i1: params.i_h as u64,
+            i2: params.i_w as u64,
+            o1: o_h as u64,
+            o2: o_w as u64,
+            padding: params.padding as u64,
+            stride: params.stride as u64,
+            dilation: params.dilation as u64,
+        };
+        match self.dtype {
+            DType::F32 => {
+                let in_buf: Subbuffer<[f32]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[f32]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvSlang,
+                        candle_vulkan_kernels::KernelName::Conv2dF32,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let in_buf: Subbuffer<[half::f16]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[half::f16]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF16,
+                        candle_vulkan_kernels::KernelName::Conv2dF16,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let in_buf: Subbuffer<[f64]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[f64]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF64,
+                        candle_vulkan_kernels::KernelName::Conv2dF64,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn conv_transpose2d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose2D,
+    ) -> Result<Self> {
+        if !matches!(
+            self.dtype,
+            DType::F32 | DType::F16 | DType::F64 | DType::BF16
+        ) || self.dtype != kernel.dtype
+        {
+            return Err(Error::Vulkan(
+                "conv_transpose2d: unsupported or mismatched dtype on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // Materialize non-contiguous inputs and kernels first.
+        let in_mat = if matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            None
+        } else {
+            let elem_count = l.shape().elem_count();
+            let mut mat = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut mat, 0, l)?;
+            Some(mat)
+        };
+        let kernel_mat = if matches!(
+            kernel_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
+            None
+        } else {
+            let elem_count = kernel_l.shape().elem_count();
+            let mut mat = VulkanStorage::new(&self.device, elem_count, kernel.dtype)?;
+            kernel.copy_strided_src(&mut mat, 0, kernel_l)?;
+            Some(mat)
+        };
+        let self_ref: &VulkanStorage = in_mat.as_ref().unwrap_or(self);
+        let kernel_ref: &VulkanStorage = kernel_mat.as_ref().unwrap_or(kernel);
+        let in_l = if in_mat.is_some() {
+            crate::Layout::contiguous_with_offset(l.shape(), 0)
+        } else {
+            l.clone()
+        };
+        let kernel_l = if kernel_mat.is_some() {
+            crate::Layout::contiguous_with_offset(kernel_l.shape(), 0)
+        } else {
+            kernel_l.clone()
+        };
+        let (in_start, in_len) =
+            match in_l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+                _ => return Err(Error::Vulkan(
+                    "conv_transpose2d: non-contiguous inputs not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                )),
+            };
+        let (w_start, w_len) =
+            match kernel_l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+                _ => return Err(Error::Vulkan(
+                    "conv_transpose2d: non-contiguous kernels not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                )),
+            };
+        if in_len != params.b_size * params.c_in * params.i_h * params.i_w
+            || w_len != params.c_in * params.c_out * params.k_h * params.k_w
+        {
+            return Err(Error::Vulkan(
+                "conv_transpose2d: size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (o_h, o_w) = (params.out_h(), params.out_w());
+        let total = params.b_size * params.c_out * o_h * o_w;
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
+        if total == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params_sub = candle_vulkan_kernels::push_constants::ConvParams {
+            b: params.b_size as u64,
+            c_in: params.c_in as u64,
+            c_out: params.c_out as u64,
+            k1: params.k_h as u64,
+            k2: params.k_w as u64,
+            i1: params.i_h as u64,
+            i2: params.i_w as u64,
+            o1: o_h as u64,
+            o2: o_w as u64,
+            padding: params.padding as u64,
+            stride: params.stride as u64,
+            dilation: params.dilation as u64,
+        };
+        match self.dtype {
+            DType::F32 => {
+                let in_buf: Subbuffer<[f32]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[f32]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvSlang,
+                        candle_vulkan_kernels::KernelName::ConvTranspose2dF32,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let in_buf: Subbuffer<[half::f16]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[half::f16]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF16,
+                        candle_vulkan_kernels::KernelName::ConvTranspose2dF16,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let in_buf: Subbuffer<[f64]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[f64]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvF64,
+                        candle_vulkan_kernels::KernelName::ConvTranspose2dF64,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let in_buf: Subbuffer<[half::bf16]> = match &self_ref.buffer {
+                    VulkanStorageBuffer::BF16(b) => {
+                        b.clone().slice(in_start as u64..(in_start + in_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let w_buf: Subbuffer<[half::bf16]> = match &kernel_ref.buffer {
+                    VulkanStorageBuffer::BF16(b) => {
+                        b.clone().slice(w_start as u64..(w_start + w_len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::bf16]> = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_conv_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::ConvBf16,
+                        candle_vulkan_kernels::KernelName::ConvTranspose2dBf16,
+                        &in_buf,
+                        &w_buf,
+                        &out_buf,
+                        &params_sub,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn avg_pool2d(
+        &self,
+        l: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    ) -> Result<Self> {
+        self.pool2d(
+            l,
+            kernel_size,
+            stride,
+            candle_vulkan_kernels::KernelName::AvgPool2dF32,
+            "avg_pool2d",
+        )
+    }
+
+    fn max_pool2d(
+        &self,
+        l: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    ) -> Result<Self> {
+        self.pool2d(
+            l,
+            kernel_size,
+            stride,
+            candle_vulkan_kernels::KernelName::MaxPool2dF32,
+            "max_pool2d",
+        )
+    }
+
+    fn upsample_nearest1d(&self, l: &Layout, dst_sz: usize) -> Result<Self> {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) {
+            return Err(Error::Vulkan(
+                "upsample_nearest1d: unsupported dtype on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let dims = l.dims();
+        if dims.len() != 3 {
+            return Err(Error::Vulkan(
+                "upsample_nearest1d: only 3D (b, c, sz) layouts supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (b_sz, c, src_sz) = (dims[0], dims[1], dims[2]);
+        if src_sz == 0 {
+            return Err(Error::Vulkan(
+                "upsample_nearest1d: empty source".to_string().into(),
+            ));
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => return Err(Error::Vulkan(
+                "upsample_nearest1d: non-contiguous layouts not supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            )),
+        };
+        if len != b_sz * c * src_sz {
+            return Err(Error::Vulkan(
+                "upsample_nearest1d: size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let planes = b_sz * c;
+        let total = planes * dst_sz;
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
+        if total == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params = candle_vulkan_kernels::UpsampleParams {
+            planes: planes as u64,
+            d0: src_sz as u64,
+            d1: dst_sz as u64,
+            d2: 0,
+            d3: 0,
+            scale_h: 0.0,
+            scale_w: 0.0,
+            align: 0,
+        };
+        match self.dtype {
+            DType::F32 => {
+                let src_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleSlang,
+                        candle_vulkan_kernels::KernelName::UpsampleNearest1dF32,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let src_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleF16,
+                        candle_vulkan_kernels::KernelName::UpsampleNearest1dF16,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let src_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleF64,
+                        candle_vulkan_kernels::KernelName::UpsampleNearest1dF64,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn upsample_nearest2d(&self, l: &Layout, dst_h: usize, dst_w: usize) -> Result<Self> {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) {
+            return Err(Error::Vulkan(
+                "upsample_nearest2d: unsupported dtype on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let dims = l.dims();
+        if dims.len() != 4 {
+            return Err(Error::Vulkan(
+                "upsample_nearest2d: only 4D NCHW layouts supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (b_sz, c, src_h, src_w) = (dims[0], dims[1], dims[2], dims[3]);
+        if src_h == 0 || src_w == 0 {
+            return Err(Error::Vulkan(
+                "upsample_nearest2d: empty source".to_string().into(),
+            ));
+        }
+        if !matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            let elem_count = l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, l)?;
+            let mat_l = crate::Layout::contiguous_with_offset(l.shape(), 0);
+            return materialized.upsample_nearest2d(&mat_l, dst_h, dst_w);
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => unreachable!(),
+        };
+        if len != b_sz * c * src_h * src_w {
+            return Err(Error::Vulkan(
+                "upsample_nearest2d: size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let planes = b_sz * c;
+        let total = planes * dst_h * dst_w;
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
+        if total == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params = candle_vulkan_kernels::UpsampleParams {
+            planes: planes as u64,
+            d0: src_h as u64,
+            d1: src_w as u64,
+            d2: dst_h as u64,
+            d3: dst_w as u64,
+            scale_h: 0.0,
+            scale_w: 0.0,
+            align: 0,
+        };
+        match self.dtype {
+            DType::F32 => {
+                let src_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleSlang,
+                        candle_vulkan_kernels::KernelName::UpsampleNearest2dF32,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let src_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleF16,
+                        candle_vulkan_kernels::KernelName::UpsampleNearest2dF16,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let src_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleF64,
+                        candle_vulkan_kernels::KernelName::UpsampleNearest2dF64,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn upsample_bilinear2d(
+        &self,
+        l: &Layout,
+        target_h: usize,
+        target_w: usize,
+        align_corners: bool,
+        scale_h_factor: Option<f64>,
+        scale_w_factor: Option<f64>,
+    ) -> Result<Self> {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) {
+            return Err(Error::Vulkan(
+                "upsample_bilinear2d: unsupported dtype on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let dims = l.dims();
+        if dims.len() != 4 {
+            return Err(Error::Vulkan(
+                "upsample_bilinear2d: only 4D NCHW layouts supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (b_sz, c, src_h, src_w) = (dims[0], dims[1], dims[2], dims[3]);
+        if src_h == 0 || src_w == 0 {
+            return Err(Error::Vulkan(
+                "upsample_bilinear2d: empty source".to_string().into(),
+            ));
+        }
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => return Err(Error::Vulkan(
+                "upsample_bilinear2d: non-contiguous layouts not supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            )),
+        };
+        if len != b_sz * c * src_h * src_w {
+            return Err(Error::Vulkan(
+                "upsample_bilinear2d: size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // Same scale computation as the CPU backend.
+        let scale_h = if align_corners {
+            if target_h > 1 {
+                (src_h - 1) as f64 / (target_h - 1) as f64
+            } else {
+                0.0
+            }
+        } else if let Some(f) = scale_h_factor {
+            1.0 / f
+        } else {
+            src_h as f64 / target_h as f64
+        };
+        let scale_w = if align_corners {
+            if target_w > 1 {
+                (src_w - 1) as f64 / (target_w - 1) as f64
+            } else {
+                0.0
+            }
+        } else if let Some(f) = scale_w_factor {
+            1.0 / f
+        } else {
+            src_w as f64 / target_w as f64
+        };
+        let planes = b_sz * c;
+        let total = planes * target_h * target_w;
+        let out = VulkanStorage::new(&self.device, total, self.dtype)?;
+        if total == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        let params = candle_vulkan_kernels::UpsampleParams {
+            planes: planes as u64,
+            d0: src_h as u64,
+            d1: src_w as u64,
+            d2: target_h as u64,
+            d3: target_w as u64,
+            scale_h,
+            scale_w,
+            align: align_corners as u64,
+        };
+        match self.dtype {
+            DType::F32 => {
+                let src_buf: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleSlang,
+                        candle_vulkan_kernels::KernelName::UpsampleBilinear2dF32,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let src_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleF16,
+                        candle_vulkan_kernels::KernelName::UpsampleBilinear2dF16,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let src_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => {
+                        b.clone().slice(start as u64..(start + len) as u64)
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_upsample_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::UpsampleF64,
+                        candle_vulkan_kernels::KernelName::UpsampleBilinear2dF64,
+                        &src_buf,
+                        &out_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) {
+            return Err(Error::Vulkan(
+                "gather: unsupported dtype on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (emb_start, emb_len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "gather: non-contiguous embeddings not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let emb_dims = l.dims();
+        if emb_dims.len() < 2 || emb_dims.len() > 3 {
+            return Err(Error::Vulkan(
+                "gather: only 2D or 3D embeddings supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // ids must be a contiguous 1D u32 vector.
+        let ids_u32 = match &ids.buffer {
+            VulkanStorageBuffer::U32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "gather: only U32 ids supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (ids_start, ids_len) = match ids_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "gather: non-contiguous ids not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let ids_dims = ids_l.dims();
+        if ids_dims.len() != emb_dims.len() {
+            return Err(Error::Vulkan(
+                "gather: ids rank must match the embedding rank on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        if dim >= emb_dims.len() {
+            return Err(Error::Vulkan(
+                "gather: dim out of range on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let ids_total: usize = ids_dims.iter().product();
+        if ids_len != ids_total {
+            return Err(Error::Vulkan(
+                "gather: ids size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let out = VulkanStorage::new(&self.device, ids_len, self.dtype)?;
+        if ids_len == 0 {
+            return Ok(out);
+        }
+        let kernels = self.device.kernels();
+        // One segment is one kernel launch: a contiguous emb slice, a
+        // contiguous ids slice, and a destination offset.
+        // - 2D and 3D dim-0 / dim-2: a single segment over the whole tensor.
+        // - 3D dim-1: one segment per batch (the row-gather entry indexes
+        //   rows within a single 2D table).
+        struct Segment {
+            emb_off: usize,
+            emb_n: usize,
+            ids_off: usize,
+            ids_n: usize,
+            count: u64,
+            inner: u64,
+            emb_h: u64,
+            dst_off: u64,
+        }
+        let mut segments = Vec::new();
+        if emb_dims.len() == 2 {
+            let (rows, dim_len) = (emb_dims[0], emb_dims[1]);
+            if emb_len != rows * dim_len {
+                return Err(Error::Vulkan(
+                    "gather: embedding size mismatch on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ));
+            }
+            let inner = ids_dims[1];
+            if dim == 0 {
+                if inner > dim_len {
+                    return Err(Error::Vulkan(
+                        "gather: ids inner dim larger than the embedding dim on the Vulkan backend"
+                            .to_string()
+                            .into(),
+                    ));
+                }
+            } else if ids_dims[0] != rows {
+                return Err(Error::Vulkan(
+                    "gather: dim-1 ids rows must match the embedding rows on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ));
+            }
+            segments.push(Segment {
+                emb_off: emb_start,
+                emb_n: emb_len,
+                ids_off: ids_start,
+                ids_n: ids_len,
+                count: ids_len as u64,
+                inner: inner as u64,
+                emb_h: dim_len as u64,
+                dst_off: 0,
+            });
+        } else {
+            let (b, r, c) = (emb_dims[0], emb_dims[1], emb_dims[2]);
+            if emb_len != b * r * c {
+                return Err(Error::Vulkan(
+                    "gather: embedding size mismatch on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ));
+            }
+            if dim == 0 {
+                if ids_dims[1] > r || ids_dims[2] != c {
+                    return Err(Error::Vulkan(
+                        "gather: dim-0 ids shape must fit the embedding shape on the Vulkan backend"
+                            .to_string()
+                            .into(),
+                    ));
+                }
+                segments.push(Segment {
+                    emb_off: emb_start,
+                    emb_n: emb_len,
+                    ids_off: ids_start,
+                    ids_n: ids_len,
+                    count: ids_len as u64,
+                    inner: (ids_dims[1] * ids_dims[2]) as u64,
+                    emb_h: (r * c) as u64,
+                    dst_off: 0,
+                });
+            } else if dim == 1 {
+                if ids_dims[0] != b || ids_dims[2] != c {
+                    return Err(Error::Vulkan(
+                        "gather: dim-1 ids batch and trailing dims must match the embedding on the Vulkan backend"
+                            .to_string()
+                            .into(),
+                    ));
+                }
+                let r2 = ids_dims[1];
+                for i in 0..b {
+                    segments.push(Segment {
+                        emb_off: emb_start + i * r * c,
+                        emb_n: r * c,
+                        ids_off: ids_start + i * r2 * c,
+                        ids_n: r2 * c,
+                        count: (r2 * c) as u64,
+                        inner: c as u64,
+                        emb_h: c as u64,
+                        dst_off: (i * r2 * c) as u64,
+                    });
+                }
+            } else {
+                if ids_dims[0] != b || ids_dims[1] != r {
+                    return Err(Error::Vulkan(
+                        "gather: dim-2 ids leading dims must match the embedding on the Vulkan backend"
+                            .to_string()
+                            .into(),
+                    ));
+                }
+                segments.push(Segment {
+                    emb_off: emb_start,
+                    emb_n: emb_len,
+                    ids_off: ids_start,
+                    ids_n: ids_len,
+                    count: ids_len as u64,
+                    inner: ids_dims[2] as u64,
+                    emb_h: c as u64,
+                    dst_off: 0,
+                });
+            }
+        }
+        // The dim-1 kernel entry is for column gathers only (2D dim-1 and
+        // 3D dim-2); everything else uses the row-gather entry.
+        let rows_entry = !(emb_dims.len() == 2 && dim == 1) && !(emb_dims.len() == 3 && dim == 2);
+        let gather_name = match (rows_entry, self.dtype) {
+            (true, DType::F32) => candle_vulkan_kernels::KernelName::GatherRowsF32,
+            (false, DType::F32) => candle_vulkan_kernels::KernelName::GatherDim1F32,
+            (true, DType::F16) => candle_vulkan_kernels::KernelName::GatherRowsF16,
+            (false, DType::F16) => candle_vulkan_kernels::KernelName::GatherDim1F16,
+            (true, DType::F64) => candle_vulkan_kernels::KernelName::GatherRowsF64,
+            (false, DType::F64) => candle_vulkan_kernels::KernelName::GatherDim1F64,
+            _ => unreachable!("dtype checked above"),
+        };
+        for seg in &segments {
+            let kernels = kernels.clone();
+            let params = candle_vulkan_kernels::push_constants::GatherIdxParams {
+                count: seg.count,
+                block_len: seg.inner,
+                emb_h: seg.emb_h,
+                dst_offset: seg.dst_off,
+            };
+            let total = seg.count as usize;
+            match self.dtype {
+                DType::F32 => {
+                    let emb_buf: Subbuffer<[f32]> = match &self.buffer {
+                        VulkanStorageBuffer::F32(b) => b
+                            .clone()
+                            .slice(seg.emb_off as u64..(seg.emb_off + seg.emb_n) as u64),
+                        _ => {
+                            return Err(Error::Vulkan(
+                                "unexpected state on the Vulkan backend".to_string().into(),
+                            ))
+                        }
+                    };
+                    let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                        VulkanStorageBuffer::F32(b) => b.clone(),
+                        _ => {
+                            return Err(Error::Vulkan(
+                                "unexpected state on the Vulkan backend".to_string().into(),
+                            ))
+                        }
+                    };
+                    let ids_buf = ids_u32
+                        .clone()
+                        .slice(seg.ids_off as u64..(seg.ids_off + seg.ids_n) as u64);
+                    let emb_buf = emb_buf.clone();
+                    let out_buf = out_buf.clone();
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_gather_idx_slang::<f32>(
+                            cbb,
+                            &kernels,
+                            candle_vulkan_kernels::Source::GatherIdxSlang,
+                            gather_name,
+                            &emb_buf,
+                            &out_buf,
+                            &ids_buf,
+                            &params,
+                            total,
+                        )
+                        .map_err(|e| e.to_string())
+                    })?;
+                }
+                DType::F16 => {
+                    let emb_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                        VulkanStorageBuffer::F16(b) => b
+                            .clone()
+                            .slice(seg.emb_off as u64..(seg.emb_off + seg.emb_n) as u64),
+                        _ => {
+                            return Err(Error::Vulkan(
+                                "unexpected state on the Vulkan backend".to_string().into(),
+                            ))
+                        }
+                    };
+                    let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                        VulkanStorageBuffer::F16(b) => b.clone(),
+                        _ => {
+                            return Err(Error::Vulkan(
+                                "unexpected state on the Vulkan backend".to_string().into(),
+                            ))
+                        }
+                    };
+                    let ids_buf = ids_u32
+                        .clone()
+                        .slice(seg.ids_off as u64..(seg.ids_off + seg.ids_n) as u64);
+                    let emb_buf = emb_buf.clone();
+                    let out_buf = out_buf.clone();
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_gather_idx_slang::<half::f16>(
+                            cbb,
+                            &kernels,
+                            candle_vulkan_kernels::Source::GatherIdxF16,
+                            gather_name,
+                            &emb_buf,
+                            &out_buf,
+                            &ids_buf,
+                            &params,
+                            total,
+                        )
+                        .map_err(|e| e.to_string())
+                    })?;
+                }
+                DType::F64 => {
+                    let emb_buf: Subbuffer<[f64]> = match &self.buffer {
+                        VulkanStorageBuffer::F64(b) => b
+                            .clone()
+                            .slice(seg.emb_off as u64..(seg.emb_off + seg.emb_n) as u64),
+                        _ => {
+                            return Err(Error::Vulkan(
+                                "unexpected state on the Vulkan backend".to_string().into(),
+                            ))
+                        }
+                    };
+                    let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                        VulkanStorageBuffer::F64(b) => b.clone(),
+                        _ => {
+                            return Err(Error::Vulkan(
+                                "unexpected state on the Vulkan backend".to_string().into(),
+                            ))
+                        }
+                    };
+                    let ids_buf = ids_u32
+                        .clone()
+                        .slice(seg.ids_off as u64..(seg.ids_off + seg.ids_n) as u64);
+                    let emb_buf = emb_buf.clone();
+                    let out_buf = out_buf.clone();
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_gather_idx_slang::<f64>(
+                            cbb,
+                            &kernels,
+                            candle_vulkan_kernels::Source::GatherIdxF64,
+                            gather_name,
+                            &emb_buf,
+                            &out_buf,
+                            &ids_buf,
+                            &params,
+                            total,
+                        )
+                        .map_err(|e| e.to_string())
+                    })?;
+                }
+                _ => {
+                    return Err(Error::Vulkan(
+                        format!("dtype checked above (dtype={:?})", self.dtype)
+                            .to_string()
+                            .into(),
+                    ))
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn scatter_set(
+        &mut self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<()> {
+        self.scatter_set_impl(l, ids, ids_l, src, src_l, dim)
+    }
+
+    fn scatter_add_set(
+        &mut self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<()> {
+        // Host-side: the add needs float atomics, which are not part of the
+        // Vulkan core (SPV_EXT_shader_atomic_float_add is device-dependent).
+        // Drain, apply the CPU scatter-add semantics in place on the contiguous
+        // blocks, and upload the full buffer back.
+        if self.dtype != DType::F32 || src.dtype != DType::F32 {
+            return Err(Error::Vulkan(
+                "scatter_add: only F32 data supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let dst_dims = l.dims();
+        let ids_dims = ids_l.dims();
+        if dst_dims.len() != ids_dims.len() || dim >= dst_dims.len() {
+            return Err(Error::Vulkan(
+                "scatter_add: rank mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (dst_start, dst_len) =
+            match l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+                _ => return Err(Error::Vulkan(
+                    "scatter_add: non-contiguous destinations not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                )),
+            };
+        let (src_start, src_len) = match src_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "scatter_add: non-contiguous sources not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (ids_start, ids_len) =
+            match ids_l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+                _ => return Err(Error::Vulkan(
+                    "scatter_add: non-contiguous index tensors not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                )),
+            };
+        if dst_len != dst_dims.iter().product::<usize>()
+            || src_len != ids_len
+            || ids_len != ids_dims.iter().product::<usize>()
+        {
+            return Err(Error::Vulkan(
+                "scatter_add: size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // Nothing to add into an empty destination (or from an empty source):
+        // their operand buffers are one-element stand-ins whose zero-length
+        // slice would be rejected by subbuffer slicing and readback.
+        if dst_len == 0 || src_len == 0 {
+            return Ok(());
+        }
+        // Drain any deferred encodes (e.g. the copy that materialized this
+        // storage) before reading the buffer contents.
+        self.device.synchronize()?;
+        // Read only the contiguous view of each operand, not the whole buffer:
+        // a scatter into a slice of a larger tensor would otherwise drain and
+        // re-upload the entire allocation.
+        let dst_slice = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b
+                .clone()
+                .slice(dst_start as u64..(dst_start + dst_len) as u64),
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let dst_v: Vec<f32> = Self::copy_to_host(&self.device, &dst_slice)?;
+        let src_v: Vec<f32> = match &src.buffer {
+            VulkanStorageBuffer::F32(b) => {
+                let s = b
+                    .clone()
+                    .slice(src_start as u64..(src_start + src_len) as u64);
+                Self::copy_to_host(&self.device, &s)?
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let ids_cpu = match &ids.buffer {
+            VulkanStorageBuffer::U32(b) => {
+                let s = b
+                    .clone()
+                    .slice(ids_start as u64..(ids_start + ids_len) as u64);
+                CpuStorage::U32(Self::copy_to_host(&self.device, &s)?)
+            }
+            VulkanStorageBuffer::I64(b) => {
+                let s = b
+                    .clone()
+                    .slice(ids_start as u64..(ids_start + ids_len) as u64);
+                CpuStorage::I64(Self::copy_to_host(&self.device, &s)?)
+            }
+            VulkanStorageBuffer::U8(b) => {
+                let s = b
+                    .clone()
+                    .slice(ids_start as u64..(ids_start + ids_len) as u64);
+                CpuStorage::U8(Self::copy_to_host(&self.device, &s)?)
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    "scatter_add: index dtype not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let mut dst_cpu = CpuStorage::F32(dst_v);
+        let src_cpu = CpuStorage::F32(src_v);
+        // Each view is now the leading contiguous block of its buffer, so the
+        // CPU scatter operates at offset 0.
+        let l_c = Layout::contiguous(dst_dims.to_vec());
+        let s_c = Layout::contiguous(ids_dims.to_vec());
+        let i_c = Layout::contiguous(ids_dims.to_vec());
+        dst_cpu.scatter_add_set(&l_c, &ids_cpu, &i_c, &src_cpu, &s_c, dim)?;
+        let CpuStorage::F32(v) = dst_cpu else {
+            return Err(Error::Vulkan(
+                "scatter_add only handles F32 data on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        };
+        // Write the updated view back into the destination slice in place,
+        // rather than re-uploading a fresh full buffer. `size_of_val` is taken
+        // on the slice view, not the `Vec` handle, so the length is the byte
+        // span of the data (`v.len() * size_of::<f32>()`), not the 24-byte
+        // `Vec` header.
+        let v_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v.as_slice()))
+        };
+        let staging = Buffer::from_iter(
+            self.device.mem_alloc(),
+            &BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            &AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            },
+            v_bytes.iter().copied(),
+        )
+        .map_err(|e| Error::Vulkan(format!("scatter_add staging: {e:?}").into()))?;
+        self.device.execute(move |cbb| {
+            cbb.copy_buffer(CopyBufferInfo::new(staging, dst_slice))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
+        // The gather kernel is compiled per dtype: run the lookup in the
+        // source dtype. A full-table F32 conversion would allocate a
+        // weight-sized scratch buffer on every embedding lookup.
+        if !matches!(
+            self.dtype,
+            DType::F32 | DType::F16 | DType::BF16 | DType::F64
+        ) {
+            return Err(Error::Vulkan(
+                format!(
+                    "index_select: unsupported dtype {:?} on the Vulkan backend",
+                    self.dtype
+                )
+                .into(),
+            ));
+        }
+        let src_dims = l.dims();
+        if src_dims.len() != 2 {
+            return Err(Error::Vulkan(
+                "index_select: only 2D sources supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (rows, dim_len) = (src_dims[0], src_dims[1]);
+        if dim > 1 {
+            return Err(Error::Vulkan(
+                "index_select: only dims 0 and 1 supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        if dim == 1 {
+            // Selecting along the last dim: `out[i][j] = src[i][ids[j]]`.
+            // The gather kernel selects along dim 0, so run it on the
+            // transposed source (`out^T[j][i] = src^T[ids[j]][i]`) and
+            // transpose the result back.
+            let n_ids = ids_l.shape().elem_count();
+            let l_t = l.permute(&[1, 0])?;
+            let mut src_t = VulkanStorage::new(&self.device, rows * dim_len, self.dtype)?;
+            self.copy_strided_src(&mut src_t, 0, &l_t)?;
+            let out_t = src_t.index_select(ids, &Layout::contiguous(l_t.shape()), ids_l, 0)?;
+            let out_t_l = Layout::contiguous_with_offset(Shape::from(&[n_ids, rows]), 0);
+            let l_final = out_t_l.permute(&[1, 0])?;
+            let mut out = VulkanStorage::new(&self.device, rows * n_ids, self.dtype)?;
+            out_t.copy_strided_src(&mut out, 0, &l_final)?;
+            return Ok(out);
+        }
+        let (src_start, src_len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "index_select: non-contiguous sources not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if src_len != rows * dim_len {
+            return Err(Error::Vulkan(
+                "index_select: source size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // Convert ids to U32 if needed.
+        let ids_u32_storage;
+        let ids_ref: &VulkanStorage = if ids.dtype == DType::U32 {
+            ids
+        } else {
+            ids_u32_storage = ids.to_dtype(ids_l, DType::U32)?;
+            &ids_u32_storage
+        };
+        // Conversion materializes only the selected ids view in a new buffer.
+        // Reapplying the old offset/strides would index past that allocation
+        // (e.g. DAC codebook ids narrowed from an I64 tensor).
+        let effective_ids_l = if ids.dtype == DType::U32 {
+            ids_l.clone()
+        } else {
+            Layout::contiguous(ids_l.shape())
+        };
+        let ids_l = &effective_ids_l;
+        let ids_u32 = match &ids_ref.buffer {
+            VulkanStorageBuffer::U32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "index_select: only U32 ids supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let ids_dims = ids_l.dims();
+        if ids_dims.len() != 1 {
+            return Err(Error::Vulkan(
+                "index_select: only 1D ids supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let n_ids = ids_dims[0];
+        // The gather kernel reads ids as a flat u32 array, so a
+        // non-contiguous ids layout is materialized to a contiguous buffer
+        // first.
+        let ids_own: Option<VulkanStorage>;
+        let ids_buf: Subbuffer<[u32]> =
+            if let crate::StridedBlocks::SingleBlock { start_offset, len } = ids_l.strided_blocks()
+            {
+                if len != n_ids {
+                    return Err(Error::Vulkan(
+                        "index_select: ids size mismatch on the Vulkan backend"
+                            .to_string()
+                            .into(),
+                    ));
+                }
+                ids_u32.slice(start_offset as u64..(start_offset + len) as u64)
+            } else {
+                let mut c = VulkanStorage::new(&self.device, n_ids, DType::U32)?;
+                ids_ref.copy_strided_src(&mut c, 0, ids_l)?;
+                ids_own = Some(c);
+                match &ids_own.as_ref().unwrap().buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => unreachable!(),
+                }
+            };
+        let kernels = self.device.kernels();
+        let params = candle_vulkan_kernels::push_constants::GatherIdxParams {
+            count: (n_ids * dim_len) as u64,
+            block_len: dim_len as u64,
+            emb_h: dim_len as u64,
+            dst_offset: 0,
+        };
+        macro_rules! run_index_select {
+            ($t:ty, $buf:ident, $source:ident, $kernel:ident, $dtype:expr) => {{
+                let src_buf = match &self.buffer {
+                    VulkanStorageBuffer::$buf(b) => b
+                        .clone()
+                        .slice(src_start as u64..(src_start + src_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out = VulkanStorage::new(&self.device, n_ids * dim_len, $dtype)?;
+                let out_buf = match &out.buffer {
+                    VulkanStorageBuffer::$buf(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                if n_ids == 0 {
+                    return Ok(out);
+                }
+                let src_buf = src_buf.clone();
+                let ids_buf = ids_buf.clone();
+                let out_buf = out_buf.clone();
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_gather_idx_slang::<$t>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::$source,
+                        candle_vulkan_kernels::KernelName::$kernel,
+                        &src_buf,
+                        &out_buf,
+                        &ids_buf,
+                        &params,
+                        n_ids * dim_len,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+                Ok(out)
+            }};
+        }
+        match self.dtype {
+            DType::F32 => {
+                run_index_select!(f32, F32, GatherIdxSlang, IndexSelectF32, DType::F32)
+            }
+            DType::F16 => {
+                run_index_select!(half::f16, F16, GatherIdxF16, IndexSelectF16, DType::F16)
+            }
+            DType::BF16 => {
+                run_index_select!(
+                    half::bf16,
+                    BF16,
+                    GatherIdxBf16,
+                    IndexSelectBf16,
+                    DType::BF16
+                )
+            }
+            DType::F64 => {
+                run_index_select!(f64, F64, GatherIdxF64, IndexSelectF64, DType::F64)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn index_add(
+        &self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<Self> {
+        // GPU path: atomic float add (VK_EXT_shader_atomic_float / _float2)
+        // handles duplicate index positions on the GPU. Host fallback when
+        // the device lacks the atomic extension.
+        if !matches!(self.dtype, DType::F32 | DType::F16 | DType::F64) || self.dtype != src.dtype {
+            return Err(Error::Vulkan(
+                "index_add: unsupported dtype on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        if dim >= l.dims().len() {
+            return Err(Error::Vulkan(
+                "index_add: rank mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (dst_start, dst_len) =
+            match l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+                _ => return Err(Error::Vulkan(
+                    "index_add: non-contiguous self tensors not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                )),
+            };
+        let (src_start, src_len) = match src_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "index_add: non-contiguous sources not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let (ids_start, ids_len) =
+            match ids_l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+                _ => return Err(Error::Vulkan(
+                    "index_add: non-contiguous index tensors not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                )),
+            };
+        if dst_len != l.dims().iter().product::<usize>()
+            || src_len != src_l.dims().iter().product::<usize>()
+            || ids_len != ids_l.dims().iter().product::<usize>()
+        {
+            return Err(Error::Vulkan(
+                "index_add: size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // GPU path: when the device supports atomic float add
+        // (VK_EXT_shader_atomic_float / _float2) and the index dtype is
+        // supported, accumulate in place on the GPU. Duplicate index
+        // positions are safe because the add is atomic.
+        if self.device.supports_atomic_fadd(self.dtype)
+            && matches!(ids.dtype, DType::U32 | DType::I64 | DType::U8)
+        {
+            let post = l.dims()[dim + 1..].iter().product::<usize>();
+            let nsrc = src_l.dims()[dim];
+            let max_idx = l.dims()[dim];
+            let params_sub = candle_vulkan_kernels::push_constants::IndexAddParams {
+                count: src_len as u64,
+                post_dim: post as u64,
+                nsrc: nsrc as u64,
+                max_idx: max_idx as u64,
+            };
+            let kernels = self.device.kernels();
+            macro_rules! dispatch_index_add {
+                ($dst_variant:ident, $dst_ty:ty, $ids_variant:ident, $ids_ty:ty, $kern:ident) => {
+                    let dst_sub = match &self.buffer {
+                        VulkanStorageBuffer::$dst_variant(b) => b
+                            .clone()
+                            .slice(dst_start as u64..(dst_start + dst_len) as u64),
+                        _ => {
+                            return Err(Error::Vulkan(
+                                format!("dtype checked above (dtype={:?})", self.dtype)
+                                    .to_string()
+                                    .into(),
+                            ))
+                        }
+                    };
+                    let src_sub = match &src.buffer {
+                        VulkanStorageBuffer::$dst_variant(b) => b
+                            .clone()
+                            .slice(src_start as u64..(src_start + src_len) as u64),
+                        _ => {
+                            return Err(Error::Vulkan(
+                                format!("dtype checked above (dtype={:?})", self.dtype)
+                                    .to_string()
+                                    .into(),
+                            ))
+                        }
+                    };
+                    let ids_sub = match &ids.buffer {
+                        VulkanStorageBuffer::$ids_variant(b) => b
+                            .clone()
+                            .slice(ids_start as u64..(ids_start + ids_len) as u64),
+                        _ => {
+                            return Err(Error::Vulkan(
+                                format!("ids dtype checked above (ids_dtype={:?})", ids.dtype)
+                                    .to_string()
+                                    .into(),
+                            ))
+                        }
+                    };
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_index_add_slang::<$dst_ty, $ids_ty>(
+                            cbb,
+                            &kernels,
+                            candle_vulkan_kernels::Source::$kern,
+                            candle_vulkan_kernels::KernelName::$kern,
+                            &dst_sub,
+                            &src_sub,
+                            &ids_sub,
+                            &params_sub,
+                            src_len,
+                        )
+                        .map_err(|e| e.to_string())
+                    })?;
+                };
+            }
+            match (self.dtype, ids.dtype) {
+                (DType::F32, DType::U32) => {
+                    dispatch_index_add!(F32, f32, U32, u32, IndexAddF32U32);
+                }
+                (DType::F32, DType::I64) => {
+                    dispatch_index_add!(F32, f32, I64, i64, IndexAddF32I64);
+                }
+                (DType::F32, DType::U8) => {
+                    dispatch_index_add!(F32, f32, U8, u8, IndexAddF32U8);
+                }
+                (DType::F16, DType::U32) => {
+                    dispatch_index_add!(F16, half::f16, U32, u32, IndexAddF16U32);
+                }
+                (DType::F16, DType::I64) => {
+                    dispatch_index_add!(F16, half::f16, I64, i64, IndexAddF16I64);
+                }
+                (DType::F16, DType::U8) => {
+                    dispatch_index_add!(F16, half::f16, U8, u8, IndexAddF16U8);
+                }
+                (DType::F64, DType::U32) => {
+                    dispatch_index_add!(F64, f64, U32, u32, IndexAddF64U32);
+                }
+                (DType::F64, DType::I64) => {
+                    dispatch_index_add!(F64, f64, I64, i64, IndexAddF64I64);
+                }
+                (DType::F64, DType::U8) => {
+                    dispatch_index_add!(F64, f64, U8, u8, IndexAddF64U8);
+                }
+                _ => {
+                    return Err(Error::Vulkan(
+                        format!("dtype checked above (dtype={:?})", self.dtype)
+                            .to_string()
+                            .into(),
+                    ))
+                }
+            }
+            return Ok(self.clone());
+        }
+        // Host fallback: the device lacks atomic float add (or the index
+        // dtype is not supported by the GPU kernels). Drain, apply the CPU
+        // index-add semantics, upload.
+        self.device.synchronize()?;
+        let v1_cpu = match self.dtype {
+            DType::F32 => {
+                let v: Vec<f32> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                CpuStorage::F32(v)
+            }
+            DType::F16 => {
+                let v: Vec<half::f16> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => Self::copy_to_host(&self.device, b)?,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                CpuStorage::F16(v)
+            }
+            DType::F64 => {
+                let v: Vec<f64> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => Self::copy_to_host(&self.device, b)?,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                CpuStorage::F64(v)
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let src_cpu = match src.dtype {
+            DType::F32 => {
+                let v: Vec<f32> = match &src.buffer {
+                    VulkanStorageBuffer::F32(b) => Self::copy_to_host(&self.device, b)?,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                CpuStorage::F32(v)
+            }
+            DType::F16 => {
+                let v: Vec<half::f16> = match &src.buffer {
+                    VulkanStorageBuffer::F16(b) => Self::copy_to_host(&self.device, b)?,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                CpuStorage::F16(v)
+            }
+            DType::F64 => {
+                let v: Vec<f64> = match &src.buffer {
+                    VulkanStorageBuffer::F64(b) => Self::copy_to_host(&self.device, b)?,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                CpuStorage::F64(v)
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let ids_cpu = match &ids.buffer {
+            VulkanStorageBuffer::U32(b) => {
+                let v: Vec<u32> = Self::copy_to_host(&self.device, b)?;
+                CpuStorage::U32(v)
+            }
+            VulkanStorageBuffer::I64(b) => {
+                let v: Vec<i64> = Self::copy_to_host(&self.device, b)?;
+                CpuStorage::I64(v)
+            }
+            VulkanStorageBuffer::U8(b) => {
+                let v: Vec<u8> = Self::copy_to_host(&self.device, b)?;
+                CpuStorage::U8(v)
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    "index_add: index dtype not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+
+        let l_c = Layout::contiguous_with_offset(l.dims().to_vec(), dst_start);
+        let s_c = Layout::contiguous_with_offset(src_l.dims().to_vec(), src_start);
+        let i_c = Layout::contiguous_with_offset(ids_l.dims().to_vec(), ids_start);
+        let out = v1_cpu.index_add(&l_c, &ids_cpu, &i_c, &src_cpu, &s_c, dim)?;
+        self.device.storage_from_cpu_storage(&out)
+    }
+
+    fn matmul(
+        &self,
+        rhs: &Self,
+        bmnk: (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
+        if !matches!(
+            self.dtype,
+            DType::F32 | DType::F16 | DType::F64 | DType::BF16
+        ) || !matches!(
+            rhs.dtype,
+            DType::F32 | DType::F16 | DType::F64 | DType::BF16
+        ) {
+            return Err(Error::Vulkan(
+                "matmul: unsupported or mismatched dtype on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // Convert rhs to match self.dtype if needed. A converted rhs is
+        // a fresh contiguous (b,k,n) buffer: to_dtype materializes
+        // non-contiguous layouts, so it is always in the standard layout.
+        let rhs_converted;
+        let rhs_ref: &VulkanStorage;
+        let rhs_converted_flag: bool;
+        if self.dtype == rhs.dtype {
+            rhs_ref = rhs;
+            rhs_converted_flag = false;
+        } else {
+            rhs_converted = rhs.to_dtype(rhs_l, self.dtype)?;
+            rhs_ref = &rhs_converted;
+            rhs_converted_flag = true;
+        };
+        let (bsz, m, n, k) = bmnk;
+        if m == 0 || n == 0 || k == 0 || bsz == 0 {
+            return VulkanStorage::new(&self.device, 0, self.dtype);
+        }
+        if !matches!(
+            lhs_l.strided_blocks(),
+            crate::StridedBlocks::SingleBlock { .. }
+        ) {
+            let lhs_elem = lhs_l.shape().elem_count();
+            let mut lhs_mat = VulkanStorage::new(&self.device, lhs_elem, self.dtype)?;
+            self.copy_strided_src(&mut lhs_mat, 0, lhs_l)?;
+            let lhs_mat_l = crate::Layout::contiguous_with_offset(lhs_l.shape(), 0);
+            return lhs_mat.matmul(rhs, bmnk, &lhs_mat_l, rhs_l);
+        }
+        let (lhs_start, lhs_len) = match lhs_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "matmul: non-contiguous lhs not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if lhs_len != bsz * m * k {
+            return Err(Error::Vulkan(
+                "matmul: lhs size mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let rank = rhs_l.dims().len();
+        if rank < 2 {
+            return Err(Error::Vulkan(
+                "matmul: rank < 2 not supported on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let rs = rhs_l.stride();
+        // Accept a contiguous (b,k,n) rhs or a contiguous (b,n,k) rhs viewed
+        // as (b,k,n) (the transposed case). Anything else is rejected.
+        let standard =
+            rs[rank - 1] == 1 && rs[rank - 2] == n && (rank == 2 || rs[rank - 3] == k * n);
+        let transposed =
+            rs[rank - 2] == 1 && rs[rank - 1] == k && (rank == 2 || rs[rank - 3] == n * k);
+        if !rhs_converted_flag && !standard && !transposed {
+            let rhs_elem = rhs_l.shape().elem_count();
+            let mut rhs_mat = VulkanStorage::new(&self.device, rhs_elem, rhs.dtype)?;
+            rhs.copy_strided_src(&mut rhs_mat, 0, rhs_l)?;
+            let rhs_mat_l = crate::Layout::contiguous_with_offset(rhs_l.shape(), 0);
+            return self.matmul(&rhs_mat, bmnk, lhs_l, &rhs_mat_l);
+        }
+        let rhs_transposed = !rhs_converted_flag && transposed && !standard;
+        let rhs_start = if rhs_converted_flag {
+            0
+        } else {
+            rhs_l.start_offset()
+        };
+        let rhs_len = bsz * n * k;
+        let out = VulkanStorage::new(&self.device, bsz * m * n, self.dtype)?;
+        let kernels = self.device.kernels();
+        match self.dtype {
+            DType::F32 => {
+                let input: Subbuffer<[f32]> = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b
+                        .clone()
+                        .slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let rhs_buf: Subbuffer<[f32]> = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::F32(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f32]> = match &out.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                // The f32 matmul uses the classic tiled kernel (the
+                // cooperative-matrix path is 16-bit only: on RDNA-class
+                // GPUs f32 matrix shapes are emulated and some drivers
+                // crash while building the pipeline for them).
+                let (source, name) = (
+                    candle_vulkan_kernels::Source::Gemm,
+                    candle_vulkan_kernels::KernelName::GemmF32,
+                );
+                let params = self.gemm_params(bsz, m, n, k, rhs_transposed);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_gemm_slang::<f32>(
+                        cbb, &kernels, source, name, &input, &rhs_buf, &out_buf, &params, bsz, m, n,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let input: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let rhs_buf: Subbuffer<[half::f16]> = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+
+                // Cooperative-matrix GEMM when the device supports it
+                // and m, k and n are multiples of 16: the cooperative-
+                // matrix load/store stride must be a multiple of the
+                // 16-element tile row (32 bytes for the 16-bit types),
+                // and the lhs rows must not run past the end of the lhs
+                // allocation (cooperativeMatrixRobustBufferAccess is not
+                // exposed by RADV). Otherwise the classic tiled kernel.
+                let use_coopmat = self.device.coopmat_gemm_available(DType::F16)
+                    && m % 16 == 0
+                    && k % 16 == 0
+                    && n % 16 == 0;
+                let params = self.gemm_params(bsz, m, n, k, rhs_transposed);
+                if use_coopmat {
+                    // Cooperative matrix with an f32 accumulator: accumulate
+                    // in f32 (no per-slab f16 rounding) into an f32 scratch,
+                    // then narrow back to the f16 output tensor.
+                    let out_f32 = self.device.new_f32_buffer(bsz * m * n)?;
+                    let (gemm_out, input, rhs_buf) =
+                        (out_f32.clone(), input.clone(), rhs_buf.clone());
+                    let kernels2 = self.device.kernels();
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_gemm_coopmat_f32_out::<half::f16>(
+                            cbb,
+                            &kernels2,
+                            candle_vulkan_kernels::Source::GemmCoopMatF16,
+                            candle_vulkan_kernels::KernelName::GemmCoopMatF16,
+                            &input,
+                            &rhs_buf,
+                            &gemm_out,
+                            &params,
+                            bsz,
+                            m,
+                            n,
+                        )
+                        .map_err(|e| e.to_string())
+                    })?;
+                    self.dispatch_to_dtype::<f32, half::f16>(
+                        &out_f32,
+                        &out_buf,
+                        candle_vulkan_kernels::Source::ToDtypeF32F16,
+                        candle_vulkan_kernels::KernelName::ToDtypeF32F16,
+                        bsz * m * n,
+                    )?;
+                } else {
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_gemm_slang::<half::f16>(
+                            cbb,
+                            &kernels,
+                            candle_vulkan_kernels::Source::GemmF16,
+                            candle_vulkan_kernels::KernelName::GemmF16,
+                            &input,
+                            &rhs_buf,
+                            &out_buf,
+                            &params,
+                            bsz,
+                            m,
+                            n,
+                        )
+                        .map_err(|e| e.to_string())
+                    })?;
+                }
+            }
+            DType::F64 => {
+                let input: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b
+                        .clone()
+                        .slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let rhs_buf: Subbuffer<[f64]> = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::F64(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[f64]> = match &out.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = self.gemm_params(bsz, m, n, k, rhs_transposed);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_gemm_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::GemmF64,
+                        candle_vulkan_kernels::KernelName::GemmF64,
+                        &input,
+                        &rhs_buf,
+                        &out_buf,
+                        &params,
+                        bsz,
+                        m,
+                        n,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input: Subbuffer<[half::bf16]> = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b
+                        .clone()
+                        .slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let rhs_buf: Subbuffer<[half::bf16]> = match &rhs_ref.buffer {
+                    VulkanStorageBuffer::BF16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::bf16]> = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let use_coopmat = self.device.coopmat_gemm_available(DType::BF16)
+                    && m % 16 == 0
+                    && k % 16 == 0
+                    && n % 16 == 0;
+                let params = self.gemm_params(bsz, m, n, k, rhs_transposed);
+                if use_coopmat {
+                    // Native BFloat16 cooperative-matrix GEMM (the f16
+                    // accumulator is converted back to bf16 in-shader).
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_gemm_slang::<half::bf16>(
+                            cbb,
+                            &kernels,
+                            candle_vulkan_kernels::Source::GemmCoopMatBf16,
+                            candle_vulkan_kernels::KernelName::GemmCoopMatBf16,
+                            &input,
+                            &rhs_buf,
+                            &out_buf,
+                            &params,
+                            bsz,
+                            m,
+                            n,
+                        )
+                        .map_err(|e| e.to_string())
+                    })?;
+                } else {
+                    // No native bf16 cooperative-matrix support (or unaligned
+                    // strides): widen to f32, run the f32 GEMM (f32
+                    // accumulation), and narrow the result back to bf16.
+                    // Widening through f16 instead would lose bf16's
+                    // exponent range (f16 saturates at 65504 and underflows
+                    // below ~6e-5) and accumulate the reduction in the
+                    // narrow f16 type. to_dtype materializes non-contiguous
+                    // layouts, so the widened tensors are contiguous at
+                    // offset 0.
+                    let lhs_f32 = self.to_dtype(lhs_l, DType::F32)?;
+                    let rhs_f32 = rhs_ref.to_dtype(rhs_l, DType::F32)?;
+                    let lhs_f32_l = crate::Layout::contiguous_with_offset(lhs_l.shape(), 0);
+                    let rhs_f32_l = crate::Layout::contiguous_with_offset(rhs_l.shape(), 0);
+                    let out_f32 = lhs_f32.matmul(&rhs_f32, bmnk, &lhs_f32_l, &rhs_f32_l)?;
+                    let out_f32_l = crate::Layout::contiguous_with_offset(&[bsz, m, n], 0);
+                    return out_f32.to_dtype(&out_f32_l, DType::BF16);
+                }
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(out)
+    }
+
+    fn affine_matmul(
+        &self,
+        rhs: &Self,
+        bias: &Self,
+        bmnk: (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        bias_l: &Layout,
+    ) -> Result<Self> {
+        let (bsz, m, n, k) = bmnk;
+        // Fused cooperative-matrix affine (one dispatch instead of
+        // matmul + add) when the device supports it and m, k and n are
+        // multiples of 16 (the cooperative-matrix load/store constraints,
+        // see matmul); anything else falls back to the unfused matmul +
+        // add.
+        if matches!(self.dtype, DType::F16 | DType::BF16)
+            && self.dtype == rhs.dtype
+            && m % 16 == 0
+            && k % 16 == 0
+            && n % 16 == 0
+            && self.device.coopmat_affine_available(self.dtype)
+        {
+            if let Some(out) = self.affine_coopmat(rhs, bias, bmnk, lhs_l, rhs_l, bias_l)? {
+                return Ok(out);
+            }
+        }
+        let out = self.matmul(rhs, bmnk, lhs_l, rhs_l)?;
+        let out_l = if bsz == 1 {
+            crate::Layout::contiguous_with_offset(&[m, n], 0)
+        } else {
+            crate::Layout::contiguous_with_offset(&[bsz, m, n], 0)
+        };
+        // The bias layout must be broadcast to the output shape before
+        // the storage-level binary op (the tensor-level broadcast ops do
+        // this; a raw (n,) layout would be sliced with the output's
+        // element count and run past the bias buffer).
+        let bias_l = bias_l.broadcast_as(out_l.shape())?;
+        out.binary_impl::<crate::op::Add>(bias, &out_l, &bias_l)
+    }
+
+    fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
+        if self.dtype != dst.dtype {
+            return Err(Error::Vulkan(
+                "copy_strided_src: src/dst dtype mismatch on the Vulkan backend"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        if !matches!(
+            self.dtype,
+            DType::F32
+                | DType::F16
+                | DType::BF16
+                | DType::F64
+                | DType::U8
+                | DType::U32
+                | DType::I64
+                | DType::F8E4M3
+        ) {
+            return Err(Error::Vulkan(
+                format!(
+                    "copy_strided_src: dtype {:?} not supported on the Vulkan backend",
+                    self.dtype
+                )
+                .into(),
+            ));
+        }
+        match src_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => {
+                if len == 0 {
+                    return Ok(());
+                }
+                // `copy_buffer` is a raw byte copy, so it is dtype-agnostic;
+                // we only need the correctly-typed subbuffers.
+                match self.dtype {
+                    DType::F32 => {
+                        let src_sub = match &self.buffer {
+                            VulkanStorageBuffer::F32(b) => b
+                                .clone()
+                                .slice(start_offset as u64..(start_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_sub = match &dst.buffer {
+                            VulkanStorageBuffer::F32(b) => b
+                                .clone()
+                                .slice(dst_offset as u64..(dst_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
+                                .map_err(|e| e.to_string())?;
+                            Ok(())
+                        })?;
+                    }
+                    DType::F16 => {
+                        let src_sub = match &self.buffer {
+                            VulkanStorageBuffer::F16(b) => b
+                                .clone()
+                                .slice(start_offset as u64..(start_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_sub = match &dst.buffer {
+                            VulkanStorageBuffer::F16(b) => b
+                                .clone()
+                                .slice(dst_offset as u64..(dst_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
+                                .map_err(|e| e.to_string())?;
+                            Ok(())
+                        })?;
+                    }
+                    DType::BF16 => {
+                        let src_sub = match &self.buffer {
+                            VulkanStorageBuffer::BF16(b) => b
+                                .clone()
+                                .slice(start_offset as u64..(start_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_sub = match &dst.buffer {
+                            VulkanStorageBuffer::BF16(b) => b
+                                .clone()
+                                .slice(dst_offset as u64..(dst_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
+                                .map_err(|e| e.to_string())?;
+                            Ok(())
+                        })?;
+                    }
+                    DType::U8 => {
+                        let src_sub = match &self.buffer {
+                            VulkanStorageBuffer::U8(b) => b
+                                .clone()
+                                .slice(start_offset as u64..(start_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_sub = match &dst.buffer {
+                            VulkanStorageBuffer::U8(b) => b
+                                .clone()
+                                .slice(dst_offset as u64..(dst_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
+                                .map_err(|e| e.to_string())?;
+                            Ok(())
+                        })?;
+                    }
+                    DType::U32 => {
+                        let src_sub = match &self.buffer {
+                            VulkanStorageBuffer::U32(b) => b
+                                .clone()
+                                .slice(start_offset as u64..(start_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_sub = match &dst.buffer {
+                            VulkanStorageBuffer::U32(b) => b
+                                .clone()
+                                .slice(dst_offset as u64..(dst_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
+                                .map_err(|e| e.to_string())?;
+                            Ok(())
+                        })?;
+                    }
+                    DType::I64 => {
+                        let src_sub = match &self.buffer {
+                            VulkanStorageBuffer::I64(b) => b
+                                .clone()
+                                .slice(start_offset as u64..(start_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_sub = match &dst.buffer {
+                            VulkanStorageBuffer::I64(b) => b
+                                .clone()
+                                .slice(dst_offset as u64..(dst_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
+                                .map_err(|e| e.to_string())?;
+                            Ok(())
+                        })?;
+                    }
+                    DType::F64 => {
+                        let src_sub = match &self.buffer {
+                            VulkanStorageBuffer::F64(b) => b
+                                .clone()
+                                .slice(start_offset as u64..(start_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_sub = match &dst.buffer {
+                            VulkanStorageBuffer::F64(b) => b
+                                .clone()
+                                .slice(dst_offset as u64..(dst_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
+                                .map_err(|e| e.to_string())?;
+                            Ok(())
+                        })?;
+                    }
+                    DType::F8E4M3 => {
+                        let src_sub = match &self.buffer {
+                            VulkanStorageBuffer::F8E4M3(b) => b
+                                .clone()
+                                .slice(start_offset as u64..(start_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_sub = match &dst.buffer {
+                            VulkanStorageBuffer::F8E4M3(b) => b
+                                .clone()
+                                .slice(dst_offset as u64..(dst_offset + len) as u64),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            cbb.copy_buffer(CopyBufferInfo::new(src_sub, dst_sub))
+                                .map_err(|e| e.to_string())?;
+                            Ok(())
+                        })?;
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                }
+            }
+            crate::StridedBlocks::UniformBlocks {
+                start_offset,
+                block_len,
+                count,
+                src_stride,
+            } => {
+                let total = count * block_len;
+                if total == 0 {
+                    return Ok(());
+                }
+                let kernels = self.device.kernels();
+                let params = candle_vulkan_kernels::push_constants::Copy2dParams {
+                    d1: count as u64,
+                    d2: block_len as u64,
+                    src_stride: src_stride as u64,
+                    dst_stride: block_len as u64,
+                    src_offset: start_offset as u64,
+                    dst_offset: dst_offset as u64,
+                };
+                match self.dtype {
+                    DType::F32 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::F32(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::F32(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_copy2d_slang::<f32>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::Copy2dSlang,
+                                candle_vulkan_kernels::KernelName::Copy2dF32,
+                                &src_buf,
+                                &dst_buf,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::F16 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::F16(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::F16(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_copy2d_slang::<half::f16>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::Copy2dF16,
+                                candle_vulkan_kernels::KernelName::Copy2dF16,
+                                &src_buf,
+                                &dst_buf,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::BF16 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::BF16(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::BF16(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_copy2d_slang::<half::bf16>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::Copy2dBf16,
+                                candle_vulkan_kernels::KernelName::Copy2dBf16,
+                                &src_buf,
+                                &dst_buf,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::U8 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::U8(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::U8(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_copy2d_slang::<u8>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::Copy2dU8,
+                                candle_vulkan_kernels::KernelName::Copy2dU8,
+                                &src_buf,
+                                &dst_buf,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::U32 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::U32(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::U32(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_copy2d_slang::<u32>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::Copy2dU32,
+                                candle_vulkan_kernels::KernelName::Copy2dU32,
+                                &src_buf,
+                                &dst_buf,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::I64 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::I64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::I64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_copy2d_slang::<i64>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::Copy2dI64,
+                                candle_vulkan_kernels::KernelName::Copy2dI64,
+                                &src_buf,
+                                &dst_buf,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::F64 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::F64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::F64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_copy2d_slang::<f64>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::Copy2dF64,
+                                candle_vulkan_kernels::KernelName::Copy2dF64,
+                                &src_buf,
+                                &dst_buf,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::F8E4M3 => {
+                        // f8e4m3 elements are a single byte, so the byte-
+                        // granular u8 copy2d kernel is a drop-in.
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::F8E4M3(b) => b.clone().reinterpret::<[u8]>(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::F8E4M3(b) => b.clone().reinterpret::<[u8]>(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_copy2d_slang::<u8>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::Copy2dU8,
+                                candle_vulkan_kernels::KernelName::Copy2dU8,
+                                &src_buf,
+                                &dst_buf,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                }
+            }
+            crate::StridedBlocks::MultipleBlocks {
+                block_start_index,
+                block_len,
+            } => {
+                let n = block_start_index.len();
+                let total = n * block_len;
+                if total == 0 {
+                    return Ok(());
+                }
+                let indices: Vec<u32> = block_start_index.map(|s| s as u32).collect();
+                let idx_buf = Buffer::from_iter(
+                    self.device.mem_alloc(),
+                    &BufferCreateInfo {
+                        usage: BufferUsage::STORAGE_BUFFER,
+                        ..Default::default()
+                    },
+                    &AllocationCreateInfo {
+                        memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                            | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                        ..Default::default()
+                    },
+                    indices,
+                )
+                .map_err(|e| Error::Vulkan(e.to_string().into()))?;
+                let idx: Subbuffer<[u32]> = idx_buf;
+                let kernels = self.device.kernels();
+                let params = candle_vulkan_kernels::push_constants::GatherIdxParams {
+                    count: total as u64,
+                    block_len: block_len as u64,
+                    emb_h: dst_offset as u64,
+                    dst_offset: 0,
+                };
+                match self.dtype {
+                    DType::F32 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::F32(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::F32(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_gather_idx_slang::<f32>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::GatherIdxSlang,
+                                candle_vulkan_kernels::KernelName::GatherIdxF32,
+                                &src_buf,
+                                &dst_buf,
+                                &idx,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::F16 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::F16(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::F16(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_gather_idx_slang::<half::f16>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::GatherIdxF16,
+                                candle_vulkan_kernels::KernelName::GatherIdxF16,
+                                &src_buf,
+                                &dst_buf,
+                                &idx,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::BF16 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::BF16(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::BF16(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_gather_idx_slang::<half::bf16>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::GatherIdxBf16,
+                                candle_vulkan_kernels::KernelName::GatherIdxBf16,
+                                &src_buf,
+                                &dst_buf,
+                                &idx,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::U8 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::U8(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::U8(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_gather_idx_slang::<u8>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::GatherIdxU8,
+                                candle_vulkan_kernels::KernelName::GatherIdxU8,
+                                &src_buf,
+                                &dst_buf,
+                                &idx,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::U32 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::U32(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::U32(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_gather_idx_slang::<u32>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::GatherIdxU32,
+                                candle_vulkan_kernels::KernelName::GatherIdxU32,
+                                &src_buf,
+                                &dst_buf,
+                                &idx,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::I64 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::I64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::I64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_gather_idx_slang::<i64>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::GatherIdxI64,
+                                candle_vulkan_kernels::KernelName::GatherIdxI64,
+                                &src_buf,
+                                &dst_buf,
+                                &idx,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::F64 => {
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::F64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::F64(b) => b.clone(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_gather_idx_slang::<f64>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::GatherIdxF64,
+                                candle_vulkan_kernels::KernelName::GatherIdxF64,
+                                &src_buf,
+                                &dst_buf,
+                                &idx,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    DType::F8E4M3 => {
+                        // f8e4m3 elements are a single byte, so the byte-
+                        // granular u8 gather kernel is a drop-in.
+                        let src_buf = match &self.buffer {
+                            VulkanStorageBuffer::F8E4M3(b) => b.clone().reinterpret::<[u8]>(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        let dst_buf = match &dst.buffer {
+                            VulkanStorageBuffer::F8E4M3(b) => b.clone().reinterpret::<[u8]>(),
+                            _ => {
+                                return Err(Error::Vulkan(
+                                    "unexpected state on the Vulkan backend".to_string().into(),
+                                ))
+                            }
+                        };
+                        self.device.execute(move |cbb| {
+                            candle_vulkan_kernels::call_gather_idx_slang::<u8>(
+                                cbb,
+                                &kernels,
+                                candle_vulkan_kernels::Source::GatherIdxU8,
+                                candle_vulkan_kernels::KernelName::GatherIdxU8,
+                                &src_buf,
+                                &dst_buf,
+                                &idx,
+                                &params,
+                                total,
+                            )
+                            .map_err(|e| e.to_string())
+                        })?;
+                    }
+                    _ => {
+                        return Err(Error::Vulkan(
+                            format!("dtype checked above (dtype={:?})", self.dtype)
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn copy2d(
+        &self,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_stride1: usize,
+        dst_stride1: usize,
+        src_offset: usize,
+        dst_offset: usize,
+    ) -> Result<()> {
+        if !matches!(
+            self.dtype,
+            DType::F32
+                | DType::F16
+                | DType::F64
+                | DType::BF16
+                | DType::U8
+                | DType::U32
+                | DType::I64
+        ) || !matches!(
+            dst.dtype,
+            DType::F32
+                | DType::F16
+                | DType::F64
+                | DType::BF16
+                | DType::U8
+                | DType::U32
+                | DType::I64
+        ) || self.dtype != dst.dtype
+        {
+            return Err(Error::Vulkan(
+                format!(
+                    "copy2d: unsupported dtype on the Vulkan backend (src={:?}, dst={:?})",
+                    self.dtype, dst.dtype
+                )
+                .into(),
+            ));
+        }
+        let total = d1 * d2;
+        if total == 0 {
+            return Ok(());
+        }
+        let kernels = self.device.kernels();
+        let params = candle_vulkan_kernels::push_constants::Copy2dParams {
+            d1: d1 as u64,
+            d2: d2 as u64,
+            src_stride: src_stride1 as u64,
+            dst_stride: dst_stride1 as u64,
+            src_offset: src_offset as u64,
+            dst_offset: dst_offset as u64,
+        };
+        match self.dtype {
+            DType::F32 => {
+                let src_buf = match &self.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_buf = match &dst.buffer {
+                    VulkanStorageBuffer::F32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<f32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dSlang,
+                        candle_vulkan_kernels::KernelName::Copy2dF32,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F16 => {
+                let src_buf: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_buf: Subbuffer<[half::f16]> = match &dst.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dF16,
+                        candle_vulkan_kernels::KernelName::Copy2dF16,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::F64 => {
+                let src_buf: Subbuffer<[f64]> = match &self.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_buf: Subbuffer<[f64]> = match &dst.buffer {
+                    VulkanStorageBuffer::F64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<f64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dF64,
+                        candle_vulkan_kernels::KernelName::Copy2dF64,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let src_buf: Subbuffer<[half::bf16]> = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_buf: Subbuffer<[half::bf16]> = match &dst.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dBf16,
+                        candle_vulkan_kernels::KernelName::Copy2dBf16,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::U8 => {
+                let src_buf: Subbuffer<[u8]> = match &self.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_buf: Subbuffer<[u8]> = match &dst.buffer {
+                    VulkanStorageBuffer::U8(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<u8>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dU8,
+                        candle_vulkan_kernels::KernelName::Copy2dU8,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::U32 => {
+                let src_buf: Subbuffer<[u32]> = match &self.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_buf: Subbuffer<[u32]> = match &dst.buffer {
+                    VulkanStorageBuffer::U32(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<u32>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dU32,
+                        candle_vulkan_kernels::KernelName::Copy2dU32,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::I64 => {
+                let src_buf: Subbuffer<[i64]> = match &self.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let dst_buf: Subbuffer<[i64]> = match &dst.buffer {
+                    VulkanStorageBuffer::I64(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let src_buf = src_buf.clone();
+                let dst_buf = dst_buf.clone();
+
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_copy2d_slang::<i64>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::Copy2dI64,
+                        candle_vulkan_kernels::KernelName::Copy2dI64,
+                        &src_buf,
+                        &dst_buf,
+                        &params,
+                        total,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(())
+    }
+    fn const_set(&mut self, scalar: crate::scalar::Scalar, l: &Layout) -> Result<()> {
+        use crate::scalar::Scalar;
+        // I32/I16 const_set has no kernel dispatch (the scalar match accepts it
+        // but the buffer match has no I32/I16 arm), so reject it here with a
+        // clear error instead of failing later at dispatch time.
+        if matches!(self.dtype, DType::I32 | DType::I16) {
+            return Err(Error::Vulkan(
+                format!(
+                    "const_set: dtype {:?} not supported on the Vulkan backend",
+                    self.dtype
+                )
+                .into(),
+            ));
+        }
+        let value = match (self.dtype, &scalar) {
+            (DType::F32, Scalar::F32(v)) => *v,
+            (DType::F32, Scalar::F16(v)) => v.to_f32(),
+            (DType::F32, Scalar::BF16(v)) => v.to_f32(),
+            (DType::F32, Scalar::F64(v)) => *v as f32,
+            (DType::F16, Scalar::F32(v)) => *v,
+            (DType::F16, Scalar::F16(v)) => v.to_f32(),
+            (DType::F16, Scalar::BF16(v)) => v.to_f32(),
+            (DType::F16, Scalar::F64(v)) => *v as f32,
+            (DType::BF16, Scalar::F32(v)) => *v,
+            (DType::BF16, Scalar::F16(v)) => v.to_f32(),
+            (DType::BF16, Scalar::BF16(v)) => v.to_f32(),
+            (DType::BF16, Scalar::F64(v)) => *v as f32,
+            (DType::F64, Scalar::F32(v)) => *v,
+            (DType::F64, Scalar::F16(v)) => v.to_f32(),
+            (DType::F64, Scalar::BF16(v)) => v.to_f32(),
+            (DType::F64, Scalar::F64(v)) => *v as f32,
+            (DType::F8E4M3, Scalar::F32(v)) => *v,
+            (DType::F8E4M3, Scalar::F16(v)) => v.to_f32(),
+            (DType::F8E4M3, Scalar::BF16(v)) => v.to_f32(),
+            (DType::F8E4M3, Scalar::F64(v)) => *v as f32,
+            (DType::F8E4M3, Scalar::F8E4M3(v)) => v.to_f32(),
+            (DType::I32, Scalar::I32(v)) => *v as f32,
+            (DType::I32, Scalar::I64(v)) => *v as f32,
+            (DType::I32, Scalar::I16(v)) => *v as f32,
+            (DType::I32, Scalar::U8(v)) => *v as f32,
+            (DType::I32, Scalar::U32(v)) => *v as f32,
+            (DType::I32, Scalar::F32(v)) => *v,
+            (DType::I64, Scalar::I64(v)) => *v as f32,
+            (DType::I64, Scalar::I32(v)) => *v as f32,
+            (DType::I64, Scalar::I16(v)) => *v as f32,
+            (DType::I64, Scalar::U8(v)) => *v as f32,
+            (DType::I64, Scalar::U32(v)) => *v as f32,
+            (DType::I16, Scalar::I16(v)) => *v as f32,
+            (DType::I16, Scalar::I32(v)) => *v as f32,
+            (DType::I16, Scalar::I64(v)) => *v as f32,
+            (DType::I16, Scalar::U8(v)) => *v as f32,
+            (DType::I16, Scalar::U32(v)) => *v as f32,
+            (DType::U8, Scalar::U8(v)) => *v as f32,
+            (DType::U8, Scalar::U32(v)) => *v as f32,
+            (DType::U8, Scalar::I32(v)) => *v as f32,
+            (DType::U8, Scalar::I64(v)) => *v as f32,
+            (DType::U8, Scalar::I16(v)) => *v as f32,
+            (DType::U32, Scalar::U32(v)) => *v as f32,
+            (DType::U32, Scalar::U8(v)) => *v as f32,
+            (DType::U32, Scalar::I32(v)) => *v as f32,
+            (DType::U32, Scalar::I64(v)) => *v as f32,
+            (DType::U32, Scalar::I16(v)) => *v as f32,
+            _ => {
+                return Err(Error::Vulkan(
+                    "const_set: unsupported scalar/dtype combination"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let blocks: Vec<(usize, usize)> = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => vec![(start_offset, len)],
+            crate::StridedBlocks::UniformBlocks {
+                start_offset,
+                block_len,
+                count,
+                src_stride,
+            } => (0..count)
+                .map(|i| (start_offset + i * src_stride, block_len))
+                .collect(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "const_set: non-contiguous layout not yet supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if blocks.iter().all(|(_, len)| *len == 0) {
+            return Ok(());
+        }
+        let kernels = self.device.kernels();
+        match &self.buffer {
+            VulkanStorageBuffer::F32(buffer) => {
+                for &(off, len) in &blocks {
+                    if len == 0 {
+                        continue;
+                    }
+                    let kernels = kernels.clone();
+                    let sub = buffer.clone().slice(off as u64..(off + len) as u64);
+                    let params = candle_vulkan_kernels::ConstSetParams {
+                        count: len as u64,
+                        value,
+                    };
+                    let pattern = u32::from_le_bytes(value.to_le_bytes());
+                    match self.try_fill_const(&sub, value, pattern)? {
+                        ConstFillPlan::Done => {}
+                        ConstFillPlan::Tail(_) | ConstFillPlan::Kernel => {
+                            self.device.execute(move |cbb| {
+                                candle_vulkan_kernels::call_const_set_f32(
+                                    cbb, &kernels, &sub, &params, len,
+                                )
+                                .map_err(|e| e.to_string())
+                            })?;
+                        }
+                    }
+                }
+            }
+            VulkanStorageBuffer::F16(buffer) => {
+                for &(off, len) in &blocks {
+                    if len == 0 {
+                        continue;
+                    }
+                    let kernels = kernels.clone();
+                    let sub = buffer.clone().slice(off as u64..(off + len) as u64);
+                    let elem = half::f16::from_f32(value);
+                    let b = elem.to_le_bytes();
+                    let pattern = u32::from_le_bytes([b[0], b[1], b[0], b[1]]);
+                    match self.try_fill_const(&sub, elem, pattern)? {
+                        ConstFillPlan::Done => {}
+                        ConstFillPlan::Tail(tail) => {
+                            let tail_len = tail.size() / 2;
+                            let tail_params = candle_vulkan_kernels::ConstSetParams {
+                                count: tail_len,
+                                value,
+                            };
+                            self.device.execute(move |cbb| {
+                                candle_vulkan_kernels::call_const_set_f16(
+                                    cbb,
+                                    &kernels,
+                                    &tail,
+                                    &tail_params,
+                                    tail_len as usize,
+                                )
+                                .map_err(|e| e.to_string())
+                            })?;
+                        }
+                        ConstFillPlan::Kernel => {
+                            let params = candle_vulkan_kernels::ConstSetParams {
+                                count: len as u64,
+                                value,
+                            };
+                            self.device.execute(move |cbb| {
+                                candle_vulkan_kernels::call_const_set_f16(
+                                    cbb, &kernels, &sub, &params, len,
+                                )
+                                .map_err(|e| e.to_string())
+                            })?;
+                        }
+                    }
+                }
+            }
+            VulkanStorageBuffer::BF16(buffer) => {
+                for &(off, len) in &blocks {
+                    if len == 0 {
+                        continue;
+                    }
+                    let kernels = kernels.clone();
+                    let sub = buffer.clone().slice(off as u64..(off + len) as u64);
+                    let elem = half::bf16::from_f32(value);
+                    let b = elem.to_bits().to_le_bytes();
+                    let pattern = u32::from_le_bytes([b[0], b[1], b[0], b[1]]);
+                    match self.try_fill_const(&sub, elem, pattern)? {
+                        ConstFillPlan::Done => {}
+                        ConstFillPlan::Tail(tail) => {
+                            let tail_len = tail.size() / 2;
+                            let tail_params = candle_vulkan_kernels::ConstSetParams {
+                                count: tail_len,
+                                value,
+                            };
+                            self.device.execute(move |cbb| {
+                                candle_vulkan_kernels::call_const_set_bf16(
+                                    cbb,
+                                    &kernels,
+                                    &tail,
+                                    &tail_params,
+                                    tail_len as usize,
+                                )
+                                .map_err(|e| e.to_string())
+                            })?;
+                        }
+                        ConstFillPlan::Kernel => {
+                            let params = candle_vulkan_kernels::ConstSetParams {
+                                count: len as u64,
+                                value,
+                            };
+                            self.device.execute(move |cbb| {
+                                candle_vulkan_kernels::call_const_set_bf16(
+                                    cbb, &kernels, &sub, &params, len,
+                                )
+                                .map_err(|e| e.to_string())
+                            })?;
+                        }
+                    }
+                }
+            }
+            VulkanStorageBuffer::U32(buffer) => {
+                // Native-width fill value: avoid the f32 round-trip in `value`
+                // (f32 only keeps 24 bits, so a u32 >= 2^24 would be rounded).
+                let native: u32 = match scalar {
+                    Scalar::U32(v) => v,
+                    Scalar::U8(v) => v as u32,
+                    Scalar::I32(v) => v as u32,
+                    Scalar::I64(v) => v as u32,
+                    Scalar::I16(v) => v as u32,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "const_set: unsupported scalar/dtype combination"
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                for &(off, len) in &blocks {
+                    if len == 0 {
+                        continue;
+                    }
+                    let kernels = kernels.clone();
+                    let sub = buffer.clone().slice(off as u64..(off + len) as u64);
+                    let params = candle_vulkan_kernels::ConstSetU32Params {
+                        count: len as u64,
+                        value: native,
+                    };
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_const_set_u32(cbb, &kernels, &sub, &params, len)
+                            .map_err(|e| e.to_string())
+                    })?;
+                }
+            }
+            VulkanStorageBuffer::I64(buffer) => {
+                // Native-width fill value: avoid the f32 round-trip in `value`
+                // (f32 only keeps 24 bits, so an i64 >= 2^24 would be rounded).
+                let native: i64 = match scalar {
+                    Scalar::I64(v) => v,
+                    Scalar::I32(v) => v as i64,
+                    Scalar::I16(v) => v as i64,
+                    Scalar::U8(v) => v as i64,
+                    Scalar::U32(v) => v as i64,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "const_set: unsupported scalar/dtype combination"
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                for &(off, len) in &blocks {
+                    if len == 0 {
+                        continue;
+                    }
+                    let kernels = kernels.clone();
+                    let sub = buffer.clone().slice(off as u64..(off + len) as u64);
+                    let params = candle_vulkan_kernels::ConstSetI64Params {
+                        count: len as u64,
+                        value: native,
+                    };
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_const_set_i64(cbb, &kernels, &sub, &params, len)
+                            .map_err(|e| e.to_string())
+                    })?;
+                }
+            }
+            VulkanStorageBuffer::U8(buffer) => {
+                for &(off, len) in &blocks {
+                    if len == 0 {
+                        continue;
+                    }
+                    let kernels = kernels.clone();
+                    let sub = buffer.clone().slice(off as u64..(off + len) as u64);
+                    let params = candle_vulkan_kernels::ConstSetParams {
+                        count: len as u64,
+                        value,
+                    };
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_const_set_u8(cbb, &kernels, &sub, &params, len)
+                            .map_err(|e| e.to_string())
+                    })?;
+                }
+            }
+            VulkanStorageBuffer::F64(buffer) => {
+                // Native-width fill value: avoid the f32 round-trip in `value`
+                // (an f64 constant >= 2^24 would be rounded through f32).
+                let native: f64 = match scalar {
+                    Scalar::F64(v) => v,
+                    Scalar::F32(v) => v as f64,
+                    Scalar::F16(v) => v.to_f32() as f64,
+                    Scalar::BF16(v) => v.to_f32() as f64,
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "const_set: unsupported scalar/dtype combination"
+                                .to_string()
+                                .into(),
+                        ))
+                    }
+                };
+                for &(off, len) in &blocks {
+                    if len == 0 {
+                        continue;
+                    }
+                    let kernels = kernels.clone();
+                    let sub = buffer.clone().slice(off as u64..(off + len) as u64);
+                    let params = candle_vulkan_kernels::ConstSetF64Params {
+                        count: len as u64,
+                        value: native,
+                    };
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_const_set_f64(cbb, &kernels, &sub, &params, len)
+                            .map_err(|e| e.to_string())
+                    })?;
+                }
+            }
+            VulkanStorageBuffer::F8E4M3(buffer) => {
+                for &(off, len) in &blocks {
+                    if len == 0 {
+                        continue;
+                    }
+                    let kernels = kernels.clone();
+                    let sub = buffer.clone().slice(off as u64..(off + len) as u64);
+                    let params = candle_vulkan_kernels::ConstSetParams {
+                        count: len as u64,
+                        value,
+                    };
+                    self.device.execute(move |cbb| {
+                        candle_vulkan_kernels::call_const_set_f8e4m3(
+                            cbb, &kernels, &sub, &params, len,
+                        )
+                        .map_err(|e| e.to_string())
+                    })?;
+                }
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    format!("dtype checked above (dtype={:?})", self.dtype)
+                        .to_string()
+                        .into(),
+                ))
+            }
+        }
+        Ok(())
+    }
+}
+
+impl VulkanStorage {
+    /// The 7-element params for the GEMM and affine cooperative-matrix
+    /// kernels, pushed through the pipeline's push constant block.
+    fn gemm_params(
+        &self,
+        bsz: usize,
+        m: usize,
+        n: usize,
+        k: usize,
+        rhs_transposed: bool,
+    ) -> candle_vulkan_kernels::push_constants::GemmParams {
+        candle_vulkan_kernels::push_constants::GemmParams {
+            batch: bsz as u64,
+            m: m as u64,
+            n: n as u64,
+            k: k as u64,
+            rhs_transposed: rhs_transposed as u64,
+            // Dedicated copies of k and n for the cooperative-matrix
+            // Stride operand: RADV miscompiles the cooperative-matrix
+            // load/store when the stride is the same SSA value as the
+            // one feeding the k loop condition.
+            sk: k as u64,
+            sn: n as u64,
+        }
+    }
+
+    /// The fused cooperative-matrix affine dispatch:
+    /// `out[b, m, n] = lhs[b, m, k] @ rhs[b, k, n] + bias[n]`.
+    /// Returns `None` (and the caller falls back to the unfused
+    /// matmul + add) when the layouts are not the ones the kernel
+    /// handles directly: a single contiguous lhs block, a standard or
+    /// transposed rhs (as in `matmul`), and a contiguous rank-1 bias.
+    fn affine_coopmat(
+        &self,
+        rhs: &Self,
+        bias: &Self,
+        bmnk: (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        bias_l: &Layout,
+    ) -> Result<Option<Self>> {
+        let (bsz, m, n, k) = bmnk;
+        if m == 0 || n == 0 || k == 0 || bsz == 0 {
+            return Ok(None);
+        }
+        let (lhs_start, lhs_len) = match lhs_l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } if len == bsz * m * k => {
+                (start_offset, len)
+            }
+            _ => return Ok(None),
+        };
+        let rank = rhs_l.dims().len();
+        if rank < 2 {
+            return Ok(None);
+        }
+        let rs = rhs_l.stride();
+        let standard =
+            rs[rank - 1] == 1 && rs[rank - 2] == n && (rank == 2 || rs[rank - 3] == k * n);
+        let transposed =
+            rs[rank - 2] == 1 && rs[rank - 1] == k && (rank == 2 || rs[rank - 3] == n * k);
+        if !standard && !transposed {
+            return Ok(None);
+        }
+        let rhs_transposed = transposed && !standard;
+        let rhs_start = rhs_l.start_offset();
+        let rhs_len = bsz * n * k;
+        let bias_dims = bias_l.shape().dims();
+        if bias_dims.len() != 1 || bias_dims[0] != n || bias_l.stride()[0] != 1 {
+            return Ok(None);
+        }
+        let bias_len = n;
+        let bias_converted;
+        let bias_start;
+        let bias_ref: &Self = if self.dtype == bias.dtype {
+            bias_start = bias_l.start_offset();
+            bias
+        } else {
+            // The converted bias is a fresh contiguous buffer of exactly `n`
+            // elements at offset 0, so the original view offset must not be
+            // applied to it.
+            bias_converted = bias.to_dtype(bias_l, self.dtype)?;
+            bias_start = 0;
+            &bias_converted
+        };
+        let out = VulkanStorage::new(&self.device, bsz * m * n, self.dtype)?;
+        let kernels = self.device.kernels();
+        match self.dtype {
+            DType::F16 => {
+                let input: Subbuffer<[half::f16]> = match &self.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let rhs_buf: Subbuffer<[half::f16]> = match &rhs.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let bias_buf: Subbuffer<[half::f16]> = match &bias_ref.buffer {
+                    VulkanStorageBuffer::F16(b) => b
+                        .clone()
+                        .slice(bias_start as u64..(bias_start + bias_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::f16]> = match &out.buffer {
+                    VulkanStorageBuffer::F16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = self.gemm_params(bsz, m, n, k, rhs_transposed);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_affine_coopmat_slang::<half::f16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::AffineCoopMatF16,
+                        candle_vulkan_kernels::KernelName::AffineCoopMatF16,
+                        &input,
+                        &rhs_buf,
+                        &bias_buf,
+                        &out_buf,
+                        &params,
+                        bsz,
+                        m,
+                        n,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            DType::BF16 => {
+                let input: Subbuffer<[half::bf16]> = match &self.buffer {
+                    VulkanStorageBuffer::BF16(b) => b
+                        .clone()
+                        .slice(lhs_start as u64..(lhs_start + lhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let rhs_buf: Subbuffer<[half::bf16]> = match &rhs.buffer {
+                    VulkanStorageBuffer::BF16(b) => b
+                        .clone()
+                        .slice(rhs_start as u64..(rhs_start + rhs_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let bias_buf: Subbuffer<[half::bf16]> = match &bias_ref.buffer {
+                    VulkanStorageBuffer::BF16(b) => b
+                        .clone()
+                        .slice(bias_start as u64..(bias_start + bias_len) as u64),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let out_buf: Subbuffer<[half::bf16]> = match &out.buffer {
+                    VulkanStorageBuffer::BF16(b) => b.clone(),
+                    _ => {
+                        return Err(Error::Vulkan(
+                            "unexpected state on the Vulkan backend".to_string().into(),
+                        ))
+                    }
+                };
+                let params = self.gemm_params(bsz, m, n, k, rhs_transposed);
+                self.device.execute(move |cbb| {
+                    candle_vulkan_kernels::call_affine_coopmat_slang::<half::bf16>(
+                        cbb,
+                        &kernels,
+                        candle_vulkan_kernels::Source::AffineCoopMatBf16,
+                        candle_vulkan_kernels::KernelName::AffineCoopMatBf16,
+                        &input,
+                        &rhs_buf,
+                        &bias_buf,
+                        &out_buf,
+                        &params,
+                        bsz,
+                        m,
+                        n,
+                    )
+                    .map_err(|e| e.to_string())
+                })?;
+            }
+            _ => {
+                return Err(Error::Vulkan(
+                    "dtype checked above (dtype={:?})".to_string().into(),
+                ))
+            }
+        }
+        Ok(Some(out))
+    }
+}
+
+// ============================================================================
+// High-level ops (RMSNorm, softmax, rotary-embedding) for the Vulkan backend.
+// Operands are viewed as f32 (converted if needed), a dedicated Slang kernel
+// is dispatched, and the result is converted back to the original dtype.
+// ============================================================================
+impl VulkanStorage {
+    /// Return a contiguous f32 view of `s` (a no-op if `s` is already f32).
+    /// The returned `Option` keeps the conversion buffer alive when a
+    /// conversion was performed.
+    fn f32_view(
+        &self,
+        s: &VulkanStorage,
+        l: &Layout,
+    ) -> Result<(Subbuffer<[f32]>, Option<VulkanStorage>)> {
+        if s.dtype == DType::F32 {
+            let (start, len) = match l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+                _ => {
+                    return Err(Error::Vulkan(
+                        "vulkan op: non-contiguous layout not supported"
+                            .to_string()
+                            .into(),
+                    ))
+                }
+            };
+            let buf = match &s.buffer {
+                VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+                _ => return Err(Error::Vulkan("dtype is F32".to_string().into())),
+            };
+            return Ok((buf, None));
+        }
+        let f32 = s.to_dtype(l, DType::F32)?;
+        let buf = match &f32.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => return Err(Error::Vulkan("converted to F32".to_string().into())),
+        };
+        Ok((buf, Some(f32)))
+    }
+    /// Return an f32 subbuffer view of `s` for the `decode_attention`
+    /// kernel's k/v contract: a `(heads, rows, cols)` layout with
+    /// contiguous rows (`stride(2) == 1`, `stride(1) == cols`) and a
+    /// uniform head stride (`stride(0) == kv_stride`,
+    /// `kv_stride >= rows * cols`). The returned subbuffer spans
+    /// `[start_offset, start_offset + (heads - 1) * kv_stride + rows *
+    /// cols)`; the kernel re-derives the row offsets from `kv_stride`,
+    /// so the tail padding of a pre-allocated cache is never read.
+    fn f16_head_rows_view(
+        &self,
+        s: &VulkanStorage,
+        l: &Layout,
+        kv_stride: usize,
+    ) -> Result<Subbuffer<[half::f16]>> {
+        if s.dtype != DType::F16 {
+            return Err(Error::Vulkan(
+                "fused_decode_attention: k/v must be f16".to_string().into(),
+            ));
+        }
+        let dims = l.dims();
+        if dims.len() != 3 {
+            return Err(Error::Vulkan(
+                "fused_decode_attention: k/v must be 3-d".to_string().into(),
+            ));
+        }
+        let (heads, rows, cols) = (dims[0], dims[1], dims[2]);
+        let strides = l.stride();
+        if strides[2] != 1
+            || strides[1] != cols
+            || strides[0] != kv_stride
+            || kv_stride < rows * cols
+        {
+            return Err(Error::Vulkan(
+                "fused_decode_attention: k/v must have contiguous rows \
+                 (strides (kv_stride, cols, 1))"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let start = l.start_offset();
+        let len = heads.saturating_sub(1) * kv_stride + rows * cols;
+        match &s.buffer {
+            VulkanStorageBuffer::F16(b) => Ok(b.clone().slice(start as u64..(start + len) as u64)),
+            _ => Err(Error::Vulkan("dtype is F16".to_string().into())),
+        }
+    }
+
+    /// Last-axis argsort: returns the `u32` indices that stably sort
+    /// each row in ascending (`asc`) or descending order. NaN values
+    /// sort last in both directions, matching the CPU reference in
+    /// `sort.rs`.
+    pub fn argsort(&self, l: &Layout, asc: bool) -> Result<Self> {
+        if !matches!(self.dtype, DType::F32) {
+            return Err(Error::Vulkan(
+                format!(
+                    "argsort: only f32 is supported on the Vulkan backend (dtype={:?})",
+                    self.dtype
+                )
+                .into(),
+            ));
+        }
+        let dims = l.shape().dims();
+        let ndim = dims.len();
+        let cols = dims[ndim - 1];
+        let rows: usize = dims[..ndim - 1].iter().product();
+        let (start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "argsort: non-contiguous layouts not supported on the Vulkan backend"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        let input: Subbuffer<[f32]> = match &self.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone().slice(start as u64..(start + len) as u64),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let out = VulkanStorage::new(&self.device, rows * cols, DType::U32)?;
+        if rows == 0 || cols == 0 {
+            return Ok(out);
+        }
+        let out_u32 = match &out.buffer {
+            VulkanStorageBuffer::U32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let kernels = self.device.kernels();
+        let params = candle_vulkan_kernels::push_constants::ArgsortParams {
+            rows: rows as u64,
+            cols: cols as u64,
+        };
+        let name = if asc {
+            candle_vulkan_kernels::KernelName::ArgsortAscF32
+        } else {
+            candle_vulkan_kernels::KernelName::ArgsortDescF32
+        };
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_argsort_slang(
+                cbb,
+                &kernels,
+                candle_vulkan_kernels::Source::ArgsortSlang,
+                name,
+                &input,
+                &out_u32,
+                &params,
+                rows,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        Ok(out)
+    }
+
+    /// RMSNorm over the last dim: `out[i][j] = x[i][j] / m[i] * alpha[j]`
+    /// with `m[i] = sqrt(sum_j(x[i][j]^2) / n + eps)`.
+    pub fn rms_norm(
+        &self,
+        l: &Layout,
+        alpha: &VulkanStorage,
+        alpha_l: &Layout,
+        eps: f64,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() < 2 {
+            return Err(Error::Vulkan(
+                "rms_norm: needs >= 2 dims".to_string().into(),
+            ));
+        }
+        let n = *dims
+            .last()
+            .ok_or_else(|| Error::Vulkan("empty dims".to_string().into()))?;
+        let n_rows: usize = dims[..dims.len() - 1].iter().product();
+        if n_rows == 0 || n == 0 {
+            return self.device.zeros_impl(l.shape(), self.dtype);
+        }
+        if l.shape().elem_count() != n_rows * n {
+            return Err(Error::Vulkan(
+                "rms_norm: layout length mismatch".to_string().into(),
+            ));
+        }
+        let out_dtype = self.dtype;
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let (alpha_buf, keep_alpha) = self.f32_view(alpha, alpha_l)?;
+        let out = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let params = candle_vulkan_kernels::NormParams {
+            n_rows: n_rows as u64,
+            n: n as u64,
+            eps,
+        };
+        let kernels = self.device.kernels();
+        let (input, alpha_buf, out_buf) = (input, alpha_buf, out_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_rms_norm_slang(
+                cbb,
+                &kernels,
+                Source::RmsNorm,
+                KernelName::RmsNorm,
+                &input,
+                &alpha_buf,
+                &out_buf,
+                &params,
+                n_rows,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_in, keep_alpha));
+        if out_dtype == DType::F32 {
+            return Ok(out);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out.to_dtype(&out_l, out_dtype)
+    }
+
+    /// Fused add + RMSNorm over the last dim. `self` is the residual `x`
+    /// `(n_rows, n)` f32, `h` is the add operand `(n_rows, n)` f32, and
+    /// `alpha` is the RMSNorm weight `(n,)` f32. Returns `(residual, norm)`
+    /// where `residual = x + h` and `norm[i][j] = residual[i][j] / m[i] *
+    /// alpha[j]` with `m[i] = sqrt(sum_j(residual[i][j]^2) / n + eps)`.
+    /// This fuses the residual add and the following RMSNorm into a single
+    /// dispatch.
+    pub fn fused_add_rms_norm(
+        &self,
+        l: &Layout,
+        h: &VulkanStorage,
+        h_l: &Layout,
+        alpha: &VulkanStorage,
+        alpha_l: &Layout,
+        eps: f64,
+    ) -> Result<(Self, Self)> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() < 2 {
+            return Err(Error::Vulkan(
+                "fused_add_rms_norm: needs >= 2 dims".to_string().into(),
+            ));
+        }
+        let n = *dims
+            .last()
+            .ok_or_else(|| Error::Vulkan("empty dims".to_string().into()))?;
+        let n_rows: usize = dims[..dims.len() - 1].iter().product();
+        if n_rows == 0 || n == 0 {
+            return Err(Error::Vulkan(
+                "fused_add_rms_norm: empty tensor".to_string().into(),
+            ));
+        }
+        if l.shape().elem_count() != n_rows * n {
+            return Err(Error::Vulkan(
+                "fused_add_rms_norm: layout length mismatch"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (x, keep_x) = self.f32_view(self, l)?;
+        let (h_buf, keep_h) = self.f32_view(h, h_l)?;
+        let (alpha_buf, keep_alpha) = self.f32_view(alpha, alpha_l)?;
+        let residual = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
+        let norm = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
+        let residual_buf = match &residual.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let norm_buf = match &norm.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let params = candle_vulkan_kernels::NormParams {
+            n_rows: n_rows as u64,
+            n: n as u64,
+            eps,
+        };
+        let kernels = self.device.kernels();
+        let (x, h_buf, alpha_buf, residual_buf, norm_buf) =
+            (x, h_buf, alpha_buf, residual_buf, norm_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_add_rms_norm_slang(
+                cbb,
+                &kernels,
+                Source::AddRmsNorm,
+                KernelName::AddRmsNorm,
+                &x,
+                &h_buf,
+                &alpha_buf,
+                &residual_buf,
+                &norm_buf,
+                &params,
+                n_rows,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_x, keep_h, keep_alpha));
+        Ok((residual, norm))
+    }
+
+    /// Fused RMSNorm + residual add over the last dim:
+    /// `out[i][j] = x[i][j] + h[i][j] / m[i] * alpha[j]` with
+    /// `m[i] = sqrt(sum_j(h[i][j]^2) / n + eps)`.
+    pub fn fused_post_norm_add(
+        &self,
+        l: &Layout,
+        h: &VulkanStorage,
+        h_l: &Layout,
+        alpha: &VulkanStorage,
+        alpha_l: &Layout,
+        eps: f64,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() < 2 {
+            return Err(Error::Vulkan(
+                "fused_post_norm_add: needs >= 2 dims".to_string().into(),
+            ));
+        }
+        let n = *dims
+            .last()
+            .ok_or_else(|| Error::Vulkan("fused_post_norm_add: empty tensor".to_string().into()))?;
+        let n_rows: usize = dims[..dims.len() - 1].iter().product();
+        if n_rows == 0 || n == 0 {
+            return Err(Error::Vulkan(
+                "fused_post_norm_add: empty tensor".to_string().into(),
+            ));
+        }
+        if l.shape().elem_count() != n_rows * n {
+            return Err(Error::Vulkan(
+                "fused_post_norm_add: layout length mismatch"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (x, keep_x) = self.f32_view(self, l)?;
+        let (h_buf, keep_h) = self.f32_view(h, h_l)?;
+        let (alpha_buf, keep_alpha) = self.f32_view(alpha, alpha_l)?;
+        let out = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let params = candle_vulkan_kernels::push_constants::NormParams {
+            n_rows: n_rows as u64,
+            n: n as u64,
+            eps,
+        };
+        let kernels = self.device.kernels();
+        let (x, h_buf, alpha_buf, out_buf) = (x, h_buf, alpha_buf, out_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_post_rms_norm_add_slang(
+                cbb,
+                &kernels,
+                Source::PostRmsNormAdd,
+                KernelName::PostRmsNormAdd,
+                &x,
+                &h_buf,
+                &alpha_buf,
+                &out_buf,
+                &params,
+                n_rows,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_x, keep_h, keep_alpha));
+        Ok(out)
+    }
+
+    /// Fused KV cache row append: copies `(num_kv_heads * head_dim)` f32
+    /// elements from `self` (keys) and `h` (values) into row `row` of the
+    /// pre-allocated f16 caches `dst_k`/`dst_v`; the src rows are f32
+    /// activations, converted on store. each dst is
+    /// `(num_kv_heads, max_len, head_dim)` with contiguous rows (strides
+    /// `(stride, head_dim, 1)`, `stride >= max_len * head_dim`), and the
+    /// row is written at `dst[head * stride + row * head_dim + col]`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn kv_cache_append_rows(
+        &self,
+        l: &Layout,
+        h: &VulkanStorage,
+        h_l: &Layout,
+        dst_k: &VulkanStorage,
+        dst_k_l: &Layout,
+        dst_v: &VulkanStorage,
+        dst_v_l: &Layout,
+        row: usize,
+    ) -> Result<()> {
+        use candle_vulkan_kernels::{KernelName, KvRowCopyParams, Source};
+        let dims = l.dims();
+        if dims.len() != 2 {
+            return Err(Error::Vulkan(
+                "kv_cache_append_rows: src must be 2-d (n_kv, d)"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (n_kv, head_dim) = (dims[0], dims[1]);
+        if n_kv == 0 || head_dim == 0 || l.shape().elem_count() != n_kv * head_dim {
+            return Err(Error::Vulkan(
+                "kv_cache_append_rows: src must be a contiguous (n_kv, d)"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        // Both dsts: (n_kv, max_len, d), strides (stride, d, 1), matching.
+        let (dst_k_dims, dst_k_strides) = (dst_k_l.dims(), dst_k_l.stride());
+        let (dst_v_dims, dst_v_strides) = (dst_v_l.dims(), dst_v_l.stride());
+        if dst_k_dims.len() != 3 || dst_v_dims.len() != 3 {
+            return Err(Error::Vulkan(
+                "kv_cache_append_rows: dsts must be 3-d (n_kv, max_len, d)"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let (dst_heads, max_len, dst_d) = (dst_k_dims[0], dst_k_dims[1], dst_k_dims[2]);
+        let stride = dst_k_strides[0];
+        if dst_k_strides[1] != dst_d
+            || dst_k_strides[2] != 1
+            || stride < max_len * dst_d
+            || dst_heads != n_kv
+            || dst_d != head_dim
+            || dst_v_dims != dst_k_dims
+            || dst_v_strides[0] != stride
+            || dst_v_strides[1] != dst_d
+            || dst_v_strides[2] != 1
+        {
+            return Err(Error::Vulkan(
+                "kv_cache_append_rows: dsts must match with contiguous rows \
+                 (strides (stride, d, 1), stride >= max_len * d)"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        if row >= max_len {
+            return Err(Error::Vulkan(
+                "kv_cache_append_rows: row out of range".to_string().into(),
+            ));
+        }
+        let (src_k, keep_k) = self.f32_view(self, l)?;
+        let (src_v, keep_v) = h.f32_view(h, h_l)?;
+        let dst_k_buf = dst_k.f16_head_rows_view(dst_k, dst_k_l, stride)?;
+        let dst_v_buf = dst_v.f16_head_rows_view(dst_v, dst_v_l, stride)?;
+        let params = KvRowCopyParams {
+            heads: n_kv as u64,
+            head_dim: head_dim as u64,
+            row: row as u64,
+            stride: stride as u64,
+        };
+        let kernels = self.device.kernels();
+        let total = 2 * n_kv * head_dim;
+        let (src_k, src_v, dst_k_buf, dst_v_buf) = (src_k, src_v, dst_k_buf, dst_v_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_kv_row_copy_slang(
+                cbb,
+                &kernels,
+                Source::KvRowCopy,
+                KernelName::KvRowCopy,
+                &src_k,
+                &src_v,
+                &dst_k_buf,
+                &dst_v_buf,
+                &params,
+                total,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_k, keep_v));
+        Ok(())
+    }
+
+    /// Fused single-query decode attention: `self` is q `(num_heads, head_dim)`
+    /// f32, `k`/`v` are `(num_kv_heads, kv_len, head_dim)` f16 with
+    /// contiguous rows (strides `(kv_stride, head_dim, 1)`, `kv_stride >=
+    /// kv_len * head_dim`). Returns the `(num_heads, head_dim)` f32
+    /// attention output. The GQA group for query head `h` is
+    /// `h * num_kv_heads / num_heads` (matching candle's `repeat_kv`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn fused_decode_attention(
+        &self,
+        l: &Layout,
+        k: &VulkanStorage,
+        k_l: &Layout,
+        v: &VulkanStorage,
+        v_l: &Layout,
+        scale: f32,
+        num_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        kv_len: usize,
+        kv_stride: usize,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{
+            call_decode_attention_slang, DecodeAttentionParams, DECODE_ATTENTION_CHUNK,
+        };
+        // The decode-attention shaders cap head_dim at MAX_D = 512 (each lane
+        // keeps a `head_dim/32` f32 accumulator in `acc[16]`); reject larger
+        // head dims on the host instead of silently overflowing it.
+        if head_dim > 512 {
+            return Err(Error::Vulkan(
+                format!("fused_decode_attention: head_dim {head_dim} > 512 is not supported")
+                    .into(),
+            ));
+        }
+        // An empty cache has no scores to reduce: the kernel returns zeros for
+        // it (softmax over zero positions has no identity), and the KV row view
+        // would otherwise reject the zero-length range.
+        if kv_len == 0 {
+            let out = VulkanStorage::new(&self.device, num_heads * head_dim, DType::F32)?;
+            out.zero_fill()?;
+            return Ok(out);
+        }
+        let num_chunks = kv_len.div_ceil(DECODE_ATTENTION_CHUNK);
+        let out = VulkanStorage::new(&self.device, num_heads * head_dim, DType::F32)?;
+        let scratch = VulkanStorage::new(
+            &self.device,
+            num_heads * num_chunks * (2 + head_dim),
+            DType::F32,
+        )?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let scratch_buf = match &scratch.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let (q_buf, q_keep) = self.f32_view(self, l)?;
+        let k_buf = self.f16_head_rows_view(k, k_l, kv_stride)?;
+        let v_buf = self.f16_head_rows_view(v, v_l, kv_stride)?;
+        let params = DecodeAttentionParams {
+            scale,
+            num_heads: num_heads as u64,
+            num_kv_heads: num_kv_heads as u64,
+            head_dim: head_dim as u64,
+            kv_len: kv_len as u64,
+            kv_stride: kv_stride as u64,
+        };
+        let kernels = self.device.kernels();
+        let (q_buf, k_buf, v_buf, scratch_buf, out_buf) =
+            (q_buf, k_buf, v_buf, scratch_buf, out_buf);
+        self.device.execute(move |cbb| {
+            call_decode_attention_slang(
+                cbb,
+                &kernels,
+                &q_buf,
+                &k_buf,
+                &v_buf,
+                &scratch_buf,
+                &out_buf,
+                &params,
+                num_heads,
+                num_chunks,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop(q_keep);
+        Ok(out)
+    }
+    pub fn rope_int(
+        &self,
+        l: &Layout,
+        cos: &VulkanStorage,
+        cos_l: &Layout,
+        sin: &VulkanStorage,
+        sin_l: &Layout,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() != 4 {
+            return Err(Error::Vulkan(
+                "rope_int: needs 4 dims (b, h, t, d)".to_string().into(),
+            ));
+        }
+        let (b, h, t, d) = (dims[0], dims[1], dims[2], dims[3]);
+        if d < 2 || d % 2 != 0 {
+            return Err(Error::Vulkan(
+                "rope_int: head dim must be even and >= 2"
+                    .to_string()
+                    .into(),
+            ));
+        }
+        let n_el = b * h * t * d;
+        if n_el == 0 {
+            return self.device.zeros_impl(l.shape(), self.dtype);
+        }
+        let out_dtype = self.dtype;
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let (cos_buf, keep_cos) = self.f32_view(cos, cos_l)?;
+        let (sin_buf, keep_sin) = self.f32_view(sin, sin_l)?;
+        let out = VulkanStorage::new(&self.device, n_el, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let unbatched = if cos_l.dims().len() == 3 {
+            1.0f32
+        } else {
+            0.0f32
+        };
+        let params = candle_vulkan_kernels::push_constants::RotaryEmbIntParams {
+            b: b as u64,
+            h: h as u64,
+            t: t as u64,
+            d: d as u64,
+            unbatched: unbatched as u64,
+        };
+        let kernels = self.device.kernels();
+        let (input, cos_buf, sin_buf, out_buf) = (input, cos_buf, sin_buf, out_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_rotary_emb_int_slang(
+                cbb,
+                &kernels,
+                Source::RotaryEmbInt,
+                KernelName::RotaryEmbInt,
+                &input,
+                &out_buf,
+                &cos_buf,
+                &sin_buf,
+                &params,
+                n_el,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_in, keep_cos, keep_sin));
+        if out_dtype == DType::F32 {
+            return Ok(out);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out.to_dtype(&out_l, out_dtype)
+    }
+
+    /// LayerNorm over the last dim:
+    /// `out[i][j] = (x[i][j] - mean[i]) * inv_std[i] * alpha[j] + beta[j]`
+    /// where `mean[i] = sum_j(x[i][j]) / n`, `var[i] = sum_j(x[i][j]^2) / n - mean[i]^2`,
+    /// `inv_std[i] = 1 / sqrt(var[i] + eps)`.
+    pub fn layer_norm(
+        &self,
+        l: &Layout,
+        alpha: &VulkanStorage,
+        alpha_l: &Layout,
+        beta: &VulkanStorage,
+        beta_l: &Layout,
+        eps: f64,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() < 2 {
+            return Err(Error::Vulkan(
+                "layer_norm: needs >= 2 dims".to_string().into(),
+            ));
+        }
+        let n = *dims
+            .last()
+            .ok_or_else(|| Error::Vulkan("empty dims".to_string().into()))?;
+        let n_rows: usize = dims[..dims.len() - 1].iter().product();
+        if n_rows == 0 || n == 0 {
+            return self.device.zeros_impl(l.shape(), self.dtype);
+        }
+        if l.shape().elem_count() != n_rows * n {
+            return Err(Error::Vulkan(
+                "layer_norm: layout length mismatch".to_string().into(),
+            ));
+        }
+        let out_dtype = self.dtype;
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let (alpha_buf, keep_alpha) = self.f32_view(alpha, alpha_l)?;
+        let (beta_buf, keep_beta) = self.f32_view(beta, beta_l)?;
+        let out = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let params = candle_vulkan_kernels::NormParams {
+            n_rows: n_rows as u64,
+            n: n as u64,
+            eps,
+        };
+        let kernels = self.device.kernels();
+        let (input, alpha_buf, beta_buf, out_buf) = (input, alpha_buf, beta_buf, out_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_layer_norm_slang(
+                cbb,
+                &kernels,
+                Source::LayerNorm,
+                KernelName::LayerNorm,
+                &input,
+                &alpha_buf,
+                &beta_buf,
+                &out_buf,
+                &params,
+                n_rows,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_in, keep_alpha, keep_beta));
+        if out_dtype == DType::F32 {
+            return Ok(out);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out.to_dtype(&out_l, out_dtype)
+    }
+
+    /// Sigmoid: `out[i] = 1 / (1 + exp(-x[i]))`
+    pub fn sigmoid(&self, l: &Layout) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dtype = self.dtype;
+        if dtype != DType::F32 && dtype != DType::F16 && dtype != DType::BF16 && dtype != DType::F64
+        {
+            return Err(Error::Vulkan(
+                format!("sigmoid: dtype {:?} not supported", dtype).into(),
+            ));
+        }
+        if !matches!(l.strided_blocks(), crate::StridedBlocks::SingleBlock { .. }) {
+            let elem_count = l.shape().elem_count();
+            let mut materialized = VulkanStorage::new(&self.device, elem_count, self.dtype)?;
+            self.copy_strided_src(&mut materialized, 0, l)?;
+            let mat_layout = crate::Layout::contiguous_with_offset(l.shape(), 0);
+            return materialized.sigmoid(&mat_layout);
+        }
+        let (_start, len) = match l.strided_blocks() {
+            crate::StridedBlocks::SingleBlock { start_offset, len } => (start_offset, len),
+            _ => {
+                return Err(Error::Vulkan(
+                    "sigmoid: non-contiguous layout not supported"
+                        .to_string()
+                        .into(),
+                ))
+            }
+        };
+        if len == 0 {
+            return VulkanStorage::new(&self.device, 0, dtype);
+        }
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let out_dtype = dtype;
+        let out_f32 = VulkanStorage::new(&self.device, len, DType::F32)?;
+        let out_buf = match &out_f32.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => return Err(Error::Vulkan("unexpected state".to_string().into())),
+        };
+        let params = candle_vulkan_kernels::push_constants::SigmoidParams { count: len as u64 };
+        let kernels = self.device.kernels();
+        let (input, out_buf) = (input, out_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_sigmoid_slang(
+                cbb,
+                &kernels,
+                Source::Sigmoid,
+                KernelName::Sigmoid,
+                &input,
+                &out_buf,
+                &params,
+                len,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop(keep_in);
+        if out_dtype == DType::F32 {
+            return Ok(out_f32);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out_f32.to_dtype(&out_l, out_dtype)
+    }
+
+    /// Softmax over the last dim.
+    pub fn softmax_last_dim(&self, l: &Layout) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.is_empty() {
+            return Err(Error::Vulkan("softmax: needs >= 1 dim".to_string().into()));
+        }
+        let n = *dims
+            .last()
+            .ok_or_else(|| Error::Vulkan("empty dims".to_string().into()))?;
+        let n_rows: usize = dims[..dims.len() - 1].iter().product();
+        if n_rows == 0 || n == 0 {
+            return self.device.zeros_impl(l.shape(), self.dtype);
+        }
+        if l.shape().elem_count() != n_rows * n {
+            return Err(Error::Vulkan(
+                "softmax: layout length mismatch".to_string().into(),
+            ));
+        }
+        let out_dtype = self.dtype;
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let out = VulkanStorage::new(&self.device, n_rows * n, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let params = candle_vulkan_kernels::push_constants::SoftmaxParams {
+            n_rows: n_rows as u64,
+            n: n as u64,
+        };
+        let kernels = self.device.kernels();
+        let (input, out_buf) = (input, out_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_softmax_slang(
+                cbb,
+                &kernels,
+                Source::Softmax,
+                KernelName::Softmax,
+                &input,
+                &out_buf,
+                &params,
+                n_rows,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop(keep_in);
+        if out_dtype == DType::F32 {
+            return Ok(out);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out.to_dtype(&out_l, out_dtype)
+    }
+
+    /// Rotary embedding (contiguous, non-interleaved, 2D cos/sin).
+    /// `self` is `(b, h, t, d)`; `cos`/`sin` are `(t, d/2)` or `(b, t, d/2)`.
+    pub fn rope(
+        &self,
+        l: &Layout,
+        cos: &VulkanStorage,
+        cos_l: &Layout,
+        sin: &VulkanStorage,
+        sin_l: &Layout,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() != 4 {
+            return Err(Error::Vulkan(
+                "rope: needs 4 dims (b, h, t, d)".to_string().into(),
+            ));
+        }
+        let (b, h, t, d) = (dims[0], dims[1], dims[2], dims[3]);
+        let half = d / 2;
+        if d < 2 || d % 2 != 0 {
+            return Err(Error::Vulkan(
+                "rope: head dim must be even and >= 2".to_string().into(),
+            ));
+        }
+        let n_el = b * h * t * d;
+        if n_el == 0 {
+            return self.device.zeros_impl(l.shape(), self.dtype);
+        }
+        if l.shape().elem_count() != n_el {
+            return Err(Error::Vulkan(
+                "rope: layout length mismatch".to_string().into(),
+            ));
+        }
+        let out_dtype = self.dtype;
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let (cos_buf, keep_cos) = self.f32_view(cos, cos_l)?;
+        let (sin_buf, keep_sin) = self.f32_view(sin, sin_l)?;
+        let out = VulkanStorage::new(&self.device, n_el, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let n_threads = b * h * t * half;
+        let batched = cos_l.dims().len() == 3;
+        let params = candle_vulkan_kernels::push_constants::RopeParams {
+            bh: (b * h) as u64,
+            t: t as u64,
+            d: d as u64,
+            h: h as u64,
+            cs_stride: if batched { (t * half) as u64 } else { 0 },
+        };
+        let name = if batched {
+            KernelName::RopeBatched
+        } else {
+            KernelName::Rope
+        };
+        let kernels = self.device.kernels();
+        let (input, cos_buf, sin_buf, out_buf) = (input, cos_buf, sin_buf, out_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_rope_slang(
+                cbb,
+                &kernels,
+                Source::Rope,
+                name,
+                &input,
+                &cos_buf,
+                &sin_buf,
+                &out_buf,
+                &params,
+                n_threads,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_in, keep_cos, keep_sin));
+        if out_dtype == DType::F32 {
+            return Ok(out);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out.to_dtype(&out_l, out_dtype)
+    }
+
+    /// T/H/D-contiguous rotary embedding: `self` is `(b, t, h, d)`;
+    /// `cos`/`sin` are `(t, d/2)` or `(b, t, d/2)`.
+    pub fn rope_thd(
+        &self,
+        l: &Layout,
+        cos: &VulkanStorage,
+        cos_l: &Layout,
+        sin: &VulkanStorage,
+        sin_l: &Layout,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::{KernelName, Source};
+        let dims = l.dims().to_vec();
+        if dims.len() != 4 {
+            return Err(Error::Vulkan(
+                "rope_thd: needs 4 dims (b, t, h, d)".to_string().into(),
+            ));
+        }
+        let (b, t, h, d) = (dims[0], dims[1], dims[2], dims[3]);
+        let half = d / 2;
+        if half == 0 {
+            return Err(Error::Vulkan(
+                "rope_thd: head dim must be >= 2".to_string().into(),
+            ));
+        }
+        let n_el = b * t * h * d;
+        if n_el == 0 {
+            return self.device.zeros_impl(l.shape(), self.dtype);
+        }
+        if l.shape().elem_count() != n_el {
+            return Err(Error::Vulkan(
+                "rope_thd: layout length mismatch".to_string().into(),
+            ));
+        }
+        let out_dtype = self.dtype;
+        let (input, keep_in) = self.f32_view(self, l)?;
+        let (cos_buf, keep_cos) = self.f32_view(cos, cos_l)?;
+        let (sin_buf, keep_sin) = self.f32_view(sin, sin_l)?;
+        let out = VulkanStorage::new(&self.device, n_el, DType::F32)?;
+        let out_buf = match &out.buffer {
+            VulkanStorageBuffer::F32(b) => b.clone(),
+            _ => {
+                return Err(Error::Vulkan(
+                    "unexpected state on the Vulkan backend".to_string().into(),
+                ))
+            }
+        };
+        let n_threads = b * t * h * half;
+        let batched = cos_l.dims().len() == 3;
+        let params = candle_vulkan_kernels::push_constants::RopeParams {
+            bh: b as u64,
+            t: t as u64,
+            d: d as u64,
+            h: h as u64,
+            cs_stride: if batched { (t * half) as u64 } else { 0 },
+        };
+        let kernels = self.device.kernels();
+        let (input, cos_buf, sin_buf, out_buf) = (input, cos_buf, sin_buf, out_buf);
+        self.device.execute(move |cbb| {
+            candle_vulkan_kernels::call_rope_slang(
+                cbb,
+                &kernels,
+                Source::Rope,
+                KernelName::RopeThd,
+                &input,
+                &cos_buf,
+                &sin_buf,
+                &out_buf,
+                &params,
+                n_threads,
+            )
+            .map_err(|e| e.to_string())
+        })?;
+        drop((keep_in, keep_cos, keep_sin));
+        if out_dtype == DType::F32 {
+            return Ok(out);
+        }
+        let out_l = Layout::contiguous(l.shape());
+        out.to_dtype(&out_l, out_dtype)
+    }
+}

@@ -222,8 +222,8 @@ macro_rules! with_dtype {
         }
     };
 }
-use float8::F8E4M3 as f8e4m3;
 use half::{bf16, f16};
+use microfloat::f8e4m3;
 
 with_dtype!(u8, U8, |v: f64| v as u8, |v: u8| v as f64);
 with_dtype!(u32, U32, |v: f64| v as u32, |v: u32| v as f64);

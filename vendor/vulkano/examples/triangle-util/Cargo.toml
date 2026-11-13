@@ -1,0 +1,23 @@
+[package]
+name = "triangle-util"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "triangle-util"
+path = "main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+# The `vulkano` crate is the main crate that you must use to use Vulkan.
+vulkano = { workspace = true, default-features = true }
+# Provides the `shader!` macro that is used to generate code for using shaders.
+vulkano-shaders = { workspace = true }
+# Contains the utility functions that make life easier.
+vulkano-util = { workspace = true }
+# The Vulkan library doesn't provide any functionality to create and handle windows, as
+# this would be out of scope. In order to open a window, we are going to use the `winit` crate.
+winit = { workspace = true, default-features = true }
