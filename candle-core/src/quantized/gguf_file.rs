@@ -548,15 +548,7 @@ impl Content {
             );
         }
         let position = reader.stream_position()?;
-        let alignment = match metadata.get("general.alignment") {
-            Some(Value::U8(v)) => *v as u64,
-            Some(Value::U16(v)) => *v as u64,
-            Some(Value::U32(v)) => *v as u64,
-            Some(Value::I8(v)) if *v >= 0 => *v as u64,
-            Some(Value::I16(v)) if *v >= 0 => *v as u64,
-            Some(Value::I32(v)) if *v >= 0 => *v as u64,
-            _ => DEFAULT_ALIGNMENT,
-        };
+        let alignment = declared_alignment(metadata.get("general.alignment"));
         let tensor_data_offset = position.div_ceil(alignment) * alignment;
         Ok(Self {
             magic,
@@ -580,6 +572,20 @@ impl Content {
     }
 }
 
+/// The alignment declared by a `general.alignment` value, as both the reader
+/// and the writer use it.
+fn declared_alignment(value: Option<&Value>) -> u64 {
+    match value {
+        Some(Value::U8(v)) => *v as u64,
+        Some(Value::U16(v)) => *v as u64,
+        Some(Value::U32(v)) => *v as u64,
+        Some(Value::I8(v)) if *v >= 0 => *v as u64,
+        Some(Value::I16(v)) if *v >= 0 => *v as u64,
+        Some(Value::I32(v)) if *v >= 0 => *v as u64,
+        _ => DEFAULT_ALIGNMENT,
+    }
+}
+
 fn write_string<W: std::io::Write>(w: &mut W, str: &str) -> Result<()> {
     let bytes = str.as_bytes();
     w.write_u64::<LittleEndian>(bytes.len() as u64)?;
@@ -592,6 +598,19 @@ pub fn write<W: std::io::Seek + std::io::Write>(
     metadata: &[(&str, &Value)],
     tensors: &[(&str, &QTensor)],
 ) -> Result<()> {
+    // Pad to the alignment the metadata declares, so that the file reads back. The reader keeps
+    // the last of repeated keys.
+    let alignment = declared_alignment(
+        metadata
+            .iter()
+            .rev()
+            .find(|(k, _)| *k == "general.alignment")
+            .map(|(_, v)| *v),
+    );
+    if alignment == 0 {
+        crate::bail!("gguf: general.alignment must not be zero")
+    }
+    let padding = |n: u64| (alignment - n % alignment) % alignment;
     w.write_u32::<LittleEndian>(0x46554747)?;
     w.write_u32::<LittleEndian>(2)?; // version 2.
     w.write_u64::<LittleEndian>(tensors.len() as u64)?;
@@ -601,7 +620,9 @@ pub fn write<W: std::io::Seek + std::io::Write>(
         w.write_u32::<LittleEndian>(value.value_type().to_u32())?;
         value.write(w)?;
     }
-    let mut offset = 0usize;
+    // Offsets are u64 as in the header, so a large declared alignment cannot wrap them on
+    // 32-bit targets.
+    let mut offset = 0u64;
     let mut offsets = Vec::with_capacity(tensors.len());
     for (name, tensor) in tensors.iter() {
         write_string(w, name)?;
@@ -611,18 +632,19 @@ pub fn write<W: std::io::Seek + std::io::Write>(
             w.write_u64::<LittleEndian>(dim as u64)?;
         }
         w.write_u32::<LittleEndian>(tensor.dtype().to_u32())?;
-        w.write_u64::<LittleEndian>(offset as u64)?;
+        w.write_u64::<LittleEndian>(offset)?;
         offsets.push(offset);
         let size_in_bytes = tensor.storage_size_in_bytes();
-        let padding = 31 - (31 + size_in_bytes) % 32;
-        offset += size_in_bytes + padding;
+        offset += size_in_bytes as u64 + padding(size_in_bytes as u64);
     }
-    let pos = w.stream_position()? as usize;
-    let padding = 31 - (31 + pos) % 32;
-    w.write_all(&vec![0u8; padding])?;
-    let tensor_start_pos = w.stream_position()? as usize;
+    let pos = w.stream_position()?;
+    std::io::copy(
+        &mut std::io::Read::take(std::io::repeat(0), padding(pos)),
+        w,
+    )?;
+    let tensor_start_pos = w.stream_position()?;
     for (offset, (_name, tensor)) in offsets.iter().zip(tensors.iter()) {
-        let pos = w.stream_position()? as usize;
+        let pos = w.stream_position()?;
         if tensor_start_pos + offset != pos {
             crate::bail!(
                 "internal error, unexpected current position {tensor_start_pos} {offset} {pos}"
@@ -631,8 +653,10 @@ pub fn write<W: std::io::Seek + std::io::Write>(
         let data = tensor.data()?;
         let size_in_bytes = data.len();
         w.write_all(&data)?;
-        let padding = 31 - (31 + size_in_bytes) % 32;
-        w.write_all(&vec![0u8; padding])?;
+        std::io::copy(
+            &mut std::io::Read::take(std::io::repeat(0), padding(size_in_bytes as u64)),
+            w,
+        )?;
     }
     Ok(())
 }
