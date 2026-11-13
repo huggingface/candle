@@ -141,14 +141,20 @@ pub fn qtensor_from_ggml(
     dims: Vec<usize>,
     device: &Device,
 ) -> Result<super::QTensor> {
-    let tensor_elems = dims.iter().product::<usize>();
+    let shape = crate::Shape::from(dims.as_slice());
+    let tensor_elems = shape.elem_count_checked()?;
     let block_size = ggml_dtype.block_size();
     if tensor_elems % block_size != 0 {
         crate::bail!(
             "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
         )
     }
-    let size_in_bytes = tensor_elems / block_size * ggml_dtype.type_size();
+    let size_in_bytes = (tensor_elems / block_size)
+        .checked_mul(ggml_dtype.type_size())
+        .ok_or_else(|| crate::Error::TensorSizeOverflow {
+            shape: shape.clone(),
+            dtype: format!("{:?}", ggml_dtype),
+        })?;
 
     match ggml_dtype {
         GgmlDType::F32 => from_raw_data::<f32>(raw_data, size_in_bytes, dims, device),
@@ -211,8 +217,21 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
         reader.seek(std::io::SeekFrom::Current(((32 - pos % 32) % 32) as i64))?;
     }
     let dims = dims.iter().map(|&u| u as usize).collect::<Vec<_>>();
-    let tensor_elems = dims.iter().product::<usize>();
-    let size_in_bytes = tensor_elems * ggml_dtype.type_size() / ggml_dtype.block_size();
+    let shape = crate::Shape::from(dims.as_slice());
+    let tensor_elems = shape.elem_count_checked()?;
+    let type_size = ggml_dtype.type_size();
+    let block_size = ggml_dtype.block_size();
+    if tensor_elems % block_size != 0 {
+        crate::bail!(
+            "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
+        )
+    }
+    let size_in_bytes = (tensor_elems / block_size)
+        .checked_mul(type_size)
+        .ok_or_else(|| crate::Error::TensorSizeOverflow {
+            shape: shape.clone(),
+            dtype: format!("{:?}", ggml_dtype),
+        })?;
     // TODO: Mmap version to avoid copying the data around?
     let mut raw_data = vec![0u8; size_in_bytes];
     reader.read_exact(&mut raw_data)?;
