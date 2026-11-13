@@ -18,8 +18,9 @@ There is no HTTP/WebSocket server or required microphone dependency.
 | `musicgen` | Text-conditioned audio/music generation | Buffered codec decoding |
 
 Registration identifies implemented adapters. It does not certify every checkpoint,
-precision or backend. See `AUDIO-IMPLEMENTATION-STATUS.json` in the workspace root
-for actual validation and limitations. CSM pretrained validation requires access to its gated weights. Other large
+precision or backend. The checkpoint tests below define the validation scope.
+Optional local reports are kept under the ignored
+`bench_results/audio-runtime/reports/` directory. CSM pretrained validation requires access to its gated weights. Other large
 checkpoint validation is recorded separately; component fixtures alone do not
 establish task quality.
 The standard loaders default to F32 activation/preprocessing; Voxtral and Gemma4 also accept

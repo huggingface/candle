@@ -52,3 +52,8 @@ models/
 !candle-audio/src/models/
 !candle-transformers/src/models/
 target-wip/
+
+# Local audio implementation and validation reports.
+/AUDIO-IMPLEMENTATION-PLAN.txt
+/AUDIO-IMPLEMENTATION-STATUS.json
+/AUDIO-VALIDATION-REPORT.txt
