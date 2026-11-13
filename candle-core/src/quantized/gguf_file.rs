@@ -557,6 +557,11 @@ impl Content {
             Some(Value::I32(v)) if *v >= 0 => *v as u64,
             _ => DEFAULT_ALIGNMENT,
         };
+        if alignment == 0 {
+            crate::bail!(
+                "gguf: invalid alignment {alignment} in general.alignment (must be non-zero)"
+            )
+        }
         let tensor_data_offset = position.div_ceil(alignment) * alignment;
         Ok(Self {
             magic,
