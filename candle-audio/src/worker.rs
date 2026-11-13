@@ -65,6 +65,23 @@ impl RealtimeWorker {
         limits: SessionLimits,
         options: WorkerOptions,
     ) -> Result<Self> {
+        Self::spawn_with_metadata(model, limits, options, false)
+    }
+    /// Spawn with identified transcript segments and clocked audio output.
+    /// `spawn` retains the legacy event representation for existing consumers.
+    pub fn spawn_structured<M: RealtimeModel + Send + 'static>(
+        model: M,
+        limits: SessionLimits,
+        options: WorkerOptions,
+    ) -> Result<Self> {
+        Self::spawn_with_metadata(model, limits, options, true)
+    }
+    fn spawn_with_metadata<M: RealtimeModel + Send + 'static>(
+        model: M,
+        limits: SessionLimits,
+        options: WorkerOptions,
+        structured: bool,
+    ) -> Result<Self> {
         if options.command_capacity == 0
             || options.event_capacity == 0
             || options.poll_interval.is_zero()
@@ -74,6 +91,9 @@ impl RealtimeWorker {
             ));
         }
         let mut session = RealtimeSession::with_limits(model, limits)?;
+        if structured {
+            session = session.with_structured_events()?;
+        }
         let limits = session.limits().clone();
         let input = session.capabilities().input_format;
         let (commands, rx) =

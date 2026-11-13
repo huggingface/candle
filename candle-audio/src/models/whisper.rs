@@ -278,6 +278,8 @@ impl AsrModel for Whisper {
             languages,
             input_formats: vec![self.input_format()],
             max_input_frames: Some(self.max_input_frames()),
+            max_context_tokens: Some(self.model.config().max_target_positions),
+            input_streaming: Some(StreamingMode::Buffered),
             ..Default::default()
         }
     }

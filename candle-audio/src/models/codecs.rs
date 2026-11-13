@@ -172,6 +172,8 @@ impl AudioCodec for EncodecCodec {
         ModelCapabilities {
             model_id: "encodec".into(),
             tasks: vec![AudioTask::Codec],
+            input_streaming: Some(StreamingMode::Buffered),
+            output_streaming: Some(StreamingMode::Buffered),
             input_formats: vec![self.format.audio_format],
             output_formats: vec![self.format.audio_format],
             max_input_frames: Some(self.max_frames),
@@ -365,6 +367,8 @@ impl AudioCodec for MimiCodec {
         ModelCapabilities {
             model_id: "mimi".into(),
             tasks: vec![AudioTask::Codec],
+            input_streaming: Some(StreamingMode::Native),
+            output_streaming: Some(StreamingMode::Native),
             input_formats: vec![self.format.audio_format],
             output_formats: vec![self.format.audio_format],
             max_input_frames: Some(self.max_frames),
@@ -438,6 +442,8 @@ impl AudioCodec for DacCodec {
         ModelCapabilities {
             model_id: "dac".into(),
             tasks: vec![AudioTask::Codec],
+            input_streaming: Some(StreamingMode::Buffered),
+            output_streaming: Some(StreamingMode::Buffered),
             input_formats: vec![self.format.audio_format],
             output_formats: vec![self.format.audio_format],
             max_input_frames: Some(self.max_frames),
@@ -511,6 +517,8 @@ impl AudioCodec for SnacCodec {
         ModelCapabilities {
             model_id: "snac".into(),
             tasks: vec![AudioTask::Codec],
+            input_streaming: Some(StreamingMode::Buffered),
+            output_streaming: Some(StreamingMode::Buffered),
             input_formats: vec![self.format.audio_format],
             output_formats: vec![self.format.audio_format],
             max_input_frames: Some(self.max_frames),

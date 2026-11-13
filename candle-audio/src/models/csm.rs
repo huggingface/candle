@@ -445,6 +445,8 @@ impl Csm {
             voices: vec!["0".into(), "1".into()],
             output_formats: vec![self.format],
             max_text_bytes: Some(MAX_TEXT_BYTES),
+            max_context_tokens: Some(MAX_POSITIONS),
+            output_streaming: Some(StreamingMode::Native),
             accepts_audio_reference: true,
             preserves_conversation: true,
             independent_output: true,

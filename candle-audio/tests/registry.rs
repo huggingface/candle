@@ -74,6 +74,43 @@ fn built_in_registry_advertises_lfm3_native_tasks() {
 }
 
 #[test]
+fn loader_constraints_are_available_without_a_checkpoint_and_match_precision_rejection() {
+    let registry = ModelRegistry::standard();
+    for (family, tasks) in registry.families() {
+        let constraints = registry.constraints(family).unwrap();
+        assert!(constraints
+            .compiled_backends
+            .iter()
+            .any(|name| name == "cpu"));
+        assert_eq!(
+            constraints
+                .activation_dtypes
+                .iter()
+                .any(|name| name == "bf16"),
+            ["voxtral", "gemma4"].contains(&family)
+        );
+        let spec = ModelSpec::new("missing-checkpoint")
+            .with_family(family)
+            .with_dtype(candle::DType::F16);
+        // Precision errors must precede attempts to open model artifacts.
+        assert!(matches!(
+            registry.load(&spec, tasks[0], &Device::Cpu),
+            Err(Error::Unsupported(_))
+        ));
+    }
+    let mut custom = ModelRegistry::new();
+    custom.register(Custom).unwrap();
+    let constraints = custom.constraints("external-test-family").unwrap();
+    assert!(constraints.activation_dtypes.is_empty());
+    assert!(constraints.compiled_backends.is_empty());
+    assert!(custom.constraints("unknown").is_err());
+    let legacy: ModelCapabilities = serde_json::from_str(r#"{"model_id":"legacy"}"#).unwrap();
+    assert_eq!(legacy.model_id, "legacy");
+    assert_eq!(legacy.max_context_tokens, None);
+    assert!(legacy.input_streaming.is_none() && legacy.output_streaming.is_none());
+}
+
+#[test]
 fn malformed_builtin_options_are_rejected_before_weights_or_json_indexing() {
     let registry = ModelRegistry::standard();
     for family in ["quantized_metavoice", "lfm3_audio", "gemma4", "voxtral"] {

@@ -133,6 +133,7 @@ pub enum AudioTask {
 /// A model's declared capabilities, independent of a checkpoint loader or transport.
 /// Empty languages/voices mean unspecified, not universal support.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ModelCapabilities {
     pub model_id: String,
     pub tasks: Vec<AudioTask>,
@@ -142,6 +143,12 @@ pub struct ModelCapabilities {
     pub output_formats: Vec<AudioFormat>,
     pub max_input_frames: Option<usize>,
     pub max_text_bytes: Option<usize>,
+    /// Generative/text context capacity, where declared by the adapter. Audio
+    /// tokens count here for shared-context models. Separate encoders may have
+    /// their own frame limit. This is distinct from a text message byte limit.
+    pub max_context_tokens: Option<usize>,
+    pub input_streaming: Option<StreamingMode>,
+    pub output_streaming: Option<StreamingMode>,
     pub accepts_audio_reference: bool,
     pub preserves_conversation: bool,
     pub independent_output: bool,
@@ -164,7 +171,11 @@ pub enum SegmentStatus {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SegmentMetadata {
+    /// Nonempty identity within one turn. Runtime-generated IDs also contain
+    /// the turn number. Consumers identify a segment by `(turn, segment_id)`.
     pub segment_id: String,
+    /// Starts at zero and increases by one for each update. Corrections after
+    /// a final segment use `SegmentStatus::Revision`.
     pub revision: u64,
     pub speaker: Option<String>,
     pub confidence: Option<f32>,
@@ -307,6 +318,8 @@ pub enum AudioEvent {
     AudioChunk {
         turn: u64,
         audio: AudioBuffer,
+        /// Output-format frame clock relative to the current turn. Gaps are
+        /// allowed; chunks must not overlap or move backwards.
         start_frame: u64,
     },
     TurnCompleted {
@@ -359,6 +372,7 @@ pub trait AsrModel {
             tasks: vec![AudioTask::Recognition],
             input_formats: vec![self.input_format()],
             max_input_frames: Some(self.max_input_frames()),
+            input_streaming: Some(StreamingMode::Buffered),
             ..Default::default()
         }
     }
@@ -403,6 +417,7 @@ pub trait TtsModel {
         ModelCapabilities {
             tasks: vec![AudioTask::Synthesis],
             output_formats: vec![self.output_format()],
+            output_streaming: Some(self.streaming_mode()),
             ..Default::default()
         }
     }
@@ -468,6 +483,8 @@ pub trait RealtimeModel {
             input_formats: caps.input_format.into_iter().collect(),
             output_formats: caps.output_format.into_iter().collect(),
             max_input_frames: caps.max_input_frames_per_turn,
+            input_streaming: caps.input_format.map(|_| caps.streaming),
+            output_streaming: caps.output_streaming,
             ..Default::default()
         }
     }

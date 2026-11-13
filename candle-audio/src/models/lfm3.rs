@@ -294,6 +294,9 @@ impl Lfm3 {
             output_formats: vec![AudioFormat::mono(24000).unwrap()],
             max_input_frames: Some(self.max_audio_frames),
             max_text_bytes: Some(16384),
+            max_context_tokens: Some(self.max_context),
+            input_streaming: Some(StreamingMode::Buffered),
+            output_streaming: Some(StreamingMode::Native),
             ..Default::default()
         }
     }
@@ -311,6 +314,7 @@ impl AsrModel for Lfm3 {
             LANGUAGES.iter().map(|(s, _)| s.to_string()).collect(),
         );
         d.output_formats.clear();
+        d.output_streaming = None;
         d
     }
     fn transcribe(
@@ -406,6 +410,7 @@ impl TtsModel for Lfm3 {
             LANGUAGES.iter().map(|(s, _)| s.to_string()).collect(),
         );
         d.input_formats.clear();
+        d.input_streaming = None;
         d.voices = vec!["female".into(), "male".into()];
         d
     }
@@ -476,6 +481,7 @@ impl RealtimeModel for Lfm3 {
     fn descriptor(&self) -> ModelCapabilities {
         let mut d = self.descriptor_for(vec![AudioTask::Realtime], vec!["en".into()]);
         d.input_formats = vec![self.source];
+        d.input_streaming = Some(StreamingMode::Native);
         d.preserves_conversation = true;
         d
     }

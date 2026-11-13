@@ -147,6 +147,7 @@ impl<M: AudioUnderstandingModel> RealtimeModel for UnderstandingStream<M> {
         descriptor.input_formats = vec![self.source];
         descriptor.max_input_frames = Some(self.max_frames);
         descriptor.output_formats.clear();
+        descriptor.input_streaming = Some(StreamingMode::Buffered);
         descriptor
     }
     fn push_audio(

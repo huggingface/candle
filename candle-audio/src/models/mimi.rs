@@ -117,6 +117,8 @@ impl RealtimeModel for Mimi {
             input_formats: vec![self.input_format],
             output_formats: vec![self.format],
             max_input_frames: self.capabilities().max_input_frames_per_turn,
+            input_streaming: Some(StreamingMode::Native),
+            output_streaming: Some(StreamingMode::Native),
             ..Default::default()
         }
     }

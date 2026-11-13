@@ -2,6 +2,10 @@ use crate::*;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+#[path = "session_events.rs"]
+mod session_events;
+use session_events::EventMetadata;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionState {
     Ready,
@@ -78,6 +82,8 @@ pub struct RealtimeSession<M: RealtimeModel> {
     started: bool,
     committing: bool,
     last_finish_reason: Option<FinishReason>,
+    structured_events: bool,
+    event_metadata: EventMetadata,
 }
 impl<M: RealtimeModel> RealtimeSession<M> {
     pub fn new(model: M, max_chunk_frames: usize, max_turn_frames: usize) -> Result<Self> {
@@ -118,7 +124,21 @@ impl<M: RealtimeModel> RealtimeSession<M> {
             started: false,
             committing: false,
             last_finish_reason: None,
+            structured_events: false,
+            event_metadata: EventMetadata::default(),
         })
+    }
+    /// Emit identified final transcript segments and clocked audio chunks for
+    /// legacy model events. Existing structured events retain their metadata.
+    /// Select this before the first input of a turn; legacy output is the default.
+    pub fn with_structured_events(mut self) -> Result<Self> {
+        if self.state != SessionState::Ready || self.started {
+            return Err(Error::InvalidState(
+                "event metadata must be selected between turns".into(),
+            ));
+        }
+        self.structured_events = true;
+        Ok(self)
     }
     pub fn capabilities(&self) -> RealtimeCapabilities {
         self.model.capabilities()
@@ -164,6 +184,7 @@ impl<M: RealtimeModel> RealtimeSession<M> {
         self.output_frames = 0;
         self.output_text_bytes = 0;
         self.output_events = 0;
+        self.event_metadata = EventMetadata::default();
         self.cancel = CancellationToken::default();
         self.started = false;
         self.committing = false;
@@ -188,6 +209,8 @@ impl<M: RealtimeModel> RealtimeSession<M> {
         let format = self.model.capabilities().output_format;
         let token = &self.cancel;
         let limits = &self.limits;
+        let structured = self.structured_events;
+        let metadata_state = &mut self.event_metadata;
         let (frames, text_bytes, events) = (
             &mut self.output_frames,
             &mut self.output_text_bytes,
@@ -198,6 +221,11 @@ impl<M: RealtimeModel> RealtimeSession<M> {
             .and_then(|()| {
                 action(&mut self.model, token, &mut |event| {
                     token.check()?;
+                    if *events >= limits.max_events_per_turn {
+                        return Err(Error::LimitExceeded(
+                            "model output exceeded turn event budget".into(),
+                        ));
+                    }
                     let (event, nframes, ntext) = match event {
                         AudioEvent::Transcript { transcript, .. } => {
                             validate_transcript(&transcript)?;
@@ -304,6 +332,15 @@ impl<M: RealtimeModel> RealtimeSession<M> {
                     {
                         return Err(Error::LimitExceeded(
                             "model output exceeded turn budget".into(),
+                        ));
+                    }
+                    let (event, extra_text_bytes) = metadata_state.normalize(event, structured)?;
+                    let new_text = new_text.checked_add(extra_text_bytes).ok_or_else(|| {
+                        Error::LimitExceeded("output metadata budget overflow".into())
+                    })?;
+                    if new_text > limits.max_output_text_bytes_per_turn {
+                        return Err(Error::LimitExceeded(
+                            "model output metadata exceeded turn budget".into(),
                         ));
                     }
                     *frames = new_frames;
@@ -648,6 +685,8 @@ impl<M: AsrModel> RealtimeModel for AsrStream<M> {
         descriptor.tasks = vec![AudioTask::Recognition, AudioTask::Realtime];
         descriptor.input_formats = vec![self.input_format];
         descriptor.max_input_frames = None;
+        descriptor.input_streaming = Some(StreamingMode::Windowed);
+        descriptor.output_streaming = None;
         descriptor
     }
     fn push_audio(
@@ -800,6 +839,7 @@ impl<A: RealtimeModel, T: TtsModel, F: FnMut(&Transcript) -> Result<Option<Synth
             AudioTask::Realtime,
         ];
         descriptor.output_formats = vec![self.tts.output_format()];
+        descriptor.output_streaming = Some(self.tts.streaming_mode());
         descriptor.voices = tts.voices;
         descriptor
             .languages
@@ -893,6 +933,8 @@ impl<M: TtsModel> RealtimeModel for TtsStream<M> {
         // push_text. It has neither conditioned input nor independently pollable
         // output, and its default end_turn resets the underlying synthesizer.
         descriptor.input_formats.clear();
+        descriptor.input_streaming = None;
+        descriptor.output_streaming = Some(self.model.streaming_mode());
         descriptor.max_input_frames = None;
         descriptor.preserves_conversation = false;
         descriptor.independent_output = false;

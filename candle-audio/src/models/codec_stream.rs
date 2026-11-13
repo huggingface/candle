@@ -73,6 +73,8 @@ impl RealtimeModel for CodecStream {
             input_formats: vec![self.input],
             output_formats: caps.output_format.into_iter().collect(),
             max_input_frames: caps.max_input_frames_per_turn,
+            input_streaming: Some(StreamingMode::Buffered),
+            output_streaming: Some(StreamingMode::Buffered),
             ..Default::default()
         }
     }

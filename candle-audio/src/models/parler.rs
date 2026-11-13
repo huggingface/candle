@@ -232,6 +232,7 @@ impl TtsModel for Parler {
             languages: vec!["en".into()],
             output_formats: vec![self.output_format()],
             max_text_bytes: Some(65_536),
+            output_streaming: Some(StreamingMode::Buffered),
             ..Default::default()
         }
     }

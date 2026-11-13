@@ -325,6 +325,8 @@ impl AudioUnderstandingModel for Voxtral {
             input_formats: vec![AudioFormat::mono(16000).unwrap()],
             max_input_frames: Some(480000),
             max_text_bytes: Some(16384),
+            max_context_tokens: Some(self.max_context),
+            input_streaming: Some(StreamingMode::Buffered),
             preserves_conversation: true,
             ..Default::default()
         }

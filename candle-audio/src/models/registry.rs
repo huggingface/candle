@@ -75,7 +75,20 @@ impl LoadedModel {
 pub trait ModelLoader: Send + Sync {
     fn family(&self) -> &str;
     fn tasks(&self) -> &[AudioTask];
+    /// Declared loader restrictions, available before loading checkpoint weights.
+    /// Empty lists mean unspecified, not unrestricted support.
+    fn constraints(&self) -> LoaderConstraints {
+        LoaderConstraints::default()
+    }
     fn load(&self, spec: &ModelSpec, task: AudioTask, device: &Device) -> Result<LoadedModel>;
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct LoaderConstraints {
+    pub activation_dtypes: Vec<String>,
+    /// Backends enabled in this build. This is not a checkpoint validation matrix
+    /// or a promise that every model operation supports every dtype on them.
+    pub compiled_backends: Vec<String>,
 }
 #[derive(Clone, Default)]
 pub struct ModelRegistry {
@@ -123,6 +136,14 @@ impl ModelRegistry {
         self.loaders
             .iter()
             .map(|(name, loader)| (name.as_str(), loader.tasks()))
+    }
+    pub fn constraints(&self, family: &str) -> Result<LoaderConstraints> {
+        self.loaders
+            .get(family)
+            .map(|loader| loader.constraints())
+            .ok_or_else(|| {
+                Error::Unsupported(format!("unregistered native model family {family:?}"))
+            })
     }
     pub fn load(&self, spec: &ModelSpec, task: AudioTask, device: &Device) -> Result<LoadedModel> {
         let family = spec.family()?;
@@ -204,6 +225,26 @@ struct BuiltinLoader(&'static str);
 impl ModelLoader for BuiltinLoader {
     fn family(&self) -> &str {
         self.0
+    }
+    fn constraints(&self) -> LoaderConstraints {
+        let mut compiled_backends = vec!["cpu".to_owned()];
+        if cfg!(feature = "vulkan") {
+            compiled_backends.push("vulkan".into());
+        }
+        if cfg!(feature = "cuda") {
+            compiled_backends.push("cuda".into());
+        }
+        if cfg!(feature = "metal") {
+            compiled_backends.push("metal".into());
+        }
+        LoaderConstraints {
+            activation_dtypes: if ["voxtral", "gemma4"].contains(&self.0) {
+                vec!["f32".into(), "bf16".into()]
+            } else {
+                vec!["f32".into()]
+            },
+            compiled_backends,
+        }
     }
     fn tasks(&self) -> &[AudioTask] {
         match self.0 {

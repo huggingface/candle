@@ -742,6 +742,8 @@ impl TtsModel for MetaVoice {
             languages: vec!["en".into()],
             output_formats: vec![self.format],
             max_text_bytes: Some(MAX_TEXT_BYTES),
+            max_context_tokens: Some(self.first_config.block_size),
+            output_streaming: Some(StreamingMode::Buffered),
             accepts_audio_reference: self.speaker_encoder.is_some(),
             ..Default::default()
         }
