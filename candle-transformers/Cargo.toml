@@ -20,6 +20,7 @@ intel-mkl-src = { workspace = true, optional = true }
 num-traits = { workspace = true }
 rand = { workspace = true }
 rayon = { workspace = true }
+rustfft = "6.4.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_plain = { workspace = true }

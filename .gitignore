@@ -50,4 +50,5 @@ bria.wav
 bench_results/
 models/
 !candle-audio/src/models/
+!candle-transformers/src/models/
 target-wip/
