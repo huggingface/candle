@@ -2,7 +2,6 @@
 // https://huggingface.co/facebook/musicgen-small/tree/main
 // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/models/musicgen/modeling_musicgen.py
 // TODO: Add an offline mode.
-// TODO: Add a KV cache.
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
@@ -33,6 +32,10 @@ struct Args {
     #[arg(long)]
     model: Option<String>,
 
+    /// MusicGen's nested text encoder, audio encoder, and decoder configuration.
+    #[arg(long)]
+    config: Option<String>,
+
     /// The tokenizer config.
     #[arg(long)]
     tokenizer: Option<String>,
@@ -53,6 +56,7 @@ fn main() -> Result<()> {
         Some(tokenizer) => std::path::PathBuf::from(tokenizer),
         None => Api::new()?
             .model("facebook/musicgen-small")
+            .with_revision("4c8334b02c6ec4e8664a91979669a501ec497792")
             .get("tokenizer.json")?,
     };
     let mut tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
@@ -65,11 +69,18 @@ fn main() -> Result<()> {
         Some(model) => std::path::PathBuf::from(model),
         None => Api::new()?
             .model("facebook/musicgen-small")
-            .with_revision("refs/pr/13")
+            .with_revision("4c8334b02c6ec4e8664a91979669a501ec497792")
             .get("model.safetensors")?,
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DTYPE, &device)? };
-    let config = GenConfig::small();
+    let config = match args.config {
+        Some(config) => std::path::PathBuf::from(config),
+        None => Api::new()?
+            .model("facebook/musicgen-small")
+            .with_revision("4c8334b02c6ec4e8664a91979669a501ec497792")
+            .get("config.json")?,
+    };
+    let config: GenConfig = serde_json::from_slice(&std::fs::read(config)?)?;
     let mut model = MusicgenForConditionalGeneration::load(vb, config)?;
 
     let tokens = tokenizer
