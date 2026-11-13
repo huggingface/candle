@@ -244,3 +244,38 @@ fn lfm3_native_recognition_synthesis_and_conversation() {
     );
     assert!(frames > 2400);
 }
+
+#[test]
+#[ignore = "requires pinned native LFM3 checkpoint; checks shared-weight forks without generation"]
+fn lfm3_realtime_descriptor_uses_source_frame_clock() {
+    let directory =
+        PathBuf::from(std::env::var("CANDLE_AUDIO_LFM3").expect("set CANDLE_AUDIO_LFM3"));
+    let device = match std::env::var("CANDLE_AUDIO_TEST_DEVICE").as_deref() {
+        Ok("vulkan") => Device::new_vulkan(0).unwrap(),
+        Ok("cpu") | Err(_) => Device::Cpu,
+        Ok(other) => panic!("unsupported test device {other}"),
+    };
+    let model = Lfm3::load(
+        &directory,
+        &device,
+        AudioFormat::mono(16000).unwrap(),
+        &serde_json::json!({}),
+    )
+    .unwrap();
+    for source in [
+        AudioFormat::mono(8000).unwrap(),
+        AudioFormat::mono(16000).unwrap(),
+        AudioFormat::new(48000, 2).unwrap(),
+    ] {
+        let fork = model.fork(source).unwrap();
+        let caps = RealtimeModel::capabilities(&fork);
+        let descriptor = RealtimeModel::descriptor(&fork);
+        assert_eq!(descriptor.input_formats, vec![source]);
+        assert_eq!(
+            descriptor.max_input_frames,
+            Some(source.sample_rate() as usize * 30)
+        );
+        assert_eq!(descriptor.max_input_frames, caps.max_input_frames_per_turn);
+        assert_eq!(AsrModel::descriptor(&fork).max_input_frames, Some(480000));
+    }
+}

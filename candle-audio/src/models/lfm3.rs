@@ -481,6 +481,7 @@ impl RealtimeModel for Lfm3 {
     fn descriptor(&self) -> ModelCapabilities {
         let mut d = self.descriptor_for(vec![AudioTask::Realtime], vec!["en".into()]);
         d.input_formats = vec![self.source];
+        d.max_input_frames = self.capabilities().max_input_frames_per_turn;
         d.input_streaming = Some(StreamingMode::Native);
         d.preserves_conversation = true;
         d
