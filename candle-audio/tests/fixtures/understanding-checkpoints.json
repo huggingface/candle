@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "native_inference": true,
+  "models": [
+    {
+      "repository": "mistralai/Voxtral-Mini-3B-2507",
+      "revision": "3060fe34b35ba5d44202ce9ff3c097642914f8f3",
+      "public_weight_access": true,
+      "family": "voxtral",
+      "test_dtype": "bf16",
+      "components_validated": ["official_weight_names_and_shapes", "cpu_f32_bf16_ops_and_cache", "primary_torch_centered_stft"],
+      "checkpoint_task_validation": "validated_cpu_bf16",
+      "validated_tasks": ["english_recognition", "spanish_recognition", "audio_question_answering", "retained_context_answer", "cancellation_rollback_reset"],
+      "quality_test": "voxtral_native_bf16_recognition_and_audio_understanding",
+      "quality_test_seconds": 338.81,
+      "cpu_threads": 4,
+      "quality_outputs": {
+        "english_asr": "What is 2 + 2?",
+        "spanish_asr": "¡Hola! ¿Cómo estás?",
+        "audio_question_answer": "4",
+        "retained_context_answer": "4",
+        "finish_reason": "end_of_sequence"
+      },
+      "files": [
+        {"file": "model-00001-of-00002.safetensors", "size": 4977385976, "sha256": "1facdc4c5a0e84f2881a59c4756441b7030a1f1036b2124c117540408d0e5fe9"},
+        {"file": "model-00002-of-00002.safetensors", "size": 4379088336, "sha256": "0a103ba715bc0d656e94bf79d637d4f8f0f4fe6d76fb1d4db7ee46c6b940f631"}
+      ]
+    },
+    {
+      "repository": "google/gemma-4-E2B-it",
+      "revision": "4adf15748de9e1a0097b6274cee9c15836c41c37",
+      "public_weight_access": true,
+      "family": "gemma4",
+      "test_dtype": "bf16",
+      "components_validated": ["official_weight_names_and_shapes", "primary_pytorch_text_f32_bf16", "primary_pytorch_audio_f32_bf16", "primary_numpy_magnitude_htk_features", "audio_placeholder_insertion"],
+      "checkpoint_task_validation": "validated_cpu_bf16",
+      "validated_tasks": ["english_recognition", "spanish_recognition", "audio_question_answering", "retained_context_answer", "cancellation_rollback_reset"],
+      "quality_test": "gemma4_native_bf16_recognition_and_audio_understanding",
+      "quality_test_seconds": 124.81,
+      "cpu_threads": 4,
+      "quality_outputs": {
+        "english_asr": "What is two plus two?",
+        "spanish_asr": "Hola, ¿cómo estás?",
+        "audio_question_answer": "Four",
+        "retained_context_answer": "Four",
+        "finish_reason": "end_of_sequence"
+      },
+      "audio_text_weight_bytes": 9909268550,
+      "unused_vision_weight_bytes": 337089408,
+      "files": [
+        {"file": "model.safetensors", "size": 10246621918, "sha256": "2db5482b20d746879bb3ef79b5203e9075a2e2b98f54ec7c2f281c1477ddc550"}
+      ]
+    }
+  ],
+  "quality_tests": {
+    "english_wav": "question-en.wav",
+    "spanish_wav": "question-es.wav",
+    "wav_manifest": "manifest.json",
+    "tasks": ["english_recognition", "spanish_recognition", "audio_question_answering", "retained_context_answer", "cancellation_rollback_reset"],
+    "execution": "Use feature cli, select the explicit ignored checkpoint test, and run with --test-threads=1. Tests require matching local model directory environment variables; they never download or silently skip checkpoints."
+  },
+  "primary_component_reference": {
+    "repository": "huggingface/transformers",
+    "revision": "109a7d19bf667168837f32929e00b791e195d14d",
+    "generator": "gemma4_reference.py",
+    "fixture": "gemma4_reference.json",
+    "shape_fixture": "understanding_weight_shapes.json"
+  }
+}

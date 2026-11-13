@@ -123,7 +123,7 @@ impl Whisper {
         audio: &AudioBuffer,
         options: &TranscriptionOptions,
         cancel: &CancellationToken,
-    ) -> Result<Transcript> {
+    ) -> Result<TranscriptionResult> {
         cancel.check()?;
         if audio.format() != self.input_format() || audio.frames() > self.max_input_frames() {
             return Err(Error::InvalidInput(
@@ -131,10 +131,14 @@ impl Whisper {
             ));
         }
         if audio.is_empty() {
-            return Ok(Transcript {
-                text: String::new(),
-                start: 0.,
-                end: 0.,
+            return Ok(TranscriptionResult {
+                transcript: Transcript {
+                    text: String::new(),
+                    start: 0.,
+                    end: 0.,
+                },
+                finish_reason: FinishReason::Completed,
+                language: options.language.clone(),
             });
         }
         let cfg = self.model.config();
@@ -146,40 +150,54 @@ impl Whisper {
         let encoded = self.model.encode(&mel)?;
         cancel.check()?;
         let mut tokens = vec![self.token(w::SOT_TOKEN)?];
-        let languages: Vec<u32> = self
+        // English-only checkpoints retain language tokens in their tokenizer.
+        // Model vocabulary size, rather than tokenizer contents, distinguishes
+        // OpenAI's monolingual checkpoints from multilingual ones.
+        let multilingual = self.model.config().vocab_size >= 51_865;
+        if !multilingual
+            && (options.translate || options.language.as_deref().is_some_and(|s| s != "en"))
+        {
+            return Err(Error::Unsupported("English-only Whisper supports English transcription, not translation or other languages".into()));
+        }
+        let mut language = (!multilingual).then(|| "en".to_owned());
+        let languages: Vec<(u32, String)> = self
             .tokenizer
             .get_vocab(true)
             .iter()
             .filter_map(|(s, &id)| {
                 let code = s.strip_prefix("<|")?.strip_suffix("|>")?;
                 ((2..=3).contains(&code.len()) && code.bytes().all(|b| b.is_ascii_lowercase()))
-                    .then_some(id)
+                    .then(|| (id, code.to_owned()))
             })
             .collect();
-        if let Some(language) = &options.language {
-            if !languages.is_empty() {
-                tokens.push(self.token(&format!("<|{language}|>"))?);
-            } else if language != "en" {
-                return Err(Error::Unsupported("English-only Whisper model".into()));
+        if multilingual {
+            if let Some(requested) = &options.language {
+                tokens.push(self.token(&format!("<|{requested}|>"))?);
+                language = Some(requested.clone());
+            } else {
+                let x = Tensor::new(tokens.as_slice(), &self.device)?.unsqueeze(0)?;
+                let hidden = self.model.decode(&x, &encoded, true)?;
+                let logits = self.model.logits(&hidden)?.i((0, 0))?.to_vec1::<f32>()?;
+                let (language_id, code) = languages
+                    .into_iter()
+                    .filter(|(id, _)| (*id as usize) < logits.len())
+                    .max_by(|(a, _), (b, _)| {
+                        logits[*a as usize]
+                            .total_cmp(&logits[*b as usize])
+                            .then_with(|| b.cmp(a))
+                    })
+                    .ok_or_else(|| {
+                        Error::InvalidInput("no language tokens fit model vocabulary".into())
+                    })?;
+                tokens.push(language_id);
+                language = Some(code);
             }
-        } else if !languages.is_empty() {
-            let x = Tensor::new(tokens.as_slice(), &self.device)?.unsqueeze(0)?;
-            let hidden = self.model.decode(&x, &encoded, true)?;
-            let logits = self.model.logits(&hidden)?.i((0, 0))?.to_vec1::<f32>()?;
-            let language = languages
-                .into_iter()
-                .filter(|id| (*id as usize) < logits.len())
-                .max_by(|a, b| logits[*a as usize].total_cmp(&logits[*b as usize]))
-                .ok_or_else(|| {
-                    Error::InvalidInput("no language tokens fit model vocabulary".into())
-                })?;
-            tokens.push(language);
+            tokens.push(self.token(if options.translate {
+                w::TRANSLATE_TOKEN
+            } else {
+                w::TRANSCRIBE_TOKEN
+            })?);
         }
-        tokens.push(self.token(if options.translate {
-            w::TRANSLATE_TOKEN
-        } else {
-            w::TRANSCRIBE_TOKEN
-        })?);
         tokens.push(self.token(w::NO_TIMESTAMPS_TOKEN)?);
         let eot = self.token(w::EOT_TOKEN)?;
         let prefix_len = tokens.len();
@@ -194,6 +212,7 @@ impl Whisper {
         let limit = self
             .max_tokens
             .min(cfg.max_target_positions.saturating_sub(prefix_len));
+        let mut finish_reason = FinishReason::Length;
         for step in 0..limit {
             cancel.check()?;
             let x = Tensor::new(tokens.as_slice(), &self.device)?.unsqueeze(0)?;
@@ -207,12 +226,13 @@ impl Whisper {
                 .iter()
                 .enumerate()
                 .filter(|(_, v)| v.is_finite())
-                .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                .max_by(|(ia, a), (ib, b)| a.total_cmp(b).then_with(|| ib.cmp(ia)))
                 .map(|(id, _)| id as u32)
                 .ok_or_else(|| {
                     Error::InvalidInput("Whisper produced no finite token logits".into())
                 })?;
             if next == eot {
+                finish_reason = FinishReason::EndOfSequence;
                 break;
             }
             tokens.push(next);
@@ -222,14 +242,45 @@ impl Whisper {
             .tokenizer
             .decode(&tokens[prefix_len..], true)
             .map_err(|e| Error::InvalidInput(e.to_string()))?;
-        Ok(Transcript {
-            text: text.trim().to_owned(),
-            start: 0.,
-            end: audio.duration(),
+        Ok(TranscriptionResult {
+            transcript: Transcript {
+                text: text.trim().to_owned(),
+                start: 0.,
+                end: audio.duration(),
+            },
+            finish_reason,
+            language,
         })
     }
 }
 impl AsrModel for Whisper {
+    fn descriptor(&self) -> ModelCapabilities {
+        let mut languages = if self.model.config().vocab_size < 51_865 {
+            vec!["en".to_owned()]
+        } else {
+            self.tokenizer
+                .get_vocab(true)
+                .into_iter()
+                .filter_map(|(token, id)| {
+                    let code = token.strip_prefix("<|")?.strip_suffix("|>")?;
+                    ((2..=3).contains(&code.len())
+                        && code.bytes().all(|b| b.is_ascii_lowercase())
+                        && (id as usize) < self.model.config().vocab_size)
+                        .then(|| code.to_owned())
+                })
+                .collect()
+        };
+        languages.sort();
+        languages.dedup();
+        ModelCapabilities {
+            model_id: "whisper".into(),
+            tasks: vec![AudioTask::Recognition],
+            languages,
+            input_formats: vec![self.input_format()],
+            max_input_frames: Some(self.max_input_frames()),
+            ..Default::default()
+        }
+    }
     fn input_format(&self) -> AudioFormat {
         AudioFormat::mono(w::SAMPLE_RATE as u32).unwrap()
     }
@@ -242,6 +293,15 @@ impl AsrModel for Whisper {
         options: &TranscriptionOptions,
         cancel: &CancellationToken,
     ) -> Result<Transcript> {
+        self.transcribe_detailed(audio, options, cancel)
+            .map(|r| r.transcript)
+    }
+    fn transcribe_detailed(
+        &mut self,
+        audio: &AudioBuffer,
+        options: &TranscriptionOptions,
+        cancel: &CancellationToken,
+    ) -> Result<TranscriptionResult> {
         let result = self.infer(audio, options, cancel);
         self.model.reset();
         result

@@ -2,7 +2,7 @@
 //! model instances can also be passed directly to the adapter constructors.
 use super::{
     mimi::Mimi,
-    parler::Parler,
+    parler::{Parler, ParlerSamplingOptions},
     whisper::{Whisper, WhisperModel},
 };
 use crate::*;
@@ -15,18 +15,47 @@ use std::{
 use tokenizers::Tokenizer;
 
 pub fn model_type(directory: &Path) -> Result<String> {
+    if !directory.join("config.json").exists() && directory.join("first_stage.meta.json").exists() {
+        return Ok(if directory.join("first_stage_q4k.gguf").exists()
+            && !directory.join("first_stage.safetensors").exists()
+        {
+            "quantized_metavoice"
+        } else {
+            "metavoice"
+        }
+        .into());
+    }
     let cfg: serde_json::Value =
         serde_json::from_slice(&std::fs::read(directory.join("config.json"))?)?;
-    cfg["model_type"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| Error::InvalidInput("config.json is missing model_type".into()))
+    if let Some(family) = cfg["model_type"].as_str() {
+        return Ok(family.into());
+    }
+    // Older native codec checkpoints predate Transformers' model_type key.
+    if cfg.get("audio_num_codebooks").is_some() && cfg.get("backbone_flavor").is_some() {
+        return Ok("csm".into());
+    }
+    if cfg.get("vq_strides").is_some() && cfg.get("encoder_rates").is_some() {
+        return Ok("snac".into());
+    }
+    if cfg.get("target_bandwidths").is_some() && cfg.get("audio_channels").is_some() {
+        return Ok("encodec".into());
+    }
+    if cfg.get("model_bitrate").is_some()
+        && cfg.get("latent_dim").is_some()
+        && cfg.get("num_codebooks").is_some()
+    {
+        return Ok("dac".into());
+    }
+    Err(Error::InvalidInput(
+        "config.json is missing model_type; applications can set ModelSpec.family explicitly"
+            .into(),
+    ))
 }
-fn tokenizer(directory: &Path) -> Result<Tokenizer> {
+pub(crate) fn tokenizer(directory: &Path) -> Result<Tokenizer> {
     Tokenizer::from_file(directory.join("tokenizer.json"))
         .map_err(|e| Error::InvalidInput(e.to_string()))
 }
-fn weights(directory: &Path) -> Result<Vec<PathBuf>> {
+pub(crate) fn weights(directory: &Path) -> Result<Vec<PathBuf>> {
     let index = directory.join("model.safetensors.index.json");
     if !index.exists() {
         return Ok(vec![directory.join("model.safetensors")]);
@@ -48,7 +77,11 @@ fn weights(directory: &Path) -> Result<Vec<PathBuf>> {
     }
     Ok(files.into_iter().map(|f| directory.join(f)).collect())
 }
-pub fn asr(directory: &Path, device: &Device) -> Result<Box<dyn AsrModel + Send>> {
+pub(crate) fn load_whisper(
+    directory: &Path,
+    device: &Device,
+    options: &serde_json::Value,
+) -> Result<Box<dyn AsrModel + Send>> {
     let kind = model_type(directory)?;
     if kind != "whisper" {
         return Err(Error::Unsupported(format!(
@@ -75,14 +108,21 @@ pub fn asr(directory: &Path, device: &Device) -> Result<Box<dyn AsrModel + Send>
         )?)
     };
     let filters = Whisper::default_mel_filters(model.config().num_mel_bins)?;
-    Ok(Box::new(Whisper::new(
-        model,
-        tokenizer(directory)?,
-        filters,
-        device.clone(),
-    )?))
+    let mut model = Whisper::new(model, tokenizer(directory)?, filters, device.clone())?;
+    if let Some(max_tokens) = options.get("max_tokens").and_then(|v| v.as_u64()) {
+        model.set_max_tokens(
+            usize::try_from(max_tokens)
+                .map_err(|_| Error::InvalidInput("max_tokens overflow".into()))?,
+        )?;
+    }
+    Ok(Box::new(model))
 }
-pub fn tts(directory: &Path, device: &Device) -> Result<Box<dyn TtsModel + Send>> {
+pub(crate) fn load_parler(
+    directory: &Path,
+    device: &Device,
+    options: &serde_json::Value,
+) -> Result<Box<dyn TtsModel + Send>> {
+    let sampling = ParlerSamplingOptions::from_model_options(options)?;
     let kind = model_type(directory)?;
     if kind != "parler_tts" {
         return Err(Error::Unsupported(format!(
@@ -93,17 +133,15 @@ pub fn tts(directory: &Path, device: &Device) -> Result<Box<dyn TtsModel + Send>
     let vb =
         unsafe { VarBuilder::from_mmaped_safetensors(&weights(directory)?, DType::F32, device)? };
     let model = candle_transformers::models::parler_tts::Model::new(&cfg, vb)?;
-    Ok(Box::new(Parler::new(
-        model,
-        &cfg,
-        tokenizer(directory)?,
-        device.clone(),
-    )?))
+    let mut model = Parler::new(model, &cfg, tokenizer(directory)?, device.clone())?;
+    model.set_sampling_options(sampling)?;
+    Ok(Box::new(model))
 }
-pub fn codec(
+pub(crate) fn load_mimi(
     directory: &Path,
     device: &Device,
     input: AudioFormat,
+    options: &serde_json::Value,
 ) -> Result<Box<dyn RealtimeModel + Send>> {
     let kind = model_type(directory)?;
     if kind != "mimi" {
@@ -113,7 +151,99 @@ pub fn codec(
     }
     let vb =
         unsafe { VarBuilder::from_mmaped_safetensors(&weights(directory)?, DType::F32, device)? };
-    let cfg = candle_transformers::models::mimi::Config::v0_1(None);
+    let cfg = mimi_config(directory, options)?;
     let model = candle_transformers::models::mimi::Model::new(cfg, vb)?;
     Ok(Box::new(Mimi::new(model, device.clone(), input)?))
+}
+
+pub fn asr(directory: &Path, device: &Device) -> Result<Box<dyn AsrModel + Send>> {
+    super::registry::ModelRegistry::standard()
+        .asr(&super::registry::ModelSpec::new(directory), device)
+}
+pub fn tts(directory: &Path, device: &Device) -> Result<Box<dyn TtsModel + Send>> {
+    super::registry::ModelRegistry::standard()
+        .tts(&super::registry::ModelSpec::new(directory), device)
+}
+pub fn codec(
+    directory: &Path,
+    device: &Device,
+    input: AudioFormat,
+) -> Result<Box<dyn RealtimeModel + Send>> {
+    super::registry::ModelRegistry::standard().realtime(
+        &super::registry::ModelSpec::new(directory).with_input(input),
+        device,
+    )
+}
+pub fn realtime(
+    directory: &Path,
+    device: &Device,
+    input: AudioFormat,
+) -> Result<Box<dyn RealtimeModel + Send>> {
+    super::registry::ModelRegistry::standard().realtime(
+        &super::registry::ModelSpec::new(directory).with_input(input),
+        device,
+    )
+}
+
+pub(crate) fn mimi_config(
+    directory: &Path,
+    options: &serde_json::Value,
+) -> Result<candle_transformers::models::mimi::Config> {
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join("config.json"))?)?;
+    let count = options
+        .get("num_codebooks")
+        .or_else(|| json.get("num_quantizers"))
+        .or_else(|| json.get("quantizer_n_q"))
+        .or_else(|| json.get("num_codebooks"));
+    let count = match count {
+        None => 16,
+        Some(v) => v
+            .as_u64()
+            .and_then(|v| usize::try_from(v).ok())
+            .filter(|v| (1..=32).contains(v))
+            .ok_or_else(|| Error::InvalidInput("Mimi num_codebooks must be in 1..32".into()))?,
+    };
+    let mut cfg = candle_transformers::models::mimi::Config::v0_1(Some(count));
+    for (name, expected) in [
+        ("sampling_rate", 24000),
+        ("audio_channels", 1),
+        ("hidden_size", 512),
+        ("num_attention_heads", 8),
+        ("num_hidden_layers", 8),
+        ("codebook_size", 2048),
+        ("codebook_dim", 256),
+    ] {
+        if let Some(actual) = json.get(name) {
+            if actual.as_u64() != Some(expected) {
+                return Err(Error::Unsupported(format!(
+                    "Mimi v0.1 {name} must be {expected}, got {actual}"
+                )));
+            }
+        }
+    }
+    if let Some(rate) = json.get("frame_rate") {
+        if rate.as_f64() != Some(12.5) {
+            return Err(Error::Unsupported(
+                "Mimi v0.1 frame_rate must be 12.5".into(),
+            ));
+        }
+    }
+    if let Some(ratios) = json.get("upsampling_ratios") {
+        if ratios != &serde_json::json!([8, 6, 5, 4]) {
+            return Err(Error::Unsupported(
+                "Mimi v0.1 requires upsampling_ratios [8,6,5,4]".into(),
+            ));
+        }
+    }
+    if let Some(max) = json.get("max_position_embeddings") {
+        cfg.transformer.max_seq_len = max
+            .as_u64()
+            .and_then(|v| usize::try_from(v).ok())
+            .filter(|v| *v > 0 && *v <= 8192)
+            .ok_or_else(|| {
+                Error::Unsupported("Mimi position capacity must be in 1..8192".into())
+            })?;
+    }
+    Ok(cfg)
 }

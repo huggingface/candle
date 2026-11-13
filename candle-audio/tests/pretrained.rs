@@ -5,6 +5,17 @@ use candle_audio::{models::load, *};
 use std::{path::PathBuf, time::Instant};
 
 fn fixtures() -> (PathBuf, AudioBuffer, Device) {
+    static LOGS: std::sync::Once = std::sync::Once::new();
+    LOGS.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "warn".into()),
+            )
+            .with_writer(std::io::stderr)
+            .try_init();
+    });
+
     let root = PathBuf::from(
         std::env::var("CANDLE_AUDIO_TEST_MODELS").expect("set CANDLE_AUDIO_TEST_MODELS"),
     );
@@ -179,7 +190,20 @@ fn parler_synthesizes_finite_non_silent_audio_and_accepts_cancellation() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     let chunks = events.iter().filter(|e| e["type"] == "audio").count();
-    let reported_frames: u64 = events.iter().filter_map(|e| e["frames"].as_u64()).sum();
+    let reported_frames: u64 = events
+        .iter()
+        .filter(|e| e["type"] == "audio")
+        .filter_map(|e| e["frames"].as_u64())
+        .sum();
+    let completed = events
+        .iter()
+        .find(|e| e["type"] == "synthesis_completed")
+        .expect("CLI must expose completion metadata");
+    assert_eq!(completed["frames"].as_u64(), Some(reported_frames));
+    assert!(matches!(
+        completed["finish_reason"].as_str(),
+        Some("end_of_sequence" | "length")
+    ));
     let mut wav = hound::WavReader::open(&path).unwrap();
     assert_eq!(wav.spec().sample_rate, 44100);
     assert_eq!(wav.spec().channels, 1);
@@ -285,4 +309,149 @@ fn mimi_emits_before_commit_flushes_exact_duration_and_resets_between_turns() {
         turns[0].len()
     );
     assert!(max_error < 1e-3, "codec state leaked between turns");
+}
+
+#[test]
+#[ignore = "requires native Whisper and Parler checkpoints; real speech-pipeline validation"]
+fn whisper_response_parler_pipeline_produces_recognizable_speech_and_recovers_after_cancel() {
+    let (root, _, device) = fixtures();
+    let mut wav = hound::WavReader::open(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/question-en.wav"
+    ))
+    .unwrap();
+    let audio = AudioBuffer::new(
+        AudioFormat::mono(16000).unwrap(),
+        wav.samples::<i16>()
+            .map(|v| v.unwrap() as f32 / 32768.)
+            .collect(),
+    )
+    .unwrap();
+    let recognizer = load::asr(&root.join("whisper-tiny"), &device).unwrap();
+    let stream = AsrStream::new(
+        recognizer,
+        audio.format(),
+        audio.frames(),
+        TranscriptionOptions {
+            language: Some("en".into()),
+            translate: false,
+        },
+    )
+    .unwrap();
+    // Parler's published generation defaults sample rather than use argmax;
+    // this phrase also reaches Length in the official greedy reference.
+    let synthesizer=candle_audio::models::registry::ModelRegistry::standard().tts(
+        &candle_audio::models::registry::ModelSpec::new(root.join("parler-tts-mini-v1"))
+            .with_options(serde_json::json!({"temperature":1.0,"top_k":50})),&device).unwrap();
+    let pipeline = SpeechPipeline::new(stream, synthesizer, |transcript: &Transcript| {
+        eprintln!(
+            "Native pipeline recognized {:?}; starting response synthesis",
+            transcript.text
+        );
+        assert!(
+            transcript.text.to_lowercase().contains("plus"),
+            "unexpected recognition {}",
+            transcript.text
+        );
+        let mut request = SynthesisRequest::new("The answer is four.");
+        request.max_steps = 512;
+        Ok(Some(request))
+    });
+    let mut session = RealtimeSession::new(pipeline, audio.frames(), audio.frames() * 2).unwrap();
+    let mut samples = Vec::new();
+    let mut texts = Vec::new();
+    let mut completed = 0;
+    let mut sink = |event| {
+        match event {
+            AudioEvent::Audio { audio, .. } => {
+                assert_eq!(audio.format().sample_rate(), 44100);
+                samples.extend_from_slice(audio.samples());
+            }
+            AudioEvent::Text { text, .. } => {
+                eprintln!("Native pipeline response text {text:?}");
+                texts.push(text);
+            }
+            AudioEvent::TurnCompleted { .. } => completed += 1,
+            _ => {}
+        }
+        Ok(())
+    };
+    session.push_audio(&audio, &mut sink).unwrap();
+    session.commit(&mut sink).unwrap();
+    assert_eq!(completed, 1);
+    assert_eq!(texts, ["The answer is four."]);
+    assert_eq!(session.last_finish_reason(),Some(FinishReason::EndOfSequence));
+    assert!(samples.len() > 4410 && samples.iter().all(|v| v.is_finite()));
+    eprintln!(
+        "Native pipeline synthesized {} mono44.1k frames, finish={:?}",
+        samples.len(),
+        session.last_finish_reason()
+    );
+    if let Ok(directory) = std::env::var("CANDLE_AUDIO_TEST_OUTPUT_DIR") {
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = PathBuf::from(directory).join("whisper-parler-pipeline.wav");
+        let mut writer = hound::WavWriter::create(
+            path,
+            hound::WavSpec {
+                channels: 1,
+                sample_rate: 44100,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            },
+        )
+        .unwrap();
+        for &sample in &samples {
+            writer
+                .write_sample((sample.clamp(-1., 1.) * 32767.).round() as i16)
+                .unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+    let output = AudioConverter::convert(
+        &AudioBuffer::new(AudioFormat::mono(44100).unwrap(), samples).unwrap(),
+        16000,
+    )
+    .unwrap();
+    let mut verifier = load::asr(&root.join("whisper-tiny"), &device).unwrap();
+    let transcript = verifier
+        .transcribe(
+            &output,
+            &TranscriptionOptions {
+                language: Some("en".into()),
+                translate: false,
+            },
+            &CancellationToken::default(),
+        )
+        .unwrap();
+    drop(verifier);
+    let cancel = session.cancellation_token();
+    let mut cancelled_frames = 0;
+    let result = session.push_audio(&audio, &mut |event| {
+        if let AudioEvent::Audio { audio, .. } = event {
+            cancelled_frames += audio.frames();
+            cancel.cancel();
+        }
+        Ok(())
+    });
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert!(cancelled_frames > 0);
+    session.cancel(&mut |_| Ok(())).unwrap();
+    assert_eq!(session.state(), SessionState::Ready);
+    assert!(!session.cancellation_token().is_cancelled());
+    // A short new input proves that the recognizer/converter can accept a new turn.
+    session
+        .push_audio(
+            &AudioBuffer::new(audio.format(), audio.samples()[..160].to_vec()).unwrap(),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+    session.cancel(&mut |_| Ok(())).unwrap();
+    // Tiny ASR may spell the English homophone "four" as "for". Require the
+    // complete response and final voiced token; the omitted-token greedy case
+    // ("The answer is...") is rejected. LFM3 independently verified this audio
+    // as "The answer is four." during checkpoint validation.
+    let heard=transcript.text.trim_end_matches(|c:char|!c.is_alphanumeric()).to_lowercase();
+    assert!(matches!(heard.as_str(),"the answer is four"|"the answer is 4"|"the answer is for"),
+        "independent pipeline output recognition: {}",transcript.text);
+    eprintln!("Native Whisper→response→Parler: output={:?}; cancellation after{cancelled_frames}frames and fresh input recovery passed",transcript.text);
 }

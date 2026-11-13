@@ -110,6 +110,16 @@ impl Mimi {
     }
 }
 impl RealtimeModel for Mimi {
+    fn descriptor(&self) -> ModelCapabilities {
+        ModelCapabilities {
+            model_id: "mimi".into(),
+            tasks: vec![AudioTask::Codec, AudioTask::Realtime],
+            input_formats: vec![self.input_format],
+            output_formats: vec![self.format],
+            max_input_frames: self.capabilities().max_input_frames_per_turn,
+            ..Default::default()
+        }
+    }
     fn capabilities(&self) -> RealtimeCapabilities {
         RealtimeCapabilities {
             input_format: Some(self.input_format),

@@ -166,7 +166,7 @@ fn irregular_chunks_preserve_samples_timestamps_and_final_short_segment() {
     assert_eq!(transcripts[2].end, 2501. / 16000.);
     assert!(matches!(
         events.last(),
-        Some(AudioEvent::TurnCompleted { turn: 0 })
+        Some(AudioEvent::TurnCompleted { turn: 0, .. })
     ));
 }
 
@@ -295,7 +295,10 @@ fn recognition_and_synthesis_compose_without_model_specific_runtime_dispatch() {
     session.finish(&mut sink).unwrap();
     assert!(matches!(&events[1], AudioEvent::Text{turn:0,text} if text=="heard 12 frames"));
     assert!(matches!(&events[2], AudioEvent::Audio{turn:0,audio} if audio.frames()==240));
-    assert!(matches!(events[3], AudioEvent::TurnCompleted { turn: 0 }));
+    assert!(matches!(
+        events[3],
+        AudioEvent::TurnCompleted { turn: 0, .. }
+    ));
 }
 
 #[test]
@@ -373,7 +376,7 @@ fn text_sessions_use_the_same_lifecycle_and_do_not_replay_previous_utterances() 
     assert!(matches!(&events[3],AudioEvent::Text{turn:1,text} if text=="goodbye"));
     assert!(matches!(
         events.last(),
-        Some(AudioEvent::TurnCompleted { turn: 1 })
+        Some(AudioEvent::TurnCompleted { turn: 1, .. })
     ));
 }
 

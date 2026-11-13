@@ -5,18 +5,35 @@
 //! No network service, microphone, or speaker is required by the library.
 #![doc = include_str!("../README.md")]
 
+mod codec;
+mod generation;
+#[cfg(feature = "live-io")]
+pub mod live;
 pub mod models;
 mod pcm;
 mod session;
+mod tasks;
+mod worker;
+pub use generation::{AudioGenerationModel, AudioGenerationRequest};
+pub use tasks::{
+    AudioUnderstandingModel, AudioUnderstandingRequest, AudioUnderstandingResult,
+    UnderstandingStream,
+};
 
-pub use pcm::{AudioBuffer, AudioConverter, AudioFormat};
-pub use session::{AsrStream, RealtimeSession, SessionState, SpeechPipeline, TtsStream};
+pub use codec::{AudioCodec, AudioCodes, CodecFormat, CodecSegment, MultiScaleAudioCodes};
+pub use pcm::{AudioBuffer, AudioConverter, AudioFormat, ChannelPolicy};
+pub use session::{
+    AsrStream, RealtimeSession, SessionLimits, SessionState, SourceAudioPolicy, SpeechPipeline,
+    TtsStream,
+};
+pub use worker::{RealtimeWorker, WorkerCommand, WorkerEvent, WorkerOptions};
 
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
+use std::time::{Duration, Instant};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -30,6 +47,8 @@ pub enum Error {
     LimitExceeded(String),
     #[error("audio operation cancelled")]
     Cancelled,
+    #[error("audio operation deadline exceeded")]
+    DeadlineExceeded,
     #[error(transparent)]
     Model(#[from] candle::Error),
     #[error(transparent)]
@@ -42,23 +61,113 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Clone this handle into another thread to interrupt a running model call.
 /// A cancelled token stays cancelled; create a new token for another request.
+#[derive(Default, Debug)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    deadline: Mutex<Option<Instant>>,
+}
 #[derive(Clone, Default, Debug)]
-pub struct CancellationToken(Arc<AtomicBool>);
+pub struct CancellationToken(Arc<CancellationState>);
 
 impl CancellationToken {
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.cancelled.store(true, Ordering::Release);
     }
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.cancelled.load(Ordering::Acquire)
+    }
+    pub fn with_timeout(timeout: Duration) -> Self {
+        let token = Self::default();
+        token.set_deadline(Instant::now().checked_add(timeout));
+        token
+    }
+    pub fn set_deadline(&self, deadline: Option<Instant>) {
+        *self.0.deadline.lock().unwrap_or_else(|e| e.into_inner()) = deadline;
     }
     pub fn check(&self) -> Result<()> {
         if self.is_cancelled() {
-            Err(Error::Cancelled)
-        } else {
-            Ok(())
+            return Err(Error::Cancelled);
         }
+        if self
+            .0
+            .deadline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err(Error::DeadlineExceeded);
+        }
+        Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FinishReason {
+    #[default]
+    Completed,
+    EndOfSequence,
+    Length,
+    Cancelled,
+    Deadline,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TranscriptionResult {
+    pub transcript: Transcript,
+    pub finish_reason: FinishReason,
+    pub language: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioTask {
+    Recognition,
+    Synthesis,
+    Realtime,
+    Codec,
+    Understanding,
+    AudioGeneration,
+}
+
+/// A model's declared capabilities, independent of a checkpoint loader or transport.
+/// Empty languages/voices mean unspecified, not universal support.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ModelCapabilities {
+    pub model_id: String,
+    pub tasks: Vec<AudioTask>,
+    pub languages: Vec<String>,
+    pub voices: Vec<String>,
+    pub input_formats: Vec<AudioFormat>,
+    pub output_formats: Vec<AudioFormat>,
+    pub max_input_frames: Option<usize>,
+    pub max_text_bytes: Option<usize>,
+    pub accepts_audio_reference: bool,
+    pub preserves_conversation: bool,
+    pub independent_output: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PollStatus {
+    Idle,
+    Pending,
+    Complete,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentStatus {
+    Partial,
+    Final,
+    Revision,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SegmentMetadata {
+    pub segment_id: String,
+    pub revision: u64,
+    pub speaker: Option<String>,
+    pub confidence: Option<f32>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -97,6 +206,51 @@ impl SynthesisRequest {
             seed: 0,
             max_steps: 512,
         }
+    }
+}
+
+/// An audio example with optional text and speaker identity for models that
+/// support voice conditioning or conversational speech context.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AudioReference {
+    pub audio: AudioBuffer,
+    pub transcript: Option<String>,
+    pub speaker_id: Option<u32>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConditionedSynthesisRequest {
+    pub request: SynthesisRequest,
+    pub references: Vec<AudioReference>,
+    pub speaker_embedding: Option<Vec<f32>>,
+    pub speaker_id: Option<u32>,
+}
+impl ConditionedSynthesisRequest {
+    pub fn new(request: SynthesisRequest) -> Self {
+        Self {
+            request,
+            references: Vec::new(),
+            speaker_embedding: None,
+            speaker_id: None,
+        }
+    }
+    pub fn validate(&self) -> Result<()> {
+        if self.speaker_embedding.as_ref().is_some_and(|embedding| {
+            embedding.is_empty() || embedding.iter().any(|value| !value.is_finite())
+        }) {
+            return Err(Error::InvalidInput(
+                "speaker embedding must be nonempty and finite".into(),
+            ));
+        }
+        if self
+            .references
+            .iter()
+            .any(|reference| reference.audio.is_empty())
+        {
+            return Err(Error::InvalidInput(
+                "audio references must not be empty".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -139,8 +293,28 @@ pub enum AudioEvent {
         turn: u64,
         audio: AudioBuffer,
     },
+    TranscriptSegment {
+        turn: u64,
+        transcript: Transcript,
+        status: SegmentStatus,
+        metadata: SegmentMetadata,
+    },
+    TranscriptionMetadata {
+        turn: u64,
+        finish_reason: FinishReason,
+        language: Option<String>,
+    },
+    AudioChunk {
+        turn: u64,
+        audio: AudioBuffer,
+        start_frame: u64,
+    },
     TurnCompleted {
         turn: u64,
+        /// Completion of the model response, including explicit budget truncation.
+        /// Legacy serialized events without this field deserialize as Completed.
+        #[serde(default)]
+        finish_reason: FinishReason,
     },
     Cancelled {
         turn: u64,
@@ -168,6 +342,26 @@ pub trait AsrModel {
         cancel: &CancellationToken,
     ) -> Result<Transcript>;
     fn reset(&mut self) -> Result<()>;
+    fn transcribe_detailed(
+        &mut self,
+        audio: &AudioBuffer,
+        options: &TranscriptionOptions,
+        cancel: &CancellationToken,
+    ) -> Result<TranscriptionResult> {
+        Ok(TranscriptionResult {
+            transcript: self.transcribe(audio, options, cancel)?,
+            finish_reason: FinishReason::Completed,
+            language: None,
+        })
+    }
+    fn descriptor(&self) -> ModelCapabilities {
+        ModelCapabilities {
+            tasks: vec![AudioTask::Recognition],
+            input_formats: vec![self.input_format()],
+            max_input_frames: Some(self.max_input_frames()),
+            ..Default::default()
+        }
+    }
 }
 
 /// A synthesizer emits `AudioEvent::Audio` chunks. For native interleaved text
@@ -181,7 +375,37 @@ pub trait TtsModel {
         cancel: &CancellationToken,
         sink: &mut dyn EventSink,
     ) -> Result<()>;
+    fn synthesize_conditioned(
+        &mut self,
+        request: &ConditionedSynthesisRequest,
+        cancel: &CancellationToken,
+        sink: &mut dyn EventSink,
+    ) -> Result<()> {
+        request.validate()?;
+        if !request.references.is_empty()
+            || request.speaker_embedding.is_some()
+            || request.speaker_id.is_some()
+        {
+            return Err(Error::Unsupported(
+                "synthesizer does not implement audio/speaker conditioning".into(),
+            ));
+        }
+        self.synthesize(&request.request, cancel, sink)
+    }
     fn reset(&mut self) -> Result<()>;
+    /// Why the most recent successful synthesis stopped. Adapters that can
+    /// distinguish EOS from an exhausted generation budget should override this.
+    /// Read this after `synthesize` or `synthesize_conditioned` succeeds.
+    fn finish_reason(&self) -> FinishReason {
+        FinishReason::Completed
+    }
+    fn descriptor(&self) -> ModelCapabilities {
+        ModelCapabilities {
+            tasks: vec![AudioTask::Synthesis],
+            output_formats: vec![self.output_format()],
+            ..Default::default()
+        }
+    }
 }
 
 /// Native streaming, duplex, codec, or composed speech models share this
@@ -205,10 +429,48 @@ pub trait RealtimeModel {
         ))
     }
     /// Flush all resampler/model tails and emit the remaining output. The
-    /// session calls `reset` before accepting another turn. Direct trait callers
-    /// must do the same. This must not discard a short final chunk.
+    /// session calls `end_turn` before accepting another turn. Stateful models
+    /// override that hook to retain conversation context. This must not discard a short final chunk.
     fn commit(&mut self, cancel: &CancellationToken, sink: &mut dyn EventSink) -> Result<()>;
+    /// Legacy complete-state reset. New stateful models should also implement
+    /// `end_turn`, `cancel_turn`, and `reset_conversation` explicitly.
     fn reset(&mut self) -> Result<()>;
+    /// Release acoustic turn state. The default preserves stateless adapter behavior.
+    fn end_turn(&mut self) -> Result<()> {
+        self.reset()
+    }
+    /// Cancel unfinished turn work. Stateful adapters can retain committed history.
+    fn cancel_turn(&mut self) -> Result<()> {
+        self.end_turn()
+    }
+    fn reset_conversation(&mut self) -> Result<()> {
+        self.reset()
+    }
+    /// Stepwise models may have output after `commit` or between incoming chunks.
+    fn output_pending(&self) -> bool {
+        false
+    }
+    fn poll_output(
+        &mut self,
+        cancel: &CancellationToken,
+        _sink: &mut dyn EventSink,
+    ) -> Result<PollStatus> {
+        cancel.check()?;
+        Ok(PollStatus::Complete)
+    }
+    fn finish_reason(&self) -> FinishReason {
+        FinishReason::Completed
+    }
+    fn descriptor(&self) -> ModelCapabilities {
+        let caps = self.capabilities();
+        ModelCapabilities {
+            tasks: vec![AudioTask::Realtime],
+            input_formats: caps.input_format.into_iter().collect(),
+            output_formats: caps.output_format.into_iter().collect(),
+            max_input_frames: caps.max_input_frames_per_turn,
+            ..Default::default()
+        }
+    }
 }
 
 impl<T: AsrModel + ?Sized> AsrModel for Box<T> {
@@ -225,6 +487,17 @@ impl<T: AsrModel + ?Sized> AsrModel for Box<T> {
         cancel: &CancellationToken,
     ) -> Result<Transcript> {
         (**self).transcribe(audio, options, cancel)
+    }
+    fn transcribe_detailed(
+        &mut self,
+        audio: &AudioBuffer,
+        options: &TranscriptionOptions,
+        cancel: &CancellationToken,
+    ) -> Result<TranscriptionResult> {
+        (**self).transcribe_detailed(audio, options, cancel)
+    }
+    fn descriptor(&self) -> ModelCapabilities {
+        (**self).descriptor()
     }
     fn reset(&mut self) -> Result<()> {
         (**self).reset()
@@ -244,6 +517,20 @@ impl<T: TtsModel + ?Sized> TtsModel for Box<T> {
         sink: &mut dyn EventSink,
     ) -> Result<()> {
         (**self).synthesize(request, cancel, sink)
+    }
+    fn synthesize_conditioned(
+        &mut self,
+        request: &ConditionedSynthesisRequest,
+        cancel: &CancellationToken,
+        sink: &mut dyn EventSink,
+    ) -> Result<()> {
+        (**self).synthesize_conditioned(request, cancel, sink)
+    }
+    fn finish_reason(&self) -> FinishReason {
+        (**self).finish_reason()
+    }
+    fn descriptor(&self) -> ModelCapabilities {
+        (**self).descriptor()
     }
     fn reset(&mut self) -> Result<()> {
         (**self).reset()
@@ -274,5 +561,30 @@ impl<T: RealtimeModel + ?Sized> RealtimeModel for Box<T> {
     }
     fn reset(&mut self) -> Result<()> {
         (**self).reset()
+    }
+    fn end_turn(&mut self) -> Result<()> {
+        (**self).end_turn()
+    }
+    fn cancel_turn(&mut self) -> Result<()> {
+        (**self).cancel_turn()
+    }
+    fn reset_conversation(&mut self) -> Result<()> {
+        (**self).reset_conversation()
+    }
+    fn output_pending(&self) -> bool {
+        (**self).output_pending()
+    }
+    fn poll_output(
+        &mut self,
+        cancel: &CancellationToken,
+        sink: &mut dyn EventSink,
+    ) -> Result<PollStatus> {
+        (**self).poll_output(cancel, sink)
+    }
+    fn finish_reason(&self) -> FinishReason {
+        (**self).finish_reason()
+    }
+    fn descriptor(&self) -> ModelCapabilities {
+        (**self).descriptor()
     }
 }
