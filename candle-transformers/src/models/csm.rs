@@ -448,6 +448,20 @@ impl Model {
         input_pos: usize,
         lp: &mut LogitsProcessor,
     ) -> Result<Vec<u32>> {
+        self.generate_frame_with_callback(tokens, tokens_mask, input_pos, lp, |_| Ok(()))
+    }
+
+    /// Generate a frame while checking cooperative cancellation before the
+    /// backbone and between audio-codebook decoder steps.
+    pub fn generate_frame_with_callback(
+        &mut self,
+        tokens: &Tensor,
+        tokens_mask: &Tensor,
+        input_pos: usize,
+        lp: &mut LogitsProcessor,
+        mut check: impl FnMut(usize) -> Result<()>,
+    ) -> Result<Vec<u32>> {
+        check(0)?;
         let (b_sz, seq_len, _cb_plus_one) = tokens.dims3()?;
         let audio_tokens = tokens.narrow(2, 0, self.config.audio_num_codebooks)?;
         let text_tokens = tokens.narrow(2, self.config.audio_num_codebooks, 1)?;
@@ -482,6 +496,7 @@ impl Model {
         self.decoder.clear_kv_cache();
         let mut decoder_pos = 0;
         for i in 1..self.config.audio_num_codebooks {
+            check(i)?;
             let proj_h = curr_h.apply(&self.projection)?;
             let decoder_h = self.decoder.forward(&proj_h, decoder_pos)?;
             decoder_pos += curr_h.dim(1)?;
@@ -529,5 +544,73 @@ impl Model {
         let tokens = Tensor::cat(&tokens, 1)?;
         let mask = Tensor::cat(&mask, 1)?;
         Ok((tokens, mask))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A deterministic tensor fixture exercises the native frame generator
+    // without allocating the checkpoint's 1B backbone. This is a component
+    // contract test, not evidence of pretrained speech quality.
+    fn tiny_model() -> Result<Model> {
+        let device = Device::Cpu;
+        let vb = VarBuilder::zeros(DType::F32, &device);
+        let mut llama = LlamaConfig::from_flavor(Flavor::Llama100M);
+        llama.num_layers = 2;
+        llama.num_heads = 2;
+        llama.num_kv_heads = 1;
+        llama.embed_dim = 8;
+        llama.max_seq_len = 32;
+        llama.intermediate_dim = 16;
+        let config = Config {
+            audio_num_codebooks: 32,
+            audio_vocab_size: 8,
+            backbone_flavor: Flavor::Llama1B,
+            decoder_flavor: Flavor::Llama100M,
+            text_vocab_size: 128,
+        };
+        Ok(Model {
+            backbone: LlamaModel::new(&llama, vb.pp("backbone"))?,
+            decoder: LlamaModel::new(&llama, vb.pp("decoder"))?,
+            codebook0_head: linear_b(8, 8, false, vb.pp("c0"))?,
+            audio_embeddings: embedding(32 * 8, 8, vb.pp("audio"))?,
+            text_embeddings: embedding(128, 8, vb.pp("text"))?,
+            projection: linear_b(8, 8, false, vb.pp("projection"))?,
+            audio_head: Tensor::zeros((31, 8, 8), DType::F32, &device)?,
+            config,
+        })
+    }
+
+    #[test]
+    fn native_csm_masks_frame_cancellation_and_cache_recovery() -> Result<()> {
+        let mut model = tiny_model()?;
+        let (tokens, mask) = model.text_tokens_and_mask(&[5, 6])?;
+        assert_eq!(tokens.dims(), [1, 2, 33]);
+        let mask_values = mask.flatten_all()?.to_vec1::<u8>()?;
+        assert_eq!(mask_values.iter().map(|v| *v as usize).sum::<usize>(), 2);
+        assert_eq!((mask_values[32], mask_values[65]), (1, 1));
+        let mut sampler = LogitsProcessor::new(0, None, None);
+        let mut checkpoints = Vec::new();
+        let result =
+            model.generate_frame_with_callback(&tokens, &mask, 0, &mut sampler, |codebook| {
+                checkpoints.push(codebook);
+                if codebook == 1 {
+                    candle::bail!("cancelled CSM component fixture");
+                }
+                Ok(())
+            });
+        assert!(result.is_err());
+        assert_eq!(checkpoints, [0, 1]);
+        model.clear_kv_cache();
+        let frame = model.generate_frame(&tokens, &mask, 0, &mut sampler)?;
+        assert_eq!(frame, vec![0; 32]);
+        let (audio_tokens, audio_mask) = model.audio_tokens_and_mask(frame)?;
+        assert_eq!(audio_tokens.dims(), [1, 1, 33]);
+        let audio_mask = audio_mask.flatten_all()?.to_vec1::<u8>()?;
+        assert!(audio_mask[..32].iter().all(|v| *v == 1));
+        assert_eq!(audio_mask[32], 0);
+        Ok(())
     }
 }

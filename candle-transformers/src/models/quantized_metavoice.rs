@@ -230,6 +230,18 @@ pub mod transformer {
         }
 
         pub fn forward(&mut self, xs: &Tensor, spk_emb: &Tensor, pos: usize) -> Result<Tensor> {
+            self.forward_with_callback(xs, spk_emb, pos, |_| Ok(()))
+        }
+
+        /// Check cooperative cancellation before each quantized transformer layer.
+        pub fn forward_with_callback(
+            &mut self,
+            xs: &Tensor,
+            spk_emb: &Tensor,
+            pos: usize,
+            mut check: impl FnMut(usize) -> Result<()>,
+        ) -> Result<Tensor> {
+            check(0)?;
             let _enter = self.span.enter();
             let (_b_sz, seqlen) = xs.dims2()?;
             let mask: Vec<_> = (0..seqlen)
@@ -247,7 +259,8 @@ pub mod transformer {
                         .broadcast_mul(&self.spk_cond_mask)?,
                 )?;
             let mask = mask.to_dtype(xs.dtype())?;
-            for layer in self.layers.iter_mut() {
+            for (index, layer) in self.layers.iter_mut().enumerate() {
+                check(index)?;
                 xs = layer.forward(&xs, pos, &mask)?
             }
             xs.narrow(1, seqlen - 1, 1)?
