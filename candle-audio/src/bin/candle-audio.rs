@@ -5,12 +5,15 @@ use candle_audio::{
     *,
 };
 use clap::{Parser, Subcommand, ValueEnum};
+#[path = "audio_cli/input.rs"]
+mod audio_input;
+use audio_input::{AudioInputOptions, AudioSource, ReferenceInputOptions};
 #[cfg(feature = "live-io")]
 #[path = "audio_cli/live.rs"]
 mod live_cli;
 use std::{
     fs::File,
-    io::{BufReader, BufWriter, Read, Write},
+    io::{BufWriter, Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -160,13 +163,15 @@ enum Command {
         #[command(subcommand)]
         command: CodecCommand,
     },
-    /// Transcribe WAV audio using bounded windows and automatic context rollover.
+    /// Transcribe WAV or raw PCM using bounded windows and context rollover.
     #[command(alias = "asr")]
     Transcribe {
         #[arg(long)]
         model: PathBuf,
         #[arg(long)]
         input: PathBuf,
+        #[command(flatten)]
+        input_options: AudioInputOptions,
         #[arg(long)]
         language: Option<String>,
         #[arg(long)]
@@ -224,13 +229,17 @@ enum Command {
         top_p: Option<f64>,
         #[arg(long)]
         audio_reference: Option<PathBuf>,
+        #[command(flatten)]
+        reference_options: ReferenceInputOptions,
     },
-    /// Ask a native audio understanding model about one or more WAV clips.
+    /// Ask a native audio understanding model about one or more WAV/raw clips.
     Understand {
         #[arg(long)]
         model: PathBuf,
         #[arg(long, required=true, num_args=1..)]
         input: Vec<PathBuf>,
+        #[command(flatten)]
+        input_options: AudioInputOptions,
         #[arg(long)]
         prompt: String,
         #[arg(long, default_value_t = 512)]
@@ -238,12 +247,14 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
-    /// Stream WAV chunks through any registered realtime model or speech pipeline.
+    /// Stream WAV/raw chunks through a realtime model or speech pipeline.
     Realtime {
         #[arg(long)]
         model: PathBuf,
         #[arg(long)]
         input: PathBuf,
+        #[command(flatten)]
+        input_options: AudioInputOptions,
         #[arg(long)]
         output: Option<PathBuf>,
         /// Optional synthesizer to read back recognized segments.
@@ -273,12 +284,14 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum CodecCommand {
-    /// Encode up to 30 seconds of WAV into JSON codebooks, preserving ragged scales.
+    /// Encode up to 30 seconds of WAV/raw PCM into JSON codebooks.
     Encode {
         #[arg(long)]
         model: PathBuf,
         #[arg(long)]
         input: PathBuf,
+        #[command(flatten)]
+        input_options: AudioInputOptions,
         #[arg(long)]
         output: PathBuf,
         #[arg(long)]
@@ -327,10 +340,10 @@ fn read_conditioning(path: &Path) -> Result<ConditionedSynthesisRequest> {
     Ok(request)
 }
 const MAX_CODEC_JSON_BYTES: usize = 32 * 1024 * 1024;
-const MAX_CODEC_INPUT_SAMPLES: usize = 16_000_000;
-fn read_codec_audio(path: &Path) -> Result<AudioBuffer> {
-    let mut source = WavSource::open(path)?;
-    let frames = source.reader.duration() as usize;
+const MAX_CODEC_INPUT_SAMPLES: usize = audio_input::MAX_INPUT_SAMPLES;
+fn read_codec_audio(path: &Path, options: &AudioInputOptions) -> Result<AudioBuffer> {
+    let mut source = AudioSource::open(path, options)?;
+    let frames = source.total_frames();
     let maximum = source.format.sample_rate() as usize * 30;
     anyhow::ensure!(
         frames > 0 && frames <= maximum,
@@ -343,7 +356,7 @@ fn read_codec_audio(path: &Path) -> Result<AudioBuffer> {
         "codec source exceeds the 16 million sample memory budget"
     );
     let audio = source.read(frames)?;
-    anyhow::ensure!(audio.frames() == frames, "codec input WAV is incomplete");
+    anyhow::ensure!(audio.frames() == frames, "audio input is incomplete");
     Ok(audio)
 }
 fn read_codes(path: &Path) -> Result<MultiScaleAudioCodes> {
@@ -537,6 +550,7 @@ impl Args {
                 CodecCommand::Encode {
                     model,
                     input,
+                    input_options,
                     output,
                     num_codebooks,
                 } => {
@@ -546,7 +560,7 @@ impl Args {
                         "num-codebooks must be in 1..64"
                     );
                     validate_output_path(output)?;
-                    read_codec_audio(input)?;
+                    read_codec_audio(input, input_options)?;
                 }
                 CodecCommand::Decode {
                     model,
@@ -569,6 +583,7 @@ impl Args {
                 top_k,
                 top_p,
                 audio_reference,
+                reference_options,
             } => {
                 anyhow::ensure!(model.is_dir(), "model directory does not exist");
                 let request = AudioGenerationRequest {
@@ -582,14 +597,16 @@ impl Args {
                     audio_reference: None,
                 };
                 request.validate()?;
+                reference_options.validate(audio_reference.is_some())?;
                 validate_output_path(output)?;
                 if let Some(path) = audio_reference {
-                    read_codec_audio(path)?;
+                    read_codec_audio(path, &reference_options.input_options())?;
                 }
             }
             Command::Understand {
                 model,
                 input,
+                input_options,
                 prompt,
                 max_steps,
                 seed,
@@ -602,7 +619,7 @@ impl Args {
                 let mut audio = Vec::new();
                 let mut samples = 0usize;
                 for path in input {
-                    let clip = read_codec_audio(path)?;
+                    let clip = read_codec_audio(path, input_options)?;
                     samples = samples
                         .checked_add(clip.samples().len())
                         .context("input sample count overflow")?;
@@ -632,6 +649,7 @@ impl Args {
             Command::Transcribe {
                 model,
                 input,
+                input_options,
                 language,
                 max_tokens,
                 turn_seconds,
@@ -640,7 +658,7 @@ impl Args {
                 anyhow::ensure!(model.is_dir(), "model directory does not exist");
                 check_language(language.as_deref())?;
                 check_budget(*max_tokens, *turn_seconds)?;
-                WavSource::open(input)?;
+                AudioSource::preflight(input, input_options)?;
             }
             Command::Synthesize {
                 model,
@@ -679,6 +697,7 @@ impl Args {
             Command::Realtime {
                 model,
                 input,
+                input_options,
                 output,
                 tts_model,
                 language,
@@ -703,59 +722,13 @@ impl Args {
                     (1..=30000).contains(window_ms),
                     "window-ms must be in 1..30000"
                 );
-                WavSource::open(input)?;
+                AudioSource::preflight(input, input_options)?;
                 if let Some(path) = output {
                     validate_output_path(path)?;
                 }
             }
         }
         Ok(())
-    }
-}
-struct WavSource {
-    reader: hound::WavReader<BufReader<File>>,
-    format: AudioFormat,
-}
-impl WavSource {
-    fn open(path: &Path) -> Result<Self> {
-        let reader =
-            hound::WavReader::open(path).with_context(|| format!("reading {}", path.display()))?;
-        let spec = reader.spec();
-        let format = AudioFormat::new(spec.sample_rate, spec.channels)?;
-        anyhow::ensure!(
-            match spec.sample_format {
-                hound::SampleFormat::Float => spec.bits_per_sample == 32,
-                hound::SampleFormat::Int => (1..=32).contains(&spec.bits_per_sample),
-            },
-            "unsupported WAV sample representation"
-        );
-        Ok(Self { reader, format })
-    }
-    fn read(&mut self, frames: usize) -> Result<AudioBuffer> {
-        let count = frames
-            .checked_mul(self.format.channels() as usize)
-            .context("WAV chunk size overflow")?;
-        anyhow::ensure!(
-            count <= MAX_CODEC_INPUT_SAMPLES,
-            "WAV read exceeds16million samples; use smaller streaming chunks"
-        );
-        let spec = self.reader.spec();
-        let pcm = match spec.sample_format {
-            hound::SampleFormat::Float => self
-                .reader
-                .samples::<f32>()
-                .take(count)
-                .collect::<std::result::Result<Vec<_>, _>>()?,
-            hound::SampleFormat::Int => {
-                let scale = 2f64.powi(spec.bits_per_sample as i32 - 1);
-                self.reader
-                    .samples::<i32>()
-                    .take(count)
-                    .map(|v| v.map(|x| (x as f64 / scale) as f32))
-                    .collect::<std::result::Result<Vec<_>, _>>()?
-            }
-        };
-        Ok(AudioBuffer::new(self.format, pcm)?)
     }
 }
 struct PendingWav {
@@ -976,7 +949,7 @@ fn complete_turn<M: RealtimeModel, S: EventSink>(
 }
 fn stream_file<M: RealtimeModel, S: EventSink>(
     model: M,
-    source: &mut WavSource,
+    source: &mut AudioSource,
     output: &mut S,
     settings: StreamSettings,
     interrupts: &Interrupts,
@@ -995,7 +968,8 @@ fn stream_file<M: RealtimeModel, S: EventSink>(
         .max(1)
         .min(MAX_CODEC_INPUT_SAMPLES / channels);
     let mut session =
-        RealtimeSession::new(model, rate * 30, rate * settings.turn_seconds as usize)?;
+        RealtimeSession::new(model, rate * 30, rate * settings.turn_seconds as usize)?
+            .with_structured_events()?;
     let mut timeline = Timeline {
         sink: output,
         input_offset_seconds: 0.,
@@ -1125,8 +1099,10 @@ fn main() -> Result<()> {
     if matches!(args.command, Command::Models) {
         let families = registry
             .families()
-            .map(|(family, tasks)| serde_json::json!({"family":family,"tasks":tasks}))
-            .collect::<Vec<_>>();
+            .map(|(family, tasks)| {
+                Ok(serde_json::json!({"family":family,"tasks":tasks,"constraints":registry.constraints(family)?}))
+            })
+            .collect::<Result<Vec<_>>>()?;
         println!("{}", serde_json::to_string_pretty(&families)?);
         return Ok(());
     }
@@ -1206,10 +1182,11 @@ fn main() -> Result<()> {
             CodecCommand::Encode {
                 model,
                 input,
+                input_options,
                 output,
                 num_codebooks,
             } => {
-                let audio = read_codec_audio(&input)?;
+                let audio = read_codec_audio(&input, &input_options)?;
                 let mut options = serde_json::json!({});
                 if let Some(n) = num_codebooks {
                     options["num_codebooks"] = n.into();
@@ -1258,6 +1235,7 @@ fn main() -> Result<()> {
             top_k,
             top_p,
             audio_reference,
+            reference_options,
         } => {
             let mut model = registry.generator(&settings.spec(model), &device)?;
             let descriptor = model.descriptor();
@@ -1284,7 +1262,10 @@ fn main() -> Result<()> {
                         .first()
                         .copied()
                         .context("generator does not advertise a reference format")?;
-                    Some(convert_audio_reference(read_codec_audio(&path)?, target)?)
+                    Some(convert_audio_reference(
+                        read_codec_audio(&path, &reference_options.input_options())?,
+                        target,
+                    )?)
                 } else {
                     None
                 },
@@ -1308,13 +1289,14 @@ fn main() -> Result<()> {
         Command::Understand {
             model,
             input,
+            input_options,
             prompt,
             max_steps,
             seed,
         } => {
             let audio = input
                 .iter()
-                .map(|path| read_codec_audio(path))
+                .map(|path| read_codec_audio(path, &input_options))
                 .collect::<Result<Vec<_>>>()?;
             let mut model = registry.understanding(&settings.spec(model), &device)?;
             let mut sink = Output::new(None, None)?;
@@ -1342,24 +1324,24 @@ fn main() -> Result<()> {
             sample_rate,
             channels,
         } => {
-            let model = registry.load(
-                &settings.apply(
-                    ModelSpec::new(model).with_input(AudioFormat::new(sample_rate, channels)?),
-                ),
-                task.audio_task(),
-                &device,
-            )?;
-            println!("{}", serde_json::to_string_pretty(&model.descriptor())?);
+            let spec = settings
+                .apply(ModelSpec::new(model).with_input(AudioFormat::new(sample_rate, channels)?));
+            let constraints = registry.constraints(&spec.family()?)?;
+            let model = registry.load(&spec, task.audio_task(), &device)?;
+            let mut descriptor = serde_json::to_value(model.descriptor())?;
+            descriptor["loader_constraints"] = serde_json::to_value(constraints)?;
+            println!("{}", serde_json::to_string_pretty(&descriptor)?);
         }
         Command::Transcribe {
             model,
             input,
+            input_options,
             language,
             translate,
             max_tokens,
             turn_seconds,
         } => {
-            let mut source = WavSource::open(&input)?;
+            let mut source = AudioSource::open(&input, &input_options)?;
             let spec = settings.apply(spec(
                 model,
                 source.format,
@@ -1442,6 +1424,7 @@ fn main() -> Result<()> {
         Command::Realtime {
             model,
             input,
+            input_options,
             output,
             tts_model,
             prompt,
@@ -1453,7 +1436,7 @@ fn main() -> Result<()> {
             pace,
             preserve_conversation,
         } => {
-            let mut source = WavSource::open(&input)?;
+            let mut source = AudioSource::open(&input, &input_options)?;
             anyhow::ensure!(tts_model.is_none()||prompt.is_none(),"readback uses the recognition task; use understand/realtime without --tts-model for question prompts");
             let model = load_realtime_input(
                 &registry,
@@ -1528,6 +1511,156 @@ mod tests {
         fn drop(&mut self) {
             std::fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn raw_cli_options_are_shared_and_validated_before_model_loading() -> Result<()> {
+        let fixture = Fixture::new();
+        let model = fixture.0.to_str().unwrap(); // No checkpoint exists here.
+        let input = fixture.0.join("samples.pcm");
+        let output = fixture.0.join("output.wav");
+        std::fs::write(&input, [0u8; 16])?;
+        let input_path = input.to_str().unwrap();
+        let output_path = output.to_str().unwrap();
+        let commands = [
+            vec!["asr", "--model", model, "--input", input_path],
+            vec![
+                "realtime",
+                "--model",
+                model,
+                "--input",
+                input_path,
+                "--output",
+                output_path,
+            ],
+            vec![
+                "codec",
+                "encode",
+                "--model",
+                model,
+                "--input",
+                input_path,
+                "--output",
+                output_path,
+            ],
+            vec![
+                "understand",
+                "--model",
+                model,
+                "--input",
+                input_path,
+                "--prompt",
+                "Transcribe",
+            ],
+        ];
+        for command in commands {
+            for encoding in ["s16le", "f32le"] {
+                let mut argv = vec!["candle-audio"];
+                argv.extend(command.iter().copied());
+                argv.extend(["--input-format", encoding]);
+                assert!(
+                    Args::try_parse_from(&argv)?.validate().is_err(),
+                    "raw metadata required"
+                );
+                argv.extend(["--input-sample-rate", "8000", "--input-channels", "2"]);
+                Args::try_parse_from(&argv)?.validate()?;
+                // Reject nonfinite raw floats before attempting to open weights or output.
+                if encoding == "f32le" {
+                    std::fs::write(
+                        &input,
+                        [f32::NAN, 0.]
+                            .into_iter()
+                            .flat_map(f32::to_le_bytes)
+                            .collect::<Vec<_>>(),
+                    )?;
+                    assert!(Args::try_parse_from(&argv)?.validate().is_err());
+                    std::fs::write(&input, [0u8; 16])?;
+                }
+            }
+            let mut argv = vec!["candle-audio"];
+            argv.extend(command);
+            argv.extend(["--input-format", "wav", "--input-channels", "2"]);
+            assert!(Args::try_parse_from(&argv)?.validate().is_err());
+        }
+        assert!(!output.exists());
+        for invalid in [
+            "--input-format=mp3",
+            "--input-channels=-1",
+            "--input-sample-rate=oops",
+        ] {
+            assert!(Args::try_parse_from([
+                "candle-audio",
+                "asr",
+                "--model",
+                model,
+                "--input",
+                input_path,
+                invalid
+            ])
+            .is_err());
+        }
+        assert!(Args::try_parse_from([
+            "candle-audio",
+            "codec",
+            "decode",
+            "--model",
+            model,
+            "--input",
+            input_path,
+            "--output",
+            output_path,
+            "--input-format",
+            "f32le"
+        ])
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn generation_raw_reference_has_independent_required_metadata() -> Result<()> {
+        let fixture = Fixture::new();
+        let input = fixture.0.join("reference.pcm");
+        let output = fixture.0.join("output.wav");
+        std::fs::write(&input, [0u8; 16])?;
+        let base = [
+            "candle-audio",
+            "generate-audio",
+            "--model",
+            fixture.0.to_str().unwrap(),
+            "--prompt",
+            "Music",
+            "--output",
+            output.to_str().unwrap(),
+        ];
+        for flags in [
+            vec!["--reference-format", "f32le"],
+            vec!["--reference-sample-rate", "32000"],
+            vec!["--reference-channels", "1"],
+            vec![
+                "--audio-reference",
+                input.to_str().unwrap(),
+                "--reference-format",
+                "f32le",
+            ],
+        ] {
+            let mut argv = base.to_vec();
+            argv.extend(flags);
+            assert!(Args::try_parse_from(argv)?.validate().is_err());
+        }
+        let mut argv = base.to_vec();
+        argv.extend([
+            "--audio-reference",
+            input.to_str().unwrap(),
+            "--reference-format",
+            "s16le",
+            "--reference-sample-rate",
+            "32000",
+            "--reference-channels",
+            "1",
+        ]);
+        Args::try_parse_from(argv)?.validate()?;
+        assert!(!output.exists());
+        Ok(())
     }
 
     #[test]
@@ -1857,65 +1990,91 @@ mod tests {
             wav.write_sample(1i16).unwrap();
         }
         wav.finalize().unwrap();
-        for preserve_conversation in [false, true] {
-            let turns = Arc::new(Mutex::new(Vec::new()));
-            let clears = Arc::new(AtomicU64::new(0));
-            let model = SmallContext {
-                frames: 0,
-                turns: turns.clone(),
-                pending: false,
-                clears: clears.clone(),
-            };
-            let mut events = Vec::new();
-            stream_file(
-                model,
-                &mut WavSource::open(&input).unwrap(),
-                &mut |e| {
-                    events.push(e);
-                    Ok(())
+        let raw = fixture.0.join("input.pcm");
+        std::fs::write(
+            &raw,
+            [1i16; 11]
+                .into_iter()
+                .flat_map(i16::to_le_bytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        for (input, input_options) in [
+            (&input, AudioInputOptions::default()),
+            (
+                &raw,
+                AudioInputOptions {
+                    input_format: audio_input::AudioEncoding::S16le,
+                    input_sample_rate: Some(10),
+                    input_channels: Some(1),
                 },
-                StreamSettings {
-                    prompt: None,
-                    chunk_ms: 1000,
-                    turn_seconds: 30,
-                    pace: false,
-                    preserve_conversation,
-                },
-                &Interrupts::default(),
-            )
-            .unwrap();
-            assert_eq!(*turns.lock().unwrap(), vec![4, 4, 3]);
-            assert_eq!(
+            ),
+        ] {
+            for preserve_conversation in [false, true] {
+                let turns = Arc::new(Mutex::new(Vec::new()));
+                let clears = Arc::new(AtomicU64::new(0));
+                let model = SmallContext {
+                    frames: 0,
+                    turns: turns.clone(),
+                    pending: false,
+                    clears: clears.clone(),
+                };
+                let mut events = Vec::new();
+                stream_file(
+                    model,
+                    &mut AudioSource::open(input, &input_options).unwrap(),
+                    &mut |e| {
+                        events.push(e);
+                        Ok(())
+                    },
+                    StreamSettings {
+                        prompt: None,
+                        chunk_ms: 1000,
+                        turn_seconds: 30,
+                        pace: false,
+                        preserve_conversation,
+                    },
+                    &Interrupts::default(),
+                )
+                .unwrap();
+                assert_eq!(*turns.lock().unwrap(), vec![4, 4, 3]);
+                assert_eq!(
                 clears.load(Ordering::SeqCst),
                 if preserve_conversation { 1 } else { 3 },
                 "only default file rollover clears completed context; final close always clears it"
             );
-            let transcripts = events
-                .iter()
-                .filter_map(|e| {
-                    if let AudioEvent::Transcript { turn, transcript } = e {
-                        Some((*turn, transcript.start, transcript.end))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(transcripts.len(), 3);
-            for ((turn, start, end), (expected_turn, expected_start, expected_end)) in transcripts
-                .into_iter()
-                .zip([(0, 0., 0.4), (1, 0.4, 0.8), (2, 0.8, 1.1)])
-            {
-                assert_eq!(turn, expected_turn);
-                assert!((start - expected_start).abs() < 1e-9);
-                assert!((end - expected_end).abs() < 1e-9);
-            }
-            assert_eq!(
-                events
+                let transcripts = events
                     .iter()
-                    .filter(|e| matches!(e, AudioEvent::TurnCompleted { .. }))
-                    .count(),
-                3
-            );
+                    .filter_map(|e| {
+                        if let AudioEvent::Transcript { turn, transcript }
+                        | AudioEvent::TranscriptSegment {
+                            turn, transcript, ..
+                        } = e
+                        {
+                            Some((*turn, transcript.start, transcript.end))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(transcripts.len(), 3);
+                for ((turn, start, end), (expected_turn, expected_start, expected_end)) in
+                    transcripts
+                        .into_iter()
+                        .zip([(0, 0., 0.4), (1, 0.4, 0.8), (2, 0.8, 1.1)])
+                {
+                    assert_eq!(turn, expected_turn);
+                    assert!((start - expected_start).abs() < 1e-9);
+                    assert!((end - expected_end).abs() < 1e-9);
+                }
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|e| matches!(e, AudioEvent::TurnCompleted { .. }))
+                        .count(),
+                    3
+                );
+            }
         }
     }
     struct RaggedCodec;
@@ -2016,7 +2175,7 @@ mod tests {
             out.write_sample(0i16).unwrap();
         }
         out.finalize().unwrap();
-        assert!(read_codec_audio(&wav).is_err());
+        assert!(read_codec_audio(&wav, &AudioInputOptions::default()).is_err());
         let json = fixture.0.join("too-large.json");
         File::create(&json)
             .unwrap()

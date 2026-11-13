@@ -340,9 +340,13 @@ fn whisper_response_parler_pipeline_produces_recognizable_speech_and_recovers_af
     .unwrap();
     // Parler's published generation defaults sample rather than use argmax;
     // this phrase also reaches Length in the official greedy reference.
-    let synthesizer=candle_audio::models::registry::ModelRegistry::standard().tts(
-        &candle_audio::models::registry::ModelSpec::new(root.join("parler-tts-mini-v1"))
-            .with_options(serde_json::json!({"temperature":1.0,"top_k":50})),&device).unwrap();
+    let synthesizer = candle_audio::models::registry::ModelRegistry::standard()
+        .tts(
+            &candle_audio::models::registry::ModelSpec::new(root.join("parler-tts-mini-v1"))
+                .with_options(serde_json::json!({"temperature":1.0,"top_k":50})),
+            &device,
+        )
+        .unwrap();
     let pipeline = SpeechPipeline::new(stream, synthesizer, |transcript: &Transcript| {
         eprintln!(
             "Native pipeline recognized {:?}; starting response synthesis",
@@ -380,7 +384,10 @@ fn whisper_response_parler_pipeline_produces_recognizable_speech_and_recovers_af
     session.commit(&mut sink).unwrap();
     assert_eq!(completed, 1);
     assert_eq!(texts, ["The answer is four."]);
-    assert_eq!(session.last_finish_reason(),Some(FinishReason::EndOfSequence));
+    assert_eq!(
+        session.last_finish_reason(),
+        Some(FinishReason::EndOfSequence)
+    );
     assert!(samples.len() > 4410 && samples.iter().all(|v| v.is_finite()));
     eprintln!(
         "Native pipeline synthesized {} mono44.1k frames, finish={:?}",
@@ -450,8 +457,17 @@ fn whisper_response_parler_pipeline_produces_recognizable_speech_and_recovers_af
     // complete response and final voiced token; the omitted-token greedy case
     // ("The answer is...") is rejected. LFM3 independently verified this audio
     // as "The answer is four." during checkpoint validation.
-    let heard=transcript.text.trim_end_matches(|c:char|!c.is_alphanumeric()).to_lowercase();
-    assert!(matches!(heard.as_str(),"the answer is four"|"the answer is 4"|"the answer is for"),
-        "independent pipeline output recognition: {}",transcript.text);
+    let heard = transcript
+        .text
+        .trim_end_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase();
+    assert!(
+        matches!(
+            heard.as_str(),
+            "the answer is four" | "the answer is 4" | "the answer is for"
+        ),
+        "independent pipeline output recognition: {}",
+        transcript.text
+    );
     eprintln!("Native Whisper→response→Parler: output={:?}; cancellation after{cancelled_frames}frames and fresh input recovery passed",transcript.text);
 }

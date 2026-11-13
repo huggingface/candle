@@ -634,7 +634,7 @@ pub fn run(
         ..Default::default()
     };
     eprintln!("Manual turns, model input {:?}, output {:?}, input mode {:?}, output mode {:?}.\nEnter starts/stops capture; c cancels output, r resets conversation, q exits. Hardware remains closed until Enter.",input,caps.output_format,caps.streaming,caps.output_streaming);
-    let worker = RealtimeWorker::spawn(
+    let worker = RealtimeWorker::spawn_structured(
         model,
         limits,
         WorkerOptions {
