@@ -5,7 +5,7 @@ use candle_nn::{
 };
 use rand::Rng;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct VoxtralEncoderConfig {
     pub vocab_size: usize,
     pub hidden_size: usize,
@@ -26,7 +26,7 @@ pub struct VoxtralEncoderConfig {
     pub activation_dropout: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct VoxtralConfig {
     pub audio_config: VoxtralEncoderConfig,
     pub text_config: VoxtralLlamaConfig,
@@ -130,8 +130,14 @@ impl VoxtralCache {
         self.audio_processed = false;
         self.cached_audio_embeds = None;
         self.cached_audio_positions = None;
-        // Note: LlamaCache reset needs to be handled at a higher level
-        // as it requires device access
+        self.cache.reset();
+    }
+
+    /// Start another audio message while retaining the language-model context.
+    pub fn reset_audio(&mut self) {
+        self.audio_processed = false;
+        self.cached_audio_embeds = None;
+        self.cached_audio_positions = None;
     }
 }
 
@@ -328,8 +334,8 @@ impl Module for VoxtralAttention {
         // Use F16 precision throughout to match PyTorch's F16 model
         let scores = q.matmul(&k.transpose(D::Minus2, D::Minus1)?)?;
 
-        // Apply softmax in same precision as input (F16) to match Python
-        let attn_weights = candle_nn::ops::softmax_last_dim(&scores)?;
+        let attn_weights =
+            candle_nn::ops::softmax_last_dim(&scores.to_dtype(DType::F32)?)?.to_dtype(x.dtype())?;
 
         // Apply attention dropout (disabled during inference)
         let attn_weights = self.attention_dropout.forward(&attn_weights, false)?;
@@ -466,9 +472,11 @@ impl VoxtralEncoder {
         )?;
 
         // Position embeddings
-        let embed_positions = vb.get(
+        let embed_positions = vb.get_with_hints_dtype(
             (cfg.max_source_positions, embed_dim),
             "embed_positions.weight",
+            Default::default(),
+            DType::F32,
         )?;
 
         // Transformer layers
@@ -529,7 +537,7 @@ impl VoxtralEncoder {
         };
 
         // Apply GELU activation after conv1 (matches Python: conv1 -> GELU)
-        let x = x.gelu()?;
+        let x = x.to_dtype(DType::F32)?.gelu_erf()?.to_dtype(x.dtype())?;
 
         // Apply conv2 (matches Python: conv2)
         let x = if false {
@@ -553,7 +561,7 @@ impl VoxtralEncoder {
         };
 
         // Apply GELU activation after conv2 (FIX: matches Python: conv2 -> GELU)
-        let x = x.gelu()?;
+        let x = x.to_dtype(DType::F32)?.gelu_erf()?.to_dtype(x.dtype())?;
 
         // Reshape: (batch, embed_dim, seq_len) -> (batch, seq_len, embed_dim)
         let x = x.transpose(1, 2)?;
@@ -840,6 +848,9 @@ impl VoxtralForConditionalGeneration {
         cache: &mut VoxtralCache,
         index_pos: usize,
     ) -> Result<Tensor> {
+        if index_pos == 0 {
+            cache.reset();
+        }
         // Get text embeddings
         let mut inputs_embeds = self.language_model.embed(input_ids)?;
 
@@ -867,6 +878,29 @@ impl VoxtralForConditionalGeneration {
         // Forward through language model using forward_input_embed
         self.language_model
             .forward_input_embed(&inputs_embeds, index_pos, &mut cache.cache)
+    }
+
+    /// Prefill audio already encoded by `get_audio_embeds`, avoiding a second
+    /// encoder pass when computing the exact placeholder count.
+    pub fn forward_with_audio_embeds(
+        &self,
+        input_ids: &Tensor,
+        audio_embeds: &Tensor,
+        cache: &mut VoxtralCache,
+        index_pos: usize,
+    ) -> Result<Tensor> {
+        if index_pos == 0 {
+            cache.reset();
+        }
+        let positions = find_audio_token_positions(input_ids, self.audio_token_id)?;
+        if positions.len() != audio_embeds.dim(0)? {
+            candle::bail!("Voxtral audio embedding and placeholder counts differ");
+        }
+        let text = self.language_model.embed(input_ids)?;
+        let embeds = replace_audio_tokens(&text, audio_embeds, &positions, input_ids.device())?;
+        cache.audio_processed = true;
+        self.language_model
+            .forward_input_embed(&embeds, index_pos, &mut cache.cache)
     }
 
     /// Generate text given audio input

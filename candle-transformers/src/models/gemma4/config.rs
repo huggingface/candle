@@ -69,6 +69,20 @@ pub struct Gemma4RopeParameters {
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Gemma4TextConfig {
+    #[serde(default)]
+    pub pad_token_id: usize,
+    #[serde(default)]
+    pub hidden_size_per_layer_input: usize,
+    #[serde(default = "default_vocab_size")]
+    pub vocab_size_per_layer_input: usize,
+    #[serde(default)]
+    pub num_kv_shared_layers: usize,
+    #[serde(default)]
+    pub use_double_wide_mlp: bool,
+    #[serde(default)]
+    pub attention_k_eq_v: bool,
+    #[serde(default)]
+    pub enable_moe_block: bool,
     #[serde(default = "default_attention_bias")]
     pub attention_bias: bool,
     #[serde(default = "default_head_dim")]
@@ -134,6 +148,14 @@ impl Gemma4TextConfig {
             .and_then(|rp| rp.sliding_attention.as_ref())
             .and_then(|sa| sa.rope_theta)
             .unwrap_or(10000.0)
+    }
+
+    pub fn rope_global_base_freq(&self) -> f64 {
+        self.rope_parameters
+            .as_ref()
+            .and_then(|rp| rp.full_attention.as_ref())
+            .and_then(|fa| fa.rope_theta)
+            .unwrap_or(self.rope_theta)
     }
 
     pub fn is_sliding(&self, layer_idx: usize) -> bool {
@@ -303,6 +325,8 @@ fn default_output_proj_dims() -> Option<usize> {
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Gemma4AudioConfig {
+    #[serde(default)]
+    pub use_clipped_linears: bool,
     #[serde(default = "default_audio_input_feat_size")]
     pub input_feat_size: usize,
     #[serde(default = "default_audio_hidden_size")]

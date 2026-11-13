@@ -8,6 +8,43 @@ use candle_nn::{Conv1d, Conv2d, Conv2dConfig, VarBuilder};
 
 use super::config::Gemma4AudioConfig;
 
+#[derive(Debug, Clone)]
+struct ClippableLinear {
+    linear: candle_nn::Linear,
+    bounds: Option<[Tensor; 4]>,
+}
+impl ClippableLinear {
+    fn new(input: usize, output: usize, clipped: bool, vb: VarBuilder) -> Result<Self> {
+        let linear = candle_nn::linear_no_bias(input, output, vb.pp("linear"))?;
+        let bounds = if clipped {
+            Some([
+                vb.get((), "input_min")?,
+                vb.get((), "input_max")?,
+                vb.get((), "output_min")?,
+                vb.get((), "output_max")?,
+            ])
+        } else {
+            None
+        };
+        Ok(Self { linear, bounds })
+    }
+}
+impl Module for ClippableLinear {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        match &self.bounds {
+            Some([input_min, input_max, output_min, output_max]) => {
+                let x = x
+                    .broadcast_maximum(input_min)?
+                    .broadcast_minimum(input_max)?;
+                x.apply(&self.linear)?
+                    .broadcast_maximum(output_min)?
+                    .broadcast_minimum(output_max)
+            }
+            None => x.apply(&self.linear),
+        }
+    }
+}
+
 // ── RmsNorm (standard, no +1 offset for audio) ─────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -34,7 +71,9 @@ impl Module for RmsNorm {
         let x = x.to_dtype(internal_dtype)?;
         let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        x_normed.to_dtype(x_dtype)?.broadcast_mul(&self.weight)
+        x_normed
+            .broadcast_mul(&self.weight.to_dtype(internal_dtype)?)?
+            .to_dtype(x_dtype)
     }
 }
 
@@ -44,11 +83,16 @@ impl Module for RmsNorm {
 struct LayerNorm {
     eps: f64,
     dim: usize,
+    weight: Tensor,
 }
 
 impl LayerNorm {
-    fn new(dim: usize, eps: f64) -> Self {
-        Self { eps, dim }
+    fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        Ok(Self {
+            eps,
+            dim,
+            weight: vb.get(dim, "weight")?,
+        })
     }
 }
 
@@ -60,7 +104,8 @@ impl Module for LayerNorm {
         let x = x.broadcast_sub(&mean)?;
         let var = (x.sqr()?.sum_keepdim(D::Minus1)? / self.dim as f64)?;
         let x = x.broadcast_div(&(var + self.eps)?.sqrt()?)?;
-        x.to_dtype(x_dtype)
+        x.broadcast_mul(&self.weight.to_dtype(DType::F32)?)?
+            .to_dtype(x_dtype)
     }
 }
 
@@ -115,7 +160,14 @@ impl SSCPConvBlock {
             },
             vb.pp("conv"),
         )?;
-        let norm = LayerNorm::new(out_channels, cfg.rms_norm_eps);
+        // CPU conv2d's GEMM path has no BF16 kernel. These two small filters
+        // can accumulate in F32 while retaining BF16 activation boundaries.
+        let conv = if vb.device().is_cpu() && vb.dtype() == DType::BF16 {
+            Conv2d::new(conv.weight().to_dtype(DType::F32)?, None, *conv.config())
+        } else {
+            conv
+        };
+        let norm = LayerNorm::new(out_channels, cfg.rms_norm_eps, vb.pp("norm"))?;
 
         Ok(Self {
             conv,
@@ -144,7 +196,10 @@ impl SSCPConvBlock {
             .pad_with_zeros(D::Minus1, self.manual_padding.0, self.manual_padding.1)?
             .pad_with_zeros(D::Minus2, self.manual_padding.2, self.manual_padding.3)?;
 
-        let audio_encodings = self.conv.forward(&audio_encodings)?;
+        let audio_encodings = self
+            .conv
+            .forward(&audio_encodings.to_dtype(self.conv.weight().dtype())?)?
+            .to_dtype(audio_encodings.dtype())?;
 
         // Subsample mask
         let t_out = audio_encodings.dim(2)?;
@@ -238,8 +293,9 @@ impl RelativePositionEmbedding {
         let num_heads = cfg.conf_num_attention_heads;
         let channels = cfg.hidden_size;
         let head_dim = channels / num_heads;
-        let max_backward = cfg.conf_attention_context_left.saturating_sub(1);
-        let max_forward = cfg.conf_attention_context_right;
+        let context_size = cfg.conf_attention_chunk_size
+            + cfg.conf_attention_context_left.saturating_sub(1)
+            + cfg.conf_attention_context_right;
         let num_timescales = channels / 2;
 
         let pos_proj =
@@ -257,9 +313,7 @@ impl RelativePositionEmbedding {
             vb.device(),
         )?;
 
-        let pos_values: Vec<i64> = (-(max_forward as i64)..=max_backward as i64)
-            .rev()
-            .collect();
+        let pos_values: Vec<i64> = (0..=(context_size / 2) as i64).rev().collect();
         let span = pos_values.len();
         let pos_indices = Tensor::from_vec(pos_values, (1, span), vb.device())?;
 
@@ -288,8 +342,12 @@ impl RelativePositionEmbedding {
         let max_span_plus_1 = self.pos_indices.dim(1)?;
 
         let pos_indices = self.pos_indices.to_device(queries.device())?;
-        let sin_emb_timing = self.get_timing_signal(&pos_indices, queries.dtype())?;
-        let projected_sin_emb = self.pos_proj.forward(&sin_emb_timing)?;
+        let sin_emb_timing =
+            self.get_timing_signal(&pos_indices, self.pos_proj.weight().dtype())?;
+        let projected_sin_emb = self
+            .pos_proj
+            .forward(&sin_emb_timing)?
+            .to_dtype(queries.dtype())?;
         let sin_emb = projected_sin_emb
             .reshape((1, max_span_plus_1, self.num_heads, self.head_dim))?
             .squeeze(0)?;
@@ -368,10 +426,10 @@ impl RelativePositionEmbedding {
 
 #[derive(Debug, Clone)]
 struct ConformerAttention {
-    q_proj: candle_nn::Linear,
-    k_proj: candle_nn::Linear,
-    v_proj: candle_nn::Linear,
-    post: candle_nn::Linear,
+    q_proj: ClippableLinear,
+    k_proj: ClippableLinear,
+    v_proj: ClippableLinear,
+    post: ClippableLinear,
     relative_position_embedding: RelativePositionEmbedding,
     per_dim_scale_softplus: Tensor,
     pre_attn_norm: RmsNorm,
@@ -404,13 +462,30 @@ impl ConformerAttention {
         let attn_vb = vb.pp("self_attn");
         let relative_position_embedding = RelativePositionEmbedding::new(cfg, attn_vb.clone())?;
         let per_dim_scale = attn_vb.get(head_dim, "per_dim_scale")?;
-        let q_proj =
-            candle_nn::linear_no_bias(hidden_size, num_heads * head_dim, attn_vb.pp("q_proj"))?;
-        let k_proj =
-            candle_nn::linear_no_bias(hidden_size, num_heads * head_dim, attn_vb.pp("k_proj"))?;
-        let v_proj =
-            candle_nn::linear_no_bias(hidden_size, num_heads * head_dim, attn_vb.pp("v_proj"))?;
-        let post = candle_nn::linear_no_bias(hidden_size, hidden_size, attn_vb.pp("post"))?;
+        let q_proj = ClippableLinear::new(
+            hidden_size,
+            num_heads * head_dim,
+            cfg.use_clipped_linears,
+            attn_vb.pp("q_proj"),
+        )?;
+        let k_proj = ClippableLinear::new(
+            hidden_size,
+            num_heads * head_dim,
+            cfg.use_clipped_linears,
+            attn_vb.pp("k_proj"),
+        )?;
+        let v_proj = ClippableLinear::new(
+            hidden_size,
+            num_heads * head_dim,
+            cfg.use_clipped_linears,
+            attn_vb.pp("v_proj"),
+        )?;
+        let post = ClippableLinear::new(
+            hidden_size,
+            hidden_size,
+            cfg.use_clipped_linears,
+            attn_vb.pp("post"),
+        )?;
 
         let pre_attn_norm = RmsNorm::new(hidden_size, cfg.rms_norm_eps, vb.pp("norm_pre_attn"))?;
         let post_norm = RmsNorm::new(hidden_size, cfg.rms_norm_eps, vb.pp("norm_post_attn"))?;
@@ -422,10 +497,10 @@ impl ConformerAttention {
         let mut mask_vec = vec![0u8; chunk_size * context_size];
         for i in 0..chunk_size {
             for j in 0..context_size {
-                let lower = j >= i;
-                let upper =
-                    (j as isize) <= (i as isize + (max_past_horizon + max_future_horizon) as isize);
-                if lower && upper {
+                let distance = max_past_horizon as isize + i as isize - j as isize;
+                if (distance >= 0 && distance < max_past_horizon as isize)
+                    || (distance < 0 && -distance < max_future_horizon as isize)
+                {
                     mask_vec[i * context_size + j] = 1;
                 }
             }
@@ -636,7 +711,7 @@ impl ConformerAttention {
         let context_vectors = context_vectors.reshape((b, t, self.hidden_size))?;
         let out = self
             .post
-            .forward(&context_vectors)?
+            .forward(&context_vectors.to_dtype(x.dtype())?)?
             .clamp(-self.gradient_clipping, self.gradient_clipping)?;
         residual.broadcast_add(&self.post_norm.forward(&out)?)
     }
@@ -648,8 +723,8 @@ impl ConformerAttention {
 struct ConformerFeedForward {
     scale: f64,
     pre_layer_norm: RmsNorm,
-    ffw_layer_1: candle_nn::Linear,
-    ffw_layer_2: candle_nn::Linear,
+    ffw_layer_1: ClippableLinear,
+    ffw_layer_2: ClippableLinear,
     post_layer_norm: RmsNorm,
     gradient_clipping: f64,
 }
@@ -663,14 +738,16 @@ impl ConformerFeedForward {
                 cfg.rms_norm_eps,
                 vb.pp("pre_layer_norm"),
             )?,
-            ffw_layer_1: candle_nn::linear_no_bias(
+            ffw_layer_1: ClippableLinear::new(
                 cfg.hidden_size,
                 cfg.hidden_size * 4,
+                cfg.use_clipped_linears,
                 vb.pp("ffw_layer_1"),
             )?,
-            ffw_layer_2: candle_nn::linear_no_bias(
+            ffw_layer_2: ClippableLinear::new(
                 cfg.hidden_size * 4,
                 cfg.hidden_size,
+                cfg.use_clipped_linears,
                 vb.pp("ffw_layer_2"),
             )?,
             post_layer_norm: RmsNorm::new(
@@ -686,7 +763,9 @@ impl ConformerFeedForward {
         let residual = x;
         let x = x.clamp(-self.gradient_clipping, self.gradient_clipping)?;
         let x = self.pre_layer_norm.forward(&x)?;
-        let x = candle_nn::ops::silu(&self.ffw_layer_1.forward(&x)?)?;
+        let projected = self.ffw_layer_1.forward(&x)?;
+        let x =
+            candle_nn::ops::silu(&projected.to_dtype(DType::F32)?)?.to_dtype(projected.dtype())?;
         let x = self
             .ffw_layer_2
             .forward(&x)?
@@ -703,8 +782,8 @@ struct ConformerLightConv1d {
     pre_layer_norm: RmsNorm,
     depthwise_conv1d: Conv1d,
     conv_norm: RmsNorm,
-    linear_start: candle_nn::Linear,
-    linear_end: candle_nn::Linear,
+    linear_start: ClippableLinear,
+    linear_end: ClippableLinear,
     causal_padding: usize,
     gradient_clipping: f64,
 }
@@ -717,9 +796,10 @@ impl ConformerLightConv1d {
                 cfg.rms_norm_eps,
                 vb.pp("pre_layer_norm"),
             )?,
-            linear_start: candle_nn::linear_no_bias(
+            linear_start: ClippableLinear::new(
                 cfg.hidden_size,
                 cfg.hidden_size * 2,
+                cfg.use_clipped_linears,
                 vb.pp("linear_start"),
             )?,
             depthwise_conv1d: candle_nn::conv1d_no_bias(
@@ -736,9 +816,10 @@ impl ConformerLightConv1d {
                 vb.pp("depthwise_conv1d"),
             )?,
             conv_norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("conv_norm"))?,
-            linear_end: candle_nn::linear_no_bias(
+            linear_end: ClippableLinear::new(
                 cfg.hidden_size,
                 cfg.hidden_size,
+                cfg.use_clipped_linears,
                 vb.pp("linear_end"),
             )?,
             causal_padding: cfg.conf_conv_kernel_size - 1,
@@ -753,17 +834,18 @@ impl ConformerLightConv1d {
         let half = x.dim(D::Minus1)? / 2;
         let x1 = x.narrow(D::Minus1, 0, half)?;
         let x2 = x.narrow(D::Minus1, half, half)?;
-        let x = (x1 * candle_nn::ops::sigmoid(&x2)?)?;
+        let x = (x1.to_dtype(DType::F32)? * candle_nn::ops::sigmoid(&x2.to_dtype(DType::F32)?)?)?
+            .to_dtype(x.dtype())?;
         let x = x.transpose(D::Minus1, D::Minus2)?;
         let x = x.pad_with_zeros(D::Minus1, self.causal_padding, 0)?;
         let x = self
             .depthwise_conv1d
-            .forward(&x.to_dtype(DType::F32)?)?
+            .forward(&x)?
             .to_dtype(audio_encodings.dtype())?
             .transpose(D::Minus2, D::Minus1)?
             .clamp(-self.gradient_clipping, self.gradient_clipping)?;
         let x = self.conv_norm.forward(&x)?;
-        let x = candle_nn::ops::silu(&x)?;
+        let x = candle_nn::ops::silu(&x.to_dtype(DType::F32)?)?.to_dtype(x.dtype())?;
         let x = self.linear_end.forward(&x)?;
         residual.broadcast_add(&x)
     }
@@ -813,6 +895,7 @@ pub struct AudioModel {
     conformer: Vec<ConformerBlock>,
     conf_reduction_factor: usize,
     output_proj: Option<candle_nn::Linear>,
+    dtype: DType,
 }
 
 impl AudioModel {
@@ -838,13 +921,14 @@ impl AudioModel {
             conformer,
             conf_reduction_factor: cfg.conf_reduction_factor,
             output_proj,
+            dtype: vb.dtype(),
         })
     }
 
     pub fn forward(&self, audio_mel: &Tensor, audio_mel_mask: &Tensor) -> Result<(Tensor, Tensor)> {
         let (mut audio_encodings, mut current_mask) = self
             .subsample_conv_projection
-            .forward(audio_mel, audio_mel_mask)?;
+            .forward(&audio_mel.to_dtype(self.dtype)?, audio_mel_mask)?;
 
         for block in &self.conformer {
             audio_encodings = block.forward(&audio_encodings, &current_mask)?;
