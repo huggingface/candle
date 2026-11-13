@@ -128,3 +128,48 @@ fn malformed_builtin_options_are_rejected_before_weights_or_json_indexing() {
         ));
     }
 }
+
+#[test]
+fn dac_submodel_option_types_and_paths_are_rejected_before_checkpoint_io() {
+    let registry = ModelRegistry::standard();
+    for options in [
+        serde_json::json!({"config_key":7}),
+        serde_json::json!({"config_key":null}),
+        serde_json::json!({"config_key":""}),
+        serde_json::json!({"config_key":"audio_encoder..model"}),
+        serde_json::json!({"weight_prefix":["audio_encoder"]}),
+        serde_json::json!({"weight_prefix":false}),
+        serde_json::json!({"weight_prefix":"../weights"}),
+        serde_json::json!({"weight_prefix":"audio_encoder."}),
+    ] {
+        let spec = ModelSpec::new("missing-dac-checkpoint")
+            .with_family("dac")
+            .with_options(options);
+        assert!(matches!(
+            registry.codec(&spec, &Device::Cpu),
+            Err(Error::InvalidInput(_))
+        ));
+    }
+}
+
+#[test]
+#[cfg(feature = "cli")]
+fn dac_config_selection_is_checked_before_mapping_weights() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("config.json"),
+        r#"{"audio_encoder":false}"#,
+    )
+    .unwrap();
+    for key in ["missing", "audio_encoder"] {
+        let spec = ModelSpec::new(directory.path())
+            .with_family("dac")
+            .with_options(
+                serde_json::json!({"config_key":key,"weight_prefix":"audio_encoder.model"}),
+            );
+        assert!(matches!(
+            ModelRegistry::standard().codec(&spec, &Device::Cpu),
+            Err(Error::InvalidInput(_))
+        ));
+    }
+}

@@ -55,6 +55,62 @@ pub(crate) fn tokenizer(directory: &Path) -> Result<Tokenizer> {
     Tokenizer::from_file(directory.join("tokenizer.json"))
         .map_err(|e| Error::InvalidInput(e.to_string()))
 }
+
+/// Select a native submodel without executing checkpoint code. Dotted keys
+/// traverse JSON objects and tensor prefixes only, never filesystem paths.
+pub(crate) fn submodel_options(
+    options: &serde_json::Value,
+) -> Result<(Option<String>, Option<String>)> {
+    if !options.is_null() && !options.is_object() {
+        return Err(Error::InvalidInput(
+            "model options must be a JSON object".into(),
+        ));
+    }
+    let path = |name: &str| -> Result<Option<String>> {
+        let Some(value) = options.get(name) else {
+            return Ok(None);
+        };
+        let value = value
+            .as_str()
+            .ok_or_else(|| Error::InvalidInput(format!("{name} must be a dotted string")))?;
+        if value.len() > 1024
+            || value.split('.').any(|part| {
+                part.is_empty()
+                    || !part
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+            })
+        {
+            return Err(Error::InvalidInput(format!(
+                "{name} must contain nonempty identifier components separated by dots"
+            )));
+        }
+        Ok(Some(value.to_owned()))
+    };
+    Ok((path("config_key")?, path("weight_prefix")?))
+}
+
+pub(crate) fn submodel_config<'a>(
+    root: &'a serde_json::Value,
+    key: Option<&str>,
+) -> Result<&'a serde_json::Value> {
+    let mut selected = root;
+    if let Some(key) = key {
+        for component in key.split('.') {
+            selected = selected.get(component).ok_or_else(|| {
+                Error::InvalidInput(format!(
+                    "checkpoint configuration has no config_key {key:?}"
+                ))
+            })?;
+        }
+    }
+    if !selected.is_object() {
+        return Err(Error::InvalidInput(
+            "selected checkpoint configuration must be an object".into(),
+        ));
+    }
+    Ok(selected)
+}
 pub(crate) fn weights(directory: &Path) -> Result<Vec<PathBuf>> {
     let index = directory.join("model.safetensors.index.json");
     if !index.exists() {

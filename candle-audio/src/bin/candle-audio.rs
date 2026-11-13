@@ -34,12 +34,18 @@ struct Args {
     /// JSON object with adapter-specific loader options (local paths and budgets).
     #[arg(long, global = true)]
     model_options: Option<PathBuf>,
+    /// Explicit native family, including a submodel inside another checkpoint.
+    #[arg(long, global = true)]
+    model_family: Option<String>,
     /// Precision of an optional --tts-model readback model, independent of --dtype.
     #[arg(long, value_enum, default_value = "f32", global = true)]
     tts_dtype: Precision,
     /// Loader options for the optional readback synthesizer only.
     #[arg(long, global = true)]
     tts_model_options: Option<PathBuf>,
+    /// Native family of the optional readback model, independent of --model-family.
+    #[arg(long, global = true)]
+    tts_model_family: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -51,15 +57,30 @@ enum Precision {
 struct LoadSettings {
     dtype: candle::DType,
     options: serde_json::Value,
+    family: Option<String>,
 }
 impl LoadSettings {
     fn new(args: &Args) -> Result<Self> {
-        Self::from_options(args.dtype, args.model_options.as_deref())
+        Self::from_options(
+            args.dtype,
+            args.model_options.as_deref(),
+            args.model_family.clone(),
+        )
     }
     fn readback(args: &Args) -> Result<Self> {
-        Self::from_options(args.tts_dtype, args.tts_model_options.as_deref())
+        Self::from_options(
+            args.tts_dtype,
+            args.tts_model_options.as_deref(),
+            args.tts_model_family.clone(),
+        )
     }
-    fn from_options(dtype: Precision, path: Option<&Path>) -> Result<Self> {
+    fn from_options(dtype: Precision, path: Option<&Path>, family: Option<String>) -> Result<Self> {
+        anyhow::ensure!(
+            family
+                .as_ref()
+                .is_none_or(|family| !family.trim().is_empty()),
+            "model family must not be empty"
+        );
         let options = match path {
             None => serde_json::json!({}),
             Some(path) => {
@@ -77,6 +98,7 @@ impl LoadSettings {
                 Precision::Bf16 => candle::DType::BF16,
             },
             options,
+            family,
         })
     }
     fn apply(&self, mut spec: ModelSpec) -> ModelSpec {
@@ -88,6 +110,9 @@ impl LoadSettings {
         }
         spec.options = options;
         spec.dtype = self.dtype;
+        if let Some(family) = &self.family {
+            spec = spec.with_family(family);
+        }
         spec
     }
     fn spec(&self, directory: PathBuf) -> ModelSpec {
@@ -1859,6 +1884,10 @@ mod tests {
             primary.to_str().unwrap(),
             "--tts-model-options",
             readback.to_str().unwrap(),
+            "--model-family",
+            "voxtral",
+            "--tts-model-family",
+            "parler_tts",
             "models",
         ])
         .unwrap();
@@ -1866,12 +1895,46 @@ mod tests {
         let readback = LoadSettings::readback(&args).unwrap().spec("tts".into());
         assert_eq!(primary.dtype, candle::DType::BF16);
         assert_eq!(readback.dtype, candle::DType::F32);
+        assert_eq!(primary.family.as_deref(), Some("voxtral"));
+        assert_eq!(readback.family.as_deref(), Some("parler_tts"));
         assert_eq!(primary.options["max_context"], 2048);
         assert!(readback.options.get("max_context").is_none());
         assert_eq!(
             readback.options["speaker_embedding_file"],
             "speaker.safetensors"
         );
+    }
+    #[test]
+    fn family_override_is_global_and_never_inherited_by_readback() {
+        let args = Args::try_parse_from([
+            "candle-audio",
+            "codec",
+            "encode",
+            "--model",
+            "parler",
+            "--input",
+            "question.wav",
+            "--output",
+            "codes.json",
+            "--model-family",
+            "dac",
+        ])
+        .unwrap();
+        assert_eq!(
+            LoadSettings::new(&args)
+                .unwrap()
+                .spec("parler".into())
+                .family
+                .as_deref(),
+            Some("dac")
+        );
+        assert!(LoadSettings::readback(&args)
+            .unwrap()
+            .spec("readback".into())
+            .family
+            .is_none());
+        let args = Args::try_parse_from(["candle-audio", "--model-family", " ", "models"]).unwrap();
+        assert!(LoadSettings::new(&args).is_err());
     }
     #[test]
     fn invalid_request_is_rejected_before_any_output_file() {
@@ -1884,8 +1947,10 @@ mod tests {
             gpu_index: 0,
             dtype: Precision::F32,
             model_options: None,
+            model_family: None,
             tts_dtype: Precision::F32,
             tts_model_options: None,
+            tts_model_family: None,
             command: Command::Synthesize {
                 model,
                 text: " ".into(),

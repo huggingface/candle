@@ -695,10 +695,12 @@ pub fn load_snac(
 pub fn load_dac(
     directory: &Path,
     device: &Device,
-    _options: &serde_json::Value,
+    options: &serde_json::Value,
 ) -> Result<Box<dyn AudioCodec + Send>> {
-    let json: serde_json::Value =
+    let (config_key, weight_prefix) = super::load::submodel_options(options)?;
+    let root: serde_json::Value =
         serde_json::from_slice(&std::fs::read(directory.join("config.json"))?)?;
+    let json = super::load::submodel_config(&root, config_key.as_deref())?;
     let config: dac::Config = serde_json::from_value(json.clone())?;
     let encoder_dim = json
         .get("encoder_hidden_size")
@@ -720,6 +722,11 @@ pub fn load_dac(
     };
     let encoder = rates("downsampling_ratios", &[2, 4, 8, 8])?;
     let decoder = rates("upsampling_ratios", &[8, 8, 4, 2])?;
+    let weights = vb(directory, device)?;
+    let weights = match weight_prefix {
+        Some(prefix) => weights.pp(prefix),
+        None => weights,
+    };
     let model = dac::Model::with_architecture(
         &config,
         encoder_dim,
@@ -727,7 +734,7 @@ pub fn load_dac(
         decoder_dim,
         &decoder,
         codebook_dim,
-        vb(directory, device)?,
+        weights,
     )?;
     Ok(Box::new(DacCodec::new(model, &config, device.clone())?))
 }

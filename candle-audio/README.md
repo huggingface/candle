@@ -409,3 +409,25 @@ compiled backends before loading weights. Compiled backend availability does not
 certify checkpoint execution on that backend. CLI `models` includes these
 constraints; `capabilities` includes them as `loader_constraints` beside the
 loaded model descriptor.
+
+### Explicit families and embedded codecs
+
+`--model-family NAME` overrides checkpoint family detection, matching
+`ModelSpec::with_family` in the native API. Readback has an independent
+`--tts-model-family`; it does not inherit the primary family override.
+
+The DAC loader accepts `config_key` and `weight_prefix` in `--model-options` to
+select a DAC submodel embedded in a larger checkpoint. Both are dotted identifier
+paths; invalid types, missing configuration objects and malformed paths fail
+before weight loading. Standalone DAC checkpoints use the root configuration
+and unprefixed weights when these options are omitted.
+
+```sh
+# dac-options.json contains:
+# {"config_key":"audio_encoder","weight_prefix":"audio_encoder.model"}
+candle-audio --model-family dac --model-options dac-options.json codec encode \
+  --model /models/parler-tts-mini-v1 --input speech.wav --output codes.json
+```
+
+This selects the codec, rather than treating the Parler speech generator as a
+codec task. Existing checkpoint files remain unchanged.

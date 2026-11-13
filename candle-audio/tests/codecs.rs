@@ -221,21 +221,16 @@ fn pretrained_dac_encoder_and_decoder_roundtrip_from_parler_prefix() {
     let directory = std::path::PathBuf::from(
         std::env::var("CANDLE_AUDIO_PARLER_MODEL").expect("set CANDLE_AUDIO_PARLER_MODEL"),
     );
-    let json: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(directory.join("config.json")).unwrap()).unwrap();
-    let config: dac::Config = serde_json::from_value(json["audio_encoder"].clone()).unwrap();
-    // Map the shared checkpoint, then request only its DAC prefix. This does not
-    // instantiate Parler's text encoders or autoregressive language model.
-    let weights = unsafe {
-        VarBuilder::from_mmaped_safetensors(
-            &[directory.join("model.safetensors")],
-            DType::F32,
-            &Device::Cpu,
-        )
-        .unwrap()
-    };
-    let model = dac::Model::new(&config, weights.pp("audio_encoder.model")).unwrap();
-    let mut codec = DacCodec::new(model, &config, Device::Cpu).unwrap();
+    // The public registry selects only the DAC submodel from shared Parler
+    // artifacts; no text encoder or autoregressive model is instantiated.
+    let spec = candle_audio::models::registry::ModelSpec::new(directory)
+        .with_family("dac")
+        .with_options(
+            serde_json::json!({"config_key":"audio_encoder","weight_prefix":"audio_encoder.model"}),
+        );
+    let mut codec = candle_audio::models::registry::ModelRegistry::standard()
+        .codec(&spec, &Device::Cpu)
+        .unwrap();
     let source = input(codec.format().audio_format, 1027);
     let codes = codec
         .encode(&source, &CancellationToken::default())
