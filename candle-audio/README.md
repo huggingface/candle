@@ -30,6 +30,14 @@ These adapters run Candle tensor operations on the selected device. Adding a new
 architecture still requires native model operations and a loader. Applications can
 register a custom `ModelLoader` without editing sessions, workers or transports.
 
+## Toolchain and platform checks
+
+The local CPU/Vulkan validation recorded in this checkout used Rust 1.98.1.
+This crate does not currently declare or certify a minimum supported Rust
+version; the workspace CI follows stable Rust. The `cli` and `live-io` fast
+tests are configured for Linux, Windows and macOS, but a workflow definition
+is not evidence that those remote jobs or hardware paths have run.
+
 ## CLI
 
 Build from the workspace with `cargo build -p candle-audio --release --features cli`.
@@ -257,7 +265,7 @@ CANDLE_AUDIO_LFM3=/models/lfm3-audio CANDLE_AUDIO_TEST_DEVICE=cpu \
 The manifest records immutable revisions, lengths and SHA256 digests. The manual
 `audio-checkpoints.yml` workflow runs selected real-checkpoint tests without
 silently skipping missing fixtures. Fast CI runs deterministic native tests with
-`cli` enabled. Physical microphone, playback and real-browser validation require
+`cli,live-io` enabled. Physical microphone, playback and real-browser validation require
 the actual devices; simulated audio/DOM tests do not certify those paths.
 
 The Axum/web integration is an optional local example under
@@ -312,3 +320,92 @@ Migration: `AudioEvent::TurnCompleted` now carries `finish_reason`, also through
 Legacy JSON events without the field deserialize as `Completed`. `TtsStream`
 advertises its own text-only wrapper capabilities; it does not expose a model's
 reference-audio or independently polled output interfaces.
+
+### Raw PCM file input
+
+File input defaults to WAV. `transcribe` (or `asr`), `realtime`, `codec encode`
+and `understand` also accept headerless PCM using `--input-format s16le` or
+`--input-format f32le`. Both require `--input-sample-rate HZ` and
+`--input-channels N`; samples are little endian and interleaved by channel.
+For `understand`, these options apply to every supplied clip. WAV uses its header
+and rejects the raw metadata flags. Inputs must be regular files; stdin is not
+supported. Streaming tasks read bounded chunks and preserve the final short
+chunk. Incomplete samples or channel frames and nonfinite float samples fail
+validation before checkpoint loading or output creation.
+
+```sh
+candle-audio asr --model /models/whisper --input recording.pcm \
+  --input-format s16le --input-sample-rate 48000 --input-channels 2
+candle-audio generate-audio --model /models/musicgen --prompt "Quiet piano" \
+  --audio-reference reference.pcm --reference-format f32le \
+  --reference-sample-rate 32000 --reference-channels 1 --output continuation.wav
+```
+
+Generation references use independent `--reference-format`,
+`--reference-sample-rate` and `--reference-channels` options, which require
+`--audio-reference`. Reference encoding defaults to WAV. Codec, understanding
+and generation reference files retain the 30 second and 16 million sample
+limits; streaming file commands can process longer recordings across turns.
+Outputs remain PCM16 WAV, and `codec decode` continues to consume codebook JSON.
+
+### Reproducible process benchmarks
+
+The stdlib-only runner executes the Rust CLI in a fresh process and never runs a
+model in Python. Reserve a new directory for each run:
+
+```sh
+python3 .devops/benchmark-audio.py --output bench_results/audio-runtime/my-whisper-run \
+  --input-wav /fixtures/jfk.wav --max-wall-seconds 20 --max-rtf 2 \
+  --note "CPU; release; warm filesystem cache; no concurrent inference" -- \
+  /path/to/release/candle-audio --device cpu asr \
+  --model /models/whisper-tiny --input /fixtures/jfk.wav --language en
+```
+
+The directory contains the original `stdout.jsonl`, `stderr.log`, timestamped
+`observed.jsonl`, and `report.json`. Existing directories are rejected. The
+report records the exact command, executable SHA256, repository commit/dirty
+paths, host/CPU/memory details, exit status and repeatable `--note` context. Use
+notes to identify checkpoint revisions, build features, GPU model, resident
+models and cache conditions; a binary hash alone does not establish which source
+or compiler flags produced it.
+
+`wall_seconds` and `first_audio.process_seconds` /
+`first_transcript.process_seconds` start before process creation and include model
+loading. The separate `cli_elapsed_seconds` values copy the Rust event's
+`elapsed_seconds` clock, which starts after loading when the CLI sink is created;
+it includes subsequent preprocessing/session work and is not isolated kernel
+time. The first nonempty transcript and first nonzero PCM chunk count. Missing
+observations remain JSON null. PCM duration sums emitted frames divided by each
+chunk's sample rate, independently of channel count. RTF is total process wall
+time divided by `--input-wav` duration (or explicit `--input-seconds` for raw
+input); without either, it uses emitted PCM duration. ASR requires an input
+duration to obtain RTF. Failed commands or malformed JSON/audio events leave RTF
+null and fail the run. Linux `/usr/bin/time`, when available, supplies peak child
+RSS. Otherwise `wait4` supplies child RSS on Linux (KiB converted to bytes) and
+Darwin (bytes). Unsupported platforms report null. The report names the source;
+RSS does not measure GPU allocations or other resident processes.
+
+Optional `--max-wall-seconds`, `--max-first-audio-seconds` and `--max-rtf` assess
+the completed run; they do not interrupt it. A missing required observation fails
+its budget. Failed runs or budgets return status 1 while retaining the report.
+Budgets describe this hardware/checkpoint/run, rather than a universal latency
+guarantee. Test the accounting without weights using
+`python3 .devops/test-benchmark-audio.py`.
+
+### Event metadata and loader constraints
+
+`RealtimeSession::with_structured_events()?` and
+`RealtimeWorker::spawn_structured` opt into identified transcript segments and
+clocked PCM; legacy events remain the API default. The file and live CLI modes
+select this option. Transcript identity is `(turn, segment_id)`; revisions start
+at zero and increase by one. A final segment can only be corrected through a
+transcript revision. Audio clocks are relative to each turn and permit gaps but
+reject overlap. Applications retain transcript identity while applying updates.
+
+`ModelCapabilities` exposes optional `max_context_tokens`, `input_streaming` and
+`output_streaming`, with serde defaults for older descriptors.
+`ModelRegistry::constraints(family)` reports accepted activation dtypes and
+compiled backends before loading weights. Compiled backend availability does not
+certify checkpoint execution on that backend. CLI `models` includes these
+constraints; `capabilities` includes them as `loader_constraints` beside the
+loaded model descriptor.

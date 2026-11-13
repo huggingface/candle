@@ -98,6 +98,8 @@ jobs:
           cargo test --workspace --lib --bins --tests
           cargo test --workspace --doc
           cargo test -p candle-audio --features cli,live-io
+      - name: Validate audio benchmark accounting without checkpoints
+        run: python .devops/test-benchmark-audio.py
       - name: Run tests (Windows & macOS)
         if: runner.os != 'Linux'
         run: |
