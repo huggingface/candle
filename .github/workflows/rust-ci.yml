@@ -89,7 +89,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install lld (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y lld
+        run: sudo apt-get update && sudo apt-get install -y lld libasound2-dev pkg-config
       - name: Run tests (with lld on Linux)
         if: runner.os == 'Linux'
         env:
@@ -97,11 +97,13 @@ jobs:
         run: |
           cargo test --workspace --lib --bins --tests
           cargo test --workspace --doc
+          cargo test -p candle-audio --features cli,live-io
       - name: Run tests (Windows & macOS)
         if: runner.os != 'Linux'
         run: |
           cargo test --workspace --lib --bins --tests
           cargo test --workspace --doc
+          cargo test -p candle-audio --features cli,live-io
 
   fmt:
     permissions:

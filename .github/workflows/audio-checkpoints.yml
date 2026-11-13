@@ -1,0 +1,106 @@
+name: Native audio checkpoint validation
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Native checkpoint suite (downloads pinned data-only model artifacts)
+        required: true
+        default: lfm3
+        type: choice
+        options: [lfm3, legacy, codecs, musicgen, metavoice, voxtral, gemma4, all]
+permissions:
+  contents: read
+jobs:
+  checkpoints:
+    name: Checkpoint (${{ matrix.suite }})
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        suite: ${{ fromJSON(inputs.suite == 'all' && '["lfm3","legacy","codecs","musicgen","metavoice","voxtral","gemma4"]' || format('["{0}"]', inputs.suite)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: 2
+      CANDLE_AUDIO_TEST_DEVICE: cpu
+      AUDIO_SUITE: ${{ matrix.suite }}
+    steps:
+      - name: Reserve disk for checkpoint data and native build
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          key: native-audio-release
+      - name: Select checkpoint directory
+        run: echo "AUDIO_MODELS=$RUNNER_TEMP/candle-audio-models" >> "$GITHUB_ENV"
+      - name: Fetch and verify immutable checkpoint artifacts
+        shell: bash
+        run: |
+          families=()
+          if [[ "$AUDIO_SUITE" == lfm3 || "$AUDIO_SUITE" == all ]]; then
+            families+=(--family lfm3-audio)
+          fi
+          if [[ "$AUDIO_SUITE" == legacy || "$AUDIO_SUITE" == all ]]; then
+            families+=(--family whisper-tiny --family whisper-tiny-q80 --family parler-tts-mini-v1 --family mimi --family samples)
+          fi
+          if [[ "$AUDIO_SUITE" == codecs || "$AUDIO_SUITE" == all ]]; then
+            families+=(--family encodec-24khz --family snac-24khz --family mimi --family parler-tts-mini-v1)
+          fi
+          if [[ "$AUDIO_SUITE" == musicgen || "$AUDIO_SUITE" == all ]]; then
+            families+=(--family musicgen-small)
+          fi
+          if [[ "$AUDIO_SUITE" == metavoice || "$AUDIO_SUITE" == all ]]; then
+            families+=(--family metavoice-v0.1)
+          fi
+          if [[ "$AUDIO_SUITE" == voxtral || "$AUDIO_SUITE" == all ]]; then
+            families+=(--family voxtral-mini-3b)
+          fi
+          if [[ "$AUDIO_SUITE" == gemma4 || "$AUDIO_SUITE" == all ]]; then
+            families+=(--family gemma4-e2b)
+          fi
+          python3 .devops/fetch-audio-test-models.py --destination "$AUDIO_MODELS" "${families[@]}"
+      - name: Native LFM3 multilingual ASR, TTS and conversation
+        if: matrix.suite == 'lfm3'
+        env:
+          CANDLE_AUDIO_LFM3: ${{ env.AUDIO_MODELS }}/lfm3-audio
+        run: cargo test -p candle-audio --release --features cli --test lfm3 -- --ignored --nocapture --test-threads=1
+      - name: Native legacy adapters
+        if: matrix.suite == 'legacy'
+        env:
+          CANDLE_AUDIO_TEST_MODELS: ${{ env.AUDIO_MODELS }}
+          CANDLE_AUDIO_TEST_WAV: ${{ env.AUDIO_MODELS }}/samples/jfk.wav
+        run: cargo test -p candle-audio --release --features cli --test pretrained -- --ignored --nocapture --test-threads=1
+      - name: Native codec checkpoints
+        if: matrix.suite == 'codecs'
+        env:
+          CANDLE_AUDIO_MIMI_MODEL: ${{ env.AUDIO_MODELS }}/mimi
+          CANDLE_AUDIO_PARLER_MODEL: ${{ env.AUDIO_MODELS }}/parler-tts-mini-v1
+          CANDLE_AUDIO_ENCODEC_MODEL: ${{ env.AUDIO_MODELS }}/encodec-24khz
+          CANDLE_AUDIO_SNAC_MODEL: ${{ env.AUDIO_MODELS }}/snac-24khz
+        run: cargo test -p candle-audio --release --features cli --test codecs -- --include-ignored --nocapture --test-threads=1
+      - name: Native text-conditioned music generation
+        if: matrix.suite == 'musicgen'
+        env:
+          CANDLE_AUDIO_MUSICGEN_MODEL: ${{ env.AUDIO_MODELS }}/musicgen-small
+        run: cargo test -p candle-audio --release --features cli --test musicgen -- --ignored --nocapture --test-threads=1
+      - name: Native MetaVoice normal and quantized synthesis
+        if: matrix.suite == 'metavoice'
+        env:
+          CANDLE_AUDIO_METAVOICE: ${{ env.AUDIO_MODELS }}/metavoice-v0.1
+          CANDLE_AUDIO_METAVOICE_GGUF: ${{ env.AUDIO_MODELS }}/metavoice-v0.1
+        run: cargo test -p candle-audio --release --features cli --test csm_metavoice metavoice_native -- --ignored --nocapture --test-threads=1
+      - name: Native Voxtral BF16 audio understanding
+        if: matrix.suite == 'voxtral'
+        env:
+          CANDLE_AUDIO_VOXTRAL: ${{ env.AUDIO_MODELS }}/voxtral-mini-3b
+          RAYON_NUM_THREADS: 4
+        run: cargo test -p candle-audio --release --features cli --test audio_understanding voxtral_native_bf16 -- --ignored --nocapture --test-threads=1
+      - name: Native Gemma4 BF16 audio understanding
+        if: matrix.suite == 'gemma4'
+        env:
+          CANDLE_AUDIO_GEMMA4: ${{ env.AUDIO_MODELS }}/gemma4-e2b
+          RAYON_NUM_THREADS: 4
+        run: cargo test -p candle-audio --release --features cli --test audio_understanding gemma4_native_bf16 -- --ignored --nocapture --test-threads=1
