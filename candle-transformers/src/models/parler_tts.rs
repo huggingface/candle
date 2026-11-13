@@ -384,9 +384,24 @@ impl Model {
         &mut self,
         prompt_tokens: &Tensor,
         description_tokens: &Tensor,
-        mut lp: LogitsProcessor,
+        lp: LogitsProcessor,
         max_steps: usize,
     ) -> Result<Tensor> {
+        self.generate_with_callback(prompt_tokens, description_tokens, lp, max_steps, |_| Ok(()))
+    }
+
+    /// As `generate`, with a fallible callback before encoding and every decode
+    /// step. Applications can cooperatively cancel generation without waiting
+    /// for the full utterance. A callback error is propagated to the caller.
+    pub fn generate_with_callback(
+        &mut self,
+        prompt_tokens: &Tensor,
+        description_tokens: &Tensor,
+        mut lp: LogitsProcessor,
+        max_steps: usize,
+        mut before_step: impl FnMut(usize) -> Result<()>,
+    ) -> Result<Tensor> {
+        before_step(0)?;
         self.decoder.clear_kv_cache();
         self.text_encoder.clear_kv_cache();
         let encoded = self.text_encoder.forward(description_tokens)?;
@@ -400,6 +415,7 @@ impl Model {
         let mut all_audio_tokens = vec![vec![]; num_codebooks];
         let prompt_len = prompt_hidden_states.dim(1)?;
         for step in 0..max_steps {
+            before_step(step)?;
             let input_ids = Tensor::from_slice(
                 audio_tokens.as_slice(),
                 (1, num_codebooks, 1),

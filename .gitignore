@@ -49,4 +49,5 @@ bria.safetensors
 bria.wav
 bench_results/
 models/
+!candle-audio/src/models/
 target-wip/

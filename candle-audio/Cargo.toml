@@ -1,0 +1,35 @@
+[package]
+name = "candle-audio"
+version.workspace = true
+edition.workspace = true
+description = "Native, model-independent speech and streaming audio pipelines for Candle"
+repository.workspace = true
+license.workspace = true
+readme = "README.md"
+
+[dependencies]
+candle = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokenizers = { workspace = true, features = ["fancy-regex"] }
+rubato = { version = "0.16.2", default-features = false }
+clap = { workspace = true, optional = true }
+hound = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+
+[features]
+default = []
+cli = ["dep:clap", "dep:hound", "dep:anyhow"]
+vulkan = ["candle/vulkan", "candle-nn/vulkan", "candle-transformers/vulkan"]
+cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+metal = ["candle/metal", "candle-nn/metal", "candle-transformers/metal"]
+accelerate = ["candle/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
+mkl = ["candle/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
+
+[[bin]]
+name = "candle-audio"
+path = "src/bin/candle-audio.rs"
+required-features = ["cli"]

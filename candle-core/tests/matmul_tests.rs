@@ -1,5 +1,41 @@
 use candle_core::{test_device, DType, Device, IndexOp, Result, Tensor};
 
+#[test]
+fn affine_matmul_cpu_broadcasts_strided_column_bias() -> Result<()> {
+    // Covers Whisper's [1500, 384] projection as well as smaller and batched
+    // inputs. A bias view has both a nonzero offset and a stride of two.
+    for (batch, rows, cols) in [(1, 2, 4), (1, 1500, 384), (3, 7, 8)] {
+        let dev = &Device::Cpu;
+        let source = Tensor::arange(0f32, (cols * 2 + 4) as f32, dev)?;
+        let bias = source
+            .narrow(0, 2, cols * 2)?
+            .reshape((cols, 2))?
+            .i((.., 0))?;
+        let rhs = Tensor::ones((3, cols), DType::F32, dev)?;
+        if batch == 1 {
+            let lhs = Tensor::ones((rows, 3), DType::F32, dev)?;
+            let values = lhs.affine_matmul(&rhs, &bias)?.to_vec2::<f32>()?;
+            for row in values {
+                for (col, value) in row.iter().enumerate() {
+                    assert_eq!(*value, 5. + 2. * col as f32);
+                }
+            }
+        } else {
+            let lhs = Tensor::ones((batch, rows, 3), DType::F32, dev)?;
+            let rhs = rhs.broadcast_left(batch)?;
+            let values = lhs.affine_matmul(&rhs, &bias)?.to_vec3::<f32>()?;
+            for matrix in values {
+                for row in matrix {
+                    for (col, value) in row.iter().enumerate() {
+                        assert_eq!(*value, 5. + 2. * col as f32);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn matmul(device: &Device) -> Result<()> {
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
     let a = Tensor::from_slice(&data, (2, 2), device)?;

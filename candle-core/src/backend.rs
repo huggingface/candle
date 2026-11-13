@@ -145,7 +145,8 @@ pub trait BackendStorage: Sized {
         } else {
             crate::Layout::contiguous_with_offset(&[bsz, m, n], 0)
         };
-        out.binary_impl::<crate::op::Add>(bias, &out_l, bias_l)
+        let bias_l = bias_l.broadcast_as(out_l.shape().clone())?;
+        out.binary_impl::<crate::op::Add>(bias, &out_l, &bias_l)
     }
 
     fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()>;

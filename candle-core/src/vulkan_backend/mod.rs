@@ -10265,6 +10265,15 @@ impl BackendStorage for VulkanStorage {
             ids_u32_storage = ids.to_dtype(ids_l, DType::U32)?;
             &ids_u32_storage
         };
+        // Conversion materializes only the selected ids view in a new buffer.
+        // Reapplying the old offset/strides would index past that allocation
+        // (e.g. DAC codebook ids narrowed from an I64 tensor).
+        let effective_ids_l = if ids.dtype == DType::U32 {
+            ids_l.clone()
+        } else {
+            Layout::contiguous(ids_l.shape())
+        };
+        let ids_l = &effective_ids_l;
         let ids_u32 = match &ids_ref.buffer {
             VulkanStorageBuffer::U32(b) => b.clone(),
             _ => {

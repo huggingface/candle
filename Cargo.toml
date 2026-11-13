@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "candle-audio",
     "candle-core",
     "candle-datasets",
     "candle-examples",
@@ -37,6 +38,7 @@ accelerate-src = { version = "0.3.2" }
 anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
 candle = { path = "./candle-core", package = "candle-core", version = "0.11.1" }
+candle-audio = { path = "./candle-audio", version = "0.11.1" }
 candle-datasets = { path = "./candle-datasets", version = "0.11.1" }
 candle-flash-attn = { path = "./candle-flash-attn", version = "0.11.1" }
 candle-flash-attn-v3 = { path = "./candle-flash-attn-v3", version = "0.11.1" }

@@ -47,6 +47,11 @@ Having installed `candle` with Cuda support, simply define the `device` to be on
 
 For more advanced examples, please have a look at the following section.
 
+For native speech applications, [`candle-audio`](candle-audio/README.md) provides
+model-independent ASR, synthesis, and realtime session APIs plus a local CLI.
+It includes Whisper, Parler-TTS, and streaming Mimi adapters, with shared PCM
+conversion, cancellation, bounded input, and typed output events.
+
 ## Vulkan
 
 Candle has a Vulkan backend that runs on AMD, Intel, and other GPUs (and CPU
