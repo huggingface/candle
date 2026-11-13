@@ -1,5 +1,60 @@
 use candle_audio::*;
 #[test]
+#[ignore = "requires only the EnCodec prefix of pinned MusicGen-small weights; CPU only"]
+fn native_musicgen_codec_blocks_match_full_decode_and_cancel() -> candle::Result<()> {
+    use candle::{DType, Device, Tensor};
+    use candle_nn::VarBuilder;
+    use candle_transformers::models::{encodec, musicgen};
+    let directory = std::path::PathBuf::from(
+        std::env::var("CANDLE_AUDIO_MUSICGEN_MODEL").expect("set CANDLE_AUDIO_MUSICGEN_MODEL"),
+    );
+    let cfg: musicgen::GenConfig =
+        serde_json::from_slice(&std::fs::read(directory.join("config.json")).unwrap()).unwrap();
+    let vb = unsafe {
+        VarBuilder::from_mmaped_safetensors(
+            &[directory.join("model.safetensors")],
+            DType::F32,
+            &Device::Cpu,
+        )?
+    };
+    // Do not instantiate/map the T5 or language decoder into tensor storage.
+    let codec = encodec::Model::new(&cfg.encodec, vb.pp("audio_encoder"))?;
+    let frames = 75;
+    let books = cfg.encodec.num_quantizers();
+    let codes = Tensor::from_vec(
+        (0..frames * books)
+            .map(|i| ((i * 17 + i / 11) % cfg.encodec.codebook_size) as u32)
+            .collect::<Vec<_>>(),
+        (1, books, frames),
+        &Device::Cpu,
+    )?;
+    let full = codec.decode(&codes)?;
+    let difference =
+        |a: &Tensor, b: &Tensor| (a - b)?.abs()?.flatten_all()?.max(0)?.to_scalar::<f32>();
+    for chunk in [16, 32] {
+        let bounded = codec.decode_chunked_with_callback(&codes, chunk, || Ok(()))?;
+        assert_eq!(bounded.dims(), full.dims());
+        let error = difference(&bounded, &full)?;
+        eprintln!("MusicGen real EnCodec frames={frames} chunk={chunk} max_error={error}");
+        assert!(error < 3e-5);
+    }
+    let mut calls = 0;
+    let cancelled = codec.decode_with_callback(&codes, || {
+        calls += 1;
+        if calls == 20 {
+            candle::bail!("cancel real EnCodec CNN");
+        }
+        Ok(())
+    });
+    assert!(cancelled
+        .unwrap_err()
+        .to_string()
+        .contains("cancel real EnCodec CNN"));
+    assert_eq!(calls, 20);
+    assert!(difference(&codec.decode_with_callback(&codes, || Ok(()))?, &full)? < 3e-5);
+    Ok(())
+}
+#[test]
 fn audio_generation_request_validates_sampling_and_budgets() {
     let mut request = AudioGenerationRequest::new("Warm piano and soft drums");
     assert_eq!(request.max_steps, 250);

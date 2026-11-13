@@ -358,8 +358,15 @@ impl MusicGen {
                 &self.device,
             )?
         };
-        let audio = self.model.decode_audio(&codes)?;
+        let audio = self.model.decode_audio_with_callback(&codes, || {
+            cancel
+                .check()
+                .map_err(|error| candle::Error::Msg(error.to_string()))
+        });
+        // Preserve the typed cancellation/deadline error across the core tensor
+        // callback, and suppress the entire buffered response on cancellation.
         cancel.check()?;
+        let audio = audio?;
         let (batch, channels, frames) = audio.dims3()?;
         if batch != 1 || channels != self.format.channels() as usize {
             return Err(Error::InvalidInput(
@@ -404,6 +411,9 @@ impl AudioGenerationModel for MusicGen {
             max_input_frames: accepts_reference.then_some(self.max_steps.saturating_sub(1) * hop),
             accepts_audio_reference: accepts_reference,
             max_text_bytes: Some(16384),
+            max_context_tokens: Some(self.model.config().musicgen.max_position_embeddings),
+            input_streaming: accepts_reference.then_some(StreamingMode::Buffered),
+            output_streaming: Some(StreamingMode::Buffered),
             ..Default::default()
         }
     }

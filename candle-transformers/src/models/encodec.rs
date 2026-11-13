@@ -135,6 +135,12 @@ impl Config {
         {
             candle::bail!("invalid EnCodec chunking configuration");
         }
+        if !self.trim_right_ratio.is_finite()
+            || !(0. ..=1.).contains(&self.trim_right_ratio)
+            || (!self.use_causal_conv && self.trim_right_ratio != 1.)
+        {
+            candle::bail!("invalid codec trim_right_ratio");
+        }
         if self.num_quantizers() == 0 {
             candle::bail!("EnCodec bandwidth is too small for one quantizer");
         }
@@ -447,6 +453,14 @@ impl ResidualVectorQuantizer {
     }
 
     pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+        self.decode_with_callback(codes, &mut || Ok(()))
+    }
+
+    fn decode_with_callback(
+        &self,
+        codes: &Tensor,
+        before_step: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
         let mut quantized_out = Tensor::zeros((), self.dtype, codes.device())?;
         let ncodes = codes.dim(0)?;
         if ncodes > self.layers.len() {
@@ -457,6 +471,7 @@ impl ResidualVectorQuantizer {
             )
         }
         for (i, layer) in self.layers.iter().take(ncodes).enumerate() {
+            before_step()?;
             let quantized = layer.decode(&codes.i(i)?)?;
             quantized_out = quantized.broadcast_add(&quantized_out)?;
         }
@@ -483,6 +498,37 @@ impl EncodecLSTM {
             layers.push(lstm)
         }
         Ok(Self { layers })
+    }
+
+    fn forward_with_callback(
+        &self,
+        xs: &Tensor,
+        before_step: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
+        use candle_nn::RNN;
+        let xs = xs.t()?;
+        let residual = &xs;
+        let mut xs = xs.clone();
+        for layer in &self.layers {
+            let (batch, length, _) = xs.dims3()?;
+            let mut state = layer.zero_state(batch)?;
+            let mut states = Vec::with_capacity(length);
+            for position in 0..length {
+                if position.is_multiple_of(DEFAULT_DECODE_CHUNK_SIZE) {
+                    // Deferred GPU execution must complete one recurrent block
+                    // before enqueueing another or observing cancellation.
+                    xs.device().synchronize()?;
+                    before_step()?;
+                }
+                state = layer.step(&xs.i((.., position, ..))?.contiguous()?, &state)?;
+                states.push(state.clone());
+            }
+            xs.device().synchronize()?;
+            before_step()?;
+            xs = layer.states_to_tensor(&states)?;
+        }
+        before_step()?;
+        (xs + residual)?.t()
     }
 }
 
@@ -829,10 +875,50 @@ pub struct Decoder {
     init_lstm: EncodecLSTM,
     sampling_layers: Vec<(EncodecConvTranspose1d, Vec<EncodecResnetBlock>)>,
     final_conv: EncodecConv1d,
+    hop: usize,
+    convolution_halo: usize,
+    temporal_group_norm: bool,
 }
 
 impl Decoder {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        cfg.validate()?;
+        // Propagate an output dependency interval backwards through the CNN
+        // following the LSTM. Conv1d expands it by its effective kernel minus
+        // one; transposed convolution maps [a,b] to
+        // [ceil((a+trim_left-kernel+1)/stride), floor((b+trim_left)/stride)].
+        // A symmetric extra frame also covers reflection at true stream edges.
+        let mut left = 0usize;
+        let mut right = 0usize;
+        let expand = |kernel: usize| {
+            let padding = kernel - 1;
+            let pad_left = if cfg.use_causal_conv {
+                padding
+            } else {
+                padding.div_ceil(2)
+            };
+            (pad_left, padding - pad_left)
+        };
+        let (pad_left, pad_right) = expand(cfg.last_kernel_size);
+        left += pad_left;
+        right += pad_right;
+        for &ratio in cfg.upsampling_ratios.iter().rev() {
+            for j in 0..cfg.num_residual_layers {
+                let kernel =
+                    (cfg.residual_kernel_size - 1) * cfg.dilation_growth_rate.pow(j as u32) + 1;
+                let (pad_left, pad_right) = expand(kernel);
+                left += pad_left;
+                right += pad_right;
+            }
+            let trim_right = if cfg.use_causal_conv {
+                (ratio as f64 * cfg.trim_right_ratio).ceil() as usize
+            } else {
+                ratio / 2
+            };
+            let trim_left = ratio - trim_right;
+            left = (left + 2 * ratio - 1 - trim_left).div_ceil(ratio);
+            right = (right + trim_left).div_ceil(ratio);
+        }
         let mut layer = Layer::new(vb.pp("layers"));
         let mut scaling = usize::pow(2, cfg.upsampling_ratios.len() as u32);
         let init_conv = EncodecConv1d::new(
@@ -885,7 +971,81 @@ impl Decoder {
             init_lstm,
             sampling_layers,
             final_conv,
+            hop: cfg.upsampling_ratios.iter().product(),
+            convolution_halo: left.max(right) + 1,
+            temporal_group_norm: cfg.norm_type == NormType::TimeGroupNorm,
         })
+    }
+
+    fn convolution_with_callback(
+        &self,
+        xs: &Tensor,
+        before_step: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
+        let mut xs = xs.clone();
+        for (conv, resnets) in &self.sampling_layers {
+            before_step()?;
+            xs = xs.elu(1.)?.apply(conv)?;
+            for resnet in resnets {
+                before_step()?;
+                let residual = xs.clone();
+                xs = xs.elu(1.)?.apply(&resnet.block_conv1)?;
+                before_step()?;
+                xs = xs.elu(1.)?.apply(&resnet.block_conv2)?;
+                let residual = match &resnet.shortcut {
+                    None => residual,
+                    Some(shortcut) => {
+                        before_step()?;
+                        residual.apply(shortcut)?
+                    }
+                };
+                xs = (xs + residual)?;
+            }
+        }
+        before_step()?;
+        xs.elu(1.)?.apply(&self.final_conv)
+    }
+
+    fn forward_chunked_with_callback(
+        &self,
+        xs: &Tensor,
+        chunk_frames: usize,
+        before_step: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
+        before_step()?;
+        let xs = xs.apply(&self.init_conv)?;
+        let xs = self.init_lstm.forward_with_callback(&xs, before_step)?;
+        // Group norm includes the complete time axis. Independently normalizing
+        // chunks would change the model; retain exact whole-tensor operations.
+        if self.temporal_group_norm {
+            return self.convolution_with_callback(&xs, before_step);
+        }
+        let length = xs.dim(D::Minus1)?;
+        let mut parts = Vec::new();
+        for offset in (0..length).step_by(chunk_frames) {
+            before_step()?;
+            let end = offset.saturating_add(chunk_frames).min(length);
+            let start_context = offset.saturating_sub(self.convolution_halo);
+            let end_context = end.saturating_add(self.convolution_halo).min(length);
+            let context = xs
+                .narrow(D::Minus1, start_context, end_context - start_context)?
+                .contiguous()?;
+            let decoded = self.convolution_with_callback(&context, before_step)?;
+            // `contiguous` may return a mono narrow view without copying. A
+            // forced copy releases halo storage instead of retaining it until cat.
+            let part = decoded
+                .narrow(
+                    D::Minus1,
+                    (offset - start_context) * self.hop,
+                    (end - offset) * self.hop,
+                )?
+                .force_contiguous()?;
+            xs.device().synchronize()?;
+            before_step()?;
+            parts.push(part);
+        }
+        before_step()?;
+        Tensor::cat(&parts, D::Minus1)
     }
 }
 
@@ -908,6 +1068,9 @@ pub struct Model {
     decoder: Decoder,
     quantizer: ResidualVectorQuantizer,
 }
+
+/// Latent frames per CNN decode block. The LSTM retains its complete history.
+pub const DEFAULT_DECODE_CHUNK_SIZE: usize = 32;
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
@@ -935,11 +1098,182 @@ impl Model {
         let outputs = self.decoder.forward(&embeddings)?;
         Ok(outputs)
     }
+
+    /// Exact buffered decoding with cooperative checks between codebooks, every
+    /// 32 recurrent steps, and bounded CNN blocks/operations. Recurrent state is
+    /// never reset at a block boundary. TimeGroupNorm variants retain whole-time
+    /// CNN operations because their normalization has unbounded temporal support.
+    /// The callback cannot preempt a tensor kernel already in flight.
+    pub fn decode_with_callback(
+        &self,
+        codes: &Tensor,
+        mut before_step: impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
+        self.decode_chunked_with_callback(codes, DEFAULT_DECODE_CHUNK_SIZE, &mut before_step)
+    }
+
+    pub fn decode_chunked_with_callback(
+        &self,
+        codes: &Tensor,
+        chunk_frames: usize,
+        mut before_step: impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
+        if chunk_frames == 0 {
+            candle::bail!("EnCodec decode chunk size must be positive");
+        }
+        let (_, _, length) = codes.dims3()?;
+        if length == 0 {
+            candle::bail!("EnCodec decode codes must not be empty");
+        }
+        before_step()?;
+        let embeddings = self
+            .quantizer
+            .decode_with_callback(&codes.transpose(0, 1)?, &mut before_step)?;
+        let output = self.decoder.forward_chunked_with_callback(
+            &embeddings,
+            chunk_frames,
+            &mut before_step,
+        )?;
+        before_step()?;
+        Ok(output)
+    }
 }
 
 #[cfg(test)]
 mod codec_tests {
     use super::*;
+    struct NonzeroWeights;
+    impl candle_nn::var_builder::SimpleBackend for NonzeroWeights {
+        fn get(
+            &self,
+            shape: Shape,
+            name: &str,
+            _: candle_nn::Init,
+            dtype: DType,
+            device: &candle::Device,
+        ) -> Result<Tensor> {
+            let seed = name.bytes().map(usize::from).sum::<usize>();
+            let values = (0..shape.elem_count())
+                .map(|i| {
+                    let value = ((i + seed) as f32 * 0.17).sin() * 0.1;
+                    if name.ends_with("norm.weight") {
+                        value + 1.
+                    } else {
+                        value
+                    }
+                })
+                .collect::<Vec<_>>();
+            Tensor::from_vec(values, shape, device)?.to_dtype(dtype)
+        }
+        fn get_unchecked(&self, _: &str, _: DType, _: &candle::Device) -> Result<Tensor> {
+            candle::bail!("test weights require a shape")
+        }
+        fn contains_tensor(&self, name: &str) -> bool {
+            name.ends_with("weight")
+        }
+    }
+    fn tiny_codec(causal: bool, norm: NormType, channels: usize) -> Result<(Model, Config)> {
+        let config = Config {
+            sampling_rate: 120,
+            audio_channels: channels,
+            hidden_size: 4,
+            num_filters: 2,
+            upsampling_ratios: vec![2, 3],
+            num_residual_layers: 2,
+            dilation_growth_rate: 3,
+            kernel_size: 3,
+            last_kernel_size: 5,
+            num_lstm_layers: 2,
+            codebook_size: 8,
+            target_bandwidths: vec![0.12],
+            use_causal_conv: causal,
+            norm_type: norm,
+            ..Default::default()
+        };
+        let model = Model::new(
+            &config,
+            VarBuilder::from_backend(Box::new(NonzeroWeights), DType::F32, candle::Device::Cpu),
+        )?;
+        Ok((model, config))
+    }
+    fn codes(config: &Config, frames: usize) -> Result<Tensor> {
+        Tensor::from_vec(
+            (0..config.num_quantizers() * frames)
+                .map(|i| ((i * 3 + i / 7) % config.codebook_size) as u32)
+                .collect::<Vec<_>>(),
+            (1, config.num_quantizers(), frames),
+            &candle::Device::Cpu,
+        )
+    }
+    fn difference(a: &Tensor, b: &Tensor) -> Result<f32> {
+        (a - b)?.abs()?.flatten_all()?.max(0)?.to_scalar::<f32>()
+    }
+    #[test]
+    fn bounded_decoder_preserves_recurrent_history_padding_and_temporal_norm() -> Result<()> {
+        for norm in [
+            NormType::None,
+            NormType::WeightNorm,
+            NormType::TimeGroupNorm,
+        ] {
+            for causal in [false, true] {
+                let (model, config) = tiny_codec(causal, norm, 2)?;
+                for frames in [1, 2, 17, 35] {
+                    let codes = codes(&config, frames)?;
+                    let full = model.decode(&codes)?;
+                    for chunk in [1, 4, 32] {
+                        let bounded =
+                            model.decode_chunked_with_callback(&codes, chunk, || Ok(()))?;
+                        assert_eq!(full.dims(), bounded.dims());
+                        let error = difference(&full, &bounded)?;
+                        assert!(error<2e-6,"norm={norm:?} causal={causal} frames={frames} chunk={chunk} error={error}");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    fn active_decode_cancellation_stops_recurrence_and_cnn_then_recovers() -> Result<()> {
+        let (model, config) = tiny_codec(false, NormType::None, 1)?;
+        let codes = codes(&config, 70)?;
+        let expected = model.decode(&codes)?;
+        // This fixture observes a real boundary error if context is omitted;
+        // constant/zero weights could otherwise make a broken halo test pass.
+        let embeddings = model.quantizer.decode(&codes.transpose(0, 1)?)?;
+        let mut without_halo = model.decoder.clone();
+        without_halo.convolution_halo = 0;
+        let broken = without_halo.forward_chunked_with_callback(&embeddings, 4, &mut || Ok(()))?;
+        let boundary_error = difference(&broken, &expected)?;
+        assert!(
+            boundary_error > 1e-6,
+            "insensitive boundary fixture: {boundary_error}"
+        );
+        let mut total = 0;
+        model.decode_with_callback(&codes, || {
+            total += 1;
+            Ok(())
+        })?;
+        assert!(total > 40);
+        for stop in [7, 15, total - 2] {
+            let mut count = 0;
+            let error = model
+                .decode_with_callback(&codes, || {
+                    count += 1;
+                    if count == stop {
+                        candle::bail!("cancel active decode");
+                    }
+                    Ok(())
+                })
+                .unwrap_err();
+            assert!(error.to_string().contains("cancel active decode"));
+            assert_eq!(count, stop, "callback must stop immediately");
+            assert!(difference(&model.decode_with_callback(&codes, || Ok(()))?, &expected)? < 2e-6);
+        }
+        assert!(model
+            .decode_chunked_with_callback(&codes, 0, || panic!("invalid chunk mutated decode"))
+            .is_err());
+        Ok(())
+    }
     fn fixture() -> serde_json::Value {
         serde_json::from_str(include_str!("../../tests/fixtures/encodec_padding.json")).unwrap()
     }

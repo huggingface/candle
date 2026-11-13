@@ -446,6 +446,34 @@ impl MusicgenForConditionalGeneration {
             1,
         )
     }
+    /// Buffered PCM with cooperative cancellation inside EnCodec. Stereo
+    /// channels are decoded independently with their original interleaved books.
+    pub fn decode_audio_with_callback(
+        &self,
+        codes: &Tensor,
+        mut before_step: impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
+        before_step()?;
+        if self.cfg.musicgen.audio_channels == 1 {
+            return self.audio_encoder.decode_with_callback(codes, before_step);
+        }
+        let left: Vec<_> = (0..self.cfg.musicgen.num_codebooks)
+            .step_by(2)
+            .map(|i| codes.narrow(1, i, 1))
+            .collect::<Result<_>>()?;
+        let right: Vec<_> = (1..self.cfg.musicgen.num_codebooks)
+            .step_by(2)
+            .map(|i| codes.narrow(1, i, 1))
+            .collect::<Result<_>>()?;
+        let left = self
+            .audio_encoder
+            .decode_with_callback(&Tensor::cat(&left, 1)?, &mut before_step)?;
+        let right = self
+            .audio_encoder
+            .decode_with_callback(&Tensor::cat(&right, 1)?, &mut before_step)?;
+        before_step()?;
+        Tensor::cat(&[left, right], 1)
+    }
     pub fn reset(&mut self) {
         self.text_encoder.clear_kv_cache();
         self.decoder.reset();
@@ -551,6 +579,91 @@ impl DelayPattern {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mono_and_stereo_vocoder_cancel_inside_decode_and_recover_exactly() -> Result<()> {
+        let device = Device::Cpu;
+        for channels in [1, 2] {
+            let mut cfg = GenConfig::small();
+            cfg.musicgen.hidden_size = 8;
+            cfg.musicgen.ffn_dim = 16;
+            cfg.musicgen.num_attention_heads = 2;
+            cfg.musicgen.num_hidden_layers = 1;
+            cfg.musicgen.num_codebooks = 2 * channels;
+            cfg.musicgen.audio_channels = channels;
+            cfg.musicgen.vocab_size = 8;
+            cfg.musicgen.pad_token_id = 8;
+            cfg.musicgen.bos_token_id = 8;
+            cfg.t5.d_model = 8;
+            cfg.t5.d_ff = 16;
+            cfg.t5.d_kv = 4;
+            cfg.t5.num_heads = 2;
+            cfg.t5.num_layers = 1;
+            cfg.t5.vocab_size = 16;
+            cfg.encodec = encodec::Config {
+                sampling_rate: 80,
+                hidden_size: 8,
+                num_filters: 2,
+                num_lstm_layers: 2,
+                num_residual_layers: 1,
+                upsampling_ratios: vec![2, 2],
+                kernel_size: 3,
+                last_kernel_size: 3,
+                codebook_size: 8,
+                target_bandwidths: vec![0.12],
+                norm_type: encodec::NormType::None,
+                use_causal_conv: false,
+                ..Default::default()
+            };
+            let variables = candle_nn::VarMap::new();
+            let model = MusicgenForConditionalGeneration::load(
+                VarBuilder::from_varmap(&variables, DType::F32, &device),
+                cfg,
+            )?;
+            for (name, var) in variables.data().lock().unwrap().iter() {
+                let seed = name.bytes().map(usize::from).sum::<usize>();
+                let values = (0..var.elem_count())
+                    .map(|i| ((i + seed) as f32 * 0.13).sin() * 0.15)
+                    .collect::<Vec<_>>();
+                var.set(&Tensor::from_vec(values, var.shape(), &device)?)?;
+            }
+            let frames = 67;
+            let codes = Tensor::from_vec(
+                (0..2 * channels * frames)
+                    .map(|i| ((i + i / 11) % 8) as u32)
+                    .collect::<Vec<_>>(),
+                (1, 2 * channels, frames),
+                &device,
+            )?;
+            let full = model.decode_audio(&codes)?;
+            let mut callbacks = 0;
+            let decoded = model.decode_audio_with_callback(&codes, || {
+                callbacks += 1;
+                Ok(())
+            })?;
+            assert_eq!(decoded.dims(), [1, channels, frames * 4]);
+            assert!(difference(&full, &decoded)? < 2e-6);
+            assert!(full.sqr()?.sum_all()?.to_scalar::<f32>()? > 1e-6);
+            if channels == 2 {
+                assert!(difference(&full.narrow(1, 0, 1)?, &full.narrow(1, 1, 1)?)? > 1e-7);
+            }
+            let mut stopped = 0;
+            let error = model
+                .decode_audio_with_callback(&codes, || {
+                    stopped += 1;
+                    if stopped == callbacks - 2 {
+                        candle::bail!("cancel active MusicGen vocoder");
+                    }
+                    Ok(())
+                })
+                .unwrap_err();
+            assert!(error.to_string().contains("cancel active MusicGen vocoder"));
+            assert_eq!(stopped, callbacks - 2);
+            assert!(
+                difference(&model.decode_audio_with_callback(&codes, || Ok(()))?, &full)? < 2e-6
+            );
+        }
+        Ok(())
+    }
     fn fixture() -> serde_json::Value {
         serde_json::from_str(include_str!("../../tests/fixtures/musicgen_decoder.json")).unwrap()
     }
