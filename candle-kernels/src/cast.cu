@@ -2,6 +2,31 @@
 #include<stdint.h>
 
 template <typename S, typename T>
+__device__ __forceinline__ void assign_cast(T &dst, S src) {
+    dst = src;
+}
+
+template <>
+__device__ __forceinline__ void assign_cast<float, uint8_t>(uint8_t &dst, float src) {
+    dst = (isnan(src) || src <= 0.0f) ? 0 : (src >= 255.0f ? 255 : static_cast<uint8_t>(src));
+}
+
+template <>
+__device__ __forceinline__ void assign_cast<double, uint8_t>(uint8_t &dst, double src) {
+    dst = (isnan(src) || src <= 0.0) ? 0 : (src >= 255.0 ? 255 : static_cast<uint8_t>(src));
+}
+
+template <typename I, typename T>
+__device__ __forceinline__ T static_cast_or_sat(I src) {
+    return static_cast<T>(src);
+}
+
+template <>
+__device__ __forceinline__ uint8_t static_cast_or_sat<float, uint8_t>(float src) {
+    return (isnan(src) || src <= 0.0f) ? 0 : (src >= 255.0f ? 255 : static_cast<uint8_t>(src));
+}
+
+template <typename S, typename T>
 __device__ void cast_(
     const size_t numel,
     const size_t num_dims,
@@ -13,13 +38,13 @@ __device__ void cast_(
     const size_t *strides = info + num_dims;
     if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
-            out[i] = inp[i];
+            assign_cast<S, T>(out[i], inp[i]);
         }
     }
     else {
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
             unsigned strided_i = get_strided_index(i, num_dims, dims, strides);
-            out[i] = inp[strided_i];
+            assign_cast<S, T>(out[i], inp[strided_i]);
         }
     }
 }
@@ -38,13 +63,13 @@ __device__ void cast_fp8_(
     const size_t *strides = info + num_dims;
     if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
-            out[i] = F8E4M3_TO_FLOAT(inp[i]);
+            assign_cast<float, T>(out[i], F8E4M3_TO_FLOAT(inp[i]));
         }
     }
     else {
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
             unsigned strided_i = get_strided_index(i, num_dims, dims, strides);
-            out[i] = F8E4M3_TO_FLOAT(inp[strided_i]);
+            assign_cast<float, T>(out[i], F8E4M3_TO_FLOAT(inp[strided_i]));
         }
     }
 }
@@ -83,13 +108,13 @@ __device__ void cast_through(
     const size_t *strides = info + num_dims;
     if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
-            out[i] = static_cast<T>(static_cast<I>(inp[i]));
+            out[i] = static_cast_or_sat<I, T>(static_cast<I>(inp[i]));
         }
     }
     else {
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
             unsigned strided_i = get_strided_index(i, num_dims, dims, strides);
-            out[i] = static_cast<T>(static_cast<I>(inp[strided_i]));
+            out[i] = static_cast_or_sat<I, T>(static_cast<I>(inp[strided_i]));
         }
     }
 }
