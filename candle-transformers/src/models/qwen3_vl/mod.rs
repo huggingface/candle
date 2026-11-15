@@ -26,6 +26,11 @@ impl Qwen3VLModel {
         Ok(Self { text, vision })
     }
 
+    /// Reset every text layer's KV cache at an episode boundary.
+    pub fn reset_kv_cache(&self) {
+        self.text.reset_kv_cache();
+    }
+
     fn prepare_decoder_attention_mask(
         &self,
         b_size: usize,
