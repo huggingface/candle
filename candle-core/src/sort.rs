@@ -7,6 +7,18 @@ struct ArgSort {
     last_dim: usize,
 }
 
+fn cmp_asc<T: PartialOrd>(a: &T, b: &T) -> std::cmp::Ordering {
+    match a.partial_cmp(b) {
+        Some(ord) => ord,
+        None => match (a != a, b != b) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            (false, false) => std::cmp::Ordering::Equal,
+        },
+    }
+}
+
 impl ArgSort {
     fn asort<T: crate::WithDType>(&self, vs: &[T], layout: &crate::Layout) -> Result<Vec<u32>> {
         let vs = match layout.contiguous_offsets() {
@@ -30,11 +42,7 @@ impl ArgSort {
                         .iter_mut()
                         .enumerate()
                         .for_each(|(i, v)| *v = i as u32);
-                    indexes.sort_by(|&i, &j| {
-                        vs[i as usize]
-                            .partial_cmp(&vs[j as usize])
-                            .unwrap_or(std::cmp::Ordering::Greater)
-                    })
+                    indexes.sort_by(|&i, &j| cmp_asc(&vs[i as usize], &vs[j as usize]))
                 });
         } else {
             sort_indexes
@@ -45,11 +53,7 @@ impl ArgSort {
                         .iter_mut()
                         .enumerate()
                         .for_each(|(i, v)| *v = i as u32);
-                    indexes.sort_by(|&j, &i| {
-                        vs[i as usize]
-                            .partial_cmp(&vs[j as usize])
-                            .unwrap_or(std::cmp::Ordering::Greater)
-                    })
+                    indexes.sort_by(|&i, &j| cmp_asc(&vs[j as usize], &vs[i as usize]))
                 });
         }
         Ok(sort_indexes)
