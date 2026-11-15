@@ -2285,3 +2285,57 @@ fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
     assert_ne!(id1, id2);
     Ok(())
 }
+
+#[test]
+fn asort_with_nan() -> Result<()> {
+    fn check<T: candle_core::WithDType>(vals: &[T], is_nan: fn(T) -> bool) -> Result<()> {
+        let len = vals.len();
+        let t = Tensor::from_slice(vals, len, &Device::Cpu)?;
+        let nan_count = vals.iter().copied().filter(|&v| is_nan(v)).count();
+
+        let asc_idx = t.arg_sort_last_dim(true)?.to_vec1::<u32>()?;
+        let asc_vals: Vec<T> = asc_idx.iter().map(|&i| vals[i as usize]).collect();
+        assert!(asc_vals[len - nan_count..].iter().copied().all(is_nan));
+        let asc_fin = &asc_vals[..len - nan_count];
+        assert!(asc_fin.iter().copied().all(|v| !is_nan(v)));
+        assert!(asc_fin.windows(2).all(|w| w[0] <= w[1]));
+
+        let desc_idx = t.arg_sort_last_dim(false)?.to_vec1::<u32>()?;
+        let desc_vals: Vec<T> = desc_idx.iter().map(|&i| vals[i as usize]).collect();
+        assert!(desc_vals[..nan_count].iter().copied().all(is_nan));
+        let desc_fin = &desc_vals[nan_count..];
+        assert!(desc_fin.iter().copied().all(|v| !is_nan(v)));
+        assert!(desc_fin.windows(2).all(|w| w[0] >= w[1]));
+
+        Ok(())
+    }
+
+    let base_f32 = [
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        -2.0,
+        0.0,
+        f32::NAN,
+        3.0,
+        -0.0,
+        f32::NAN,
+    ];
+    check(&base_f32, f32::is_nan)?;
+
+    let f64_vals: Vec<f64> = base_f32.iter().map(|&x| x as f64).collect();
+    check(&f64_vals, f64::is_nan)?;
+
+    let f16_vals: Vec<half::f16> = base_f32.iter().map(|&x| half::f16::from_f32(x)).collect();
+    check(&f16_vals, half::f16::is_nan)?;
+
+    let bf16_vals: Vec<half::bf16> = base_f32.iter().map(|&x| half::bf16::from_f32(x)).collect();
+    check(&bf16_vals, half::bf16::is_nan)?;
+
+    let f8_vals: Vec<F8E4M3> = [240.0f32, -16.0, -2.0, 0.0, f32::NAN, 3.0, -0.0, f32::NAN]
+        .into_iter()
+        .map(F8E4M3::from_f32)
+        .collect();
+    check(&f8_vals, |v| v.is_nan())?;
+
+    Ok(())
+}
