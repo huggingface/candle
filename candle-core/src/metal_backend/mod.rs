@@ -969,13 +969,13 @@ impl BackendStorage for MetalStorage {
                 .broadcast_as((b, k, n))?;
             col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
         } else {
-            // Make the kernel contiguous if not already the case.
+            // Make the kernel contiguous if it is not already.
             let mut kernel_c = self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
-            let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
+            let kernel_l = Layout::contiguous_with_offset((1, n, k), 0)
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul(&kernel_c, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, n)).transpose(1, 2)?;
         let mut res_t = self.device().zeros_impl(res_l.shape(), res.dtype())?;
@@ -1172,13 +1172,13 @@ impl BackendStorage for MetalStorage {
                 .broadcast_as((b, k, n))?;
             col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
         } else {
-            // Make the kernel contiguous if not already the case.
+            // Make the kernel contiguous if it is not already.
             let mut kernel_c = self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
-            let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
+            let kernel_l = Layout::contiguous_with_offset((1, n, k), 0)
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul(&kernel_c, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, h_out, w_out, n))
             .transpose(1, 2)?
