@@ -234,7 +234,12 @@ with_dtype!(f16, F16, f16::from_f64, f16::to_f64);
 with_dtype!(bf16, BF16, bf16::from_f64, bf16::to_f64);
 with_dtype!(f32, F32, |v: f64| v as f32, |v: f32| v as f64);
 with_dtype!(f64, F64, |v: f64| v, |v: f64| v);
-with_dtype!(f8e4m3, F8E4M3, f8e4m3::from_f64, |v: f8e4m3| v.to_f64());
+with_dtype!(
+    f8e4m3,
+    F8E4M3,
+    f8e4m3::from_f64,
+    |v: f8e4m3| f8e4m3::to_f64(&v)
+);
 
 pub trait IntDType: WithDType + num_traits::Bounded {
     fn is_true(&self) -> bool;
