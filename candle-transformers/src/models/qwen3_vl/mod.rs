@@ -72,17 +72,17 @@ impl Qwen3VLModel {
         seqlen_offsets: &[usize],
     ) -> Result<Tensor> {
         let (bs, seqlen) = input_ids.dims2()?;
-        let attention_mask = if seqlen <= 1 {
-            Some(self.prepare_decoder_attention_mask(
-                bs,
-                seqlen,
-                seqlen_offsets[0],
-                self.text.dtype,
-                input_ids.device(),
-            )?)
-        } else {
-            None
-        };
+        // PATCH(vlm-perception-shim): build the causal mask for prefill too.
+        // Upstream skipped it for seqlen > 1, which left prefill attention
+        // bidirectional — corrupting every layer past the first via cached
+        // K/V computed from future-seeing hidden states.
+        let attention_mask = Some(self.prepare_decoder_attention_mask(
+            bs,
+            seqlen,
+            seqlen_offsets[0],
+            self.text.dtype,
+            input_ids.device(),
+        )?);
 
         let mut input_embeds = self.text.embed_tokens(input_ids)?;
         let (batch_size, seq_len, hidden_dim) = input_embeds.dims3()?;
