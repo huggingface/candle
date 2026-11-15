@@ -2285,3 +2285,24 @@ fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
     assert_ne!(id1, id2);
     Ok(())
 }
+
+fn f8e4m3_to_f64_cast(device: &Device) -> Result<()> {
+    if device.is_metal() {
+        return Ok(());
+    }
+    assert_eq!(candle_core::WithDType::to_f64(F8E4M3::from_f32(1.5)), 1.5);
+    let t = Tensor::from_slice(&[F8E4M3::from_f32(1.5), F8E4M3::from_f32(-2.0)], 2, device)?;
+    let f64_vec = t.to_dtype(DType::F64)?.to_vec1::<f64>()?;
+    assert_eq!(f64_vec, [1.5, -2.0]);
+
+    let ones = Tensor::ones((2, 2), DType::F8E4M3, device)?;
+    let ones_f64 = ones.to_dtype(DType::F64)?.to_vec2::<f64>()?;
+    assert_eq!(ones_f64, [[1.0, 1.0], [1.0, 1.0]]);
+    Ok(())
+}
+test_device!(
+    f8e4m3_to_f64_cast,
+    f8e4m3_to_f64_cast_cpu,
+    f8e4m3_to_f64_cast_gpu,
+    f8e4m3_to_f64_cast_metal
+);
