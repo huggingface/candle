@@ -21,7 +21,7 @@ vulkano = { path = "../vendor/vulkano/vulkano" }
 parking_lot = "0.12"
 
 [build-dependencies]
-shader-slang-dev = { git = "https://github.com/amejia1/shader-slang-dev", ref = "84f586256151ec5e53b611544101c8c9a35a911b" }
+shader-slang-dev = { git = "https://github.com/amejia1/shader-slang-dev", ref = "54cfcfef530483bf0fb02176ad3182a902714068" }
 spirv = "0.3"
 
 [profile.profiling]
