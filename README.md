@@ -189,6 +189,9 @@ And then head over to
   including SGD with momentum, AdaGrad, AdaDelta, AdaMax, NAdam, RAdam, and RMSprop.
 - [`candle-vllm`](https://github.com/EricLBuehler/candle-vllm): Efficient platform for inference and
   serving local LLMs including an OpenAI compatible API server.
+- [`candle-roformer`](https://github.com/AlexeyShirshov/candle-roformer): Rust
+  library for offline vocal and instrumental separation using models such as
+  BS-RoFormer and MelBand-RoFormer, built on Candle.
 - [`candle-ext`](https://github.com/mokeyish/candle-ext): An extension library to Candle that provides PyTorch functions not currently available in Candle.
 - [`candle-coursera-ml`](https://github.com/vishpat/candle-coursera-ml): Implementation of ML algorithms from Coursera's [Machine Learning Specialization](https://www.coursera.org/specializations/machine-learning-introduction) course.
 - [`kalosm`](https://github.com/floneum/floneum/tree/master/interfaces/kalosm): A multi-modal meta-framework in Rust for interfacing with local pre-trained models with support for controlled generation, custom samplers, in-memory vector databases, audio transcription, and more.
