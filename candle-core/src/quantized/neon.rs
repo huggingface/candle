@@ -20,9 +20,20 @@ use core::arch::arm::*;
 #[cfg(target_arch = "aarch64")]
 use core::arch::aarch64::*;
 
+#[inline(always)]
+unsafe fn vdotq_s32(a: int8x16_t, b: int8x16_t) -> int32x4_t {
+    if cfg!(target_feature = "dotprod") || crate::cpu::features::get().dotprod {
+        vdotq_s32_dotprod(a, b)
+    } else {
+        let p0 = vmull_s8(vget_low_s8(a), vget_low_s8(b));
+        let p1 = vmull_s8(vget_high_s8(a), vget_high_s8(b));
+        vaddq_s32(vpaddlq_s16(p0), vpaddlq_s16(p1))
+    }
+}
+
 #[inline]
 #[target_feature(enable = "dotprod")]
-unsafe fn vdotq_s32(a: int8x16_t, b: int8x16_t) -> int32x4_t {
+unsafe fn vdotq_s32_dotprod(a: int8x16_t, b: int8x16_t) -> int32x4_t {
     let mut acc: int32x4_t = vdupq_n_s32(0);
     core::arch::asm!(
         "sdot {acc:v}.4s, {a:v}.16b, {b:v}.16b",
@@ -34,10 +45,31 @@ unsafe fn vdotq_s32(a: int8x16_t, b: int8x16_t) -> int32x4_t {
     acc
 }
 
-/// Two SDOT ops into one accumulator
+#[inline(always)]
+unsafe fn vdotq_s32_pair(a0: int8x16_t, b0: int8x16_t, a1: int8x16_t, b1: int8x16_t) -> int32x4_t {
+    if cfg!(target_feature = "dotprod") || crate::cpu::features::get().dotprod {
+        vdotq_s32_pair_dotprod(a0, b0, a1, b1)
+    } else {
+        let p0 = vmull_s8(vget_low_s8(a0), vget_low_s8(b0));
+        let p1 = vmull_s8(vget_high_s8(a0), vget_high_s8(b0));
+        let p2 = vmull_s8(vget_low_s8(a1), vget_low_s8(b1));
+        let p3 = vmull_s8(vget_high_s8(a1), vget_high_s8(b1));
+        vaddq_s32(
+            vaddq_s32(vpaddlq_s16(p0), vpaddlq_s16(p1)),
+            vaddq_s32(vpaddlq_s16(p2), vpaddlq_s16(p3)),
+        )
+    }
+}
+
+/// Two SDOT ops into one accumulator.
 #[inline]
 #[target_feature(enable = "dotprod")]
-unsafe fn vdotq_s32_pair(a0: int8x16_t, b0: int8x16_t, a1: int8x16_t, b1: int8x16_t) -> int32x4_t {
+unsafe fn vdotq_s32_pair_dotprod(
+    a0: int8x16_t,
+    b0: int8x16_t,
+    a1: int8x16_t,
+    b1: int8x16_t,
+) -> int32x4_t {
     let mut acc: int32x4_t = vdupq_n_s32(0);
     core::arch::asm!(
         "sdot {acc:v}.4s, {a0:v}.16b, {b0:v}.16b",
