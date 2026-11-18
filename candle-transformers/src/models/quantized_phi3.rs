@@ -80,6 +80,7 @@ struct LayerWeights {
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
+    rope_dim: usize,
     cos: Tensor,
     sin: Tensor,
     neg_inf: Tensor,
@@ -101,7 +102,13 @@ impl LayerWeights {
         let (_b_sz, _h, seq_len, _n_embd) = xs.dims4()?;
         let cos = self.cos.narrow(0, index_pos, seq_len)?;
         let sin = self.sin.narrow(0, index_pos, seq_len)?;
-        candle_nn::rotary_emb::rope(&xs.contiguous()?, &cos, &sin)
+        if self.rope_dim == self.head_dim {
+            return candle_nn::rotary_emb::rope(&xs.contiguous()?, &cos, &sin);
+        }
+        let xs_rot = xs.narrow(D::Minus1, 0, self.rope_dim)?.contiguous()?;
+        let xs_pass = xs.narrow(D::Minus1, self.rope_dim, self.head_dim - self.rope_dim)?;
+        let xs_rot = candle_nn::rotary_emb::rope(&xs_rot, &cos, &sin)?;
+        Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)
     }
 
     fn forward_attn(
@@ -279,6 +286,7 @@ impl ModelWeights {
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim,
+                rope_dim,
                 cos: cos.clone(),
                 sin: sin.clone(),
                 neg_inf: neg_inf.clone(),
