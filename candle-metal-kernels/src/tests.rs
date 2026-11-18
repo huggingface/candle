@@ -2491,3 +2491,100 @@ fn residency_set_batch_insert_remove() {
     set.remove_batch(std::iter::empty());
     assert_eq!(raw.allocationCount(), base);
 }
+
+// QMatMul dequantizes float dtypes, so these arms are only reachable by calling
+// the kernel directly. Every dst row must be written, and each must read its own
+// weight row rather than row 0.
+fn run_mv_float_weights<T: Clone>(dtype: GgmlDType, weights: &[T], k: usize) -> Vec<f32> {
+    let device = device();
+    let kernels = Kernels::new();
+    let n = weights.len() / k;
+    let lhs: Vec<f32> = (0..k).map(|i| ((i % 7) as f32 - 3.0) * 0.25).collect();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let weights_buf = new_buffer(&device, weights);
+    let lhs_buf = new_buffer(&device, &lhs);
+    let dst_buf = new_buffer(&device, &vec![f32::NAN; n]);
+    call_quantized_matmul_mv_t(
+        &device,
+        &encoder,
+        &kernels,
+        dtype,
+        (1, 1, n, k),
+        &lhs_buf,
+        0,
+        &weights_buf,
+        0,
+        &dst_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+    read_to_vec(&dst_buf, n)
+}
+
+#[test]
+fn quantized_matmul_mv_float_weights() {
+    let (n, k) = (32usize, 64usize);
+    let weights: Vec<f32> = (0..n * k)
+        .map(|i| ((i % 23) as f32 - 11.0) * 0.125)
+        .collect();
+    let lhs: Vec<f32> = (0..k).map(|i| ((i % 7) as f32 - 3.0) * 0.25).collect();
+    // The kernel widens each weight to f32 and accumulates there, so the
+    // reference rounds the weights the same way and stays exact otherwise.
+    let reference = |round: &dyn Fn(f32) -> f32| -> Vec<f32> {
+        (0..n)
+            .map(|row| {
+                (0..k)
+                    .map(|col| round(weights[row * k + col]) * lhs[col])
+                    .sum::<f32>()
+            })
+            .collect()
+    };
+
+    let got = run_mv_float_weights(GgmlDType::F32, &weights, k);
+    assert_eq!(approx(got, 4), approx(reference(&|v| v), 4));
+
+    let half: Vec<f16> = weights.iter().map(|v| f16::from_f32(*v)).collect();
+    let got = run_mv_float_weights(GgmlDType::F16, &half, k);
+    assert_eq!(
+        approx(got, 4),
+        approx(reference(&|v| f16::from_f32(v).to_f32()), 4)
+    );
+
+    let brain: Vec<bf16> = weights.iter().map(|v| bf16::from_f32(*v)).collect();
+    let got = run_mv_float_weights(GgmlDType::BF16, &brain, k);
+    assert_eq!(
+        approx(got, 4),
+        approx(reference(&|v| bf16::from_f32(v).to_f32()), 4)
+    );
+}
+
+// Q8_1 and Q8_K are activation-side formats in ggml, never weights, so neither
+// the mat-vec nor the mat-mat path has a kernel for them.
+#[test]
+fn quantized_matmul_mv_rejects_activation_only_dtypes() {
+    let device = device();
+    let kernels = Kernels::new();
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let buf = new_buffer(&device, &[0f32; 32]);
+    for dtype in [GgmlDType::Q8_1, GgmlDType::Q8K] {
+        assert!(matches!(
+            call_quantized_matmul_mv_t(
+                &device,
+                &encoder,
+                &kernels,
+                dtype,
+                (1, 1, 8, 4),
+                &buf,
+                0,
+                &buf,
+                0,
+                &buf,
+            ),
+            Err(MetalKernelError::UnsupportedDTypeForOp(_, "qmatmul_mv"))
+        ));
+    }
+}
