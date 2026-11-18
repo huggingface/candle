@@ -975,6 +975,27 @@ fn conv2d_grad_noncontiguous_kernel(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+fn conv_invalid_sizes(dev: &Device) -> Result<()> {
+    // Kernels larger than the padded input or a zero stride must return an error rather
+    // than panicking or producing a tensor with a wrapped-around shape.
+    let t = Tensor::ones((1, 2, 3), candle_core::DType::F32, dev)?;
+    let w = Tensor::ones((1, 2, 5), candle_core::DType::F32, dev)?;
+    assert!(t.conv1d(&w, 0, 1, 1, 1).is_err());
+    assert!(t.conv1d(&w.narrow(2, 0, 2)?, 0, 1, 3, 1).is_err());
+    assert!(t.conv1d(&w.narrow(2, 0, 1)?, 0, 0, 1, 1).is_err());
+    // The kernel fits once the input is padded.
+    assert_eq!(t.conv1d(&w, 1, 1, 1, 1)?.dims(), [1, 1, 1]);
+
+    let t = Tensor::ones((1, 1, 2, 3), candle_core::DType::F32, dev)?;
+    let w = Tensor::ones((1, 1, 3, 3), candle_core::DType::F32, dev)?;
+    assert!(t.conv2d(&w, 0, 1, 1, 1).is_err());
+    assert!(t.conv2d(&w, 0, 3, 1, 1).is_err());
+    assert!(t.conv2d(&w.narrow(2, 0, 2)?, 0, 1, 2, 1).is_err());
+    assert!(t.conv2d(&w.narrow(2, 0, 1)?, 0, 0, 1, 1).is_err());
+    assert_eq!(t.conv2d(&w, 1, 1, 1, 1)?.dims(), [1, 1, 2, 3]);
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
@@ -1018,4 +1039,10 @@ test_device!(
     conv2d_grad_noncontiguous_kernel_cpu,
     conv2d_grad_noncontiguous_kernel_gpu,
     conv2d_grad_noncontiguous_kernel_metal
+);
+test_device!(
+    conv_invalid_sizes,
+    conv_invalid_sizes_cpu,
+    conv_invalid_sizes_gpu,
+    conv_invalid_sizes_metal
 );
