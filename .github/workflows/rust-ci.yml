@@ -31,9 +31,24 @@ jobs:
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249  # stable
+      - name: Detect runner CPU for the cache key
+        id: cpu
+        shell: bash
+        run: |
+          # .cargo/config.toml builds with target-cpu=native, which also applies to
+          # build scripts and proc macros. Those only run on the CPU that built them,
+          # so a cache primed on one runner model must not be restored on another.
+          case "$RUNNER_OS" in
+            Linux) model=$(lscpu | grep -m1 'Model name' | cut -d: -f2) ;;
+            macOS) model=$(sysctl -n machdep.cpu.brand_string) ;;
+            Windows) model=$(powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name") ;;
+          esac
+          model=$(printf '%s' "$model" | tr -cd '[:alnum:]' | head -c 40)
+          echo "Runner CPU: $model"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
-          key: ${{ matrix.os }}
+          key: ${{ matrix.os }}-${{ steps.cpu.outputs.model }}
           # Save only from main
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -82,9 +97,24 @@ jobs:
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249  # stable
+      - name: Detect runner CPU for the cache key
+        id: cpu
+        shell: bash
+        run: |
+          # .cargo/config.toml builds with target-cpu=native, which also applies to
+          # build scripts and proc macros. Those only run on the CPU that built them,
+          # so a cache primed on one runner model must not be restored on another.
+          case "$RUNNER_OS" in
+            Linux) model=$(lscpu | grep -m1 'Model name' | cut -d: -f2) ;;
+            macOS) model=$(sysctl -n machdep.cpu.brand_string) ;;
+            Windows) model=$(powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name") ;;
+          esac
+          model=$(printf '%s' "$model" | tr -cd '[:alnum:]' | head -c 40)
+          echo "Runner CPU: $model"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
-          key: ${{ matrix.os }}
+          key: ${{ matrix.os }}-${{ steps.cpu.outputs.model }}
           # Save only from main
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install lld (Linux only)
@@ -125,7 +155,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249  # stable
         with:
           components: clippy
+      - name: Detect runner CPU for the cache key
+        id: cpu
+        shell: bash
+        run: |
+          # .cargo/config.toml builds with target-cpu=native, which also applies to
+          # build scripts and proc macros. Those only run on the CPU that built them,
+          # so a cache primed on one runner model must not be restored on another.
+          case "$RUNNER_OS" in
+            Linux) model=$(lscpu | grep -m1 'Model name' | cut -d: -f2) ;;
+            macOS) model=$(sysctl -n machdep.cpu.brand_string) ;;
+            Windows) model=$(powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name") ;;
+          esac
+          model=$(printf '%s' "$model" | tr -cd '[:alnum:]' | head -c 40)
+          echo "Runner CPU: $model"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
+          key: ${{ steps.cpu.outputs.model }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --tests --examples --benches -- -D warnings
