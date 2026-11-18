@@ -100,7 +100,7 @@ pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
 pub use dummy_dtype::{F4, F6E2M3, F6E3M2, F8E8M0};
 pub use error::{Context, Error, Result};
-pub use indexer::{IndexOp, TensorIndexer};
+pub use indexer::{IndexOp, StepRange, TensorIndexer};
 pub use layout::Layout;
 pub use nditer::NdIter;
 pub use shape::{Shape, D};
