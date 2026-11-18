@@ -200,6 +200,29 @@ impl Header {
     }
 }
 
+/// Reads `elem_count` values of type `T` from `reader`.
+///
+/// `elem_count` comes from the file header, so it is not trusted for the up-front allocation:
+/// the buffer grows as data is actually read, at most doubling at each step. A header that
+/// declares far more elements than the file holds then fails with an io error once the data
+/// runs out, instead of attempting an allocation sized by the header.
+fn read_values<T: Clone + Default, R: Read>(
+    reader: &mut R,
+    elem_count: usize,
+    read_into: impl Fn(&mut R, &mut [T]) -> std::io::Result<()>,
+) -> Result<Vec<T>> {
+    const MIN_CHUNK_BYTES: usize = 1 << 20;
+    let min_chunk = (MIN_CHUNK_BYTES / std::mem::size_of::<T>().max(1)).max(1);
+    let mut data = Vec::with_capacity(elem_count.min(min_chunk));
+    while data.len() < elem_count {
+        let start = data.len();
+        let len = (elem_count - start).min(start.max(min_chunk));
+        data.resize(start + len, T::default());
+        read_into(reader, &mut data[start..])?;
+    }
+    Ok(data)
+}
+
 impl Tensor {
     // TODO: Add the possibility to read directly to a device?
     pub(crate) fn from_reader<R: std::io::Read>(
@@ -207,56 +230,68 @@ impl Tensor {
         dtype: DType,
         reader: &mut R,
     ) -> Result<Self> {
-        let elem_count = shape.elem_count();
+        let elem_count = shape
+            .dims()
+            .iter()
+            .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+            .ok_or_else(|| Error::Msg(format!("element count overflows for shape {shape:?}")))?;
         match dtype {
             DType::BF16 => {
-                let mut data_t = vec![bf16::ZERO; elem_count];
-                reader.read_u16_into::<LittleEndian>(data_t.reinterpret_cast_mut())?;
+                let data_t = read_values(reader, elem_count, |r, buf: &mut [bf16]| {
+                    r.read_u16_into::<LittleEndian>(buf.reinterpret_cast_mut())
+                })?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::F16 => {
-                let mut data_t = vec![f16::ZERO; elem_count];
-                reader.read_u16_into::<LittleEndian>(data_t.reinterpret_cast_mut())?;
+                let data_t = read_values(reader, elem_count, |r, buf: &mut [f16]| {
+                    r.read_u16_into::<LittleEndian>(buf.reinterpret_cast_mut())
+                })?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::F32 => {
-                let mut data_t = vec![0f32; elem_count];
-                reader.read_f32_into::<LittleEndian>(&mut data_t)?;
+                let data_t = read_values(reader, elem_count, |r, buf: &mut [f32]| {
+                    r.read_f32_into::<LittleEndian>(buf)
+                })?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::F64 => {
-                let mut data_t = vec![0f64; elem_count];
-                reader.read_f64_into::<LittleEndian>(&mut data_t)?;
+                let data_t = read_values(reader, elem_count, |r, buf: &mut [f64]| {
+                    r.read_f64_into::<LittleEndian>(buf)
+                })?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::U8 => {
-                let mut data_t = vec![0u8; elem_count];
-                reader.read_exact(&mut data_t)?;
+                let data_t =
+                    read_values(reader, elem_count, |r, buf: &mut [u8]| r.read_exact(buf))?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::U32 => {
-                let mut data_t = vec![0u32; elem_count];
-                reader.read_u32_into::<LittleEndian>(&mut data_t)?;
+                let data_t = read_values(reader, elem_count, |r, buf: &mut [u32]| {
+                    r.read_u32_into::<LittleEndian>(buf)
+                })?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::I16 => {
-                let mut data_t = vec![0i16; elem_count];
-                reader.read_i16_into::<LittleEndian>(&mut data_t)?;
+                let data_t = read_values(reader, elem_count, |r, buf: &mut [i16]| {
+                    r.read_i16_into::<LittleEndian>(buf)
+                })?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::I32 => {
-                let mut data_t = vec![0i32; elem_count];
-                reader.read_i32_into::<LittleEndian>(&mut data_t)?;
+                let data_t = read_values(reader, elem_count, |r, buf: &mut [i32]| {
+                    r.read_i32_into::<LittleEndian>(buf)
+                })?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::I64 => {
-                let mut data_t = vec![0i64; elem_count];
-                reader.read_i64_into::<LittleEndian>(&mut data_t)?;
+                let data_t = read_values(reader, elem_count, |r, buf: &mut [i64]| {
+                    r.read_i64_into::<LittleEndian>(buf)
+                })?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::F8E4M3 => {
-                let mut data_t = vec![0u8; elem_count];
-                reader.read_exact(&mut data_t)?;
+                let data_t =
+                    read_values(reader, elem_count, |r, buf: &mut [u8]| r.read_exact(buf))?;
                 let data_f8: Vec<float8::F8E4M3> =
                     data_t.into_iter().map(float8::F8E4M3::from_bits).collect();
                 Tensor::from_vec(data_f8, shape, &Device::Cpu)
@@ -471,5 +506,70 @@ mod tests {
             h.to_string().unwrap(),
             "{'descr': '<u4', 'fortran_order': False, 'shape': (), }"
         );
+    }
+
+    fn npy_bytes(header: &str, data: &[u8]) -> Vec<u8> {
+        let mut bytes = super::NPY_MAGIC_STRING.to_vec();
+        bytes.extend_from_slice(&[1u8, 0u8]);
+        bytes.extend_from_slice(&(header.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(header.as_bytes());
+        bytes.extend_from_slice(data);
+        bytes
+    }
+
+    fn read_npy_bytes(bytes: &[u8]) -> crate::Result<crate::Tensor> {
+        let mut reader = std::io::Cursor::new(bytes);
+        let header = super::read_header(&mut reader)?;
+        let header = Header::parse(&header)?;
+        crate::Tensor::from_reader(header.shape(), header.descr, &mut reader)
+    }
+
+    #[test]
+    fn read_from_bytes() {
+        let data: Vec<u8> = [1f32, 2., 3., 4., 5., 6.]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let bytes = npy_bytes(
+            "{'descr': '<f4', 'fortran_order': False, 'shape': (2, 3), }",
+            &data,
+        );
+        let t = read_npy_bytes(&bytes).unwrap();
+        assert_eq!(t.dims(), &[2, 3]);
+        assert_eq!(t.to_vec2::<f32>().unwrap(), [[1., 2., 3.], [4., 5., 6.]]);
+    }
+
+    #[test]
+    fn read_from_bytes_multiple_chunks() {
+        // Larger than the initial 1MB read so that the buffer has to grow a few times.
+        let n = 1_000_003usize;
+        let values: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        let data: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let header = format!("{{'descr': '<f4', 'fortran_order': False, 'shape': ({n},), }}");
+        let t = read_npy_bytes(&npy_bytes(&header, &data)).unwrap();
+        assert_eq!(t.to_vec1::<f32>().unwrap(), values);
+        // One element short of the declared shape.
+        let t = read_npy_bytes(&npy_bytes(&header, &data[..data.len() - 4]));
+        assert!(t.is_err());
+    }
+
+    #[test]
+    fn huge_shape_with_little_data_is_an_error() {
+        // A few bytes of data cannot back a 2^59 element array: this has to fail
+        // on the missing data rather than attempting a 2^61 byte allocation.
+        let bytes = npy_bytes(
+            "{'descr': '<f4', 'fortran_order': False, 'shape': (576460752303423488,), }",
+            &[0u8; 16],
+        );
+        assert!(read_npy_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn overflowing_shape_is_an_error() {
+        let bytes = npy_bytes(
+            "{'descr': '<f4', 'fortran_order': False, 'shape': (4294967296, 4294967296, 2), }",
+            &[0u8; 16],
+        );
+        assert!(read_npy_bytes(&bytes).is_err());
     }
 }
