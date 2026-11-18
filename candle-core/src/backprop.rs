@@ -367,11 +367,12 @@ impl Tensor {
                         // For computing the max-pool gradient, we compute a mask where a 1 means
                         // that the element is the maximum, then we apply this mask to the
                         // upsampled gradient (taking into account that multiple max may exist so
-                        // we scale the gradient for this case).
+                        // we split the gradient evenly between them for this case).
                         let node_upsampled = node.upsample_nearest2d(h, w)?;
                         let mask = arg.eq(&node_upsampled)?.to_dtype(arg.dtype())?;
                         let avg = mask.avg_pool2d_with_stride(*kernel_size, *stride)?;
-                        let grad_arg = ((grad * avg)?.upsample_nearest2d(h, w)? * mask)?;
+                        let count = (avg * (kernel_size.0 * kernel_size.1) as f64)?;
+                        let grad_arg = ((grad / count)?.upsample_nearest2d(h, w)? * mask)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
                     }
