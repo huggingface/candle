@@ -32,6 +32,7 @@ pub mod loss;
 pub mod moe;
 pub mod ops;
 pub mod optim;
+pub mod quant_kv;
 pub mod rnn;
 pub mod rotary_emb;
 pub mod sampling;
