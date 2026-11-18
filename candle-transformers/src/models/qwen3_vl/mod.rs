@@ -67,7 +67,7 @@ impl Qwen3VLModel {
         seqlen_offsets: &[usize],
     ) -> Result<Tensor> {
         let (bs, seqlen) = input_ids.dims2()?;
-        let attention_mask = if seqlen <= 1 {
+        let attention_mask = if seqlen > 1 {
             Some(self.prepare_decoder_attention_mask(
                 bs,
                 seqlen,
