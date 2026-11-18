@@ -1124,6 +1124,109 @@ impl RawInterleavedKvCache {
     }
 }
 
+// Head-major f16 interleaved K/V cache for the f16-KV CPU flash kernels: f16 (half the
+// decode bandwidth), each kv head's positions contiguous. Per-head block h starts at
+// h * head_stride() and holds len positions of [K(d), V(d)].
+pub struct RawInterleavedKvCacheF16 {
+    buf: Vec<half::f16>,
+    h_kv: usize,
+    d: usize,
+    cap: usize,
+    len: usize,
+}
+
+impl RawInterleavedKvCacheF16 {
+    // Create a cache with space for max_seq positions.
+    pub fn new(h_kv: usize, d: usize, max_seq: usize) -> Self {
+        Self {
+            buf: vec![half::f16::ZERO; h_kv * max_seq * 2 * d],
+            h_kv,
+            d,
+            cap: max_seq,
+            len: 0,
+        }
+    }
+
+    // Number of positions currently cached.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    // Elements between consecutive kv-head blocks in data().
+    pub fn head_stride(&self) -> usize {
+        self.cap * 2 * self.d
+    }
+
+    // Write one position of K and V. k_flat/v_flat are flat (H_kv * D) slices.
+    pub fn write_kv(&mut self, k_flat: &[f32], v_flat: &[f32]) {
+        if self.len == self.cap {
+            self.grow();
+        }
+        let d = self.d;
+        let pos_off = self.len * 2 * d;
+        for h in 0..self.h_kv {
+            let src = h * d;
+            let dst = h * self.cap * 2 * d + pos_off;
+            for (o, &x) in self.buf[dst..dst + d].iter_mut().zip(&k_flat[src..]) {
+                *o = half::f16::from_f32(x);
+            }
+            for (o, &x) in self.buf[dst + d..dst + 2 * d]
+                .iter_mut()
+                .zip(&v_flat[src..])
+            {
+                *o = half::f16::from_f32(x);
+            }
+        }
+
+        self.len += 1;
+    }
+
+    fn grow(&mut self) {
+        let new_cap = self.cap * 2;
+        let block = 2 * self.d;
+        let mut new_buf = vec![half::f16::ZERO; self.h_kv * new_cap * block];
+        for h in 0..self.h_kv {
+            let src = h * self.cap * block;
+            let dst = h * new_cap * block;
+            new_buf[dst..dst + self.len * block]
+                .copy_from_slice(&self.buf[src..src + self.len * block]);
+        }
+        self.buf = new_buf;
+        self.cap = new_cap;
+    }
+
+    // Write multiple positions for prefill. k_flat is (S, H_kv * D) row-major, v_flat same.
+    pub fn write_kv_batch(&mut self, k_flat: &[f32], v_flat: &[f32], seq_len: usize) {
+        let hd = self.h_kv * self.d;
+        for s in 0..seq_len {
+            let k_row = &k_flat[s * hd..(s + 1) * hd];
+            let v_row = &v_flat[s * hd..(s + 1) * hd];
+            self.write_kv(k_row, v_row);
+        }
+    }
+
+    // Full cache buffer; per-head block h starts at h * head_stride(), len positions of [K(d), V(d)].
+    pub fn data(&self) -> &[half::f16] {
+        &self.buf
+    }
+
+    pub fn reset(&mut self) {
+        self.len = 0;
+    }
+
+    pub fn h_kv(&self) -> usize {
+        self.h_kv
+    }
+
+    pub fn d(&self) -> usize {
+        self.d
+    }
+}
+
 /// Apply interleaved RoPE in-place on a flat `(H, D)` slice.
 ///
 /// Pairs adjacent elements `(2i, 2i+1)` with frequency `cos[i], sin[i]`.
