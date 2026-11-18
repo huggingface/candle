@@ -321,6 +321,38 @@ fn quantized_embedding_cpu() -> Result<()> {
     Ok(())
 }
 
+// #3864: QTensor::quantize on a narrowed-then-contiguous() view ignored the
+// layout offset and quantized the parent's data starting at element 0. A
+// row-narrowed tensor is already contiguous, so `contiguous()` (unlike
+// `force_contiguous()`) does not copy it — the offset survived into the
+// quantizer's raw storage read.
+#[test]
+fn quantize_a_narrowed_view() -> Result<()> {
+    let device = Device::Cpu;
+    // Four rows of 32 f32; row r is filled with the value r + 1.
+    let data: Vec<f32> = (0..4)
+        .flat_map(|r| std::iter::repeat_n((r + 1) as f32, 32))
+        .collect();
+    let t = Tensor::from_slice(&data, (4, 32), &device)?;
+    let narrowed = t.narrow(0, 1, 1)?.contiguous()?;
+    // The view reads correctly through the ordinary tensor API.
+    assert_eq!(narrowed.to_vec2::<f32>()?, vec![vec![2.0f32; 32]]);
+
+    let qtensor = quantized::QTensor::quantize(&narrowed, GgmlDType::Q8_0)?;
+    let dequantized = qtensor.dequantize(&device)?;
+    let got = dequantized.to_vec2::<f32>()?;
+    // Q8_0's round-trip of 2.0 is close but not bit-exact (~1.99988). The
+    // parent's row 0 (value 1.0) would round-trip to ~0.99994 — over 0.5 away
+    // from 2.0 — which is what the bug produced, so a loose tolerance still
+    // distinguishes "read the right row" from "read the parent's row 0".
+    for row in &got {
+        for &v in row {
+            assert!((v - 2.0).abs() < 0.01, "expected ~2.0, got {v}");
+        }
+    }
+    Ok(())
+}
+
 #[cfg(feature = "metal")]
 #[test]
 fn quantized_embedding_metal() -> Result<()> {
