@@ -4892,6 +4892,57 @@ fn test_slice() -> Result<()> {
     Ok(())
 }
 
+fn slice_with_optional_inputs(axes: &str, steps: &str) -> Result<Vec<Vec<i64>>> {
+    let input_names = ["data", "starts", "ends", axes, steps];
+    let model = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Slice".to_string(),
+            input: input_names.map(str::to_string).to_vec(),
+            output: vec!["result".to_string()],
+            ..NodeProto::default()
+        }],
+        input: input_names
+            .into_iter()
+            .filter(|name| !name.is_empty())
+            .map(|name| ValueInfoProto {
+                name: name.to_string(),
+                ..ValueInfoProto::default()
+            })
+            .collect(),
+        output: vec![ValueInfoProto {
+            name: "result".to_string(),
+            ..ValueInfoProto::default()
+        }],
+        ..GraphProto::default()
+    }));
+    let cpu = &Device::Cpu;
+    let inputs = [
+        ("data", Tensor::new(&[[1i64, 2, 3, 4], [5, 6, 7, 8]], cpu)?),
+        ("starts", Tensor::new(&[1i64, 0], cpu)?),
+        ("ends", Tensor::new(&[2i64, 3], cpu)?),
+        ("axes", Tensor::new(&[-2i64, -1], cpu)?),
+        ("steps", Tensor::new(&[1i64, 2], cpu)?),
+    ]
+    .into_iter()
+    .filter(|(name, _)| input_names.contains(name))
+    .map(|(name, tensor)| (name.to_string(), tensor))
+    .collect();
+    let outputs = candle_onnx::simple_eval(&model, inputs)?;
+    outputs["result"].to_vec2::<i64>()
+}
+
+#[test]
+fn test_slice_with_omitted_axes_and_explicit_steps() -> Result<()> {
+    assert_eq!(slice_with_optional_inputs("", "steps")?, vec![vec![5, 7]]);
+    Ok(())
+}
+
+#[test]
+fn test_slice_with_explicit_axes_and_omitted_steps() -> Result<()> {
+    assert_eq!(slice_with_optional_inputs("axes", "")?, vec![vec![5, 6, 7]]);
+    Ok(())
+}
+
 #[test]
 fn test_lstm() -> Result<()> {
     // values generated from pytorch, so at least it's close enough to what pytorch does

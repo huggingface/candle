@@ -1242,42 +1242,24 @@ fn simple_eval_(
             }
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#slice
             "Slice" => {
-                let data = get(&node.input[0])?;
-                let starts = get(&node.input[1])?;
-                let ends = get(&node.input[2])?;
-                let default_axes;
-                let default_steps;
-                let axes: &Tensor;
-                let steps: &Tensor;
-                // If axes are omitted, they are set to [0, ..., r-1]. If steps are omitted,
-                // they are set to [1, ..., 1] of length len(starts)
-                match node.input.len() {
-                    3 => {
-                        let len = starts.dims()[0];
-                        default_axes = Some(Tensor::arange(0, len as i64, starts.device())?);
-                        axes = default_axes.as_ref().unwrap();
-                        default_steps = Some(Tensor::ones((len,), DType::I64, starts.device())?);
-                        steps = default_steps.as_ref().unwrap();
-                    }
-                    4 => {
-                        let len = starts.dims()[0];
-                        axes = get(&node.input[3])?;
-                        default_steps = Some(Tensor::ones((len,), DType::I64, starts.device())?);
-                        steps = default_steps.as_ref().unwrap();
-                    }
-                    5 => {
-                        steps = get(&node.input[4])?;
-                        axes = get(&node.input[3])?;
-                    }
-                    _ => bail!(
+                if !(3..=5).contains(&node.input.len()) {
+                    bail!(
                         "Slice node is invalid, expected 3-5 inputs, got {}: {:?}",
                         node.input.len(),
                         node
-                    ),
+                    );
                 }
+                let data = get(&node.input[0])?;
+                let starts = get(&node.input[1])?;
+                let ends = get(&node.input[2])?;
+                let axes = match get_opt(3).transpose()? {
+                    Some(axes) => axes.to_vec1::<i64>()?,
+                    None => (0..starts.dim(0)? as i64).collect(),
+                };
+                let steps = get_opt(4).transpose()?;
 
                 let mut out = data.clone();
-                for (i, axis) in axes.to_vec1::<i64>()?.into_iter().enumerate() {
+                for (i, axis) in axes.into_iter().enumerate() {
                     // All negative elements of axes are made non-negative by
                     // adding r to them, where r = rank(input).
                     let axis = if axis < 0 {
@@ -1299,7 +1281,10 @@ fn simple_eval_(
                         e += data_dim;
                     }
 
-                    let p = to_scalar_flexible::<i64>(&steps.get(i)?)?;
+                    let p = match steps {
+                        Some(steps) => to_scalar_flexible::<i64>(&steps.get(i)?)?,
+                        None => 1,
+                    };
                     // starts[i] is clamped into the range [0, dims[axes[i]]]
                     // for positive stepping and [0, dims[axes[i]]-1] for
                     // negative stepping.
