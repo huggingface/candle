@@ -50,8 +50,8 @@ For more advanced examples, please have a look at the following section.
 ## Check out our examples
 
 These online demos run entirely in your browser:
-- [yolo](https://huggingface.co/spaces/lmz/candle-yolo): pose estimation and
-  object recognition.
+- [yolo26](https://wzh19960613.github.io/yolo26-wasm/): object recognition, pose estimation,
+  instance segmentation and so on.
 - [whisper](https://huggingface.co/spaces/lmz/candle-whisper): speech recognition.
 - [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2): text generation.
 - [T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm): text generation.
