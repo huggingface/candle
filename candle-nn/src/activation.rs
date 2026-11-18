@@ -24,6 +24,7 @@ pub enum Activation {
     LeakyRelu(f64),
     #[serde(alias = "gelu_pytorch_tanh")]
     GeluPytorchTanh,
+    Tanh,
 }
 
 impl super::Module for Activation {
@@ -45,6 +46,7 @@ impl super::Module for Activation {
             &Self::Elu(alpha) => xs.elu(alpha),
             &Self::LeakyRelu(negative_slope) => crate::ops::leaky_relu(xs, negative_slope),
             Self::GeluPytorchTanh => xs.gelu(),
+            Self::Tanh => xs.tanh(),
         }
     }
 }
