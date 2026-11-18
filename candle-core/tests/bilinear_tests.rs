@@ -420,6 +420,31 @@ fn bilinear_identity(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+fn bilinear_identity_non_contiguous(dev: &Device) -> Result<()> {
+    // Resizing to the input size must return the tensor's logical values, not its
+    // raw storage, when the input is strided (e.g. an HWC image permuted to CHW).
+    let hwc = Tensor::arange(0f32, 24f32, dev)?.reshape((1, 2, 4, 3))?;
+    let chw = hwc.permute((0, 3, 1, 2))?;
+    assert!(!chw.is_contiguous());
+    let output = chw.upsample_bilinear2d(2, 4, false)?;
+    assert_eq!(output.dims4()?, (1, 3, 2, 4));
+    assert_eq!(
+        output.flatten_all()?.to_vec1::<f32>()?,
+        chw.flatten_all()?.to_vec1::<f32>()?
+    );
+
+    // Same for a contiguous view with a storage offset (one image of a batch).
+    let batch = Tensor::arange(0f32, 32f32, dev)?.reshape((2, 1, 4, 4))?;
+    let second = batch.narrow(0, 1, 1)?;
+    let output = second.upsample_bilinear2d(4, 4, false)?;
+    assert_eq!(output.dims4()?, (1, 1, 4, 4));
+    assert_eq!(
+        output.flatten_all()?.to_vec1::<f32>()?,
+        second.flatten_all()?.to_vec1::<f32>()?
+    );
+    Ok(())
+}
+
 fn bilinear_align_corners_difference(dev: &Device) -> Result<()> {
     // Test that align_corners parameter produces different results
     let t = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
@@ -515,6 +540,13 @@ test_device!(
     bilinear_identity_cpu,
     bilinear_identity_gpu,
     bilinear_identity_metal
+);
+
+test_device!(
+    bilinear_identity_non_contiguous,
+    bilinear_identity_non_contiguous_cpu,
+    bilinear_identity_non_contiguous_gpu,
+    bilinear_identity_non_contiguous_metal
 );
 
 test_device!(
