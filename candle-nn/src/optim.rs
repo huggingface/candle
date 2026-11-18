@@ -199,3 +199,296 @@ impl AdamW {
         self.params = params;
     }
 }
+
+/// Wraps any [`Optimizer`] with gradient-accumulation semantics.
+pub struct GradAccumulator<O: Optimizer> {
+    opt: O,
+    accum: Option<candle::backprop::GradStore>,
+    count: usize,
+}
+
+impl<O: Optimizer> GradAccumulator<O> {
+    pub fn new(opt: O) -> Self {
+        Self {
+            opt,
+            accum: None,
+            count: 0,
+        }
+    }
+
+    pub fn pending(&self) -> usize {
+        self.count
+    }
+
+    pub fn optimizer(&self) -> &O {
+        &self.opt
+    }
+
+    pub fn optimizer_mut(&mut self) -> &mut O {
+        &mut self.opt
+    }
+
+    pub fn into_inner(self) -> O {
+        self.opt
+    }
+
+    pub fn accumulate(&mut self, loss: &Tensor) -> Result<()> {
+        let fresh = loss.backward()?;
+        match &mut self.accum {
+            None => {
+                let ids: Vec<_> = fresh.get_ids().copied().collect();
+                let mut store = fresh;
+                for id in ids {
+                    let detached = store.get_id(id).unwrap().detach();
+                    store.insert_id(id, detached);
+                }
+                self.accum = Some(store);
+            }
+            Some(existing) => {
+                let ids: Vec<_> = fresh.get_ids().copied().collect();
+                for id in ids {
+                    let g = fresh.get_id(id).unwrap().clone();
+                    let merged = match existing.get_id(id) {
+                        Some(prev) => (prev + &g)?.detach(),
+                        None => g.detach(),
+                    };
+                    existing.insert_id(id, merged);
+                }
+            }
+        }
+        self.count += 1;
+        Ok(())
+    }
+
+    /// Average the accumulated gradients and apply a single optimizer step.
+    pub fn step(&mut self) -> Result<()> {
+        if self.count == 0 {
+            return Ok(());
+        }
+        let Some(store) = self.accum.as_mut() else {
+            return Ok(());
+        };
+        let scale = 1.0 / self.count as f64;
+        let ids: Vec<_> = store.get_ids().copied().collect();
+        let mut scaled: Vec<(_, Tensor)> = Vec::with_capacity(ids.len());
+        for id in &ids {
+            let g = store.get_id(*id).unwrap();
+            scaled.push((*id, (g * scale)?));
+        }
+        // Collapse count to 1 so a retry after opt.step failure does not re-scale.
+        for (id, g) in scaled {
+            store.insert_id(id, g);
+        }
+        self.count = 1;
+        self.opt.step(store)?;
+        self.accum = None;
+        self.count = 0;
+        Ok(())
+    }
+
+    pub fn reset(&mut self) {
+        self.accum = None;
+        self.count = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle::{Device, Tensor};
+
+    #[test]
+    fn adamw_accumulate_matches_single_step() {
+        let dev = Device::Cpu;
+        let params = ParamsAdamW {
+            lr: 0.01,
+            weight_decay: 0.0,
+            ..Default::default()
+        };
+
+        let w1 = Var::from_tensor(&Tensor::new(&[1.0f32, 2.0, 3.0], &dev).unwrap()).unwrap();
+        let w2 = Var::from_tensor(&Tensor::new(&[1.0f32, 2.0, 3.0], &dev).unwrap()).unwrap();
+
+        let x1 = Tensor::new(&[0.5f32, -0.5, 1.0], &dev).unwrap();
+        let x2 = Tensor::new(&[-1.0f32, 0.3, 0.7], &dev).unwrap();
+
+        let mut acc = GradAccumulator::new(AdamW::new(vec![w1.clone()], params.clone()).unwrap());
+        let l1a = (w1.as_tensor() * &x1).unwrap().sum_all().unwrap();
+        let l2a = (w1.as_tensor() * &x2).unwrap().sum_all().unwrap();
+        acc.accumulate(&l1a).unwrap();
+        acc.accumulate(&l2a).unwrap();
+        acc.step().unwrap();
+        let result_a: Vec<f32> = w1.as_tensor().to_vec1().unwrap();
+
+        let mut opt_b = AdamW::new(vec![w2.clone()], params).unwrap();
+        let l1b = (w2.as_tensor() * &x1).unwrap().sum_all().unwrap();
+        let l2b = (w2.as_tensor() * &x2).unwrap().sum_all().unwrap();
+        let combined = ((&l1b + &l2b).unwrap() * 0.5).unwrap();
+        opt_b.backward_step(&combined).unwrap();
+        let result_b: Vec<f32> = w2.as_tensor().to_vec1().unwrap();
+
+        for (a, b) in result_a.iter().zip(result_b.iter()) {
+            assert!(
+                (a - b).abs() < 1e-6,
+                "accumulate diverged from single step: {a} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn sgd_accumulate_matches_single_step() {
+        let dev = Device::Cpu;
+        let lr = 0.1;
+
+        let w1 = Var::from_tensor(&Tensor::new(&[1.0f32, 2.0, 3.0], &dev).unwrap()).unwrap();
+        let w2 = Var::from_tensor(&Tensor::new(&[1.0f32, 2.0, 3.0], &dev).unwrap()).unwrap();
+
+        let x1 = Tensor::new(&[0.5f32, -0.5, 1.0], &dev).unwrap();
+        let x2 = Tensor::new(&[-1.0f32, 0.3, 0.7], &dev).unwrap();
+
+        let mut acc = GradAccumulator::new(SGD::new(vec![w1.clone()], lr).unwrap());
+        let l1a = (w1.as_tensor() * &x1).unwrap().sum_all().unwrap();
+        let l2a = (w1.as_tensor() * &x2).unwrap().sum_all().unwrap();
+        acc.accumulate(&l1a).unwrap();
+        acc.accumulate(&l2a).unwrap();
+        acc.step().unwrap();
+        let result_a: Vec<f32> = w1.as_tensor().to_vec1().unwrap();
+
+        let mut sgd = SGD::new(vec![w2.clone()], lr).unwrap();
+        let l1b = (w2.as_tensor() * &x1).unwrap().sum_all().unwrap();
+        let l2b = (w2.as_tensor() * &x2).unwrap().sum_all().unwrap();
+        let combined = ((&l1b + &l2b).unwrap() * 0.5).unwrap();
+        sgd.backward_step(&combined).unwrap();
+        let result_b: Vec<f32> = w2.as_tensor().to_vec1().unwrap();
+
+        for (a, b) in result_a.iter().zip(result_b.iter()) {
+            assert!(
+                (a - b).abs() < 1e-6,
+                "SGD accumulate diverged from single step: {a} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn step_with_no_accumulation_is_noop() {
+        let dev = Device::Cpu;
+        let w = Var::from_tensor(&Tensor::new(&[1.0f32, 2.0], &dev).unwrap()).unwrap();
+        let mut acc =
+            GradAccumulator::new(AdamW::new(vec![w.clone()], ParamsAdamW::default()).unwrap());
+        let before: Vec<f32> = w.as_tensor().to_vec1().unwrap();
+        acc.step().unwrap();
+        let after: Vec<f32> = w.as_tensor().to_vec1().unwrap();
+        assert_eq!(before, after);
+        assert_eq!(acc.pending(), 0);
+    }
+
+    #[test]
+    fn accumulate_resets_after_step() {
+        let dev = Device::Cpu;
+        let w = Var::from_tensor(&Tensor::new(&[1.0f32, 2.0], &dev).unwrap()).unwrap();
+        let mut acc =
+            GradAccumulator::new(AdamW::new(vec![w.clone()], ParamsAdamW::default()).unwrap());
+        let x = Tensor::new(&[1.0f32, 1.0], &dev).unwrap();
+        let loss = (w.as_tensor() * &x).unwrap().sum_all().unwrap();
+        acc.accumulate(&loss).unwrap();
+        assert_eq!(acc.pending(), 1);
+        acc.step().unwrap();
+        assert_eq!(acc.pending(), 0);
+        assert!(acc.accum.is_none());
+    }
+
+    #[test]
+    fn accumulate_multi_var_with_weight_decay() {
+        let dev = Device::Cpu;
+        let params = ParamsAdamW {
+            lr: 0.01,
+            weight_decay: 0.1,
+            ..Default::default()
+        };
+
+        let wa1 = Var::from_tensor(&Tensor::new(&[1.0f32, -2.0, 3.0], &dev).unwrap()).unwrap();
+        let wa2 = Var::from_tensor(&Tensor::new(&[0.5f32, 0.5], &dev).unwrap()).unwrap();
+        let wb1 = Var::from_tensor(&Tensor::new(&[1.0f32, -2.0, 3.0], &dev).unwrap()).unwrap();
+        let wb2 = Var::from_tensor(&Tensor::new(&[0.5f32, 0.5], &dev).unwrap()).unwrap();
+
+        let x1 = Tensor::new(&[0.5f32, -0.5, 1.0], &dev).unwrap();
+        let x2 = Tensor::new(&[-1.0f32, 0.3, 0.7], &dev).unwrap();
+        let y1 = Tensor::new(&[1.0f32, 0.5], &dev).unwrap();
+        let y2 = Tensor::new(&[-0.5f32, 2.0], &dev).unwrap();
+
+        let mut acc = GradAccumulator::new(
+            AdamW::new(vec![wa1.clone(), wa2.clone()], params.clone()).unwrap(),
+        );
+        let l1a = ((wa1.as_tensor() * &x1).unwrap().sum_all().unwrap()
+            + (wa2.as_tensor() * &y1).unwrap().sum_all().unwrap())
+        .unwrap();
+        let l2a = ((wa1.as_tensor() * &x2).unwrap().sum_all().unwrap()
+            + (wa2.as_tensor() * &y2).unwrap().sum_all().unwrap())
+        .unwrap();
+        acc.accumulate(&l1a).unwrap();
+        acc.accumulate(&l2a).unwrap();
+        acc.step().unwrap();
+
+        let mut opt_b = AdamW::new(vec![wb1.clone(), wb2.clone()], params).unwrap();
+        let l1b = ((wb1.as_tensor() * &x1).unwrap().sum_all().unwrap()
+            + (wb2.as_tensor() * &y1).unwrap().sum_all().unwrap())
+        .unwrap();
+        let l2b = ((wb1.as_tensor() * &x2).unwrap().sum_all().unwrap()
+            + (wb2.as_tensor() * &y2).unwrap().sum_all().unwrap())
+        .unwrap();
+        let combined = ((&l1b + &l2b).unwrap() * 0.5).unwrap();
+        opt_b.backward_step(&combined).unwrap();
+
+        let a1: Vec<f32> = wa1.as_tensor().to_vec1().unwrap();
+        let b1: Vec<f32> = wb1.as_tensor().to_vec1().unwrap();
+        let a2: Vec<f32> = wa2.as_tensor().to_vec1().unwrap();
+        let b2: Vec<f32> = wb2.as_tensor().to_vec1().unwrap();
+        for (a, b) in a1.iter().zip(b1.iter()) {
+            assert!((a - b).abs() < 1e-5, "var1 diverged: {a} vs {b}");
+        }
+        for (a, b) in a2.iter().zip(b2.iter()) {
+            assert!((a - b).abs() < 1e-5, "var2 diverged: {a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn accumulate_skips_var_without_grad() {
+        let dev = Device::Cpu;
+        let used = Var::from_tensor(&Tensor::new(&[1.0f32, 2.0], &dev).unwrap()).unwrap();
+        let unused = Var::from_tensor(&Tensor::new(&[7.0f32, 8.0], &dev).unwrap()).unwrap();
+        let used_before: Vec<f32> = used.as_tensor().to_vec1().unwrap();
+        let unused_before: Vec<f32> = unused.as_tensor().to_vec1().unwrap();
+
+        let mut acc = GradAccumulator::new(
+            AdamW::new(vec![used.clone(), unused.clone()], ParamsAdamW::default()).unwrap(),
+        );
+        let x = Tensor::new(&[0.5f32, 0.5], &dev).unwrap();
+        let loss = (used.as_tensor() * &x).unwrap().sum_all().unwrap();
+        acc.accumulate(&loss).unwrap();
+        acc.accumulate(&loss).unwrap();
+        acc.step().unwrap();
+
+        let used_after: Vec<f32> = used.as_tensor().to_vec1().unwrap();
+        let unused_after: Vec<f32> = unused.as_tensor().to_vec1().unwrap();
+        assert_ne!(used_after, used_before, "used var should have moved");
+        assert_eq!(unused_after, unused_before, "unused var must not move");
+    }
+
+    #[test]
+    fn reset_discards_pending() {
+        let dev = Device::Cpu;
+        let w = Var::from_tensor(&Tensor::new(&[1.0f32, 2.0], &dev).unwrap()).unwrap();
+        let mut acc =
+            GradAccumulator::new(AdamW::new(vec![w.clone()], ParamsAdamW::default()).unwrap());
+        let x = Tensor::new(&[1.0f32, 1.0], &dev).unwrap();
+        let loss = (w.as_tensor() * &x).unwrap().sum_all().unwrap();
+        acc.accumulate(&loss).unwrap();
+        assert_eq!(acc.pending(), 1);
+        acc.reset();
+        assert_eq!(acc.pending(), 0);
+        let before: Vec<f32> = w.as_tensor().to_vec1().unwrap();
+        acc.step().unwrap();
+        let after: Vec<f32> = w.as_tensor().to_vec1().unwrap();
+        assert_eq!(before, after, "step after reset must not update");
+    }
+}
