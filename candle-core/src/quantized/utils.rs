@@ -1,5 +1,10 @@
 pub(super) fn nearest_int(v: f32) -> i32 {
-    v.round() as i32
+    // The ggml quantizers this file is ported from round a tie to the even
+    // integer. f32::round sends the tie away from zero, so 2.5 became 3 and
+    // the next quant level was stored.
+    let val = v + 12582912.0f32;
+    let bits = val.to_bits() as i32;
+    (bits & 0x007fffff) - 0x00400000
 }
 
 /// Validates that the input and output are the right size and returns an iterator which maps each
@@ -307,7 +312,7 @@ pub(super) fn make_q3_quants(x: &[f32], nmax: i32, do_rmse: bool) -> f32 {
         let mut sumlx = 0.0;
         let mut suml2 = 0.0;
         for i in 0..n {
-            let li = (iscale * x[i]).round() as i32;
+            let li = nearest_int(iscale * x[i]);
             let li = li.clamp(-nmax, nmax - 1);
             l[i] = li as i8;
             let w = x[i] * x[i];
@@ -321,7 +326,7 @@ pub(super) fn make_q3_quants(x: &[f32], nmax: i32, do_rmse: bool) -> f32 {
                 let mut slx = sumlx - w * x[i] * l[i] as f32;
                 if slx > 0.0 {
                     let mut sl2 = suml2 - w * (l[i] as i32 * l[i] as i32) as f32;
-                    let mut new_l = (x[i] * sl2 / slx).round() as i32;
+                    let mut new_l = nearest_int(x[i] * sl2 / slx);
                     new_l = new_l.clamp(-nmax, nmax - 1);
                     if new_l != l[i] as i32 {
                         slx += w * x[i] * new_l as f32;
@@ -345,7 +350,7 @@ pub(super) fn make_q3_quants(x: &[f32], nmax: i32, do_rmse: bool) -> f32 {
         return sumlx / suml2;
     }
     for i in 0..n {
-        let li = (iscale * x[i]).round() as i32;
+        let li = nearest_int(iscale * x[i]);
         l[i] = (li.clamp(-nmax, nmax - 1) + nmax) as i8;
     }
     1.0 / iscale
@@ -559,4 +564,28 @@ pub(super) fn make_qp_quants(
     }
 
     sumlx / suml2
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn halfway_values_round_to_the_even_integer() {
+        assert_eq!(nearest_int(0.5), 0);
+        assert_eq!(nearest_int(2.5), 2);
+        assert_eq!(nearest_int(-0.5), 0);
+        assert_eq!(nearest_int(-2.5), -2);
+        assert_eq!(nearest_int(1.5), 2);
+        assert_eq!(nearest_int(1.0), 1);
+    }
+
+    #[test]
+    fn qkx1_keeps_a_halfway_sample_on_the_even_level() {
+        // 0.5 is halfway between levels 0 and 1. Rounding it away from zero
+        // stored level 1 and returned a scale of 0.75.
+        let (scale, min) = make_qkx1_quants(1, 1, &[0.5, 1.0]);
+        assert_eq!(scale, 1.0);
+        assert_eq!(min, 0.0);
+    }
 }
