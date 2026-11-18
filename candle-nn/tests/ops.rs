@@ -355,6 +355,41 @@ fn rope_thd(device: &Device) -> Result<()> {
     Ok(())
 }
 
+// A batched (3D) cos/sin table can hold more positions than the input sequence, the
+// first `seq_len` positions of each batch element should be used.
+fn rope_batched_cs_longer_than_seq(device: &Device) -> Result<()> {
+    let (b_size, num_head, seq_len, head_dim, max_seq_len) = (2, 3, 4, 8, 7);
+    let src = Tensor::randn(0f32, 1., (b_size, num_head, seq_len, head_dim), device)?;
+    let cos = Tensor::randn(0f32, 1., (b_size, max_seq_len, head_dim / 2), device)?;
+    let sin = Tensor::randn(0f32, 1., (b_size, max_seq_len, head_dim / 2), device)?;
+    let src_thd = src.transpose(1, 2)?.contiguous()?;
+    for b in 0..b_size {
+        let src_b = src.i(b..b + 1)?;
+        let src_thd_b = src_thd.i(b..b + 1)?;
+        let cos_b = cos.i(b)?.narrow(0, 0, seq_len)?;
+        let sin_b = sin.i(b)?.narrow(0, 0, seq_len)?;
+        let pairs = [
+            (
+                candle_nn::rotary_emb::rope(&src, &cos, &sin)?.i(b..b + 1)?,
+                candle_nn::rotary_emb::rope(&src_b, &cos_b, &sin_b)?,
+            ),
+            (
+                candle_nn::rotary_emb::rope_i(&src, &cos, &sin)?.i(b..b + 1)?,
+                candle_nn::rotary_emb::rope_i(&src_b, &cos_b, &sin_b)?,
+            ),
+            (
+                candle_nn::rotary_emb::rope_thd(&src_thd, &cos, &sin)?.i(b..b + 1)?,
+                candle_nn::rotary_emb::rope_thd(&src_thd_b, &cos_b, &sin_b)?,
+            ),
+        ];
+        for (batched, expected) in pairs {
+            let diff = (batched - expected)?.abs()?.max_all()?.to_vec0::<f32>()?;
+            assert!(diff < 1e-5, "batch {b}: max diff {diff}");
+        }
+    }
+    Ok(())
+}
+
 fn sigmoid(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
     let tensor = Tensor::new(data, device)?;
@@ -368,6 +403,12 @@ fn sigmoid(device: &Device) -> Result<()> {
 test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal);
 test_device!(rope, rope_cpu, rope_gpu, rope_metal);
 test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
+test_device!(
+    rope_batched_cs_longer_than_seq,
+    rope_batched_cs_longer_than_seq_cpu,
+    rope_batched_cs_longer_than_seq_gpu,
+    rope_batched_cs_longer_than_seq_metal
+);
 test_device!(softmax, softmax_cpu, softmax_gpu, softmax_metal);
 test_device!(rms_norm, rms_norm_cpu, rms_norm_gpu, rms_norm_metal);
 test_device!(rms_norml, rms_norml_cpu, rms_norml_gpu, rms_norml_metal);
