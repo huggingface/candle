@@ -87,24 +87,75 @@ fn conv2d_1x1<T: WithDType + num_traits::Num + Copy + 'static>(
     };
     let k_layout = Layout::contiguous((p.c_out, p.c_in));
 
+    if p.b_size == 1 {
+        let inp_reshaped;
+        let inp_values;
+        let inp_layout = if inp_s0 == p.c_in * spatial_size
+            && inp_s1 == spatial_size
+            && inp_s2 == p.i_w
+            && inp_s3 == 1
+        {
+            inp_values = inp;
+            Layout::contiguous((p.c_in, spatial_size))
+        } else {
+            // Reshape input to [c_in, h*w].
+            inp_reshaped = {
+                let mut inp_reshaped = Vec::with_capacity(p.c_in * spatial_size);
+                for c_in_idx in 0..p.c_in {
+                    for h_idx in 0..p.i_h {
+                        for w_idx in 0..p.i_w {
+                            let inp_idx = c_in_idx * inp_s1 + h_idx * inp_s2 + w_idx * inp_s3;
+                            inp_reshaped.push(inp[inp_idx]);
+                        }
+                    }
+                }
+                inp_reshaped
+            };
+            inp_values = &inp_reshaped;
+            Layout::contiguous((p.c_in, spatial_size))
+        };
+
+        // The [c_out, h*w] GEMM result is already contiguous in the same memory
+        // order as [1, c_out, h, w], so batch-1 inference can return it directly.
+        let matmul = MatMul((1, p.c_out, spatial_size, p.c_in));
+        return matmul.f(&k_reshaped, &k_layout, inp_values, &inp_layout);
+    }
+
     // Process each batch
     (0..p.b_size).into_par_iter().try_for_each(|b_idx| {
-        // Reshape input to [c_in, h*w] for this batch
-        let mut inp_reshaped = Vec::with_capacity(p.c_in * spatial_size);
-        for c_in_idx in 0..p.c_in {
-            for h_idx in 0..p.i_h {
-                for w_idx in 0..p.i_w {
-                    let inp_idx =
-                        b_idx * inp_s0 + c_in_idx * inp_s1 + h_idx * inp_s2 + w_idx * inp_s3;
-                    inp_reshaped.push(inp[inp_idx]);
+        let inp_reshaped;
+        let inp_values;
+        let inp_layout = if inp_s0 == p.c_in * spatial_size
+            && inp_s1 == spatial_size
+            && inp_s2 == p.i_w
+            && inp_s3 == 1
+        {
+            inp_values = inp;
+            Layout::contiguous_with_offset((p.c_in, spatial_size), b_idx * inp_s0)
+        } else {
+            // Reshape input to [c_in, h*w] for this batch.
+            inp_reshaped = {
+                let mut inp_reshaped = Vec::with_capacity(p.c_in * spatial_size);
+                for c_in_idx in 0..p.c_in {
+                    for h_idx in 0..p.i_h {
+                        for w_idx in 0..p.i_w {
+                            let inp_idx = b_idx * inp_s0
+                                + c_in_idx * inp_s1
+                                + h_idx * inp_s2
+                                + w_idx * inp_s3;
+                            inp_reshaped.push(inp[inp_idx]);
+                        }
+                    }
                 }
-            }
-        }
-        let inp_layout = Layout::contiguous((p.c_in, spatial_size));
+                inp_reshaped
+            };
+            inp_values = &inp_reshaped;
+            Layout::contiguous((p.c_in, spatial_size))
+        };
 
         // Perform matmul: [c_out, c_in] @ [c_in, spatial_size] -> [c_out, spatial_size]
         let matmul = MatMul((1, p.c_out, spatial_size, p.c_in));
-        let result = matmul.f(&k_reshaped, &k_layout, &inp_reshaped, &inp_layout)?;
+        let result = matmul.f(&k_reshaped, &k_layout, inp_values, &inp_layout)?;
 
         // Copy result to output
         let out_offset = b_idx * p.c_out * spatial_size;
