@@ -366,12 +366,15 @@ impl BackendStorage for MetalStorage {
                 .build()?;
             let encoder = self.device.command_encoder()?;
             let src = buffer_o(&self.buffer, layout, self.dtype);
+            // Pass the dims with the reduced ones moved to the end: the arg reduce kernels
+            // compute the index as `i % dims[num_dims - 1]`. The reordering can still be
+            // contiguous when the skipped dims have size 1, e.g. argmax(1) on (b, n, 1).
             candle_metal_kernels::call_reduce_contiguous(
                 &device.device,
                 &encoder,
                 &device.kernels,
                 name,
-                src_dims,
+                &dims,
                 dst_el,
                 src,
                 &buffer,
