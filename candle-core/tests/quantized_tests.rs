@@ -328,12 +328,6 @@ fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact_q6k() -> Res
 
 #[cfg(feature = "metal")]
 #[test]
-fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact_q4_0() -> Result<()> {
-    qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact(GgmlDType::Q4_0)
-}
-
-#[cfg(feature = "metal")]
-#[test]
 fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact_q5k() -> Result<()> {
     qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact(GgmlDType::Q5K)
 }
@@ -406,10 +400,73 @@ fn qmatmul_mm_t_matches_sequential_single_row_mv_calls_within_tolerance_q5_1() -
     Ok(())
 }
 
+// Q4_0 and Q8_0 with 4 or more rows use the tile kernel
+// (`kernel_mul_mv_tile_*`), not the one-row kernel. Like the matmul kernel,
+// it dequantizes the weights to half, so compare with a tolerance: at the
+// shapes of a small model, for M = 2 to 8 (2 and 3 rows stay on the mat-vec
+// kernel) and for 12 rows as `[12, 1, K]` (two tiles), with N not a
+// multiple of 8.
+#[cfg(feature = "metal")]
+fn qmatmul_mv_rows_match_single_row_calls(dtype: GgmlDType) -> Result<()> {
+    let device = Device::new_metal(0)?;
+    for (n, k) in [
+        (256usize, 512usize),
+        (128, 896),
+        (896, 4864),
+        (4864, 896),
+        (100, 512),
+    ] {
+        let weight: Vec<f32> = (0..n * k)
+            .map(|v| ((v * 37 + 11) % 997) as f32 * 0.001 - 0.5)
+            .collect();
+        let weight = Tensor::from_slice(&weight, (n, k), &device)?;
+        let matmul =
+            quantized::QMatMul::from_qtensor(quantized::QTensor::quantize(&weight, dtype)?)?;
+        for batch in [2usize, 3, 4, 5, 6, 7, 8, 12] {
+            let x: Vec<f32> = (0..batch * k)
+                .map(|v| ((v * 13 + 5) % 991) as f32 * 0.001 - 0.5)
+                .collect();
+            let x = Tensor::from_slice(&x, (batch, k), &device)?;
+            // 12 rows as rank 3, so that they take the mat-vec path.
+            let batched = if batch > 8 {
+                matmul
+                    .forward(&x.unsqueeze(1)?)?
+                    .squeeze(1)?
+                    .to_vec2::<f32>()?
+            } else {
+                matmul.forward(&x)?.to_vec2::<f32>()?
+            };
+            for (row, got) in batched.iter().enumerate() {
+                let want = matmul
+                    .forward(&x.narrow(0, row, 1)?)?
+                    .to_vec2::<f32>()?
+                    .remove(0);
+                let scale = want.iter().fold(0f32, |a, v| a.max(v.abs())).max(1.0);
+                let diff = got
+                    .iter()
+                    .zip(&want)
+                    .fold(0f32, |a, (g, w)| a.max((g - w).abs()));
+                assert!(
+                    diff <= 2e-3 * scale,
+                    "dtype={dtype:?} n={n} k={k} batch={batch} row={row}: max diff {diff} \
+                     against the one-row kernel, max |value| {scale}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(feature = "metal")]
 #[test]
-fn qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact_q8_0() -> Result<()> {
-    qmatmul_batched_mv_matches_sequential_single_row_calls_bit_exact(GgmlDType::Q8_0)
+fn qmatmul_mv_rows_match_single_row_calls_q4_0() -> Result<()> {
+    qmatmul_mv_rows_match_single_row_calls(GgmlDType::Q4_0)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn qmatmul_mv_rows_match_single_row_calls_q8_0() -> Result<()> {
+    qmatmul_mv_rows_match_single_row_calls(GgmlDType::Q8_0)
 }
 
 // No qmatmul_batched_..._q8_1 test: `kernel_mul_mv_q8_1_f32` does not exist

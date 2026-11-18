@@ -61,6 +61,28 @@ pub fn call_quantized_matmul_mv_t(
     let r2: u32 = (ne12 / ne02) as u32;
     let r3: u32 = (ne13 / ne03) as u32;
 
+    // A few rows of Q4_0 or Q8_0 go to the kernel that reads each block of
+    // the weights once for several rows.
+    // From 4 rows, Q4_0 and Q8_0 go to the tile kernel, which reads each
+    // block of the weights once for up to 8 rows. With 2 or 3 rows, the
+    // mat-vec kernel below is faster (measured on an M4 Pro). The tile
+    // kernel reads `lhs` as float4, so it needs a 16-byte aligned offset.
+    if m >= 4 && matches!(dtype, GgmlDType::Q4_0 | GgmlDType::Q8_0) && lhs_offset.is_multiple_of(16)
+    {
+        return call_quantized_matmul_mv_rows_t(
+            device,
+            ep,
+            kernels,
+            dtype,
+            (b, m, n, k),
+            lhs,
+            lhs_offset,
+            rhs,
+            dst_offset,
+            dst,
+        );
+    }
+
     let (nth0, nth1, align) = match dtype {
         GgmlDType::Q4_0
         | GgmlDType::Q4_1
@@ -165,6 +187,98 @@ pub fn call_quantized_matmul_mv_t(
             nb10,
             nb11,
             nb12,
+            ne0,
+            ne1,
+            r2,
+            r3
+        )
+    );
+
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
+    Ok(())
+}
+
+/// As [`call_quantized_matmul_mv_t`] for Q4_0 and Q8_0 with a few rows of
+/// `lhs`: tiles of 8 rows of `lhs`, with K split over the SIMD groups of a
+/// threadgroup. Each block of the weights is read once for each tile of 8
+/// rows. `lhs_offset` must be a multiple of 16.
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantized_matmul_mv_rows_t(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs: &Buffer,
+    lhs_offset: usize,
+    rhs: &Buffer,
+    dst_offset: usize,
+    dst: &Buffer,
+) -> Result<(), MetalKernelError> {
+    // The tile of the weights: nt*8 rows, K split over nsg SIMD groups.
+    // Measured on an M4 Pro at the shapes of Qwen2.5-0.5B: 16 rows and 8 SIMD
+    // groups are the best or near it, except for few rows of the weights
+    // (more threadgroups) and a long K (a finer split of K).
+    let (nt, nsg) = if n <= 256 {
+        (1, 16)
+    } else if k >= 4096 {
+        (2, 16)
+    } else {
+        (2, 8)
+    };
+    let name = match (dtype, nt, nsg) {
+        (GgmlDType::Q4_0, 1, 16) => "kernel_mul_mv_tile_q4_0_f32_nt1_nsg16",
+        (GgmlDType::Q4_0, 2, 8) => "kernel_mul_mv_tile_q4_0_f32_nt2_nsg8",
+        (GgmlDType::Q4_0, 2, 16) => "kernel_mul_mv_tile_q4_0_f32_nt2_nsg16",
+        (GgmlDType::Q8_0, 1, 16) => "kernel_mul_mv_tile_q8_0_f32_nt1_nsg16",
+        (GgmlDType::Q8_0, 2, 8) => "kernel_mul_mv_tile_q8_0_f32_nt2_nsg8",
+        (GgmlDType::Q8_0, 2, 16) => "kernel_mul_mv_tile_q8_0_f32_nt2_nsg16",
+        _ => {
+            return Err(MetalKernelError::LoadFunctionError(format!(
+                "no tile kernel for {dtype:?}"
+            )))
+        }
+    };
+    let ne00 = k as i64;
+    let ne01 = n as i64;
+    let ne02 = b as i64;
+    let ne10 = k as i64;
+    let ne11 = m as i64;
+    let ne12 = b as i64;
+    let ne0 = n as i64;
+    let ne1 = m as i64;
+    let r2: u32 = 1;
+    let r3: u32 = 1;
+
+    let thread_groups_count = MTLSize {
+        width: divide(n, nt * 8),
+        height: divide(m, 8),
+        depth: b,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: 32,
+        height: nsg,
+        depth: 1,
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "qmm_mv_tile {name} B={b} M={m} K={k} N={n}");
+
+    set_params!(
+        encoder,
+        (
+            rhs,
+            (lhs, lhs_offset),
+            Output::with_offset(dst, dst_offset),
+            ne00,
+            ne01,
+            ne02,
+            ne10,
+            ne11,
+            ne12,
             ne0,
             ne1,
             r2,
