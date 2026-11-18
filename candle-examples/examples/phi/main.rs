@@ -94,7 +94,7 @@ impl TextGeneration {
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
             let logits = match &mut self.model {
                 Model::MixFormer(m) => m.forward(&input)?,
-                Model::Phi(m) => m.forward(&input)?,
+                Model::Phi(m) => m.forward(&input, pos)?,
                 Model::Quantized(m) => m.forward(&input)?,
                 Model::Phi3(m) => m.forward(&input, pos)?.i((.., 0, ..))?,
             };
@@ -484,7 +484,7 @@ fn mmlu<P: AsRef<std::path::Path>>(
                 }
                 Model::Phi(m) => {
                     m.clear_kv_cache();
-                    m.forward(&input)?
+                    m.forward(&input, 0)?
                 }
                 Model::Phi3(m) => {
                     m.clear_kv_cache();
