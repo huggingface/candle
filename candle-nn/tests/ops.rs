@@ -365,6 +365,22 @@ fn sigmoid(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn silu_mul(device: &Device) -> Result<()> {
+    let x = Tensor::new(&[[1.0f32, -2.0, 3.0], [-0.5, 0.0, 2.5]], device)?;
+    let y = Tensor::new(&[[2.0f32, 0.5, -1.0], [4.0, 3.0, -2.0]], device)?;
+    let expected = (&x.silu()? * &y)?;
+    let actual = candle_nn::ops::silu_mul(&x, &y)?;
+    let diff = (&expected - &actual)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    assert!(diff < 1e-6, "silu_mul diff: {diff}");
+
+    // Also test swiglu chunked op
+    let xy = Tensor::cat(&[&x, &y], candle::D::Minus1)?;
+    let swiglu_out = candle_nn::ops::swiglu(&xy)?;
+    let swiglu_diff = (&expected - &swiglu_out)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    assert!(swiglu_diff < 1e-6, "swiglu diff: {swiglu_diff}");
+    Ok(())
+}
+
 test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal);
 test_device!(rope, rope_cpu, rope_gpu, rope_metal);
 test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
@@ -380,3 +396,4 @@ test_device!(
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);
+test_device!(silu_mul, silu_mul_cpu, silu_mul_gpu, silu_mul_metal);
