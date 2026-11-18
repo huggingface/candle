@@ -529,6 +529,21 @@ impl Encoder {
         }
         Ok(xs)
     }
+
+    fn forward_with_hidden_states(
+        &self,
+        xs: &Tensor,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Vec<Tensor>> {
+        let mut all_hidden_states = Vec::with_capacity(self.layers.len() + 1);
+        let mut xs = xs.clone();
+        all_hidden_states.push(xs.clone());
+        for layer in self.layers.iter() {
+            xs = layer.forward(&xs, attention_mask)?;
+            all_hidden_states.push(xs.clone());
+        }
+        Ok(all_hidden_states)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -627,6 +642,11 @@ impl VisionTransformer {
             head,
         })
     }
+
+    fn forward_with_hidden_states(&self, xs: &Tensor) -> Result<Vec<Tensor>> {
+        let xs = xs.apply(&self.embeddings)?;
+        self.encoder.forward_with_hidden_states(&xs, None)
+    }
 }
 
 impl Module for VisionTransformer {
@@ -650,6 +670,11 @@ impl VisionModel {
     pub fn new(cfg: &VisionConfig, use_head: bool, vb: VarBuilder) -> Result<Self> {
         let vision_model = VisionTransformer::new(cfg, use_head, vb)?;
         Ok(Self { vision_model })
+    }
+
+    /// Per-layer hidden states; index 0 is the embedding output.
+    pub fn forward_with_hidden_states(&self, xs: &Tensor) -> Result<Vec<Tensor>> {
+        self.vision_model.forward_with_hidden_states(xs)
     }
 }
 
