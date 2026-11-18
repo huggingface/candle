@@ -202,6 +202,49 @@ fn broadcast_matmul_rank2_rhs(device: &Device) -> Result<()> {
     Ok(())
 }
 
+// An rhs whose leading dims are all 1, e.g. a `(k, n)` weight unsqueezed to `(1, k, n)`, is the
+// same matrix as the rank-2 case and must take the folded path too, transposed or not.
+fn broadcast_matmul_unit_batch_rhs(device: &Device) -> Result<()> {
+    let w = Tensor::randn(0f32, 1f32, (5, 2), device)?;
+    let lhs = Tensor::randn(0f32, 1f32, (3, 4, 5), device)?;
+    let expected = lhs.broadcast_matmul(&w)?;
+    let wt = Tensor::randn(0f32, 1f32, (2, 5), device)?;
+    let expected_t = lhs.broadcast_matmul(&wt.t()?)?;
+    for (rhs, expected) in [
+        (w.unsqueeze(0)?, &expected),
+        (w.unsqueeze(0)?.unsqueeze(0)?, &expected),
+        (wt.t()?.unsqueeze(0)?, &expected_t),
+    ] {
+        let lhs = if rhs.rank() == 4 {
+            lhs.unsqueeze(0)?
+        } else {
+            lhs.clone()
+        };
+        let out = lhs.broadcast_matmul(&rhs)?;
+        let mut dims = lhs.dims().to_vec();
+        let n = dims.len();
+        dims[n - 1] = 2;
+        assert_eq!(out.dims(), dims.as_slice());
+        let diff = (out.reshape((3, 4, 2))? - expected)?.sqr()?.sum_all()?;
+        assert!(diff.to_vec0::<f32>()? < 1e-6);
+    }
+    // The gradient flows back through the squeeze to the original `(1, k, n)` shape and matches
+    // the rank-2 gradient.
+    let v = candle_core::Var::from_tensor(&w.unsqueeze(0)?)?;
+    let grads = lhs.broadcast_matmul(v.as_tensor())?.sum_all()?.backward()?;
+    let g = grads.get(v.as_tensor()).expect("no grad for rhs");
+    assert_eq!(g.dims(), &[1, 5, 2]);
+    let v2 = candle_core::Var::from_tensor(&w)?;
+    let grads2 = lhs
+        .broadcast_matmul(v2.as_tensor())?
+        .sum_all()?
+        .backward()?;
+    let g2 = grads2.get(v2.as_tensor()).expect("no grad for rank-2 rhs");
+    let diff = (g.squeeze(0)? - g2)?.sqr()?.sum_all()?;
+    assert!(diff.to_vec0::<f32>()? < 1e-6);
+    Ok(())
+}
+
 #[test]
 fn tensor_dot() -> Result<()> {
     let lhs = Tensor::new(&[1., 2., 3.], &Device::Cpu)?;
@@ -291,6 +334,12 @@ test_device!(
     broadcast_matmul_rank2_rhs_cpu,
     broadcast_matmul_rank2_rhs_gpu,
     broadcast_matmul_rank2_rhs_metal
+);
+test_device!(
+    broadcast_matmul_unit_batch_rhs,
+    broadcast_matmul_unit_batch_rhs_cpu,
+    broadcast_matmul_unit_batch_rhs_gpu,
+    broadcast_matmul_unit_batch_rhs_metal
 );
 test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal);
 test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal);
