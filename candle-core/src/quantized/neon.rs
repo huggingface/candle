@@ -1,5 +1,7 @@
 #![allow(clippy::needless_range_loop)]
 
+#[cfg(target_arch = "aarch64")]
+use super::k_quants::BlockQ5_0;
 use super::k_quants::{
     BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K,
 };
@@ -169,6 +171,36 @@ pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) ->
         }
         vaddvq_f32(sumv0)
     }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "dotprod")]
+pub(crate) unsafe fn vec_dot_q5_0_q8_0(xs: &[BlockQ5_0], ys: &[BlockQ8_0]) -> f32 {
+    let masks = vld1q_u8([1u8, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128].as_ptr());
+    let low_mask = vdupq_n_u8(0x0f);
+    let high_bit = vdupq_n_u8(0x10);
+    let zero_point = vdupq_n_s8(16);
+    let mut sum = 0f32;
+    for (x, y) in xs.iter().zip(ys) {
+        let packed = vld1q_u8(x.qs.as_ptr());
+        let flags_lo = vcombine_u8(vdup_n_u8(x.qh[0]), vdup_n_u8(x.qh[1]));
+        let flags_hi = vcombine_u8(vdup_n_u8(x.qh[2]), vdup_n_u8(x.qh[3]));
+        let lo = vorrq_u8(
+            vandq_u8(packed, low_mask),
+            vandq_u8(vtstq_u8(flags_lo, masks), high_bit),
+        );
+        let hi = vorrq_u8(
+            vshrq_n_u8(packed, 4),
+            vandq_u8(vtstq_u8(flags_hi, masks), high_bit),
+        );
+        let lo = vsubq_s8(vreinterpretq_s8_u8(lo), zero_point);
+        let hi = vsubq_s8(vreinterpretq_s8_u8(hi), zero_point);
+        let ylo = vld1q_s8(y.qs.as_ptr());
+        let yhi = vld1q_s8(y.qs.as_ptr().add(16));
+        let dot = vaddvq_s32(vdotq_s32_pair(lo, ylo, hi, yhi));
+        sum += dot as f32 * x.d.to_f32() * y.d.to_f32();
+    }
+    sum
 }
 
 #[inline(always)]
