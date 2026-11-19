@@ -1,0 +1,28 @@
+[package]
+name = "generator"
+version = "0.1.0"
+authors = [
+    "Maik Klein <maikklein@googlemail.com>",
+    "Benjamin Saunders <ben.e.saunders@gmail.com>",
+    "Marijn Suijten <marijn@traverseresearch.nl>",
+]
+edition = "2021"
+publish = false
+
+[dependencies]
+# Pin version to have control over how ash/src/vk/native.rs
+# is generated (there is a CI check that validates that this
+# file is generated as currently checked in): 
+bindgen = "=0.69.4"
+heck = "0.5"
+itertools = "0.14"
+nom = "8"
+proc-macro2 = "1.0"
+quote = "1.0"
+regex = "1.4"
+vk-parse = { version = "0.20", features = ["vkxml-convert"] }
+vkxml = "0.3"
+
+[dependencies.syn]
+version = "2.0"
+features = ["full", "extra-traits"]

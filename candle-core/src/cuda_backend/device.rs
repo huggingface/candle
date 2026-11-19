@@ -3,8 +3,8 @@ use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::driver::CudaFunction;
-use float8::F8E4M3;
 use half::{bf16, f16};
+use microfloat::f8e4m3;
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -462,7 +462,7 @@ impl BackendDevice for CudaDevice {
                 CudaStorageSlice::F64(data)
             }
             DType::F8E4M3 => {
-                let data = self.alloc_zeros::<F8E4M3>(elem_count)?;
+                let data = self.alloc_zeros::<f8e4m3>(elem_count)?;
                 CudaStorageSlice::F8E4M3(data)
             }
             DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
@@ -616,7 +616,7 @@ impl BackendDevice for CudaDevice {
                 CudaStorageSlice::F64(data)
             }
             DType::F8E4M3 => {
-                let data = self.alloc::<F8E4M3>(elem_count)?;
+                let data = self.alloc::<f8e4m3>(elem_count)?;
                 CudaStorageSlice::F8E4M3(data)
             }
             DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {

@@ -1,0 +1,19 @@
+[package]
+name = "shader-types-derive"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "shader-types-derive"
+path = "main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+ron = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+vulkano = { workspace = true, default-features = true, features = ["serde"] }
+vulkano-shaders = { workspace = true }
+winit = { workspace = true, default-features = true }

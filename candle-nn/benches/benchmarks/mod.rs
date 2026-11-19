@@ -29,6 +29,12 @@ impl BenchDevice for Device {
                 #[cfg(not(feature = "metal"))]
                 panic!("Metal device without metal feature enabled: {device:?}")
             }
+            Device::Vulkan(device) => {
+                #[cfg(feature = "vulkan")]
+                return device.synchronize();
+                #[cfg(not(feature = "vulkan"))]
+                panic!("Vulkan device without vulkan feature enabled: {device:?}")
+            }
         }
     }
 
@@ -46,6 +52,7 @@ impl BenchDevice for Device {
             }
             Device::Cuda(_) => format!("cuda_{}", name.into()),
             Device::Metal(_) => format!("metal_{}", name.into()),
+            Device::Vulkan(_) => format!("vulkan_{}", name.into()),
         }
     }
 }
@@ -61,6 +68,8 @@ impl BenchDeviceHandler {
             devices.push(Device::new_metal(0)?);
         } else if cfg!(feature = "cuda") {
             devices.push(Device::new_cuda(0)?);
+        } else if cfg!(feature = "vulkan") {
+            devices.push(Device::new_vulkan(0)?);
         } else {
             devices.push(Device::Cpu);
         }

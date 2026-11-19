@@ -1,0 +1,121 @@
+[workspace]
+members = [
+    "autogen",
+    "examples/*",
+    "vulkano",
+    "vulkano-macros",
+    "vulkano-shaders",
+    "vulkano-taskgraph",
+    "vulkano-util",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.88.0"
+license = "MIT OR Apache-2.0"
+homepage = "https://vulkano.rs"
+keywords = ["vulkan", "bindings", "graphics", "gpu", "rendering"]
+categories = ["rendering::graphics-api"]
+
+[workspace.dependencies.vulkano]
+version = "0.35"
+path = "vulkano"
+default-features = false
+
+[workspace.dependencies.vulkano-macros]
+version = "0.35"
+path = "vulkano-macros"
+
+[workspace.dependencies.vulkano-shaders]
+version = "0.35"
+path = "vulkano-shaders"
+
+[workspace.dependencies.vulkano-taskgraph]
+version = "0.35"
+path = "vulkano-taskgraph"
+
+[workspace.dependencies.vulkano-util]
+version = "0.35"
+path = "vulkano-util"
+
+[workspace.dependencies]
+# When updating Ash, also update vk.xml to the same Vulkan patch version that Ash uses,
+# and run `cargo run --bin autogen` to update the generated files.
+# All versions of vk.xml can be found at:
+# https://github.com/KhronosGroup/Vulkan-Headers/commits/main/registry/vk.xml
+ash = { path = "../ash/ash", features = ["provisional"] }
+bytemuck = "1.9"
+concurrent-slotmap = { git = "https://github.com/vulkano-rs/concurrent-slotmap", rev = "6c328e2857f8461c177046414962ee6c7784f61c" }
+crossbeam-queue = "0.3"
+foldhash = "0.1"
+half = "2.0"
+heck = "0.4"
+indexmap = "2.0"
+libloading = "0.8"
+nom = "7.1"
+parking_lot = "0.12"
+prettyplease = "0.2.32"
+proc-macro2 = "1.0"
+proc-macro-crate = "3.0"
+quote = "1.0.37"
+rangemap = "1.5"
+raw-window-handle = "0.6"
+raw-window-metal = "1.0"
+serde = "1.0"
+serde_json = "1.0"
+slabbin = "1.2"
+smallvec = "1.8"
+syn = "2.0"
+thread_local = "1.1"
+vk-parse = "0.15"
+winit = "0.30"
+x11-dl = "2.0"
+x11rb = "0.13"
+
+# Only used in examples
+glam = "0.29"
+png = "0.17"
+rand = "0.8"
+ron = "0.8"
+
+[workspace.lints]
+# Rust 2024 lints
+# Before switching to the 2024 edition, fix these where needed and then remove them
+rust.rust_2024_compatibility = { level = "warn", priority = -1 }
+rust.edition_2024_expr_fragment_specifier = "allow"
+rust.if_let_rescope = "allow"
+rust.tail_expr_drop_order = "allow"
+
+# TODO: we want to fix/enable these lints eventually
+rust.missing_docs = "allow"
+clippy.missing_safety_doc = "allow"
+
+# Warn lints
+rust.rust_2018_idioms = { level = "warn", priority = -1 }
+clippy.multiple_unsafe_ops_per_block = "warn"
+clippy.ptr_as_ptr = "warn"
+clippy.ptr_cast_constness = "warn"
+clippy.ref_as_ptr = "warn"
+clippy.trivially_copy_pass_by_ref = "warn"
+
+# Allow lints
+# These lints are a bit too pedantic, so they're disabled here.
+# They can be removed if they no longer happen in the future.
+clippy.arc_with_non_send_sync = "allow"
+clippy.collapsible_else_if = "allow"
+clippy.collapsible_if = "allow"
+clippy.collapsible_match = "allow"
+clippy.len_without_is_empty = "allow"
+clippy.needless_late_init = "allow"
+clippy.nonminimal_bool = "allow"
+clippy.result_large_err = "allow"
+clippy.too_many_arguments = "allow"
+clippy.type_complexity = "allow"
+clippy.uninlined_format_args = "allow"
+
+[profile.CI]
+inherits = "dev"
+debug = 0
+codegen-units = 1
+incremental = false

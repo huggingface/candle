@@ -120,6 +120,34 @@ pub trait BackendStorage: Sized {
         _: &Layout,
     ) -> Result<Self>;
 
+    /// `y = lhs @ rhs + bias`: the matrix product (same shapes as
+    /// `matmul`, `bmnk = (bsz, m, n, k)`) with the bias vector (one
+    /// value per column of the product, `n` elements) added to every
+    /// row.
+    ///
+    /// The default implementation is the unfused `matmul` followed by
+    /// the element-wise add; backends with a fused kernel (the Vulkan
+    /// cooperative-matrix affine) override it.
+    #[allow(clippy::too_many_arguments)]
+    fn affine_matmul(
+        &self,
+        rhs: &Self,
+        bias: &Self,
+        bmnk: (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        bias_l: &Layout,
+    ) -> Result<Self> {
+        let (bsz, m, n, _) = bmnk;
+        let out = self.matmul(rhs, bmnk, lhs_l, rhs_l)?;
+        let out_l = if bsz == 1 {
+            crate::Layout::contiguous_with_offset(&[m, n], 0)
+        } else {
+            crate::Layout::contiguous_with_offset(&[bsz, m, n], 0)
+        };
+        out.binary_impl::<crate::op::Add>(bias, &out_l, bias_l)
+    }
+
     fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()>;
 
     #[allow(clippy::too_many_arguments)]

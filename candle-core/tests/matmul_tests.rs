@@ -249,48 +249,67 @@ fn mm_layout(device: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(matmul, matmul_cpu, matmul_gpu, matmul_metal);
+test_device!(matmul, matmul_cpu, matmul_gpu, matmul_metal, matmul_vulkan);
 test_device!(
     matmul_bf16,
     matmul_bf16_cpu,
     matmul_bf16_gpu,
-    matmul_bf16_metal
+    matmul_bf16_metal,
+    matmul_bf16_vulkan
 );
 test_device!(
     broadcast_matmul,
     broadcast_matmul_cpu,
     broadcast_matmul_gpu,
-    broadcast_matmul_metal
+    broadcast_matmul_metal,
+    broadcast_matmul_vulkan
 );
 test_device!(
     broadcast_matmul_stride_zero_lhs,
     broadcast_matmul_stride_zero_lhs_cpu,
     broadcast_matmul_stride_zero_lhs_gpu,
-    broadcast_matmul_stride_zero_lhs_metal
+    broadcast_matmul_stride_zero_lhs_metal,
+    broadcast_matmul_stride_zero_lhs_vulkan
 );
 test_device!(
     zero_matmul,
     zero_matmul_cpu,
     zero_matmul_gpu,
-    zero_matmul_metal
+    zero_matmul_metal,
+    zero_matmul_vulkan
 );
 test_device!(
     zero_matmul_validation,
     zero_matmul_validation_cpu,
     zero_matmul_validation_gpu,
-    zero_matmul_validation_metal
+    zero_matmul_validation_metal,
+    zero_matmul_validation_vulkan
 );
 test_device!(
     zero_matmul_device_validation,
     zero_matmul_device_validation_cpu,
     zero_matmul_device_validation_gpu,
-    zero_matmul_device_validation_metal
+    zero_matmul_device_validation_metal,
+    zero_matmul_device_validation_vulkan
 );
 test_device!(
     broadcast_matmul_rank2_rhs,
     broadcast_matmul_rank2_rhs_cpu,
     broadcast_matmul_rank2_rhs_gpu,
-    broadcast_matmul_rank2_rhs_metal
+    broadcast_matmul_rank2_rhs_metal,
+    broadcast_matmul_rank2_rhs_vulkan
 );
-test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal);
-test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal);
+test_device!(
+    squeeze_mm,
+    squeeze_mm_cpu,
+    squeeze_mm_gpu,
+    squeeze_mm_metal,
+    squeeze_mm_vulkan
+);
+test_device!(
+    mm_layout,
+    mm_layout_cpu,
+    mm_layout_gpu,
+    mm_layout_metal,
+    mm_layout_vulkan
+);

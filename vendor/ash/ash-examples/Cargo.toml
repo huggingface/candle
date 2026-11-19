@@ -1,0 +1,16 @@
+[package]
+name = "ash-examples"
+version = "0.1.0"
+authors = ["maik klein <maikklein@googlemail.com>"]
+edition = "2021"
+publish = false
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+winit = { version = "0.29", features = ["rwh_06"] }
+# The examples require the validation layers, which means the SDK or
+# equivalent development packages should be present, so we can link
+# directly and benefit from the infallible `Entry` constructor.
+# Provisional features are required to access VK_KHR_portability_subset for MoltenVK
+ash = { path = "../ash", default-features = false, features = ["linked", "debug", "std", "provisional"] }
+ash-window = { path = "../ash-window" }

@@ -102,6 +102,20 @@ impl candle::CustomOp3 for RotaryEmbI {
         }
     }
 
+    #[cfg(feature = "vulkan")]
+    fn vulkan_fwd(
+        &self,
+        s1: &candle::VulkanStorage,
+        l1: &Layout,
+        s2: &candle::VulkanStorage,
+        l2: &Layout,
+        s3: &candle::VulkanStorage,
+        l3: &Layout,
+    ) -> Result<(candle::VulkanStorage, Shape)> {
+        let out = s1.rope_int(l1, s2, l2, s3, l3)?;
+        Ok((out, l1.shape().clone()))
+    }
+
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
@@ -314,6 +328,20 @@ struct RotaryEmb;
 impl candle::CustomOp3 for RotaryEmb {
     fn name(&self) -> &'static str {
         "rotary-emb"
+    }
+
+    #[cfg(feature = "vulkan")]
+    fn vulkan_fwd(
+        &self,
+        s1: &candle::VulkanStorage,
+        l1: &Layout,
+        s2: &candle::VulkanStorage,
+        l2: &Layout,
+        s3: &candle::VulkanStorage,
+        l3: &Layout,
+    ) -> Result<(candle::VulkanStorage, Shape)> {
+        let out = s1.rope(l1, s2, l2, s3, l3)?;
+        Ok((out, l1.shape().clone()))
     }
 
     fn cpu_fwd(
@@ -605,6 +633,20 @@ struct RotaryEmbThd;
 impl candle::CustomOp3 for RotaryEmbThd {
     fn name(&self) -> &'static str {
         "rotary-emb"
+    }
+
+    #[cfg(feature = "vulkan")]
+    fn vulkan_fwd(
+        &self,
+        s1: &candle::VulkanStorage,
+        l1: &Layout,
+        s2: &candle::VulkanStorage,
+        l2: &Layout,
+        s3: &candle::VulkanStorage,
+        l3: &Layout,
+    ) -> Result<(candle::VulkanStorage, Shape)> {
+        let out = s1.rope_thd(l1, s2, l2, s3, l3)?;
+        Ok((out, l1.shape().clone()))
     }
 
     fn cpu_fwd(

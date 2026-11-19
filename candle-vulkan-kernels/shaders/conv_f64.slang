@@ -1,0 +1,230 @@
+// Convolution kernels, F32, NCHW/NCL data, single-group semantics
+// (grouped convs are chunked into single-group calls by the Tensor API).
+//
+// main_conv1d: in (b, c_in, l_in), w (c_out, c_in, k), out (b, c_out, l_out)
+//   params: [0]=b, [1]=c_in, [2]=c_out, [3]=k_size, [4]=l_in, [5]=l_out,
+//           [6]=padding, [7]=stride, [8]=dilation
+// main_conv2d: in (b, c_in, i_h, i_w), w (c_out, c_in, k_h, k_w),
+//   out (b, c_out, o_h, o_w)
+//   params: [0]=b, [1]=c_in, [2]=c_out, [3]=k_h, [4]=k_w, [5]=i_h, [6]=i_w,
+//           [7]=o_h, [8]=o_w, [9]=padding, [10]=stride, [11]=dilation
+// main_conv_transpose1d: in (b, c_in, l_in), w (c_in, c_out, k), out (b, c_out, l_out)
+//   params: [0]=b, [1]=c_in, [2]=c_out, [3]=k_size, [4]=l_in, [5]=l_out,
+//           [6]=padding, [7]=stride, [8]=dilation
+// main_conv_transpose2d: in (b, c_in, i_h, i_w), w (c_in, c_out, k_h, k_w),
+//   out (b, c_out, o_h, o_w)
+//   params: [0]=b, [1]=c_in, [2]=c_out, [3]=k_h, [4]=k_w, [5]=i_h, [6]=i_w,
+//           [7]=o_h, [8]=o_w, [9]=padding, [10]=stride, [11]=dilation
+import common_conv;
+StructuredBuffer<double> g_In;
+StructuredBuffer<double> g_W;
+RWStructuredBuffer<double> g_Out;
+layout(push_constant) Params g_Params;
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_conv1d(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint o = dispatchThreadID.x;
+    uint64_t b = g_Params.b;
+    uint64_t c_in = g_Params.c_in;
+    uint64_t c_out = g_Params.c_out;
+    uint64_t k_size = g_Params.k1;
+    uint64_t l_in = g_Params.i1;
+    uint64_t l_out = g_Params.o1;
+    int padding = int(g_Params.padding);
+    int stride = int(g_Params.stride);
+    int dilation = int(g_Params.dilation);
+    if (o >= b * c_out * l_out)
+    {
+        return;
+    }
+    uint64_t plane = o / l_out;
+    uint64_t lo = o - plane * l_out;
+    uint64_t batch = plane / c_out;
+    uint64_t co = plane - batch * c_out;
+    uint64_t in_base = batch * c_in * l_in;
+    uint64_t w_base = co * c_in * k_size;
+    double acc = 0.0;
+    for (uint ci = 0u; ci < c_in; ci++)
+    {
+        for (uint k = 0u; k < k_size; k++)
+        {
+            int pos = int(lo) * stride - padding + int(k) * dilation;
+            if (pos >= 0 && uint(pos) < l_in)
+            {
+                acc += g_In[in_base + ci * l_in + uint(pos)] * g_W[w_base + ci * k_size + k];
+            }
+        }
+    }
+    g_Out[o] = acc;
+}
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_conv2d(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint o = dispatchThreadID.x;
+    uint64_t b = g_Params.b;
+    uint64_t c_in = g_Params.c_in;
+    uint64_t c_out = g_Params.c_out;
+    uint64_t k_h = g_Params.k1;
+    uint64_t k_w = g_Params.k2;
+    uint64_t i_h = g_Params.i1;
+    uint64_t i_w = g_Params.i2;
+    uint64_t o_h = g_Params.o1;
+    uint64_t o_w = g_Params.o2;
+    int padding = int(g_Params.padding);
+    int stride = int(g_Params.stride);
+    int dilation = int(g_Params.dilation);
+    if (o >= b * c_out * o_h * o_w)
+    {
+        return;
+    }
+    uint64_t hw = o_h * o_w;
+    uint64_t plane = o / hw;
+    uint64_t r = o - plane * hw;
+    uint64_t oh = r / o_w;
+    uint64_t ow = r - oh * o_w;
+    uint64_t batch = plane / c_out;
+    uint64_t co = plane - batch * c_out;
+    uint64_t in_base = batch * c_in * i_h * i_w;
+    uint64_t w_base = co * c_in * k_h * k_w;
+    double acc = 0.0;
+    for (uint ci = 0u; ci < c_in; ci++)
+    {
+        uint64_t ci_base = ci * i_h * i_w;
+        uint64_t ci_w_base = ci * k_h * k_w;
+        for (uint kh = 0u; kh < k_h; kh++)
+        {
+            int ph = int(oh) * stride - padding + int(kh) * dilation;
+            if (ph < 0 || uint(ph) >= i_h)
+            {
+                continue;
+            }
+            uint ih = uint(ph);
+            for (uint kw = 0u; kw < k_w; kw++)
+            {
+                int pw = int(ow) * stride - padding + int(kw) * dilation;
+                if (pw < 0 || uint(pw) >= i_w)
+                {
+                    continue;
+                }
+                acc += g_In[in_base + ci_base + ih * i_w + uint(pw)] *
+                    g_W[w_base + ci_w_base + kh * k_w + kw];
+            }
+        }
+    }
+    g_Out[o] = acc;
+}
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_conv_transpose1d(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint o = dispatchThreadID.x;
+    uint64_t b = g_Params.b;
+    uint64_t c_in = g_Params.c_in;
+    uint64_t c_out = g_Params.c_out;
+    uint64_t k_size = g_Params.k1;
+    uint64_t l_in = g_Params.i1;
+    uint64_t l_out = g_Params.o1;
+    int padding = int(g_Params.padding);
+    int stride = int(g_Params.stride);
+    int dilation = int(g_Params.dilation);
+    if (o >= b * c_out * l_out)
+    {
+        return;
+    }
+    uint64_t plane = o / l_out;
+    uint64_t po = o - plane * l_out;
+    uint64_t batch = plane / c_out;
+    uint64_t co = plane - batch * c_out;
+    uint64_t in_base = batch * c_in * l_in;
+    uint64_t w_base = co * k_size;
+    double acc = 0.0;
+    for (uint ci = 0u; ci < c_in; ci++)
+    {
+        for (uint k = 0u; k < k_size; k++)
+        {
+            int num = int(po) + padding - int(k) * dilation;
+            if (num < 0 || num % stride != 0)
+            {
+                continue;
+            }
+            uint li = uint(num / stride);
+            if (li >= l_in)
+            {
+                continue;
+            }
+            acc += g_In[in_base + ci * l_in + li] * g_W[(ci * c_out + co) * k_size + k];
+        }
+    }
+    g_Out[o] = acc;
+}
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main_conv_transpose2d(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    uint o = dispatchThreadID.x;
+    uint64_t b = g_Params.b;
+    uint64_t c_in = g_Params.c_in;
+    uint64_t c_out = g_Params.c_out;
+    uint64_t k_h = g_Params.k1;
+    uint64_t k_w = g_Params.k2;
+    uint64_t i_h = g_Params.i1;
+    uint64_t i_w = g_Params.i2;
+    uint64_t o_h = g_Params.o1;
+    uint64_t o_w = g_Params.o2;
+    int padding = int(g_Params.padding);
+    int stride = int(g_Params.stride);
+    int dilation = int(g_Params.dilation);
+    if (o >= b * c_out * o_h * o_w)
+    {
+        return;
+    }
+    uint64_t hw = o_h * o_w;
+    uint64_t plane = o / hw;
+    uint64_t r = o - plane * hw;
+    uint64_t oh = r / o_w;
+    uint64_t ow = r - oh * o_w;
+    uint64_t batch = plane / c_out;
+    uint64_t co = plane - batch * c_out;
+    uint64_t in_base = batch * c_in * i_h * i_w;
+    double acc = 0.0;
+    for (uint ci = 0u; ci < c_in; ci++)
+    {
+        uint64_t ci_base = ci * i_h * i_w;
+        uint64_t ci_w_base = ci * c_out * k_h * k_w;
+        for (uint kh = 0u; kh < k_h; kh++)
+        {
+            int num_h = int(oh) + padding - int(kh) * dilation;
+            if (num_h < 0 || num_h % stride != 0)
+            {
+                continue;
+            }
+            uint ih = uint(num_h / stride);
+            if (ih >= i_h)
+            {
+                continue;
+            }
+            for (uint kw = 0u; kw < k_w; kw++)
+            {
+                int num_w = int(ow) + padding - int(kw) * dilation;
+                if (num_w < 0 || num_w % stride != 0)
+                {
+                    continue;
+                }
+                uint iw = uint(num_w / stride);
+                if (iw >= i_w)
+                {
+                    continue;
+                }
+                acc += g_In[in_base + ci_base + ih * i_w + iw] *
+                    g_W[(ci_w_base + co * k_h * k_w) + kh * k_w + kw];
+            }
+        }
+    }
+    g_Out[o] = acc;
+}
