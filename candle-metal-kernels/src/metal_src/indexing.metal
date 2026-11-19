@@ -259,6 +259,8 @@ kernel void NAME( \
 }
 
 
+INDEX_OP(is_i64_u8, int64_t, uint8_t)
+INDEX_OP(is_i64_u32, int64_t, uint32_t)
 INDEX_OP(is_i64_i64, int64_t, int64_t)
 INDEX_OP(is_i64_f32, int64_t, float)
 INDEX_OP(is_i64_f16, int64_t, half)
@@ -298,8 +300,10 @@ GATHER_OP(gather_u32_bf16, uint, bfloat)
 GATHER_OP(gather_u8_u8, uint8_t, uint8_t)
 GATHER_OP(gather_u8_i64, uint8_t, int64_t)
 GATHER_OP(gather_u8_u32, uint8_t, uint)
+GATHER_OP(gather_u32_u8, uint, uint8_t)
 GATHER_OP(gather_u32_u32, uint, uint)
 GATHER_OP(gather_u32_i64, uint, int64_t)
+GATHER_OP(gather_i64_u8, int64_t, uint8_t)
 GATHER_OP(gather_i64_u32, int64_t, uint)
 GATHER_OP(gather_i64_i64, int64_t, int64_t)
 

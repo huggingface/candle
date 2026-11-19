@@ -193,6 +193,7 @@ define_unary_op(ufloor, floor(x));
 define_unary_op(uround, round(x));
 define_unary_op(uerf, erf(x));
 define_unary_op(usign, sign(x));
+define_unary_op(usign_int, x > 0 ? 1 : (x < 0 ? -1 : 0));
 define_unary_op(usigmoid, sigmoid(x));
 // tanh may create NaN on large values, e.g. 45 rather than outputting 1.
 // This has been an issue for the encodec example.
@@ -272,6 +273,7 @@ init_const_set(u32, uint32_t);
 
 #if __METAL_VERSION__ >= 220
 init_unary(copy, uid, i64, int64_t);
+init_unary(sign, usign_int, i64, int64_t);
 init_copy2d(i64, int64_t);
 init_const_set(i64, int64_t);
 #endif

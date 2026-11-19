@@ -1475,11 +1475,13 @@ impl BackendStorage for MetalStorage {
             (DType::U32, DType::F32) => "gather_u32_f32",
             (DType::U32, DType::F16) => "gather_u32_f16",
             (DType::U32, DType::BF16) => "gather_u32_bf16",
+            (DType::U32, DType::U8) => "gather_u32_u8",
             (DType::U32, DType::U32) => "gather_u32_u32",
             (DType::U32, DType::I64) => "gather_u32_i64",
             (DType::I64, DType::F32) => "gather_i64_f32",
             (DType::I64, DType::F16) => "gather_i64_f16",
             (DType::I64, DType::BF16) => "gather_i64_bf16",
+            (DType::I64, DType::U8) => "gather_i64_u8",
             (DType::I64, DType::U32) => "gather_i64_u32",
             (DType::I64, DType::I64) => "gather_i64_i64",
             (left, right) => crate::bail!("Metal gather {left:?} {right:?} not implemented"),
@@ -1526,11 +1528,7 @@ impl BackendStorage for MetalStorage {
             (DType::I64, DType::F32) => "s_i64_f32",
             (DType::I64, DType::F16) => "s_i64_f16",
             (DType::I64, DType::BF16) => "s_i64_bf16",
-            _ => Err(MetalError::UnexpectedDType {
-                msg: "scatter ids should be u8/u32/i64",
-                expected: DType::U32,
-                got: ids.dtype(),
-            })?,
+            (left, right) => crate::bail!("Metal scatter {left:?} {right:?} not implemented"),
         };
         let encoder = self.device.command_encoder()?;
         let dst = buffer_o(&self.buffer, l, self.dtype);
@@ -1575,11 +1573,7 @@ impl BackendStorage for MetalStorage {
             (DType::I64, DType::F32) => "sa_i64_f32",
             (DType::I64, DType::F16) => "sa_i64_f16",
             (DType::I64, DType::BF16) => "sa_i64_bf16",
-            _ => Err(MetalError::UnexpectedDType {
-                msg: "scatter-add ids should be u8/u32/i64",
-                expected: DType::U32,
-                got: ids.dtype(),
-            })?,
+            (left, right) => crate::bail!("Metal scatter-add {left:?} {right:?} not implemented"),
         };
         let encoder = self.device.command_encoder()?;
         let dst = buffer_o(&self.buffer, l, self.dtype);

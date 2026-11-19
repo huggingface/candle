@@ -1872,6 +1872,99 @@ fn zero_dim(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn index_select_i64_ids_int_data(device: &Device) -> Result<()> {
+    let ids = Tensor::new(&[2i64, 0, 1, 2], device)?;
+    let t = Tensor::new(&[[0u8, 1, 2], [3, 4, 5], [6, 7, 8]], device)?;
+    let hs = t.index_select(&ids, 1)?;
+    assert_eq!(
+        hs.to_vec2::<u8>()?,
+        &[[2, 0, 1, 2], [5, 3, 4, 5], [8, 6, 7, 8]]
+    );
+    let hs = t.index_select(&ids, 0)?;
+    assert_eq!(
+        hs.to_vec2::<u8>()?,
+        &[[6, 7, 8], [0, 1, 2], [3, 4, 5], [6, 7, 8]]
+    );
+    let t = Tensor::new(&[[0u32, 1, 2], [3, 4, 5], [6, 7, 8]], device)?;
+    let hs = t.index_select(&ids, 1)?;
+    assert_eq!(
+        hs.to_vec2::<u32>()?,
+        &[[2, 0, 1, 2], [5, 3, 4, 5], [8, 6, 7, 8]]
+    );
+    let hs = t.index_select(&ids, 0)?;
+    assert_eq!(
+        hs.to_vec2::<u32>()?,
+        &[[6, 7, 8], [0, 1, 2], [3, 4, 5], [6, 7, 8]]
+    );
+    Ok(())
+}
+
+fn flip_int(device: &Device) -> Result<()> {
+    let t = Tensor::new(&[[0u8, 1, 2], [3, 4, 5]], device)?;
+    assert_eq!(t.flip(&[0])?.to_vec2::<u8>()?, &[[3, 4, 5], [0, 1, 2]]);
+    assert_eq!(t.flip(&[1])?.to_vec2::<u8>()?, &[[2, 1, 0], [5, 4, 3]]);
+    let t = Tensor::new(&[[0u32, 1, 2], [3, 4, 5]], device)?;
+    assert_eq!(t.flip(&[0])?.to_vec2::<u32>()?, &[[3, 4, 5], [0, 1, 2]]);
+    assert_eq!(t.flip(&[0, 1])?.to_vec2::<u32>()?, &[[5, 4, 3], [2, 1, 0]]);
+    Ok(())
+}
+
+fn sign_i64(device: &Device) -> Result<()> {
+    let t = Tensor::new(&[-5i64, -1, 0, 1, 7, i64::MIN, i64::MAX], device)?;
+    assert_eq!(t.sign()?.to_vec1::<i64>()?, &[-1, -1, 0, 1, 1, -1, 1]);
+    Ok(())
+}
+
+fn gather_u32_ids_u8_data(device: &Device) -> Result<()> {
+    let t = Tensor::new(&[[0u8, 1, 2], [3, 4, 5], [6, 7, 8]], device)?;
+    let ids = Tensor::new(&[[2u32, 0], [1, 1], [0, 2]], device)?;
+    let hs = t.gather(&ids, 1)?;
+    assert_eq!(hs.to_vec2::<u8>()?, &[[2, 0], [4, 4], [6, 8]]);
+    let ids = Tensor::new(&[[2u32, 0, 1]], device)?;
+    let hs = t.gather(&ids, 0)?;
+    assert_eq!(hs.to_vec2::<u8>()?, &[[6, 1, 5]]);
+    let ids = Tensor::new(&[[2i64, 0], [1, 1], [0, 2]], device)?;
+    let hs = t.gather(&ids, 1)?;
+    assert_eq!(hs.to_vec2::<u8>()?, &[[2, 0], [4, 4], [6, 8]]);
+
+    let t = Tensor::new(&[[3u8, 1, 4, 0, 5], [2, 9, 7, 8, 6]], device)?;
+    let (sorted, indexes) = t.sort_last_dim(true)?;
+    assert_eq!(
+        indexes.to_vec2::<u32>()?,
+        &[[3, 1, 0, 2, 4], [0, 4, 2, 3, 1]]
+    );
+    assert_eq!(sorted.to_vec2::<u8>()?, &[[0, 1, 3, 4, 5], [2, 6, 7, 8, 9]]);
+    let (sorted, indexes) = t.sort_last_dim(false)?;
+    assert_eq!(
+        indexes.to_vec2::<u32>()?,
+        &[[4, 2, 0, 1, 3], [1, 3, 2, 4, 0]]
+    );
+    assert_eq!(sorted.to_vec2::<u8>()?, &[[5, 4, 3, 1, 0], [9, 8, 7, 6, 2]]);
+    Ok(())
+}
+
+fn asort_i16_i32(device: &Device) -> Result<()> {
+    let t = Tensor::new(&[[3i32, -1, 4, 0, -5], [2, 9, -7, 8, 6]], device)?;
+    assert_eq!(
+        t.arg_sort_last_dim(true)?.to_vec2::<u32>()?,
+        &[[4, 1, 3, 0, 2], [2, 0, 4, 3, 1]]
+    );
+    assert_eq!(
+        t.arg_sort_last_dim(false)?.to_vec2::<u32>()?,
+        &[[2, 0, 3, 1, 4], [1, 3, 4, 0, 2]]
+    );
+    let t = Tensor::new(&[[3i16, -1, 4, 0, -5], [2, 9, -7, 8, 6]], device)?;
+    assert_eq!(
+        t.arg_sort_last_dim(true)?.to_vec2::<u32>()?,
+        &[[4, 1, 3, 0, 2], [2, 0, 4, 3, 1]]
+    );
+    assert_eq!(
+        t.arg_sort_last_dim(false)?.to_vec2::<u32>()?,
+        &[[2, 0, 3, 1, 4], [1, 3, 4, 0, 2]]
+    );
+    Ok(())
+}
+
 test_device!(zeros, zeros_cpu, zeros_gpu, zeros_metal);
 test_device!(ones, ones_cpu, ones_gpu, ones_metal);
 test_device!(full, full_cpu, full_gpu, full_metal);
@@ -1933,6 +2026,26 @@ test_device!(
     meshgrid_with_empty_axis_metal
 );
 test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal);
+test_device!(
+    index_select_i64_ids_int_data,
+    index_select_i64_ids_int_data_cpu,
+    index_select_i64_ids_int_data_gpu,
+    index_select_i64_ids_int_data_metal
+);
+test_device!(flip_int, flip_int_cpu, flip_int_gpu, flip_int_metal);
+test_device!(sign_i64, sign_i64_cpu, sign_i64_gpu, sign_i64_metal);
+test_device!(
+    gather_u32_ids_u8_data,
+    gather_u32_ids_u8_data_cpu,
+    gather_u32_ids_u8_data_gpu,
+    gather_u32_ids_u8_data_metal
+);
+test_device!(
+    asort_i16_i32,
+    asort_i16_i32_cpu,
+    asort_i16_i32_gpu,
+    asort_i16_i32_metal
+);
 
 fn tensor_send_sync(device: &Device) -> Result<()> {
     let tensor = Tensor::new(vec![1.0f32, 2.0, 3.0], device)?;
