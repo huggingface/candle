@@ -1208,7 +1208,8 @@ impl candle::CustomOp3 for Sdpa {
 
             let mask_s_l = self.mask.as_ref().map(|m| m.storage_and_layout());
 
-            let (mask_type, mask_buffer, mask_strides) = if let Some(mask) = &self.mask {
+            let (mask_type, mask_buffer, mask_offset, mask_strides) = if let Some(mask) = &self.mask
+            {
                 let (mask_s, mask_l) = mask_s_l.as_ref().unwrap();
 
                 let mask_buffer = match &**mask_s {
@@ -1237,10 +1238,11 @@ impl candle::CustomOp3 for Sdpa {
                 (
                     Some(mask_type),
                     Some(mask_buffer),
+                    mask_l.start_offset() * mask.dtype().size_in_bytes(),
                     Some(mask_l.stride().to_vec()),
                 )
             } else {
-                (None, None, None)
+                (None, None, 0, None)
             };
 
             candle_metal_kernels::call_sdpa_full(
@@ -1260,6 +1262,7 @@ impl candle::CustomOp3 for Sdpa {
                 v_l.stride(),
                 mask_type,
                 mask_buffer,
+                mask_offset,
                 mask_strides.as_deref(),
                 &output,
                 out_layout.stride(),
@@ -1274,6 +1277,22 @@ impl candle::CustomOp3 for Sdpa {
 
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, q.dtype());
         Ok((newstorage, out_shape))
+    }
+}
+
+/// Returns `t` unchanged if its strides match `expected` on every dim of size > 1
+/// (`None` accepts any stride), and a packed row-major copy otherwise.
+fn with_sdpa_strides(t: &Tensor, expected: [Option<usize>; 4]) -> Result<Tensor> {
+    let ok = t
+        .dims()
+        .iter()
+        .zip(t.stride())
+        .zip(expected)
+        .all(|((&dim, &stride), e)| dim <= 1 || e.is_none_or(|e| e == stride));
+    if ok {
+        Ok(t.clone())
+    } else {
+        t.force_contiguous()
     }
 }
 
@@ -1314,13 +1333,41 @@ pub fn sdpa(
     scale: f32,
     softcapping: f32,
 ) -> Result<Tensor> {
+    // The Metal kernels only take some of the strides, so copy any input whose
+    // layout they cannot index rather than silently reading the wrong elements.
+    // Contiguous inputs and narrowed KV-cache views go through without a copy.
+    let (_, h_q, q_seq, q_d) = q.dims4()?;
+    let (_, h_kv, _, k_d) = k.dims4()?;
+    let (_, _, _, v_d) = v.dims4()?;
+    let (q, k, v, mask) = if q_seq == 1 {
+        // The vector kernels index q as packed (b * h_q, d) rows, and k/v as
+        // `(b * h_kv) * head_stride + seq * d`, so only the head stride is free.
+        let kv = |t: &Tensor, d: usize| [Some(h_kv * t.stride()[1]), None, Some(d), Some(1)];
+        (
+            with_sdpa_strides(q, [Some(h_q * q_d), Some(q_d), None, Some(1)])?,
+            with_sdpa_strides(k, kv(k, k_d))?,
+            with_sdpa_strides(v, kv(v, v_d))?,
+            mask.cloned(),
+        )
+    } else {
+        // The full kernel takes the batch, head and seq strides of q/k/v and the
+        // mask, but assumes the last dim is packed.
+        let packed_last = [None, None, None, Some(1)];
+        (
+            with_sdpa_strides(q, packed_last)?,
+            with_sdpa_strides(k, packed_last)?,
+            with_sdpa_strides(v, packed_last)?,
+            mask.map(|m| with_sdpa_strides(m, packed_last))
+                .transpose()?,
+        )
+    };
     q.apply_op3_no_bwd(
-        k,
-        v,
+        &k,
+        &v,
         &Sdpa {
             scale,
             softcapping,
-            mask: mask.cloned(),
+            mask,
             do_causal,
         },
     )
