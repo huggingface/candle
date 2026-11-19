@@ -417,8 +417,9 @@ fn candle_num_threads() -> usize {
 }
 
 pub fn get_num_threads() -> usize {
-    // Respond to the same environment variable as rayon.
-    rayon_num_threads()
+    // Prefer CANDLE_NUM_THREADS, falling back to RAYON_NUM_THREADS, so that the
+    // rayon pools and gemm use the same thread count as the barrier pool.
+    candle_num_threads()
 }
 
 /// On Apple Silicon: P-core count via `hw.perflevel0.logicalcpu`.
