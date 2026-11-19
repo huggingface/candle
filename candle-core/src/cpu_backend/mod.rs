@@ -1485,9 +1485,10 @@ impl Map2 for MatMul {
         } else {
             Parallelism::None
         };
-        let (b, m, n, k) = if b_skip == 0 && a_skip == m * k {
+        let (b, m, n, k) = if b_skip == 0 && a_skip == m * k && a_skip == m * lhs_rs {
             // A batch-invariant rhs lets the batches of lhs stack into the rows of a single
-            // (b * m, k) matrix, which the destination already matches row for row.
+            // (b * m, k) matrix, which the destination already matches row for row. That needs
+            // the rows of lhs to be adjacent across batches, which a transposed lhs doesn't have.
             // a_skip and c_skip should be updated but step is always 0 so
             // it wouldn't matter.
             (1, b * m, n, k)

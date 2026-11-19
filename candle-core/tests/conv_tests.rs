@@ -975,6 +975,132 @@ fn conv2d_grad_noncontiguous_kernel(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+/* Expected values are from the following script.
+import torch
+v = [((i * 7 + 3) % 11) * 0.25 - 1.25 for i in range(12)]
+t = torch.tensor(v).reshape(2, 2, 3)
+w = torch.tensor(v).reshape(2, 2, 3)
+print(torch.nn.functional.conv_transpose1d(t, w).flatten())
+*/
+fn conv_transpose1d_batch(dev: &Device) -> Result<()> {
+    let v: Vec<f32> = (0..12)
+        .map(|i| ((i * 7 + 3) % 11) as f32 * 0.25 - 1.25)
+        .collect();
+    let t = Tensor::from_slice(&v, (2, 2, 3), dev)?;
+    let w = Tensor::from_slice(&v, (2, 2, 3), dev)?;
+    let res = t.conv_transpose1d(&w, 0, 0, 1, 1, 1)?;
+    assert_eq!(
+        res.flatten_all()?.to_vec1::<f32>()?,
+        [
+            1.0, -2.8125, 2.25, 0.375, 0.0625, 1.3125, -3.0625, 1.9375, -0.25, 0.0, 1.75, -3.0625,
+            2.0, -0.625, 0.0625, 2.3125, -2.8125, 2.4375, -0.75, 0.25,
+        ]
+    );
+    Ok(())
+}
+
+/* Expected gradients are from the following script.
+import torch
+t = torch.tensor([-0.5, 1.25, 0.25, -0.75, 1.0, 0.0]).reshape(1, 2, 3).requires_grad_()
+w = torch.tensor([
+    -0.2, 0.5, 0.1, -0.3, 0.4, 0.0, -0.4, 0.3, -0.1,
+    -0.5, 0.2, -0.2, 0.5, 0.1, -0.3, 0.4, 0.0, -0.4,
+]).reshape(2, 3, 3).requires_grad_()
+res = torch.nn.functional.conv_transpose1d(t, w, stride=2, padding=1, output_padding=1, dilation=2)
+(res ** 2).sum().backward()
+print(t.grad.flatten())
+print(w.grad.flatten())
+*/
+fn conv_transpose1d_grad(dev: &Device) -> Result<()> {
+    use candle_core::Var;
+    fn assert_close(a: &Tensor, b: &[f32]) -> Result<()> {
+        let a = a.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(a.len(), b.len());
+        for (a, b) in a.iter().zip(b) {
+            assert!((a - b).abs() < 1e-3, "{a} != {b}");
+        }
+        Ok(())
+    }
+    let t = Var::from_slice(&[-0.5f32, 1.25, 0.25, -0.75, 1.0, 0.0], (1, 2, 3), dev)?;
+    let w = Var::from_slice(
+        &[
+            -0.2f32, 0.5, 0.1, -0.3, 0.4, 0.0, -0.4, 0.3, -0.1, -0.5, 0.2, -0.2, 0.5, 0.1, -0.3,
+            0.4, 0.0, -0.4,
+        ],
+        (2, 3, 3),
+        dev,
+    )?;
+    let res = t.conv_transpose1d(&w, 1, 1, 2, 2, 1)?;
+    assert_eq!(res.dims(), [1, 3, 8]);
+    let grads = res.sqr()?.sum_all()?.backward()?;
+    assert_close(
+        grads.get(&t).unwrap(),
+        &[-1.37, 2.7, -1.67, -1.79, 1.76, 0.365],
+    )?;
+    assert_close(
+        grads.get(&w).unwrap(),
+        &[
+            -2.4375, 3.3625, -0.7375, 0.0, 1.925, -1.25, -0.3125, 1.5875, -1.7625, -2.3, 3.475,
+            -1.2125, -0.3, 1.725, -1.525, -0.5, 1.625, -1.8375,
+        ],
+    )?;
+    Ok(())
+}
+
+#[test]
+fn conv_transpose1d_grad_finite_differences() -> Result<()> {
+    use candle_core::Var;
+    let dev = &Device::Cpu;
+    let values = |n: usize| -> Vec<f64> {
+        (0..n)
+            .map(|i| ((i * 7 + 3) % 11) as f64 * 0.25 - 1.25)
+            .collect()
+    };
+    // (stride, padding, output_padding, dilation, groups). The fourth case has
+    // output_padding >= stride, the last one has more than one group.
+    for (stride, padding, output_padding, dilation, groups) in [
+        (1, 0, 0, 1, 1),
+        (2, 1, 1, 1, 1),
+        (3, 2, 1, 2, 1),
+        (1, 1, 2, 3, 1),
+        (2, 1, 1, 2, 2),
+    ] {
+        let t = Var::from_vec(values(12), (2, 2, 3), dev)?;
+        let w = Var::from_vec(values(12), (2, 2, 3), dev)?;
+        let loss = |t: &Tensor, w: &Tensor| -> Result<f64> {
+            let res = t.conv_transpose1d(w, padding, output_padding, stride, dilation, groups)?;
+            Ok(res.sqr()?.sum_all()?.to_scalar::<f64>()?)
+        };
+        let res = t.conv_transpose1d(&w, padding, output_padding, stride, dilation, groups)?;
+        let grads = res.sqr()?.sum_all()?.backward()?;
+        for (var, is_t) in [(&t, true), (&w, false)] {
+            let grad = grads.get(var).unwrap();
+            assert_eq!(grad.dims(), var.dims());
+            let grad = grad.flatten_all()?.to_vec1::<f64>()?;
+            for (i, grad) in grad.iter().enumerate() {
+                let bumped = |eps: f64| -> Result<Tensor> {
+                    let mut v = var.flatten_all()?.to_vec1::<f64>()?;
+                    v[i] += eps;
+                    Ok(Tensor::from_vec(v, var.dims(), dev)?)
+                };
+                let eps = 1e-5;
+                let (up, down) = (bumped(eps)?, bumped(-eps)?);
+                let numeric = if is_t {
+                    (loss(&up, &w)? - loss(&down, &w)?) / (2. * eps)
+                } else {
+                    (loss(&t, &up)? - loss(&t, &down)?) / (2. * eps)
+                };
+                assert!(
+                    (grad - numeric).abs() < 1e-5,
+                    "stride={stride} padding={padding} output_padding={output_padding} \
+                     dilation={dilation} groups={groups} i={i}: {grad} != {numeric}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
@@ -1018,4 +1144,16 @@ test_device!(
     conv2d_grad_noncontiguous_kernel_cpu,
     conv2d_grad_noncontiguous_kernel_gpu,
     conv2d_grad_noncontiguous_kernel_metal
+);
+test_device!(
+    conv_transpose1d_grad,
+    conv_transpose1d_grad_cpu,
+    conv_transpose1d_grad_gpu,
+    conv_transpose1d_grad_metal
+);
+test_device!(
+    conv_transpose1d_batch,
+    conv_transpose1d_batch_cpu,
+    conv_transpose1d_batch_gpu,
+    conv_transpose1d_batch_metal
 );
