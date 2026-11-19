@@ -311,9 +311,40 @@ impl Tensor {
                         };
                         *sum_grad = sum_grad.add(&grad_kernel)?;
                     }
-                    Op::ConvTranspose1D { .. } => Err(Error::BackwardNotSupported {
-                        op: "conv-transpose1d",
-                    })?,
+                    Op::ConvTranspose1D {
+                        arg,
+                        kernel,
+                        padding,
+                        stride,
+                        dilation,
+                        output_padding: _output_padding,
+                    } => {
+                        let grad_arg = grad.conv1d(kernel, *padding, *stride, *dilation, 1)?;
+                        // When output_padding >= stride (allowed if dilation > stride), the
+                        // conv1d output is longer than the input, drop the trailing elements.
+                        let l_in = arg.dim(2)?;
+                        let grad_arg = if grad_arg.dim(2)? != l_in {
+                            grad_arg.narrow(2, 0, l_in)?
+                        } else {
+                            grad_arg
+                        };
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&grad_arg)?;
+
+                        let grad_kernel = grad
+                            .transpose(0, 1)?
+                            .conv1d(&arg.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
+                            .transpose(0, 1)?;
+                        let sum_grad = grads.or_insert(kernel)?;
+                        let (_, _, k0) = kernel.dims3()?;
+                        let (_, _, g_k0) = grad_kernel.dims3()?;
+                        let grad_kernel = if g_k0 != k0 {
+                            grad_kernel.narrow(2, 0, k0)?
+                        } else {
+                            grad_kernel
+                        };
+                        *sum_grad = sum_grad.add(&grad_kernel)?;
+                    }
                     Op::ConvTranspose2D {
                         arg,
                         kernel,
