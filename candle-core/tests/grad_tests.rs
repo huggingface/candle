@@ -659,3 +659,40 @@ test_device!(
     index_select_strided_ids_grad_gpu,
     index_select_strided_ids_grad_metal
 );
+
+#[cfg(all(not(feature = "mkl"), not(feature = "accelerate")))]
+#[test]
+fn matmul_nonuniform_batched_strides_grad_cpu() -> Result<()> {
+    let dev = Device::Cpu;
+    let lhs = Var::from_vec(
+        (0..48).map(|i| (i as f32 - 20.) / 13.).collect::<Vec<_>>(),
+        (2, 2, 3, 1, 4),
+        &dev,
+    )?;
+    let rhs = Var::from_vec(
+        (0..80).map(|i| (i as f32 - 30.) / 17.).collect::<Vec<_>>(),
+        (2, 2, 1, 4, 5),
+        &dev,
+    )?;
+    let expanded = rhs.as_tensor().broadcast_as((2, 2, 3, 4, 5))?;
+    let actual = lhs.as_tensor().matmul(&expanded)?.sum_all()?.backward()?;
+    let expected = lhs
+        .as_tensor()
+        .matmul(&expanded.contiguous()?)?
+        .sum_all()?
+        .backward()?;
+    for variable in [&lhs, &rhs] {
+        let a = actual
+            .get(variable)
+            .context("missing actual gradient")?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let b = expected
+            .get(variable)
+            .context("missing expected gradient")?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-5));
+    }
+    Ok(())
+}
