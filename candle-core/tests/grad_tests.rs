@@ -568,6 +568,162 @@ fn binary_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn cumsum_grad(device: &Device) -> Result<()> {
+    let x = Var::from_slice(&[1f32, 2., 3., 4., 5., 6.], (2, 3), device)?;
+    let weights = Tensor::from_slice(&[1f32, 2., 3., 4., 5., 6.], (2, 3), device)?;
+    let y = (x.as_tensor().cumsum(1)? * weights)?.sum_all()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(
+        grad_x.to_vec2::<f32>()?,
+        [[6.0, 5.0, 3.0], [15.0, 11.0, 6.0]]
+    );
+    Ok(())
+}
+
+fn cumsum_singleton_grad(device: &Device) -> Result<()> {
+    let x = Var::from_slice(&[1f32, 2., 3., 4., 5., 6.], (3, 1, 2), device)?;
+    let weights = Tensor::arange(1f32, 7., device)?.reshape((3, 1, 2))?;
+    let result = x.as_tensor().cumsum(1)?;
+    assert_eq!(result.id(), x.id());
+    let grads = (result * &weights)?.sum_all()?.backward()?;
+    assert_eq!(
+        grads
+            .get(&x)
+            .context("no grad for x")?
+            .flatten_all()?
+            .to_vec1::<f32>()?,
+        [1., 2., 3., 4., 5., 6.]
+    );
+    Ok(())
+}
+
+test_device!(
+    cumsum_singleton_grad,
+    cumsum_singleton_grad_cpu,
+    cumsum_singleton_grad_cuda,
+    cumsum_singleton_grad_metal
+);
+
+fn cumsum_layout_grad(device: &Device) -> Result<()> {
+    let x = Var::from_slice(&[1f32, 2., 3., 4., 5., 6.], (2, 3), device)?;
+    let weights = Tensor::from_slice(&[1f32, 2., 3., 4., 5., 6.], (2, 3), device)?.t()?;
+    for (dim, expected) in [
+        (0, [[6., 5., 3.], [15., 11., 6.]]),
+        (1, [[5., 7., 9.], [4., 5., 6.]]),
+    ] {
+        let y = (x.as_tensor().t()?.cumsum(dim)? * &weights)?.sum_all()?;
+        let grads = y.backward()?;
+        assert_eq!(
+            grads.get(&x).context("no grad for x")?.to_vec2::<f32>()?,
+            expected
+        );
+    }
+
+    let x = Var::from_tensor(&Tensor::arange(1f32, 13., device)?.reshape((3, 4))?)?;
+    let view = x.as_tensor().narrow(1, 1, 2)?;
+    let weights = Tensor::arange(1f32, 13., device)?
+        .reshape((3, 4))?
+        .narrow(1, 1, 2)?;
+    let y = (view.cumsum(0)? * weights)?.sum_all()?;
+    let grads = y.backward()?;
+    assert_eq!(
+        grads.get(&x).context("no grad for x")?.to_vec2::<f32>()?,
+        [[0., 18., 21., 0.], [0., 16., 18., 0.], [0., 10., 11., 0.]]
+    );
+    Ok(())
+}
+
+#[test]
+fn cumsum_layout_grad_cpu() -> Result<()> {
+    cumsum_layout_grad(&Device::Cpu)
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_layout_grad_cuda() -> Result<()> {
+    cumsum_layout_grad(&Device::new_cuda(0)?)
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_tile_grad_cuda() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    for rows in [1, 2] {
+        for len in [3, 33, 1025, 4096, 4097, 4128, 4129, 8193] {
+            for dtype in [DType::F16, DType::BF16, DType::F32, DType::F64] {
+                let mut weights = vec![0f64; rows * len];
+                let mut expected = vec![0f64; rows * len];
+                for row in 0..rows {
+                    let mut suffix = 0.;
+                    for col in (0..len).rev() {
+                        let value = ((col + row) % 7) as f64 - 3.;
+                        weights[row * len + col] = value;
+                        suffix += value;
+                        expected[row * len + col] = suffix;
+                    }
+                }
+                let weights = Tensor::from_vec(weights, (rows, len), &device)?.to_dtype(dtype)?;
+                for transposed in [false, true] {
+                    let x = Var::from_tensor(&Tensor::ones((rows, len), dtype, &device)?)?;
+                    let loss = if transposed {
+                        (x.t()?.contiguous()?.cumsum(0)? * weights.t()?)?.sum_all()?
+                    } else {
+                        (x.cumsum(1)? * &weights)?.sum_all()?
+                    };
+                    let grads = loss.backward()?;
+                    let actual = grads
+                        .get(&x)
+                        .context("no grad for x")?
+                        .flatten_all()?
+                        .to_dtype(DType::F64)?
+                        .to_vec1::<f64>()?;
+                    assert_eq!(
+                        actual, expected,
+                        "dtype {dtype:?}, rows {rows}, length {len}, transposed {transposed}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_low_precision_layout_grad_cuda() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    for dtype in [DType::F16, DType::BF16] {
+        for len in [33, 4128] {
+            let x = Var::from_tensor(&Tensor::zeros((3, len + 2), dtype, &device)?)?;
+            let weights: Vec<f32> = (0..3 * len).map(|i| (i % 7) as f32 - 3.).collect();
+            let mut expected = vec![0f64; 3 * (len + 2)];
+            for row in 0..3 {
+                let mut suffix = 0.;
+                for col in (0..len).rev() {
+                    suffix += 2. * weights[row * len + col] as f64;
+                    expected[row * (len + 2) + col + 1] = suffix;
+                }
+            }
+            let weights = Tensor::from_vec(weights, (3, len), &device)?.to_dtype(dtype)?;
+            let view = x
+                .narrow(1, 1, len)?
+                .unsqueeze(0)?
+                .broadcast_as((2, 3, len))?;
+            let loss = view.cumsum(2)?.broadcast_mul(&weights)?.sum_all()?;
+            let grads = loss.backward()?;
+            let actual = grads
+                .get(&x)
+                .context("no grad for x")?
+                .flatten_all()?
+                .to_dtype(DType::F64)?
+                .to_vec1::<f64>()?;
+            assert_eq!(actual, expected, "dtype {dtype:?}, len {len}");
+        }
+    }
+    Ok(())
+}
+
 fn index_select_strided_ids_grad(device: &Device) -> Result<()> {
     let w = Var::new(&[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]], device)?;
     let all_ids = Tensor::new(&[[0u32, 1], [2, 1]], device)?;
@@ -621,6 +777,12 @@ test_device!(
     simple_grad_metal
 );
 test_device!(sum_grad, sum_grad_cpu, sum_grad_gpu, sum_grad_metal);
+test_device!(
+    cumsum_grad,
+    cumsum_grad_cpu,
+    cumsum_grad_gpu,
+    cumsum_grad_metal
+);
 test_device!(
     expand_grad,
     expand_grad_cpu,
