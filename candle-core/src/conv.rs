@@ -43,10 +43,8 @@ pub struct ParamsConvTranspose1D {
 
 impl ParamsConvTranspose1D {
     pub(crate) fn l_out(&self) -> usize {
-        (self.l_in - 1) * self.stride - 2 * self.padding
-            + self.dilation * (self.k_size - 1)
-            + self.output_padding
-            + 1
+        (self.l_in - 1) * self.stride + self.dilation * (self.k_size - 1) + self.output_padding + 1
+            - 2 * self.padding
     }
 
     pub(crate) fn out_dims(&self) -> Vec<usize> {
@@ -244,6 +242,13 @@ impl Tensor {
         }
         if c_in % groups != 0 {
             crate::bail!("in_channel {c_in} is not divisible by the number of groups")
+        }
+        if (l_in - 1) * stride + dilation * (k_size - 1) + output_padding + 1 < 2 * padding {
+            crate::bail!(
+                "invalid parameters for conv_transpose1d: 2 * padding ({}) is larger than intermediate length ({})",
+                2 * padding,
+                (l_in - 1) * stride + dilation * (k_size - 1) + output_padding + 1
+            )
         }
         let params = ParamsConvTranspose1D {
             b_size,
