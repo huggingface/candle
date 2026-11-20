@@ -60,6 +60,14 @@ fn main() -> Result<()> {
         moe_builder = moe_builder.arg("-DNO_BF16_KERNEL");
     }
 
+    // cudaforge compiles this library as machine code for one architecture
+    // only (code=sm_XX). Without PTX the kernels cannot load on a GPU of a newer
+    // architecture, and the quantized matmuls return zeros there instead of
+    // failing. Embedding the PTX lets the driver JIT them; GPUs of the compiled
+    // architecture still use the machine code.
+    let ptx_gencode = format!("-gencode=arch=compute_{compute_cap},code=compute_{compute_cap}");
+    moe_builder = moe_builder.arg(&ptx_gencode);
+
     let mut is_target_msvc = false;
     if let Ok(target) = std::env::var("TARGET") {
         if target.contains("msvc") {
