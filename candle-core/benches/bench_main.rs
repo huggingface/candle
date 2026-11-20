@@ -13,6 +13,7 @@ criterion_main!(
     benchmarks::conv_transpose2d::benches,
     benchmarks::matmul::benches,
     benchmarks::qmatmul::benches,
+    benchmarks::qmatmul_rows::benches,
     benchmarks::random::benches,
     benchmarks::reduce::benches,
     benchmarks::unary::benches,
