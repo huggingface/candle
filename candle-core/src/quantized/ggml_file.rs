@@ -4,6 +4,7 @@ use super::{k_quants, GgmlDType, QStorage};
 use crate::{Device, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
+use std::io::Read;
 
 // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.h#L37
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,8 +109,18 @@ impl Vocab {
         let mut token_score_pairs = Vec::with_capacity(n_vocab);
         for _index in 0..n_vocab {
             let len = reader.read_u32::<LittleEndian>()? as usize;
-            let mut word = vec![0u8; len];
-            reader.read_exact(&mut word)?;
+            // Read incrementally so that the allocation is bounded by the bytes
+            // actually present instead of the untrusted declared length (CWE-770):
+            // a short vocab entry declaring a 4 GiB length previously forced a
+            // 4 GiB zeroed allocation before a single byte of it was read.
+            let mut word = Vec::new();
+            reader.by_ref().take(len as u64).read_to_end(&mut word)?;
+            if word.len() != len {
+                crate::bail!(
+                    "vocab entry is truncated, expected {len} bytes, got {}",
+                    word.len()
+                )
+            }
             let score = reader.read_f32::<LittleEndian>()?;
             token_score_pairs.push((word, score))
         }
@@ -197,13 +208,27 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     let name_len = reader.read_u32::<LittleEndian>()?;
     let ggml_dtype = reader.read_u32::<LittleEndian>()?;
     let ggml_dtype = GgmlDType::from_u32(ggml_dtype)?;
-    let mut dims = vec![0u32; n_dims as usize];
-    reader.read_u32_into::<LittleEndian>(&mut dims)?;
+    // Read the dims one by one so that the allocation is bounded by the bytes
+    // actually present instead of the untrusted n_dims value (CWE-770).
+    let mut dims = Vec::new();
+    for _ in 0..n_dims {
+        dims.push(reader.read_u32::<LittleEndian>()?);
+    }
     // The dimensions are stored in reverse order, see for example:
     // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/convert.py#L969
     dims.reverse();
-    let mut name = vec![0u8; name_len as usize];
-    reader.read_exact(&mut name)?;
+    // Read the name incrementally, the untrusted name_len can declare up to 4 GiB.
+    let mut name = Vec::new();
+    reader
+        .by_ref()
+        .take(name_len as u64)
+        .read_to_end(&mut name)?;
+    if name.len() != name_len as usize {
+        crate::bail!(
+            "tensor name is truncated, expected {name_len} bytes, got {}",
+            name.len()
+        )
+    }
     let name = String::from_utf8_lossy(&name).into_owned();
 
     if magic.align32() {
@@ -211,11 +236,32 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
         reader.seek(std::io::SeekFrom::Current(((32 - pos % 32) % 32) as i64))?;
     }
     let dims = dims.iter().map(|&u| u as usize).collect::<Vec<_>>();
-    let tensor_elems = dims.iter().product::<usize>();
-    let size_in_bytes = tensor_elems * ggml_dtype.type_size() / ggml_dtype.block_size();
+    // Use checked arithmetic, a crafted file can declare dims whose product
+    // (times the type size) silently wraps around in release builds (CWE-190).
+    let tensor_elems = match dims.iter().try_fold(1usize, |acc, &d| acc.checked_mul(d)) {
+        Some(v) => v,
+        None => crate::bail!("product of tensor dims {dims:?} overflows usize"),
+    };
+    let size_in_bytes = match tensor_elems.checked_mul(ggml_dtype.type_size()) {
+        Some(v) => v / ggml_dtype.block_size(),
+        None => crate::bail!(
+            "tensor byte size overflows usize ({tensor_elems} elements of {ggml_dtype:?})"
+        ),
+    };
     // TODO: Mmap version to avoid copying the data around?
-    let mut raw_data = vec![0u8; size_in_bytes];
-    reader.read_exact(&mut raw_data)?;
+    // Read the tensor payload incrementally for the same reason as above, the
+    // allocation is bounded by the bytes actually present in the file.
+    let mut raw_data = Vec::new();
+    reader
+        .by_ref()
+        .take(size_in_bytes as u64)
+        .read_to_end(&mut raw_data)?;
+    if raw_data.len() != size_in_bytes {
+        crate::bail!(
+            "tensor data is truncated, expected {size_in_bytes} bytes, got {}",
+            raw_data.len()
+        )
+    }
     match qtensor_from_ggml(ggml_dtype, &raw_data, dims, device) {
         Ok(tensor) => Ok((name, tensor)),
         Err(e) => crate::bail!("Error creating tensor {name}: {e}"),
@@ -262,5 +308,75 @@ impl Content {
             None => crate::bail!("cannot find tensor with name '{name}'"),
             Some(tensor) => Ok(tensor),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ggml_file(n_vocab: u32) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&0x67676d66u32.to_le_bytes()); // "ggmf" magic
+        v.extend_from_slice(&1u32.to_le_bytes()); // version 1
+        for h in [n_vocab, 1, 1, 1, 1, 1, 1] {
+            v.extend_from_slice(&h.to_le_bytes()); // hparams
+        }
+        v
+    }
+
+    fn read_err(data: &[u8]) -> crate::Error {
+        match Content::read(&mut std::io::Cursor::new(data), &Device::Cpu) {
+            Ok(_) => panic!("expected an error"),
+            Err(e) => e,
+        }
+    }
+
+    #[test]
+    fn small_tensor_roundtrip() {
+        let mut data = ggml_file(0);
+        data.extend_from_slice(&1u32.to_le_bytes()); // n_dims
+        data.extend_from_slice(&1u32.to_le_bytes()); // name_len
+        data.extend_from_slice(&0u32.to_le_bytes()); // F32
+        data.extend_from_slice(&1u32.to_le_bytes()); // dims[0] = 1
+        data.extend_from_slice(b"a"); // name
+        data.extend_from_slice(&1.0f32.to_le_bytes()); // payload
+        match Content::read(&mut std::io::Cursor::new(&data[..]), &Device::Cpu) {
+            Ok(content) => assert!(content.tensors.contains_key("a")),
+            Err(e) => panic!("unexpected error {e}"),
+        }
+    }
+
+    #[test]
+    fn vocab_entry_truncated_is_an_error() {
+        let mut data = ggml_file(1);
+        data.extend_from_slice(&u32::MAX.to_le_bytes()); // token len: ~4 GiB
+        data.extend_from_slice(b"ab"); // far less than declared
+        let err = read_err(&data);
+        assert!(err.to_string().contains("truncated"), "{err}");
+    }
+
+    #[test]
+    fn tensor_name_truncated_is_an_error() {
+        let mut data = ggml_file(0);
+        data.extend_from_slice(&1u32.to_le_bytes()); // n_dims
+        data.extend_from_slice(&u32::MAX.to_le_bytes()); // name_len: ~4 GiB
+        data.extend_from_slice(&0u32.to_le_bytes()); // F32
+        data.extend_from_slice(&1u32.to_le_bytes()); // dims[0] = 1
+        let err = read_err(&data);
+        assert!(err.to_string().contains("truncated"), "{err}");
+    }
+
+    #[test]
+    fn tensor_dims_overflow_is_an_error() {
+        let mut data = ggml_file(0);
+        data.extend_from_slice(&2u32.to_le_bytes()); // n_dims
+        data.extend_from_slice(&1u32.to_le_bytes()); // name_len
+        data.extend_from_slice(&0u32.to_le_bytes()); // F32
+        data.extend_from_slice(&u32::MAX.to_le_bytes()); // dims[0]
+        data.extend_from_slice(&u32::MAX.to_le_bytes()); // dims[1]
+        data.extend_from_slice(b"a"); // name
+        let err = read_err(&data);
+        assert!(err.to_string().contains("overflow"), "{err}");
     }
 }
