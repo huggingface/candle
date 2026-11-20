@@ -404,7 +404,12 @@ impl Map1 for AvgPool2D {
         let src_index = layout.start_offset();
         let mut dst = vec![T::zero(); b_sz * c * h_out * w_out];
         let scale = 1f64 / (k_h * k_w) as f64;
-        let scale = T::from_f64(scale);
+        // Integer dtypes truncate `1/(k_h*k_w)` to 0, so every window becomes 0.
+        let scale_t = T::from_f64(scale);
+        let integer_window = matches!(
+            T::DTYPE,
+            DType::U8 | DType::U32 | DType::I16 | DType::I32 | DType::I64
+        );
         for b_idx in 0..b_sz {
             let dst = &mut dst[b_idx * c * h_out * w_out..];
             let src_index = src_index + b_idx * stride[0];
@@ -421,7 +426,11 @@ impl Map1 for AvgPool2D {
                                 sum += src[src_index + m * stride_h + n * stride_w]
                             }
                         }
-                        dst[h_idx * w_out + w_idx] = sum * scale;
+                        dst[h_idx * w_out + w_idx] = if integer_window {
+                            T::from_f64(sum.to_f64() * scale)
+                        } else {
+                            sum * scale_t
+                        };
                     }
                 }
             }
