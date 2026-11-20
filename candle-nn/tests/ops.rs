@@ -380,3 +380,35 @@ test_device!(
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);
+
+/// Row kernels in reduce.cu used to compute `row * ncols` in `int`: past 2^31 elements the
+/// last rows read and wrote out of bounds. Needs ~16 GiB of device memory and ~9 GiB of
+/// host memory, so it is ignored by default: `cargo test --features cuda -- --ignored`.
+#[test]
+#[ignore]
+#[cfg(feature = "cuda")]
+fn softmax_last_dim_past_i32_elements() -> Result<()> {
+    let (rows, ncols) = (524_289usize, 4096usize); // rows * ncols = 2^31 + ncols
+    let pattern: Vec<f32> = (0..ncols).map(|c| ((c * 7919) % 1009) as f32 / 1009.0 * 8.0 - 4.0).collect();
+    let mut data: Vec<f32> = Vec::with_capacity(rows * ncols);
+    for r in 0..rows {
+        let shift = r % ncols;
+        data.extend_from_slice(&pattern[shift..]);
+        data.extend_from_slice(&pattern[..shift]);
+    }
+    let cpu = Tensor::from_vec(data, (rows, ncols), &Device::Cpu)?;
+    let dev = Device::new_cuda(0)?;
+    let gpu = cpu.to_device(&dev)?;
+    let out = candle_nn::ops::softmax_last_dim(&gpu)?;
+    dev.synchronize()?;
+    for r in [0, rows / 2, (1usize << 31) / ncols - 1, (1usize << 31) / ncols, rows - 1] {
+        // narrow keeps the 8 GiB storage; affine materialises the one row before the copy back.
+        let got = out.narrow(0, r, 1)?.affine(1.0, 0.0)?.to_vec2::<f32>()?.remove(0);
+        let want = candle_nn::ops::softmax_last_dim(&cpu.narrow(0, r, 1)?)?.to_vec2::<f32>()?.remove(0);
+        let max_diff = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        assert!(max_diff < 1e-5, "row {r}: max abs diff {max_diff}");
+        let sum: f32 = got.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-3, "row {r}: sum {sum}");
+    }
+    Ok(())
+}

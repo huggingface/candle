@@ -203,11 +203,12 @@ template <typename T>
 __device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta, const int ncols, const int block_size, const float eps) {
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
+    const size_t row_off = (size_t)row * ncols;
 
     float2 mean_var = make_float2(0.f, 0.f);
 
     for (int col = tid; col < ncols; col += block_size) {
-        const float xi = x[row*ncols + col];
+        const float xi = x[row_off + col];
         mean_var.x += xi;
         mean_var.y += xi * xi;
     }
@@ -232,30 +233,30 @@ __device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta,
 
     if (alpha == nullptr && beta == nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
-          dst[row*ncols + col] = static_cast<T>(lhs);
+          float lhs = (static_cast<float>(x[row_off + col]) - mean) * inv_std;
+          dst[row_off + col] = static_cast<T>(lhs);
       }
     }
     else if (alpha == nullptr && beta != nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
           float b = static_cast<float>(beta[col]);
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
-          dst[row*ncols + col] = static_cast<T>(lhs + b);
+          float lhs = (static_cast<float>(x[row_off + col]) - mean) * inv_std;
+          dst[row_off + col] = static_cast<T>(lhs + b);
       }
     }
     else if (alpha != nullptr && beta == nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
           float a = static_cast<float>(alpha[col]);
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
-          dst[row*ncols + col] = static_cast<T>(lhs * a);
+          float lhs = (static_cast<float>(x[row_off + col]) - mean) * inv_std;
+          dst[row_off + col] = static_cast<T>(lhs * a);
       }
     }
     else {
       for (int col = tid; col < ncols; col += block_size) {
           float a = static_cast<float>(alpha[col]);
           float b = static_cast<float>(beta[col]);
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
-          dst[row*ncols + col] = static_cast<T>(lhs * a + b);
+          float lhs = (static_cast<float>(x[row_off + col]) - mean) * inv_std;
+          dst[row_off + col] = static_cast<T>(lhs * a + b);
       }
     }
 }
@@ -266,11 +267,12 @@ template <typename T>
 __device__ void rmsnorm(const T * x, T * dst, const T * alpha, const int ncols, const int block_size, const float eps) {
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
+    const size_t row_off = (size_t)row * ncols;
 
     float tmp = 0.0f; // partial sum for thread in warp
 
     for (int col = tid; col < ncols; col += block_size) {
-        const float xi = static_cast<float>(x[row*ncols + col]);
+        const float xi = static_cast<float>(x[row_off + col]);
         tmp += xi * xi;
     }
 
@@ -293,13 +295,13 @@ __device__ void rmsnorm(const T * x, T * dst, const T * alpha, const int ncols, 
 
     if (alpha == nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
-          dst[row*ncols + col] = static_cast<T>(scale * static_cast<float>(x[row*ncols + col]));
+          dst[row_off + col] = static_cast<T>(scale * static_cast<float>(x[row_off + col]));
       }
     }
     else {
       for (int col = tid; col < ncols; col += block_size) {
           float a = static_cast<float>(alpha[col]);
-          dst[row*ncols + col] = static_cast<T>(scale * static_cast<float>(x[row*ncols + col]) * a);
+          dst[row_off + col] = static_cast<T>(scale * static_cast<float>(x[row_off + col]) * a);
       }
     }
 }
@@ -311,11 +313,12 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
     const int row = blockDim.x*blockIdx.x + threadIdx.x;
     const int block_size = blockDim.y;
     const int tid = threadIdx.y;
+    const size_t row_off = (size_t)row * ncols;
 
     T max_val = -INFINITY;
 
     for (int col = tid; col < ncols; col += block_size) {
-        const int i = row*ncols + col;
+        const size_t i = row_off + col;
         max_val = maxg(max_val, x[i]);
     }
 
@@ -328,7 +331,7 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
     ACC tmp = 0.;
 
     for (int col = tid; col < ncols; col += block_size) {
-        const int i = row*ncols + col;
+        const size_t i = row_off + col;
         const T val = expg(x[i] - max_val);
         tmp += static_cast<ACC>(val);
         dst[i] = val;
@@ -343,7 +346,7 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
     const ACC inv_tmp = 1. / tmp;
 
     for (int col = tid; col < ncols; col += block_size) {
-        const int i = row*ncols + col;
+        const size_t i = row_off + col;
         dst[i] *= inv_tmp;
     }
 }
