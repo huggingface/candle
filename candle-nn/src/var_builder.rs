@@ -17,6 +17,7 @@ pub struct VarBuilderArgs<'a, B: Backend> {
     data: Arc<TensorData<B>>,
     path: Vec<String>,
     pub dtype: DType,
+    pub(crate) transpose_linear_weights: bool,
     _phantom: std::marker::PhantomData<&'a B>,
 }
 
@@ -26,6 +27,7 @@ impl<B: Backend> Clone for VarBuilderArgs<'_, B> {
             data: self.data.clone(),
             path: self.path.clone(),
             dtype: self.dtype,
+            transpose_linear_weights: self.transpose_linear_weights,
             _phantom: self._phantom,
         }
     }
@@ -116,6 +118,7 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
             data: Arc::new(data),
             path: vec![],
             dtype,
+            transpose_linear_weights: false,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -131,6 +134,7 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
             data: self.data.clone(),
             path: vec![],
             dtype: self.dtype,
+            transpose_linear_weights: self.transpose_linear_weights,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -141,6 +145,7 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
             data: self.data.clone(),
             path: vec![prefix.to_string()],
             dtype: self.dtype,
+            transpose_linear_weights: self.transpose_linear_weights,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -154,6 +159,7 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
             data: self.data.clone(),
             path,
             dtype: self.dtype,
+            transpose_linear_weights: self.transpose_linear_weights,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -179,6 +185,7 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
             data: self.data.clone(),
             path: self.path.clone(),
             dtype,
+            transpose_linear_weights: self.transpose_linear_weights,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -608,8 +615,20 @@ impl<'a> VarBuilder<'a> {
             data: Arc::new(data),
             path: vec![],
             dtype,
+            transpose_linear_weights: false,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    /// Prepare fixed CPU F32 weights loaded by the standard linear layer builders so that
+    /// their transpose is contiguous. This can reduce packing in the CPU GEMM backend.
+    ///
+    /// The logical weight shape and values are preserved. Weights tracked by autograd keep
+    /// their original layout. Use this with fixed weights, as preparing a weight can copy it
+    /// and stop reflecting later in-place updates through a storage alias.
+    pub fn with_transposed_linear_weights(mut self) -> Self {
+        self.transpose_linear_weights = true;
+        self
     }
 
     /// Initializes a `VarBuilder` that uses zeros for any tensor.
@@ -715,6 +734,7 @@ impl<'a> VarBuilder<'a> {
         let dtype = self.dtype();
         let device = self.device().clone();
         let path = self.path.clone();
+        let transpose_linear_weights = self.transpose_linear_weights;
         let backend = Rename::new(self, renamer);
         let backend: Box<dyn SimpleBackend + 'a> = Box::new(backend);
         let data = TensorData {
@@ -726,6 +746,7 @@ impl<'a> VarBuilder<'a> {
             data: Arc::new(data),
             dtype,
             path,
+            transpose_linear_weights,
             _phantom: std::marker::PhantomData,
         }
     }
