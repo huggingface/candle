@@ -40,6 +40,76 @@ fn test_evaluation_fails_without_defined_graph() -> Result<()> {
     Ok(())
 }
 
+fn eval_int32_initializer(dims: &[i64], data: &[i32], raw: bool) -> Result<Tensor> {
+    let initializer = TensorProto {
+        name: OUTPUT_Z.to_string(),
+        data_type: DataType::Int32 as i32,
+        dims: dims.to_vec(),
+        int32_data: if raw { vec![] } else { data.to_vec() },
+        raw_data: if raw {
+            data.iter().flat_map(|value| value.to_le_bytes()).collect()
+        } else {
+            vec![]
+        },
+        ..Default::default()
+    };
+    let model = create_model_proto_with_graph(Some(GraphProto {
+        initializer: vec![initializer],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    let mut outputs = simple_eval(&model, HashMap::new())?;
+    Ok(outputs.remove(OUTPUT_Z).expect("initializer output"))
+}
+
+#[test]
+fn test_int32_initializer_shapes() -> Result<()> {
+    let data = [i32::MIN, -2, -1, 0, 1, i32::MAX];
+    for raw in [false, true] {
+        for dims in [vec![2, 3], vec![], vec![6], vec![0, 3]] {
+            let count = dims.iter().product::<i64>() as usize;
+            let output = eval_int32_initializer(&dims, &data[..count], raw)?;
+            let expected_dims: Vec<_> = dims.iter().map(|&dim| dim as usize).collect();
+            assert_eq!(output.dims(), expected_dims, "raw={raw}, dims={dims:?}");
+            assert_eq!(output.dtype(), DType::I64);
+            assert_eq!(
+                output.flatten_all()?.to_vec1::<i64>()?,
+                data[..count]
+                    .iter()
+                    .map(|&value| i64::from(value))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn test_int32_initializer_rejects_partial_raw_element() {
+    let initializer = TensorProto {
+        name: OUTPUT_Z.to_string(),
+        data_type: DataType::Int32 as i32,
+        dims: vec![1],
+        raw_data: vec![0, 0, 0, 0, 1],
+        ..Default::default()
+    };
+    let model = create_model_proto_with_graph(Some(GraphProto {
+        initializer: vec![initializer],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    let error = simple_eval(&model, HashMap::new()).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("invalid INT32 raw data length 5"));
+}
+
 // "Add"
 #[test]
 fn test_add_operation() -> Result<()> {

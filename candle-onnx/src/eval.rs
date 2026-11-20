@@ -193,16 +193,21 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
     let dims: Vec<usize> = t.dims.iter().map(|&x| x as usize).collect();
     match DataType::try_from(t.data_type) {
         Ok(DataType::Int32) => {
-            if t.int32_data.is_empty() {
-                let len = t.raw_data.len() / 4;
-                let data: &[i32] =
-                    unsafe { std::slice::from_raw_parts(t.raw_data.as_ptr() as *const i32, len) };
-                let data = data.iter().map(|v| *v as i64).collect::<Vec<_>>();
-                Tensor::from_vec(data, len, &Device::Cpu)
+            let data = if t.int32_data.is_empty() {
+                let chunks = t.raw_data.chunks_exact(4);
+                if !chunks.remainder().is_empty() {
+                    bail!(
+                        "invalid INT32 raw data length {} for {name}",
+                        t.raw_data.len()
+                    )
+                }
+                chunks
+                    .map(|bytes| i64::from(i32::from_le_bytes(bytes.try_into().unwrap())))
+                    .collect::<Vec<_>>()
             } else {
-                let data = t.int32_data.iter().map(|v| *v as i64).collect::<Vec<_>>();
-                Tensor::from_vec(data, t.int32_data.len(), &Device::Cpu)
-            }
+                t.int32_data.iter().map(|&v| i64::from(v)).collect()
+            };
+            Tensor::from_vec(data, dims.as_slice(), &Device::Cpu)
         }
         Ok(dt) => match dtype(dt) {
             Some(dt) => {
