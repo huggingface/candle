@@ -2581,6 +2581,7 @@ kernel void kernel_mul_mv_q8_0_f32(
     kernel_mul_mv_q8_0_f32_impl(src0,src1,dst,ne00,ne01,ne02,ne10,ne12,ne0,ne1,r2,r3,nullptr,tgpig,tiisg,sgitg);
 }
 
+
 #define N_MV_T_T 4
 
 template<typename T0, typename T04, typename T1, typename T14>
@@ -7139,6 +7140,153 @@ kernel void kernel_mul_mm(device const  uchar * src0,
         }
     }
 }
+
+// Matmul for a few rows of src1 (2 to 8 tokens of a decode batch, or more
+// in tiles of 8), Q4_0 and Q8_0.
+//
+// `kernel_mul_mv_*` reads src0 once for each row of src1. `kernel_mul_mm`
+// reads src0 once, but its tile has 32 rows of src1 and one SIMD group walks
+// all of K, so with a few rows most of the tile is empty and few threads
+// work. This kernel has a tile of 8 rows of src1 and NT*8 rows of src0, and
+// splits K over the NSG SIMD groups of the threadgroup:
+//
+// - SIMD group s takes the blocks s, s + NSG, s + 2*NSG, ... of K.
+// - For each block, the SIMD group dequantizes NT*8 rows of src0 (32 values
+//   each) to its part of threadgroup memory, copies the same 32 values of
+//   the 8 rows of src1 (zeros for a row past ne11), and adds 4 products of
+//   8 x 8 simdgroup matrices to its NT result tiles.
+// - At the end, the SIMD groups store their result tiles to threadgroup
+//   memory, and the threadgroup adds them and writes the rows of dst that
+//   exist.
+//
+// The grid is (ceil(ne01 / (NT*8)), ceil(ne11 / 8), ne12 * ne13), with
+// 32 * NSG threads. src1 must be 16-byte aligned (the caller checks the
+// offset). As in `kernel_mul_mm`, the dequantized values of src0 are half,
+// so the result differs from the mat-vec kernels by about 1e-3 relative. The design (an 8-row tile of src1, K split over SIMD groups) is
+// the one of `kernel_mul_mv_mma` in llama.cpp.
+
+// For each SIMD group, threadgroup memory has 8 rows of src1 (float) and
+// nt*8 rows of src0 (half), 32 values each. The result tiles use the same
+// memory after the loop.
+#define MV_TILE_Y_FLOATS     (8*32)
+#define MV_TILE_SG_BYTES(nt) (MV_TILE_Y_FLOATS*4 + (nt)*8*32*2)
+
+template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread half4x4 &), int nt, int nsg>
+kernel void kernel_mul_mv_tile(
+        device const  void * src0,
+        device const float * src1,
+        device       float * dst,
+        constant   int64_t & ne00,
+        constant   int64_t & ne01,
+        constant   int64_t & ne02,
+        constant   int64_t & ne10,
+        constant   int64_t & ne11,
+        constant   int64_t & ne12,
+        constant   int64_t & ne0,
+        constant   int64_t & ne1,
+        constant   uint    & r2,
+        constant   uint    & r3,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]],
+        ushort tiitg[[thread_index_in_threadgroup]]) {
+    threadgroup char smem[nsg*MV_TILE_SG_BYTES(nt)];
+
+    const int nb = ne00/32;
+
+    const int r0 = tgpig.x*nt*8; // first row of src0
+    const int r1 = tgpig.y*8;    // first row of src1
+    const int im = tgpig.z;
+
+    const uint i12 = im%ne12;
+    const uint i13 = im/ne12;
+
+    threadgroup float * ys = (threadgroup float *)(smem + sgitg*MV_TILE_SG_BYTES(nt));
+    threadgroup half  * ws = (threadgroup half  *)(smem + sgitg*MV_TILE_SG_BYTES(nt) + MV_TILE_Y_FLOATS*4);
+
+    device const block_q * x = (device const block_q *) src0 + (i12/r2)*(nb*ne01) + (i13/r3)*(nb*ne01*ne02);
+    device const float   * y = src1 + im*ne00*ne1;
+
+    simdgroup_float8x8 mc[nt];
+    for (short t = 0; t < nt; ++t) {
+        mc[t] = make_filled_simdgroup_matrix<float, 8>(0.f);
+    }
+
+    // The part of each block that a thread copies: row ty of src1, 8 values
+    // from 8*tc.
+    const short ty = tiisg/4;
+    const short tc = tiisg%4;
+    const bool y_ok = r1 + ty < ne11;
+
+    for (int ib = sgitg; ib < nb; ib += nsg) {
+        // src1: 8 rows of 32 values.
+        float4 y0 = 0.f, y1 = 0.f;
+        if (y_ok) {
+            device const float4 * yb = (device const float4 *)(y + (r1 + ty)*ne10 + ib*32 + 8*tc);
+            y0 = yb[0];
+            y1 = yb[1];
+        }
+        *((threadgroup float4 *)(ys + ty*32 + 8*tc) + 0) = y0;
+        *((threadgroup float4 *)(ys + ty*32 + 8*tc) + 1) = y1;
+
+        // src0: nt*8 rows of 32 values, 16 values for each (row, half).
+        for (short i = tiisg; i < nt*8*2; i += 32) {
+            const short row = i/2;
+            const short il  = i%2;
+            const int   i01 = min(r0 + row, (int)ne01 - 1);
+            half4x4 w;
+            dequantize_func(x + i01*nb + ib, il, w);
+            threadgroup half * wr = ws + row*32 + 16*il;
+            for (short j = 0; j < 16; ++j) {
+                wr[j] = w[j/4][j%4];
+            }
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (short ks = 0; ks < 4; ++ks) {
+            simdgroup_float8x8 ma;
+            simdgroup_load(ma, ys + ks*8, 32);
+            for (short t = 0; t < nt; ++t) {
+                simdgroup_half8x8 mb;
+                // mb[k][n] = src0 row (t*8 + n), value ks*8 + k.
+                simdgroup_load(mb, ws + t*8*32 + ks*8, 32, ulong2(0, 0), true);
+                simdgroup_multiply_accumulate(mc[t], ma, mb, mc[t]);
+            }
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    // Add the result tiles of the SIMD groups.
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup float * part = (threadgroup float *) smem;
+    for (short t = 0; t < nt; ++t) {
+        simdgroup_store(mc[t], part + (sgitg*nt + t)*64, 8);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (int idx = tiitg; idx < nt*64; idx += 32*nsg) {
+        const int t = idx/64;
+        const int m = (idx%64)/8;
+        const int n = idx%8;
+        float sum = 0.f;
+        for (int sg = 0; sg < nsg; ++sg) {
+            sum += part[(sg*nt + t)*64 + m*8 + n];
+        }
+        const int i01 = r0 + t*8 + n;
+        if (r1 + m < ne11 && i01 < ne01) {
+            dst[im*ne0*ne1 + (r1 + m)*ne0 + i01] = sum;
+        }
+    }
+}
+
+typedef decltype(kernel_mul_mv_tile<block_q4_0, 2, dequantize_q4_0, 1, 16>) mul_mv_tile_t;
+
+template [[host_name("kernel_mul_mv_tile_q4_0_f32_nt1_nsg16")]] kernel mul_mv_tile_t kernel_mul_mv_tile<block_q4_0, 2, dequantize_q4_0, 1, 16>;
+template [[host_name("kernel_mul_mv_tile_q4_0_f32_nt2_nsg8")]] kernel mul_mv_tile_t kernel_mul_mv_tile<block_q4_0, 2, dequantize_q4_0, 2, 8>;
+template [[host_name("kernel_mul_mv_tile_q4_0_f32_nt2_nsg16")]] kernel mul_mv_tile_t kernel_mul_mv_tile<block_q4_0, 2, dequantize_q4_0, 2, 16>;
+template [[host_name("kernel_mul_mv_tile_q8_0_f32_nt1_nsg16")]] kernel mul_mv_tile_t kernel_mul_mv_tile<block_q8_0, 2, dequantize_q8_0, 1, 16>;
+template [[host_name("kernel_mul_mv_tile_q8_0_f32_nt2_nsg8")]] kernel mul_mv_tile_t kernel_mul_mv_tile<block_q8_0, 2, dequantize_q8_0, 2, 8>;
+template [[host_name("kernel_mul_mv_tile_q8_0_f32_nt2_nsg16")]] kernel mul_mv_tile_t kernel_mul_mv_tile<block_q8_0, 2, dequantize_q8_0, 2, 16>;
 
 // same as kernel_mul_mm_impl, but src1 and dst are accessed via indices stored in rowids
 template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread half4x4 &), typename row_index = ushort2>
