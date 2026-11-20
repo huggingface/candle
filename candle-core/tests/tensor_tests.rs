@@ -2217,6 +2217,17 @@ fn tensor_new() -> Result<()> {
 }
 
 #[test]
+fn avg_pool2d_integer_window_is_not_zero() -> Result<()> {
+    // 2x2 window of u8 values 1, 3, 5, 7. Mean is 4. Casting the scale 0.25
+    // to u8 used to make the scale 0 and the pool all zeros.
+    let t = Tensor::from_vec(vec![1u8, 3, 5, 7], (1, 1, 2, 2), &Device::Cpu)?;
+    let pooled = t.avg_pool2d(2)?;
+    assert_eq!(pooled.dims(), &[1, 1, 1, 1]);
+    assert_eq!(pooled.reshape(1)?.to_vec1::<u8>()?, vec![4]);
+    Ok(())
+}
+
+#[test]
 fn tensor_norm() -> Result<()> {
     let t = Tensor::new(&[[3., 4.], [0., 0.]], &Device::Cpu)?;
     let norm = t.norm()?;
