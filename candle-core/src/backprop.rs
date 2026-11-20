@@ -16,6 +16,17 @@ fn broadcast_back(arg: &Tensor, node: &Tensor, reduced_dims: &[usize]) -> Result
     }
 }
 
+// The convolution identities can produce unused trailing spatial positions.
+fn crop_conv3d_gradient(grad: &Tensor, target: &Tensor) -> Result<Tensor> {
+    let mut grad = grad.clone();
+    for axis in 2..5 {
+        if grad.dim(axis)? != target.dim(axis)? {
+            grad = grad.narrow(axis, 0, target.dim(axis)?)?;
+        }
+    }
+    Ok(grad)
+}
+
 thread_local! {
     static CANDLE_GRAD_DO_NOT_DETACH: bool = {
         match std::env::var("CANDLE_GRAD_DO_NOT_DETACH") {
@@ -80,7 +91,17 @@ impl Tensor {
                         kernel: rhs,
                         ..
                     }
+                    | Op::Conv3D {
+                        arg: lhs,
+                        kernel: rhs,
+                        ..
+                    }
                     | Op::ConvTranspose2D {
+                        arg: lhs,
+                        kernel: rhs,
+                        ..
+                    }
+                    | Op::ConvTranspose3D {
                         arg: lhs,
                         kernel: rhs,
                         ..
@@ -309,6 +330,73 @@ impl Tensor {
                         } else {
                             grad_kernel
                         };
+                        *sum_grad = sum_grad.add(&grad_kernel)?;
+                    }
+                    Op::Conv3D {
+                        arg,
+                        kernel,
+                        padding,
+                        stride,
+                        dilation,
+                    } => {
+                        let mut output_padding = [0; 3];
+                        for axis in 0..3 {
+                            // Forward validation guarantees these sums/products fit.
+                            // The remainder avoids subtracting padding from an
+                            // intermediate transposed output that can be negative.
+                            output_padding[axis] = (arg.dim(axis + 2)? + 2 * padding[axis]
+                                - dilation[axis] * (kernel.dim(axis + 2)? - 1)
+                                - 1)
+                                % stride[axis];
+                        }
+                        let (grad_arg, grad_kernel) = if arg.elem_count() == 0
+                            || kernel.elem_count() == 0
+                            || grad.elem_count() == 0
+                        {
+                            (arg.zeros_like()?, kernel.zeros_like()?)
+                        } else {
+                            let grad_arg = grad.conv_transpose3d(
+                                kernel,
+                                *padding,
+                                output_padding,
+                                *stride,
+                                *dilation,
+                                1,
+                            )?;
+                            let grad_kernel = arg
+                                .transpose(0, 1)?
+                                .conv3d(&grad.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
+                                .transpose(0, 1)?;
+                            (grad_arg, crop_conv3d_gradient(&grad_kernel, kernel)?)
+                        };
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&grad_arg)?;
+                        let sum_grad = grads.or_insert(kernel)?;
+                        *sum_grad = sum_grad.add(&grad_kernel)?;
+                    }
+                    Op::ConvTranspose3D {
+                        arg,
+                        kernel,
+                        padding,
+                        stride,
+                        dilation,
+                        output_padding: _,
+                    } => {
+                        let (grad_arg, grad_kernel) = if arg.elem_count() == 0 {
+                            (arg.zeros_like()?, kernel.zeros_like()?)
+                        } else {
+                            let grad_arg = grad.conv3d(kernel, *padding, *stride, *dilation, 1)?;
+                            // output_padding may be >= stride when it is < dilation.
+                            let grad_arg = crop_conv3d_gradient(&grad_arg, arg)?;
+                            let grad_kernel = grad
+                                .transpose(0, 1)?
+                                .conv3d(&arg.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
+                                .transpose(0, 1)?;
+                            (grad_arg, crop_conv3d_gradient(&grad_kernel, kernel)?)
+                        };
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&grad_arg)?;
+                        let sum_grad = grads.or_insert(kernel)?;
                         *sum_grad = sum_grad.add(&grad_kernel)?;
                     }
                     Op::ConvTranspose1D { .. } => Err(Error::BackwardNotSupported {
