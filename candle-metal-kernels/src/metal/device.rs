@@ -101,6 +101,22 @@ impl Device {
         }
     }
 
+    pub unsafe fn new_buffer_with_bytes_no_copy(
+        &self,
+        pointer: *const c_void,
+        length: usize,
+        options: MTLResourceOptions,
+    ) -> Result<Buffer, MetalKernelError> {
+        let pointer = ptr::NonNull::new(pointer as *mut c_void)
+            .ok_or_else(|| MetalKernelError::InvalidInput("Null pointer".to_string()))?;
+        self.as_ref()
+            .newBufferWithBytesNoCopy_length_options_deallocator(pointer, length, options, None)
+            .map(Buffer::new)
+            .ok_or(MetalKernelError::FailedToCreateResource(
+                "Buffer".to_string(),
+            ))
+    }
+
     pub fn new_library_with_source(
         &self,
         source: &str,
