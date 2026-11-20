@@ -54,9 +54,18 @@ fn read_header<R: Read>(reader: &mut R) -> Result<String> {
     let header_len = header_len
         .iter()
         .rev()
-        .fold(0_usize, |acc, &v| 256 * acc + v as usize);
-    let mut header = vec![0u8; header_len];
-    reader.read_exact(&mut header)?;
+        .fold(0_u64, |acc, &v| 256 * acc + v as u64);
+    // Read the header incrementally rather than pre-allocating `header_len` bytes:
+    // the length prefix comes from the (untrusted) file, so trusting it lets a tiny
+    // file trigger a multi-gigabyte allocation before any content is validated.
+    let mut header: Vec<u8> = Vec::new();
+    reader.by_ref().take(header_len).read_to_end(&mut header)?;
+    if header.len() as u64 != header_len {
+        return Err(Error::Npy(format!(
+            "npy header is truncated, expected {header_len} bytes, got {}",
+            header.len()
+        )));
+    }
     Ok(String::from_utf8_lossy(&header).to_string())
 }
 
@@ -471,5 +480,31 @@ mod tests {
             h.to_string().unwrap(),
             "{'descr': '<u4', 'fortran_order': False, 'shape': (), }"
         );
+    }
+
+    /// Build a v2.0 .npy prefix: magic + version + 4-byte header length.
+    fn npy_v2(declared_header_len: u32, header: &[u8]) -> Vec<u8> {
+        let mut v = super::NPY_MAGIC_STRING.to_vec();
+        v.extend_from_slice(&[2u8, 0u8]);
+        v.extend_from_slice(&declared_header_len.to_le_bytes());
+        v.extend_from_slice(header);
+        v
+    }
+
+    #[test]
+    fn header_roundtrip() {
+        let header = b"{'descr': '<f4', 'fortran_order': False, 'shape': (2, 3), }";
+        let bytes = npy_v2(header.len() as u32, header);
+        let parsed = super::read_header(&mut &bytes[..]).unwrap();
+        assert_eq!(parsed.as_bytes(), header);
+    }
+
+    /// A tiny file must not be able to drive a huge allocation via the length
+    /// prefix: it should fail with a clean error instead.
+    #[test]
+    fn header_truncated_is_an_error() {
+        let bytes = npy_v2(1 << 30, b"{}");
+        let err = super::read_header(&mut &bytes[..]);
+        assert!(err.is_err(), "truncated header must be an error");
     }
 }
