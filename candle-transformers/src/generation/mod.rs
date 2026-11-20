@@ -64,8 +64,27 @@ impl LogitsProcessor {
     fn sample_topp(&mut self, prs: &mut Vec<f32>, top_p: f32) -> Result<u32> {
         let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
 
-        // Sort by descending probability.
+        // A normalized distribution has less than 1 - top_p mass below this threshold.
+        let threshold = (1.0 - top_p) / prs.len() as f32;
+        if prs.len() > 1024 && top_p > 0.0 && top_p < 1.0 {
+            argsort_indices.retain(|&i| prs[i].total_cmp(&threshold).is_ge());
+        }
         argsort_indices.sort_by(|&i, &j| prs[j].total_cmp(&prs[i]));
+
+        if argsort_indices.len() < prs.len() {
+            let retained_mass = argsort_indices.iter().fold(0.0, |sum, &i| sum + prs[i]);
+            if retained_mass >= top_p {
+                for pr in prs.iter_mut() {
+                    if pr.total_cmp(&threshold).is_lt() {
+                        *pr = 0.0;
+                    }
+                }
+            } else {
+                // sample_f can change the normalization; rounding can also lower the retained mass.
+                argsort_indices = (0..prs.len()).collect();
+                argsort_indices.sort_by(|&i, &j| prs[j].total_cmp(&prs[i]));
+            }
+        }
 
         // Clamp smaller probabilities to zero.
         let mut cumsum = 0.;
