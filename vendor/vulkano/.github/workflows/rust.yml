@@ -1,0 +1,144 @@
+name: Rust
+
+on:
+  push:
+    branches-ignore:
+      - master
+      - 'gh-readonly-queue/**'
+      - 'dependabot/**'
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+  merge_group:
+
+jobs:
+  build:
+    if: github.repository == 'vulkano-rs/vulkano'
+    strategy:
+      matrix:
+        include:
+          - name: windows-latest
+            runs-on: [self-hosted, Windows]
+            self-hosted: true
+            shell: wsl -e wsl-bash {0}
+            target: x86_64-pc-windows-msvc
+            target-dir: ~/.cargo/target
+          - name: ubuntu-latest
+            runs-on: ubuntu-latest
+            self-hosted: false
+            shell: bash
+            target: x86_64-unknown-linux-gnu
+            target-dir: target
+          - name: macos-latest
+            runs-on: macos-latest
+            self-hosted: false
+            shell: bash
+            target: aarch64-apple-darwin
+            target-dir: target
+      fail-fast: false
+    name: build / ${{ matrix.name }}
+    runs-on: ${{ matrix.runs-on }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      common_args: >-
+        --locked
+        --target ${{ matrix.target }}
+        --target-dir ${{ matrix.target-dir }}
+        --profile CI
+        --color always
+        --verbose
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        if: ${{ ! matrix.self-hosted }}
+      - uses: Swatinem/rust-cache@151eeee51b94b648db7d5aa68ce6a3cad1ddea4e
+        if: ${{ ! matrix.self-hosted }}
+        with:
+          cache-bin: false
+          cmd-format: nix develop .#CI -c {0}
+      - name: Run clippy
+        run: nix develop .#CI -c cargo clippy ${{ env.common_args }} -- -Dwarnings
+      - name: Build with each feature
+        run: nix develop .#CI -s RUSTFLAGS '-Dwarnings' -c cargo hack build ${{ env.common_args }} --ignore-private --each-feature --optional-deps --exclude-features shaderc-build-from-source
+      - name: Build tests
+        run: nix develop .#CI -c cargo build ${{ env.common_args }} --tests
+      - name: Run tests
+        run: nix develop .#CI -c cargo test ${{ env.common_args }}
+      - name: Build examples
+        run: nix develop .#CI -c cargo build ${{ env.common_args }} --bins
+  msrv:
+    if: github.repository == 'vulkano-rs/vulkano'
+    strategy:
+      matrix:
+        include:
+          - name: windows-latest
+            runs-on: [self-hosted, Windows]
+            self-hosted: true
+            shell: wsl -e wsl-bash {0}
+            target: x86_64-pc-windows-msvc
+            target-dir: ~/.cargo/target-msrv
+          - name: ubuntu-latest
+            runs-on: ubuntu-latest
+            self-hosted: false
+            shell: bash
+            target: x86_64-unknown-linux-gnu
+            target-dir: target
+          - name: macos-latest
+            runs-on: macos-latest
+            self-hosted: false
+            shell: bash
+            target: aarch64-apple-darwin
+            target-dir: target
+      fail-fast: false
+    name: msrv / ${{ matrix.name }}
+    runs-on: ${{ matrix.runs-on }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      common_args: >-
+        --locked
+        --target ${{ matrix.target }}
+        --target-dir ${{ matrix.target-dir }}
+        --profile CI
+        --color always
+        --verbose
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        if: ${{ ! matrix.self-hosted }}
+      - uses: Swatinem/rust-cache@151eeee51b94b648db7d5aa68ce6a3cad1ddea4e
+        if: ${{ ! matrix.self-hosted }}
+        with:
+          cache-bin: false
+          cmd-format: nix develop .#CI-MSRV -c {0}
+      - name: Build libraries
+        run: nix develop .#CI-MSRV -c cargo build ${{ env.common_args }} --lib
+  fmt:
+    if: github.repository == 'vulkano-rs/vulkano'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Run fmt check
+        run: nix develop .#CI -c cargo fmt --check
+  typos:
+    if: github.repository == 'vulkano-rs/vulkano'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Run typos
+        run: nix develop .#CI -c typos
+  checksums:
+    if: github.repository == 'vulkano-rs/vulkano'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Verify checksums
+        run: nix develop .#CI -c sh -c 'cd vulkano-shaders && sha256sum -c include-sha256sums include-sha256sums.sha256'

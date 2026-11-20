@@ -1,0 +1,90 @@
+{
+  "source": "https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py",
+  "torch": "2.15.0+cpu",
+  "reflect": [
+    {
+      "input": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "left": 2,
+      "right": 1,
+      "expected": [
+        3.0,
+        2.0,
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+        3.0
+      ]
+    },
+    {
+      "input": [
+        1
+      ],
+      "left": 3,
+      "right": 2,
+      "expected": [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "input": [
+        1,
+        2
+      ],
+      "left": 0,
+      "right": 5,
+      "expected": [
+        1.0,
+        2.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "transpose": [
+    {
+      "causal": true,
+      "ratio": 1.0,
+      "expected": [
+        1.0,
+        1.0,
+        3.0,
+        3.0
+      ]
+    },
+    {
+      "causal": true,
+      "ratio": 0.0,
+      "expected": [
+        3.0,
+        3.0,
+        2.0,
+        2.0
+      ]
+    },
+    {
+      "causal": false,
+      "ratio": 1.0,
+      "expected": [
+        1.0,
+        3.0,
+        3.0,
+        2.0
+      ]
+    }
+  ],
+  "source_sha256": "d5eaa228bbcf235b89eb5b186caf34894ceb97c9f9420479c2c8ebd34824e21f"
+}

@@ -1,0 +1,258 @@
+{
+  "architectures": [
+    "Lfm3AudioForConditionalGeneration"
+  ],
+  "model_type": "lfm3_audio",
+  "format_version": 1,
+  "codebooks": 12,
+  "audio_vocab_size": 2017,
+  "maskgit_steps": 3,
+  "interleaved_n_text": 6,
+  "interleaved_n_audio": 12,
+  "preprocessor": {
+    "feature_type": "log_mel",
+    "sample_rate": 16000,
+    "waveform_dtype": "float32",
+    "channel_reduction": "mean",
+    "n_mels": 128,
+    "n_fft": 400,
+    "win_length": 400,
+    "hop_length": 160,
+    "window": "hann",
+    "window_periodic": true,
+    "center": false,
+    "normalized": false,
+    "onesided": true,
+    "power": 2.0,
+    "f_min": 0.0,
+    "f_max": 8000.0,
+    "mel_scale": "slaney",
+    "mel_norm": "slaney",
+    "log_base": 10,
+    "logmel_floor": -12.0,
+    "normalization": {
+      "type": "affine",
+      "offset": 4.0,
+      "divisor": 4.0
+    },
+    "padding": {
+      "side": "right",
+      "mode": "constant",
+      "value": 0.0,
+      "minimum_samples": 400,
+      "length_alignment_offset": 400,
+      "length_alignment_multiple": 160
+    }
+  },
+  "tokenizer": {
+    "repo_id": "LiquidAI/liquid7.1_tokenizer",
+    "revision": "39badc470af6cdf6f6a6fbb4d6d1c4d1929b5b96"
+  },
+  "encoder": {
+    "dim_in": 128,
+    "dim_conv": 256,
+    "dim_out": 768,
+    "sliding_window": 32,
+    "lfm": {
+      "transformers_version": "5.19.0.dev0",
+      "architectures": null,
+      "output_hidden_states": false,
+      "return_dict": true,
+      "dtype": "float32",
+      "chunk_size_feed_forward": 0,
+      "is_encoder_decoder": false,
+      "id2label": {
+        "0": "LABEL_0",
+        "1": "LABEL_1"
+      },
+      "label2id": {
+        "LABEL_0": 0,
+        "LABEL_1": 1
+      },
+      "problem_type": null,
+      "vocab_size": 2,
+      "hidden_size": 768,
+      "intermediate_size": 2560,
+      "num_hidden_layers": 17,
+      "num_attention_heads": 8,
+      "num_key_value_heads": 4,
+      "max_position_embeddings": 128000,
+      "initializer_range": 0.02,
+      "norm_eps": 1e-05,
+      "use_cache": true,
+      "pad_token_id": 0,
+      "bos_token_id": 1,
+      "eos_token_id": null,
+      "tie_word_embeddings": true,
+      "rope_parameters": {
+        "rope_theta": 1000000.0,
+        "rope_type": "default"
+      },
+      "conv_bias": false,
+      "conv_L_cache": 3,
+      "block_multiple_of": 256,
+      "block_ffn_dim_multiplier": 1.0,
+      "block_auto_adjust_ff_dim": true,
+      "full_attn_idxs": null,
+      "layer_types": [
+        "conv",
+        "conv",
+        "full_attention",
+        "conv",
+        "conv",
+        "full_attention",
+        "conv",
+        "conv",
+        "full_attention",
+        "conv",
+        "conv",
+        "full_attention",
+        "conv",
+        "conv",
+        "full_attention",
+        "full_attention",
+        "full_attention"
+      ],
+      "_name_or_path": "",
+      "model_type": "lfm2",
+      "output_attentions": false
+    }
+  },
+  "depthformer": {
+    "transformers_version": "5.19.0.dev0",
+    "architectures": null,
+    "output_hidden_states": false,
+    "return_dict": true,
+    "dtype": null,
+    "chunk_size_feed_forward": 0,
+    "is_encoder_decoder": false,
+    "id2label": {
+      "0": "LABEL_0",
+      "1": "LABEL_1"
+    },
+    "label2id": {
+      "LABEL_0": 0,
+      "LABEL_1": 1
+    },
+    "problem_type": null,
+    "vocab_size": 1,
+    "hidden_size": 1024,
+    "intermediate_size": 2816,
+    "num_hidden_layers": 3,
+    "num_attention_heads": 32,
+    "num_key_value_heads": 8,
+    "max_position_embeddings": 12,
+    "initializer_range": 0.02,
+    "norm_eps": 1e-05,
+    "use_cache": false,
+    "pad_token_id": null,
+    "bos_token_id": null,
+    "eos_token_id": null,
+    "tie_word_embeddings": true,
+    "rope_parameters": {
+      "full_attention": {
+        "rope_type": "default",
+        "rope_theta": 1000000.0,
+        "partial_rotary_factor": 1.0
+      }
+    },
+    "conv_bias": false,
+    "conv_L_cache": 7,
+    "layer_types": [
+      "full_attention",
+      "full_attention",
+      "full_attention"
+    ],
+    "head_dim": 32,
+    "sliding_window": 256,
+    "use_sandwich_norm": false,
+    "_name_or_path": "",
+    "is_causal": false,
+    "model_type": "lfm3",
+    "output_attentions": false
+  },
+  "lfm": {
+    "transformers_version": "5.19.0.dev0",
+    "architectures": [
+      "Lfm3ForCausalLM"
+    ],
+    "output_hidden_states": false,
+    "return_dict": true,
+    "dtype": "float32",
+    "chunk_size_feed_forward": 0,
+    "is_encoder_decoder": false,
+    "id2label": {
+      "0": "LABEL_0",
+      "1": "LABEL_1"
+    },
+    "label2id": {
+      "LABEL_0": 0,
+      "LABEL_1": 1
+    },
+    "problem_type": null,
+    "vocab_size": 128000,
+    "hidden_size": 2048,
+    "intermediate_size": 7680,
+    "num_hidden_layers": 24,
+    "num_attention_heads": 16,
+    "num_key_value_heads": 4,
+    "max_position_embeddings": 128000,
+    "initializer_range": 0.02,
+    "norm_eps": 1e-05,
+    "use_cache": true,
+    "pad_token_id": 124893,
+    "bos_token_id": 124894,
+    "eos_token_id": 124900,
+    "tie_word_embeddings": true,
+    "rope_parameters": {
+      "full_attention": {
+        "partial_rotary_factor": 0.5,
+        "rope_theta": 1000000.0,
+        "rope_type": "default"
+      },
+      "sliding_attention": {
+        "rope_theta": 10000,
+        "rope_type": "default"
+      }
+    },
+    "conv_bias": false,
+    "conv_L_cache": 7,
+    "layer_types": [
+      "conv",
+      "conv",
+      "full_attention",
+      "conv",
+      "sliding_attention",
+      "conv",
+      "full_attention",
+      "conv",
+      "sliding_attention",
+      "conv",
+      "full_attention",
+      "conv",
+      "sliding_attention",
+      "conv",
+      "full_attention",
+      "conv",
+      "sliding_attention",
+      "conv",
+      "full_attention",
+      "conv",
+      "sliding_attention",
+      "conv",
+      "full_attention",
+      "conv"
+    ],
+    "head_dim": 128,
+    "sliding_window": 256,
+    "use_sandwich_norm": true,
+    "model_type": "lfm3",
+    "output_attentions": false
+  },
+  "auto_map": {
+    "AutoConfig": "configuration_lfm3_audio.Lfm3AudioConfig",
+    "AutoModel": "modeling_lfm3_audio.Lfm3AudioModel",
+    "AutoModelForMultimodalLM": "modeling_lfm3_audio.Lfm3AudioForConditionalGeneration",
+    "AutoModelForSeq2SeqLM": "modeling_lfm3_audio.Lfm3AudioForConditionalGeneration"
+  }
+}

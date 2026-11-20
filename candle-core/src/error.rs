@@ -1,7 +1,7 @@
 //! Candle-specific Error and Result
 use std::{convert::Infallible, fmt::Display};
 
-use crate::{DType, DeviceLocation, Layout, MetalError, Shape};
+use crate::{DType, DeviceLocation, Layout, MetalError, Shape, VulkanError};
 
 #[derive(Debug, Clone)]
 pub struct MatMulUnexpectedStriding {
@@ -164,6 +164,9 @@ pub enum Error {
     #[error("the candle crate has not been built with metal support")]
     NotCompiledWithMetalSupport,
 
+    #[error("the candle crate has not been built with vulkan support")]
+    NotCompiledWithVulkanSupport,
+
     #[error("cannot find tensor {path}")]
     CannotFindTensor { path: String },
 
@@ -173,6 +176,9 @@ pub enum Error {
 
     #[error("Metal error {0}")]
     Metal(#[from] MetalError),
+
+    #[error("Vulkan error {0}")]
+    Vulkan(#[from] VulkanError),
 
     #[error(transparent)]
     TryFromIntError(#[from] core::num::TryFromIntError),

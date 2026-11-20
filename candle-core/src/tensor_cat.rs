@@ -86,13 +86,38 @@ impl Tensor {
         }
         let rank = arg0.rank();
         let device = arg0.device();
-        let dtype = arg0.dtype();
+        // Determine the result dtype: promote mixed dtypes to a common type.
+        let result_dtype = {
+            let mut dt = arg0.dtype();
+            for arg in &args[1..] {
+                let a = arg.as_ref();
+                if a.dtype() != dt {
+                    dt = if matches!(dt, crate::DType::F64)
+                        || matches!(a.dtype(), crate::DType::F64)
+                    {
+                        crate::DType::F64
+                    } else {
+                        crate::DType::F32
+                    };
+                }
+            }
+            dt
+        };
+        // Convert args to the result dtype if needed.
+        let promoted_args: Vec<Tensor> = if result_dtype != arg0.dtype() {
+            args.iter()
+                .map(|a| a.as_ref().to_dtype(result_dtype))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            args.iter().map(|a| a.as_ref().clone()).collect()
+        };
+        let arg0 = &promoted_args[0];
+        let dtype = result_dtype;
         let first_dims = arg0.shape().dims();
         let mut cat_dims = first_dims.to_vec();
         cat_dims[0] = 0;
         let mut offsets = vec![0usize];
-        for (arg_idx, arg) in args.iter().enumerate() {
-            let arg = arg.as_ref();
+        for (arg_idx, arg) in promoted_args.iter().enumerate() {
             if arg.dtype() != dtype {
                 Err(Error::DTypeMismatchBinaryOp {
                     lhs: dtype,
@@ -143,8 +168,7 @@ impl Tensor {
         let shape = Shape::from(cat_dims);
         let op = crate::op::BackpropOp::new(args, |args| crate::op::Op::Cat(args, 0));
         let mut storage = unsafe { device.alloc_uninit(&shape, dtype)? };
-        for (arg, &offset) in args.iter().zip(offsets.iter()) {
-            let arg = arg.as_ref();
+        for (arg, &offset) in promoted_args.iter().zip(offsets.iter()) {
             arg.storage()
                 .copy_strided_src(&mut storage, offset, arg.layout())?;
         }
@@ -161,12 +185,36 @@ impl Tensor {
         }
         let rank = arg0.rank();
         let device = arg0.device();
-        let dtype = arg0.dtype();
-        let first_dims = arg0.shape().dims();
+        // Determine the result dtype: promote mixed dtypes to a common type.
+        let result_dtype = {
+            let mut dt = arg0.dtype();
+            for arg in &args[1..] {
+                let a = arg.as_ref();
+                if a.dtype() != dt {
+                    dt = if matches!(dt, crate::DType::F64)
+                        || matches!(a.dtype(), crate::DType::F64)
+                    {
+                        crate::DType::F64
+                    } else {
+                        crate::DType::F32
+                    };
+                }
+            }
+            dt
+        };
+        // Convert args to the result dtype if needed.
+        let promoted_args: Vec<Tensor> = if result_dtype != arg0.dtype() {
+            args.iter()
+                .map(|a| a.as_ref().to_dtype(result_dtype))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            args.iter().map(|a| a.as_ref().clone()).collect()
+        };
+        let dtype = result_dtype;
+        let first_dims = promoted_args[0].shape().dims();
         let mut cat_dims = first_dims.to_vec();
         cat_dims[dim] = 0;
-        for (arg_idx, arg) in args.iter().enumerate() {
-            let arg = arg.as_ref();
+        for (arg_idx, arg) in promoted_args.iter().enumerate() {
             if arg.dtype() != dtype {
                 Err(Error::DTypeMismatchBinaryOp {
                     lhs: dtype,
@@ -215,11 +263,10 @@ impl Tensor {
         let cat_target_dim_len = cat_dims[dim];
         let block_size: usize = cat_dims.iter().skip(1 + dim).product();
         let shape = Shape::from(cat_dims);
-        let op = crate::op::BackpropOp::new(args, |args| crate::op::Op::Cat(args, dim));
+        let op = crate::op::BackpropOp::new(&promoted_args, |args| crate::op::Op::Cat(args, dim));
         let mut storage = unsafe { device.alloc_uninit(&shape, dtype)? };
         let mut dst_o = 0;
-        for arg in args.iter() {
-            let arg = arg.as_ref();
+        for arg in promoted_args.iter() {
             let arg_dims = arg.shape().dims();
             let d1: usize = arg_dims.iter().take(dim).product();
             let d2 = block_size * arg_dims[dim];

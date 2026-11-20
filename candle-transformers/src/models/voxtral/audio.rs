@@ -1,7 +1,10 @@
-use candle::{DType, Device, Error, Tensor};
+use candle::{Device, Error, Tensor};
+use rustfft::{num_complex::Complex32, FftPlanner};
 
 use crate::models::whisper::audio::{log_mel_spectrogram_, Float};
 
+/// Legacy whisper.cpp-style frontend. For checkpoint-compatible Voxtral input,
+/// use `extract_features`, which follows WhisperFeatureExtractor's centered STFT.
 pub fn pcm_to_mel<T: Float>(samples: &[T], filters: &[T]) -> Vec<T> {
     log_mel_spectrogram_(
         samples,
@@ -13,55 +16,74 @@ pub fn pcm_to_mel<T: Float>(samples: &[T], filters: &[T]) -> Vec<T> {
     )
 }
 
-/// Process audio using exact WhisperFeatureExtractor algorithm then apply VoxtralProcessor chunking
+/// WhisperFeatureExtractor followed by VoxtralProcessor's 30-second chunking.
+/// PCM is padded to the next 480000 samples before a centered, reflect-padded
+/// 400-point STFT. This does not add whisper.cpp's extra 15-second tail or fold
+/// negative-frequency power into the positive-frequency bins.
 pub fn extract_features(audio: &[f32], filters: &[f32], device: &Device) -> Result<Tensor, Error> {
-    const N_MELS: usize = super::N_MELS;
-
-    // Use the exact WhisperFeatureExtractor algorithm
-    // Use the whisper implementation from the parent module
-    let mel_vec = pcm_to_mel(audio, filters);
-
-    // The whisper implementation returns Vec<f32> in shape (n_mel * n_len)
-    // We need to reshape it to match the expected tensor format
-    let n_mel = super::N_MELS;
-    let n_len = mel_vec.len() / n_mel;
-
-    // Create tensor with shape (n_mel, n_len) then add batch dimension
-    let mel_tensor = Tensor::from_vec(mel_vec, (n_mel, n_len), device)?;
-    let mel_tensor = mel_tensor.unsqueeze(0)?; // Add batch dimension -> (1, n_mel, n_len)
-
-    // Convert tensor back to Vec<f32> for compatibility with existing code
-    let mel = mel_tensor.flatten_all()?.to_vec1::<f32>()?;
-    let mel_len = mel.len();
-
-    // Apply VoxtralProcessor chunking exactly like Python
-    let total_frames = mel_len / N_MELS;
-    let max_source_positions = 3000; // From VoxtralProcessor defaults
-
-    // Python approach: reshape (feature_size, total_frames) -> (feature_size, -1, max_source_positions)
-    // First, create mel tensor with shape (N_MELS, total_frames)
-    let mel_tensor = Tensor::from_vec(mel, (N_MELS, total_frames), device)
-        .map_err(|e| Error::Msg(format!("Failed to create mel tensor: {e}")))?;
-
-    // Calculate number of chunks (equivalent to Python's -1 dimension in reshape)
-    let num_chunks = total_frames.div_ceil(max_source_positions);
-
-    // Pad the mel tensor to be divisible by max_source_positions
-    let padded_frames = num_chunks * max_source_positions;
-    let padding_needed = padded_frames - total_frames;
-
-    let mel_padded = if padding_needed > 0 {
-        let padding = Tensor::zeros((N_MELS, padding_needed), DType::F32, device)?;
-        Tensor::cat(&[&mel_tensor, &padding], 1)?
-    } else {
-        mel_tensor
-    };
-
-    // Reshape to (N_MELS, num_chunks, max_source_positions)
-    let reshaped = mel_padded.reshape((N_MELS, num_chunks, max_source_positions))?;
-
-    // Transpose to (num_chunks, N_MELS, max_source_positions) - matching Python's transpose(0,1)
-    let audio_features = reshaped.transpose(0, 1)?;
-
-    Ok(audio_features)
+    const CHUNK_SAMPLES: usize = 480000;
+    const CHUNK_FRAMES: usize = 3000;
+    const BINS: usize = super::N_FFT / 2 + 1;
+    if audio.is_empty()
+        || audio.iter().any(|v| !v.is_finite())
+        || filters.len() != super::N_MELS * BINS
+        || filters.iter().any(|v| !v.is_finite())
+    {
+        candle::bail!("invalid Voxtral PCM or mel filters");
+    }
+    let chunks = audio.len().div_ceil(CHUNK_SAMPLES);
+    let padded_len = chunks
+        .checked_mul(CHUNK_SAMPLES)
+        .ok_or_else(|| Error::Msg("Voxtral padded audio size overflow".into()))?;
+    let frames = chunks * CHUNK_FRAMES;
+    let mut samples = audio.to_vec();
+    samples.resize(padded_len, 0.);
+    let window: Vec<f32> = (0..super::N_FFT)
+        .map(|i| {
+            (0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / super::N_FFT as f64).cos()) as f32
+        })
+        .collect();
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(super::N_FFT);
+    let mut input = vec![Complex32::new(0., 0.); super::N_FFT];
+    let mut scratch = vec![Complex32::new(0., 0.); fft.get_inplace_scratch_len()];
+    let mut powers = vec![0f32; frames * BINS];
+    for frame in 0..frames {
+        let start = (frame * super::HOP_LENGTH) as isize - (super::N_FFT / 2) as isize;
+        for (idx, value) in input.iter_mut().enumerate() {
+            let pos = start + idx as isize;
+            let pos = if pos < 0 {
+                -pos
+            } else if pos >= padded_len as isize {
+                2 * padded_len as isize - 2 - pos
+            } else {
+                pos
+            } as usize;
+            *value = Complex32::new(samples[pos] * window[idx], 0.);
+        }
+        fft.process_with_scratch(&mut input, &mut scratch);
+        for (power, value) in powers[frame * BINS..(frame + 1) * BINS]
+            .iter_mut()
+            .zip(&input)
+        {
+            *power = value.norm_sqr();
+        }
+    }
+    // Batched native GEMM avoids a scalar dot product for every mel/frame.
+    // The frontend runs on CPU; only the final features move to the model.
+    let powers = Tensor::from_vec(powers, (frames, BINS), &Device::Cpu)?.t()?;
+    let filters = Tensor::from_slice(filters, (super::N_MELS, BINS), &Device::Cpu)?;
+    let mel = (filters
+        .matmul(&powers)?
+        .clamp(1e-10f32, f32::INFINITY)?
+        .log()?
+        / std::f64::consts::LN_10)?;
+    let max_log = mel.max_all()?.to_scalar::<f32>()?;
+    let mel = ((mel.clamp(max_log - 8., f32::INFINITY)? + 4.)? / 4.)?;
+    // Reshape (mel, chunks, time) then transpose to the encoder's
+    // (chunks, mel, time), preserving the order of contiguous audio chunks.
+    mel.reshape((super::N_MELS, chunks, CHUNK_FRAMES))?
+        .transpose(0, 1)?
+        .contiguous()?
+        .to_device(device)
 }

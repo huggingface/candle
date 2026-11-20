@@ -14,13 +14,15 @@ accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle-kernels = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
+candle-vulkan-kernels = { workspace = true, optional = true }
+vulkano = { workspace = true, optional = true }
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 cutile = { workspace = true, optional = true }
 gemm = { workspace = true }
 half = { workspace = true, features = ["zerocopy"] }
-float8 = { workspace = true }
+microfloat = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 libc = { workspace = true }
 libm = { workspace = true }
@@ -38,11 +40,17 @@ zip = { workspace = true }
 parking_lot = "0.12.5"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokenizers = { workspace = true, features = ["fancy-regex"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+half = { workspace = true }
+microfloat = { workspace = true }
+candle-vulkan-kernels = { workspace = true }
 clap = { workspace = true }
 criterion = { workspace = true }
+vulkano = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [features]
 default = []
@@ -58,6 +66,7 @@ metal = [
     "dep:candle-metal-kernels",
 ]
 metal-debug-labels = ["metal", "candle-metal-kernels/debug-labels"]
+vulkan = ["dep:candle-vulkan-kernels", "dep:vulkano"]
 
 [[bench]]
 name = "bench_main"
@@ -70,6 +79,9 @@ required-features = ["metal"]
 [[example]]
 name = "cuda_basics"
 required-features = ["cuda"]
+[[example]]
+name = "vulkan_basics"
+required-features = ["vulkan"]
 
 [[example]]
 name = "cutile"

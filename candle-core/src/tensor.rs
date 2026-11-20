@@ -678,6 +678,7 @@ impl Tensor {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Vulkan(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1458,6 +1459,179 @@ impl Tensor {
         self.sqr().and_then(|x| x.sum_all()).and_then(|x| x.sqrt())
     }
 
+    /// Fused single-query decode attention (Vulkan backend only): `self` is q
+    /// `(num_heads, head_dim)` f32, `k`/`v` are `(num_kv_heads, kv_len,
+    /// head_dim)` f32 with contiguous rows (strides `(kv_stride, head_dim, 1)`,
+    /// `kv_stride >= kv_len * head_dim`; fully contiguous tensors qualify),
+    /// and matching layouts for `k` and `v`. Returns the `(num_heads,
+    /// head_dim)` f32 attention output. The GQA group for query head `h` is
+    /// `h * num_kv_heads / num_heads` (matching `repeat_kv`). Two dispatches:
+    /// a per-(head, KV-chunk) flash-decode pass over a partials scratch buffer,
+    /// then a small per-head reduction, so any `kv_len` is supported
+    /// (`head_dim` must be at most 512).
+    pub fn fused_decode_attention(
+        &self,
+        k: &Tensor,
+        v: &Tensor,
+        scale: f32,
+        num_kv_heads: usize,
+    ) -> Result<Tensor> {
+        let (num_heads, head_dim) = self.dims2()?;
+        let (k_heads, kv_len, k_dim) = k.dims3()?;
+        let (v_heads, v_len, v_dim) = v.dims3()?;
+        if k_dim != head_dim
+            || v_dim != head_dim
+            || v_len != kv_len
+            || v_heads != k_heads
+            || k_heads != num_kv_heads
+        {
+            bail!(
+                "fused_decode_attention: shape mismatch: q {:?}, k {:?}, v {:?}",
+                self.dims(),
+                k.dims(),
+                v.dims()
+            );
+        }
+        let (ks, kl) = k.storage_and_layout();
+        let (vs, vl) = v.storage_and_layout();
+        let k_strides = kl.stride();
+        let v_strides = vl.stride();
+        let kv_stride = *k_strides.first().unwrap_or(&0);
+        if k_strides.len() != 3
+            || v_strides.len() != 3
+            || k_strides[2] != 1
+            || v_strides[2] != 1
+            || k_strides[1] != head_dim
+            || v_strides[1] != head_dim
+            || v_strides[0] != kv_stride
+            || kv_stride < kv_len * head_dim
+        {
+            bail!(
+                "fused_decode_attention: k/v must have contiguous rows \
+                 (strides (kv_stride, head_dim, 1)): k strides {k_strides:?}, \
+                 v strides {v_strides:?}"
+            );
+        }
+        let (qs, ql) = self.storage_and_layout();
+        if head_dim > 512 {
+            bail!("fused_decode_attention: head_dim {head_dim} exceeds the kernel limit of 512");
+        }
+        let out = match (&*qs, &*ks, &*vs) {
+            (Storage::Vulkan(qv), Storage::Vulkan(kv), Storage::Vulkan(vv)) => qv
+                .fused_decode_attention(
+                    ql,
+                    kv,
+                    kl,
+                    vv,
+                    vl,
+                    scale,
+                    num_heads,
+                    num_kv_heads,
+                    head_dim,
+                    kv_len,
+                    kv_stride,
+                )?,
+            _ => bail!("fused_decode_attention: requires f32 Vulkan tensors"),
+        };
+        Ok(from_storage(
+            Storage::Vulkan(out),
+            (num_heads, head_dim),
+            BackpropOp::none(),
+            false,
+        ))
+    }
+
+    /// Fused add + RMSNorm over the last dim (Vulkan only). `self` is the
+    /// residual `x`, `h` is the add operand (same shape as `x`), and `alpha`
+    /// is the RMSNorm weight (`x`'s last dim). Returns `(residual, norm)`
+    /// where `residual = x + h` and `norm = RMSNorm(residual) * alpha`. This
+    /// fuses the residual add and the following RMSNorm into a single dispatch.
+    pub fn fused_add_rms_norm(&self, h: &Self, alpha: &Self, eps: f32) -> Result<(Self, Self)> {
+        let shape = self.shape().clone();
+        if shape.elem_count() != h.shape().elem_count() {
+            bail!(
+                "fused_add_rms_norm: shape mismatch: self {:?}, h {:?}",
+                self.dims(),
+                h.dims()
+            );
+        }
+        let (xs, xl) = self.storage_and_layout();
+        let (hs, hl) = h.storage_and_layout();
+        let (as_, al) = alpha.storage_and_layout();
+        let (residual, norm) = match (&*xs, &*hs, &*as_) {
+            (Storage::Vulkan(xv), Storage::Vulkan(hv), Storage::Vulkan(av)) => {
+                xv.fused_add_rms_norm(xl, hv, hl, av, al, eps as f64)?
+            }
+            _ => bail!("fused_add_rms_norm: requires f32 Vulkan tensors"),
+        };
+        let residual_t = from_storage(
+            Storage::Vulkan(residual),
+            shape.clone(),
+            BackpropOp::none(),
+            false,
+        );
+        let norm_t = from_storage(Storage::Vulkan(norm), shape, BackpropOp::none(), false);
+        Ok((residual_t, norm_t))
+    }
+
+    /// Fused RMSNorm + residual add over the last dim (Vulkan only). `self`
+    /// is the residual `x`, `h` is the sublayer output (same shape as `x`),
+    /// and `alpha` is the RMSNorm weight (`x`'s last dim). Returns
+    /// `x + RMSNorm(h) * alpha`: this fuses the post-sublayer RMSNorm
+    /// (Gemma-3 style) and the residual add into a single dispatch.
+    pub fn fused_post_norm_add(&self, h: &Self, alpha: &Self, eps: f32) -> Result<Self> {
+        let shape = self.shape().clone();
+        if shape.elem_count() != h.shape().elem_count() {
+            bail!(
+                "fused_post_norm_add: shape mismatch: self {:?}, h {:?}",
+                self.dims(),
+                h.dims()
+            );
+        }
+        let (xs, xl) = self.storage_and_layout();
+        let (hs, hl) = h.storage_and_layout();
+        let (as_, al) = alpha.storage_and_layout();
+        let out = match (&*xs, &*hs, &*as_) {
+            (Storage::Vulkan(xv), Storage::Vulkan(hv), Storage::Vulkan(av)) => {
+                xv.fused_post_norm_add(xl, hv, hl, av, al, eps as f64)?
+            }
+            _ => bail!("fused_post_norm_add: requires f32 Vulkan tensors"),
+        };
+        Ok(from_storage(
+            Storage::Vulkan(out),
+            shape,
+            BackpropOp::none(),
+            false,
+        ))
+    }
+
+    /// Fused KV cache row append (Vulkan only): copies the
+    /// `(num_kv_heads, head_dim)` f32 rows `self` (keys) and `v` (values)
+    /// into row `row` of the pre-allocated `(num_kv_heads, max_len,
+    /// head_dim)` caches `dst_k`/`dst_v` (head stride `>= max_len *
+    /// head_dim`, contiguous rows) in a single dispatch.
+    pub fn kv_cache_append_rows(
+        &self,
+        v: &Self,
+        dst_k: &Self,
+        dst_v: &Self,
+        row: usize,
+    ) -> Result<()> {
+        let (ks, kl) = self.storage_and_layout();
+        let (vs, vl) = v.storage_and_layout();
+        let (dks, dkl) = dst_k.storage_and_layout();
+        let (dvs, dvl) = dst_v.storage_and_layout();
+        match (&*ks, &*vs, &*dks, &*dvs) {
+            (
+                Storage::Vulkan(kx),
+                Storage::Vulkan(vx),
+                Storage::Vulkan(kdx),
+                Storage::Vulkan(vdx),
+            ) => kx.kv_cache_append_rows(kl, vx, vl, kdx, dkl, vdx, dvl, row),
+            _ => bail!("kv_cache_append_rows: requires f32 Vulkan tensors"),
+        }
+    }
+
     /// Performs strict matrix-vector multiplication (`[m, n] * [n] = [m]`).
     ///
     /// - If `self` is a matrix (`[m, n]`) and `rhs` is a vector (`[n]`), returns a vector (`[m]`).
@@ -1547,6 +1721,73 @@ impl Tensor {
             rhs.layout(),
         )?;
         let op = BackpropOp::new2(self, rhs, Op::Matmul);
+        Ok(from_storage(storage, c_shape, op, false))
+    }
+
+    /// Returns the affine matrix product `self @ rhs + bias`.
+    ///
+    /// # Arguments
+    ///
+    /// * `self` - A tensor with dimensions `m, k` or `b, m, k`.
+    /// * `rhs` - A tensor with dimensions `k, n` or `b, k, n` (the batch
+    ///   dimension, when present, must match `self`'s).
+    /// * `bias` - A 1D tensor with `n` elements, added to every row of the
+    ///   product.
+    ///
+    /// The resulting tensor has dimensions `m, n` or `b, m, n`. Backends
+    /// with a fused kernel (the Vulkan cooperative-matrix affine) compute
+    /// the product and the bias addition in a single dispatch; otherwise
+    /// this is the `matmul` followed by the element-wise add.
+    pub fn affine_matmul(&self, rhs: &Self, bias: &Self) -> Result<Self> {
+        let a_dims = self.dims();
+        let b_dims = rhs.dims();
+        let bias_dims = bias.dims();
+        let (m, k, n, bsz) = match (a_dims.len(), b_dims.len()) {
+            (2, 2) => (a_dims[0], a_dims[1], b_dims[1], 1),
+            (3, 2) => (a_dims[1], a_dims[2], b_dims[1], a_dims[0]),
+            (3, 3) if a_dims[0] == b_dims[0] => (a_dims[1], a_dims[2], b_dims[2], a_dims[0]),
+            _ => {
+                return Err(Error::ShapeMismatchBinaryOp {
+                    lhs: self.shape().clone(),
+                    rhs: rhs.shape().clone(),
+                    op: "affine_matmul",
+                }
+                .bt())
+            }
+        };
+        if b_dims[b_dims.len() - 2] != k || bias_dims.len() != 1 || bias_dims[0] != n {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "affine_matmul",
+            }
+            .bt());
+        }
+        let c_shape = if a_dims.len() == 2 {
+            Shape::from((m, n))
+        } else {
+            Shape::from((a_dims[0], m, n))
+        };
+        if c_shape.elem_count() == 0 || k == 0 {
+            {
+                let lhs_storage = self.storage();
+                let rhs_storage = rhs.storage();
+                lhs_storage.same_device(&rhs_storage, "affine_matmul")?;
+                lhs_storage.same_dtype(&rhs_storage, "affine_matmul")?;
+            }
+            let storage = self.device().zeros(&c_shape, self.dtype())?;
+            let op = BackpropOp::new3(self, rhs, bias, Op::AffineMatmul);
+            return Ok(from_storage(storage, c_shape, op, false));
+        }
+        let storage = self.storage().affine_matmul(
+            &rhs.storage(),
+            &bias.storage(),
+            (bsz, m, n, k),
+            self.layout(),
+            rhs.layout(),
+            bias.layout(),
+        )?;
+        let op = BackpropOp::new3(self, rhs, bias, Op::AffineMatmul);
         Ok(from_storage(storage, c_shape, op, false))
     }
 
@@ -1982,6 +2223,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Vulkan(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -2013,6 +2255,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Vulkan(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -2054,6 +2297,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Vulkan(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -2410,8 +2654,12 @@ impl Tensor {
                 (Storage::Cpu(storage), Device::Metal(metal)) => {
                     Storage::Metal(metal.storage_from_cpu_storage(storage)?)
                 }
+                (Storage::Cpu(storage), Device::Vulkan(metal)) => {
+                    Storage::Vulkan(metal.storage_from_cpu_storage(storage)?)
+                }
                 (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
+                (Storage::Vulkan(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Cuda(storage), Device::Cuda(cuda)) => {
                     // can't clone storage if it's the same device because of the underlying device ptr
                     let dst_storage = storage.transfer_to_device(cuda)?;

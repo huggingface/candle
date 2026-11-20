@@ -1,0 +1,16 @@
+[package]
+name = "pipeline-caching"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "pipeline-caching"
+path = "main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+vulkano = { workspace = true, default-features = true }
+vulkano-shaders = { workspace = true }

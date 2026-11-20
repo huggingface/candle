@@ -1,6 +1,9 @@
 // Adapted from: https://github.com/guoqingbao/vllm.rs/blob/main/src/models/layers/moe.rs
 use candle::Module;
-use candle::{quantized::QTensor, DType, Result, Tensor, D};
+use candle::{
+    quantized::{QStorage, QTensor},
+    DType, Result, Tensor, D,
+};
 use candle_nn::{linear_no_bias, moe, Activation, Linear, VarBuilder};
 use std::sync::Arc;
 
@@ -164,6 +167,12 @@ pub struct FusedMoeGGUF {
     pub gate: Linear,
     pub gate_experts: Arc<QTensor>,
     pub up_experts: Arc<QTensor>,
+    // Gate and up experts packed into `[experts, 2 * inter, hidden]` so the
+    // non-CUDA path issues one fused MoE GEMM instead of two. `None` on
+    // CUDA, where the forward uses `gate_experts`/`up_experts` separately and
+    // the packed copy would only duplicate the weights.
+    pub gate_up_experts: Option<Arc<QTensor>>,
+    pub w_size_n: usize,
     pub down_experts: Arc<QTensor>,
     pub act: Activation,
     pub norm_topk_prob: bool,
@@ -174,51 +183,6 @@ pub struct FusedMoeGGUF {
 }
 
 impl FusedMoeGGUF {
-    pub fn new(
-        cfg: &MoeCfg,
-        vb: crate::quantized_var_builder::VarBuilder,
-        dtype: DType,
-    ) -> Result<Self> {
-        let num_experts = cfg.num_experts;
-        let gate_ws = vb
-            .pp("ffn_gate_inp")
-            .get((num_experts, cfg.hidden_size), "weight")?
-            .dequantize(vb.device())?
-            .to_dtype(DType::F32)?;
-
-        let gate = Linear::new(gate_ws, None);
-
-        let (gate_experts, up_experts, down_experts) = {
-            (
-                vb.pp("ffn_gate_exps").get(
-                    (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
-                    "weight",
-                )?,
-                vb.pp("ffn_up_exps").get(
-                    (num_experts, cfg.moe_intermediate_size, cfg.hidden_size),
-                    "weight",
-                )?,
-                vb.pp("ffn_down_exps").get(
-                    (num_experts, cfg.hidden_size, cfg.moe_intermediate_size),
-                    "weight",
-                )?,
-            )
-        };
-
-        Ok(Self {
-            gate,
-            gate_experts,
-            up_experts,
-            down_experts,
-            act: cfg.act,
-            norm_topk_prob: cfg.norm_topk_prob,
-            num_experts_per_tok: cfg.num_experts_per_tok,
-            // all_reduce: AllReduce::new(comm),
-            // world_size: 1,
-            dtype,
-        })
-    }
-
     pub fn forward(&self, xs: &Tensor, is_prefill: bool) -> Result<Tensor> {
         let (batch, seq_len, hidden_dim) = xs.dims3()?;
         let xs = xs.reshape(((), hidden_dim))?;
@@ -246,16 +210,7 @@ impl FusedMoeGGUF {
             topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
         }
 
-        let ys = if xs.device().is_metal() {
-            let xs = xs.reshape((num_tokens, 1, hidden_dim))?.contiguous()?;
-            let gate = self.gate_experts.indexed_moe_forward(&xs, &topk_ids)?;
-            let up = self.up_experts.indexed_moe_forward(&xs, &topk_ids)?;
-            let down_inputs = (up * gate.apply(&self.act)?)?;
-            let down = self
-                .down_experts
-                .indexed_moe_forward(&down_inputs, &topk_ids)?;
-            down.broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
-        } else {
+        let ys = if xs.device().is_cuda() {
             let (expert_ids, sorted_token_ids) = topk_ids.flatten_all()?.sort_last_dim(true)?;
             let gate = moe::moe_gemm_gguf(
                 &xs,
@@ -289,6 +244,24 @@ impl FusedMoeGGUF {
                 is_prefill,
                 self.dtype,
             )?
+        } else {
+            let xs = xs.reshape((num_tokens, 1, hidden_dim))?.contiguous()?;
+            // One fused GEMM over the packed `[experts, 2 * inter, hidden]`
+            // weight, then split the output into the gate and up halves.
+            let gate_up = self
+                .gate_up_experts
+                .as_ref()
+                .ok_or_else(|| candle::Error::Msg("gate_up_experts are not packed".to_string()))?
+                .indexed_moe_forward(&xs, &topk_ids)?;
+            let gate = gate_up.narrow(D::Minus1, 0, self.w_size_n)?.contiguous()?;
+            let up = gate_up
+                .narrow(D::Minus1, self.w_size_n, self.w_size_n)?
+                .contiguous()?;
+            let down_inputs = (up * gate.apply(&self.act)?)?;
+            let down = self
+                .down_experts
+                .indexed_moe_forward(&down_inputs, &topk_ids)?;
+            down.broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
         };
         let mut ys = ys.reshape((num_tokens, (), hidden_dim))?.sum(D::Minus2)?;
         if ys.dtype() != original_dtype {
@@ -296,4 +269,31 @@ impl FusedMoeGGUF {
         }
         ys.reshape((batch, seq_len, hidden_dim))
     }
+}
+
+/// Pack the gate and up MoE expert weights into a single quantized tensor
+/// `[experts, 2 * inter, hidden]` (gate rows followed by up rows within each
+/// expert) so the non-CUDA MoE path issues one fused GEMM instead of two. The
+/// quantized bytes are concatenated per expert, so no dequantization happens.
+pub(crate) fn pack_gate_up_experts(gate: &QTensor, up: &QTensor) -> Result<QTensor> {
+    let (experts, inter, hidden) = gate.shape().dims3()?;
+    let (experts_u, inter_u, hidden_u) = up.shape().dims3()?;
+    if (experts, inter, hidden) != (experts_u, inter_u, hidden_u) || gate.dtype() != up.dtype() {
+        candle::bail!("pack_gate_up_experts: gate/up shape or dtype mismatch");
+    }
+    let dtype = gate.dtype();
+    let block_bytes = dtype.type_size();
+    let row_bytes = hidden / dtype.block_size() * block_bytes;
+    let per_expert = inter * row_bytes;
+    let g = gate.data()?;
+    let u = up.data()?;
+    let mut packed = Vec::with_capacity(experts * 2 * per_expert);
+    for e in 0..experts {
+        let off = e * per_expert;
+        packed.extend_from_slice(&g[off..off + per_expert]);
+        packed.extend_from_slice(&u[off..off + per_expert]);
+    }
+    let device = gate.device();
+    let storage = QStorage::from_data(std::borrow::Cow::Owned(packed), &device, dtype)?;
+    QTensor::new(storage, (experts, 2 * inter, hidden))
 }

@@ -130,6 +130,7 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
         Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
         Device::Metal(metal) => super::metal::load_quantized(metal, data)?,
         Device::Cuda(cuda) => super::cuda::load_quantized(cuda, data)?,
+        Device::Vulkan(vulkan) => super::vulkan::load_quantized(vulkan, data)?,
     };
     super::QTensor::new(data, dims)
 }
@@ -149,7 +150,6 @@ pub fn qtensor_from_ggml(
         )
     }
     let size_in_bytes = tensor_elems / block_size * ggml_dtype.type_size();
-
     match ggml_dtype {
         GgmlDType::F32 => from_raw_data::<f32>(raw_data, size_in_bytes, dims, device),
         GgmlDType::F16 => from_raw_data::<half::f16>(raw_data, size_in_bytes, dims, device),

@@ -12,26 +12,33 @@ use candle_nn::{conv1d, Conv1d, ConvTranspose1d, VarBuilder};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Deserialize)]
 pub enum NormType {
+    #[serde(rename = "weight_norm", alias = "WeightNorm")]
     WeightNorm,
+    #[serde(rename = "time_group_norm", alias = "TimeGroupNorm")]
     TimeGroupNorm,
+    #[serde(rename = "none", alias = "None")]
     None,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Deserialize)]
 pub enum PadMode {
+    #[serde(rename = "constant", alias = "Constant")]
     Constant,
+    #[serde(rename = "reflect", alias = "Reflect")]
     Reflect,
+    #[serde(rename = "replicate", alias = "Replicate")]
     Replicate,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub target_bandwidths: Vec<f64>,
     pub sampling_rate: usize,
     pub audio_channels: usize,
     pub normalize: bool,
-    pub chunk_length_s: Option<usize>,
-    pub overlap: Option<usize>,
+    pub chunk_length_s: Option<f64>,
+    pub overlap: Option<f64>,
     pub hidden_size: usize,
     pub num_filters: usize,
     pub num_residual_layers: usize,
@@ -70,8 +77,7 @@ impl Default for Config {
             residual_kernel_size: 3,
             dilation_growth_rate: 2,
             use_causal_conv: true,
-            // This should be PadMode::Reflect which is currently unsupported in candle.
-            pad_mode: PadMode::Replicate,
+            pad_mode: PadMode::Reflect,
             compress: 2,
             num_lstm_layers: 2,
             trim_right_ratio: 1.0,
@@ -83,22 +89,79 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn validate(&self) -> Result<()> {
+        if self.target_bandwidths.is_empty()
+            || self
+                .target_bandwidths
+                .iter()
+                .any(|value| !value.is_finite() || *value <= 0.)
+            || self.sampling_rate == 0
+            || self.audio_channels == 0
+            || self.hidden_size == 0
+            || self.num_filters == 0
+            || self.upsampling_ratios.is_empty()
+            || self.upsampling_ratios.contains(&0)
+            || self.compress == 0
+            || self.codebook_size < 2
+            || self.codebook_dim == Some(0)
+            || self.kernel_size == 0
+            || self.last_kernel_size == 0
+            || self.residual_kernel_size == 0
+        {
+            candle::bail!("invalid EnCodec configuration");
+        }
+        if self.upsampling_ratios.len() >= usize::BITS as usize
+            || self
+                .num_filters
+                .checked_shl(self.upsampling_ratios.len() as u32)
+                .is_none()
+        {
+            candle::bail!("EnCodec scale overflow");
+        }
+        let hop = self
+            .upsampling_ratios
+            .iter()
+            .try_fold(1usize, |n, value| n.checked_mul(*value))
+            .ok_or_else(|| candle::Error::Msg("EnCodec hop overflow".into()))?;
+        if hop > self.sampling_rate || !self.codebook_size.is_power_of_two() {
+            candle::bail!("EnCodec requires a supported hop and power-of-two codebooks");
+        }
+        if self
+            .chunk_length_s
+            .is_some_and(|v| !v.is_finite() || v <= 0.)
+            || self
+                .overlap
+                .is_some_and(|v| !v.is_finite() || !(0. ..1.).contains(&v))
+        {
+            candle::bail!("invalid EnCodec chunking configuration");
+        }
+        if !self.trim_right_ratio.is_finite()
+            || !(0. ..=1.).contains(&self.trim_right_ratio)
+            || (!self.use_causal_conv && self.trim_right_ratio != 1.)
+        {
+            candle::bail!("invalid codec trim_right_ratio");
+        }
+        if self.num_quantizers() == 0 {
+            candle::bail!("EnCodec bandwidth is too small for one quantizer");
+        }
+        Ok(())
+    }
     fn codebook_dim(&self) -> usize {
         self.codebook_dim.unwrap_or(self.hidden_size)
     }
 
-    fn frame_rate(&self) -> usize {
+    pub fn frame_rate(&self) -> usize {
         let hop_length: usize = self.upsampling_ratios.iter().product();
         self.sampling_rate.div_ceil(hop_length)
     }
 
-    fn num_quantizers(&self) -> usize {
+    pub fn num_quantizers(&self) -> usize {
         let num = 1000f64
             * self
                 .target_bandwidths
                 .last()
                 .expect("empty target_bandwidths");
-        (num as usize) / (self.frame_rate() * 10)
+        (num as usize) / (self.frame_rate() * self.codebook_size.ilog2() as usize)
     }
 }
 
@@ -118,7 +181,37 @@ fn get_extra_padding_for_conv1d(
 fn pad1d(xs: &Tensor, pad_l: usize, pad_r: usize, mode: PadMode) -> Result<Tensor> {
     match mode {
         PadMode::Constant => xs.pad_with_zeros(D::Minus1, pad_l, pad_r),
-        PadMode::Reflect => candle::bail!("pad-mode 'reflect' is not supported"),
+        PadMode::Reflect => {
+            // Match Transformers' small-input wrapper: zero-extend before
+            // reflection, then remove that temporary extension from the right.
+            let length = xs.dim(D::Minus1)?;
+            if length == 0 {
+                candle::bail!("cannot reflect-pad empty audio");
+            }
+            let max_pad = pad_l.max(pad_r);
+            let extra = if length <= max_pad {
+                max_pad - length + 1
+            } else {
+                0
+            };
+            let xs = xs.pad_with_zeros(D::Minus1, 0, extra)?;
+            let length = length + extra;
+            let indices: Vec<u32> = (0..length + pad_l + pad_r)
+                .map(|index| {
+                    let index = index as isize - pad_l as isize;
+                    if index < 0 {
+                        (-index) as u32
+                    } else if index >= length as isize {
+                        (2 * length as isize - 2 - index) as u32
+                    } else {
+                        index as u32
+                    }
+                })
+                .collect();
+            let indices = Tensor::new(indices.as_slice(), xs.device())?;
+            let padded = xs.contiguous()?.index_select(&indices, D::Minus1)?;
+            padded.narrow(D::Minus1, 0, padded.dim(D::Minus1)? - extra)
+        }
         PadMode::Replicate => xs.pad_with_same(D::Minus1, pad_l, pad_r),
     }
 }
@@ -133,6 +226,9 @@ pub fn conv1d_weight_norm(
     config: candle_nn::Conv1dConfig,
     vb: VarBuilder,
 ) -> Result<Conv1d> {
+    if vb.contains_tensor("weight") {
+        return candle_nn::conv1d(in_c, out_c, kernel_size, config, vb);
+    }
     let weight_g = vb.get((out_c, 1, 1), "weight_g")?;
     let weight_v = vb.get((out_c, in_c, kernel_size), "weight_v")?;
     let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
@@ -148,6 +244,9 @@ pub fn conv1d_weight_norm_no_bias(
     config: candle_nn::Conv1dConfig,
     vb: VarBuilder,
 ) -> Result<Conv1d> {
+    if vb.contains_tensor("weight") {
+        return candle_nn::conv1d_no_bias(in_c, out_c, kernel_size, config, vb);
+    }
     let weight_g = vb.get((out_c, 1, 1), "weight_g")?;
     let weight_v = vb.get((out_c, in_c, kernel_size), "weight_v")?;
     let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
@@ -163,6 +262,15 @@ pub fn conv_transpose1d_weight_norm(
     config: candle_nn::ConvTranspose1dConfig,
     vb: VarBuilder,
 ) -> Result<ConvTranspose1d> {
+    if vb.contains_tensor("weight") {
+        let weight = vb.get((in_c, out_c, kernel_size), "weight")?;
+        let bias = if bias {
+            Some(vb.get(out_c, "bias")?)
+        } else {
+            None
+        };
+        return Ok(ConvTranspose1d::new(weight, bias, config));
+    }
     let weight_g = vb.get((in_c, 1, 1), "weight_g")?;
     let weight_v = vb.get((in_c, out_c, kernel_size), "weight_v")?;
     let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
@@ -345,6 +453,14 @@ impl ResidualVectorQuantizer {
     }
 
     pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+        self.decode_with_callback(codes, &mut || Ok(()))
+    }
+
+    fn decode_with_callback(
+        &self,
+        codes: &Tensor,
+        before_step: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
         let mut quantized_out = Tensor::zeros((), self.dtype, codes.device())?;
         let ncodes = codes.dim(0)?;
         if ncodes > self.layers.len() {
@@ -355,6 +471,7 @@ impl ResidualVectorQuantizer {
             )
         }
         for (i, layer) in self.layers.iter().take(ncodes).enumerate() {
+            before_step()?;
             let quantized = layer.decode(&codes.i(i)?)?;
             quantized_out = quantized.broadcast_add(&quantized_out)?;
         }
@@ -382,6 +499,37 @@ impl EncodecLSTM {
         }
         Ok(Self { layers })
     }
+
+    fn forward_with_callback(
+        &self,
+        xs: &Tensor,
+        before_step: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
+        use candle_nn::RNN;
+        let xs = xs.t()?;
+        let residual = &xs;
+        let mut xs = xs.clone();
+        for layer in &self.layers {
+            let (batch, length, _) = xs.dims3()?;
+            let mut state = layer.zero_state(batch)?;
+            let mut states = Vec::with_capacity(length);
+            for position in 0..length {
+                if position.is_multiple_of(DEFAULT_DECODE_CHUNK_SIZE) {
+                    // Deferred GPU execution must complete one recurrent block
+                    // before enqueueing another or observing cancellation.
+                    xs.device().synchronize()?;
+                    before_step()?;
+                }
+                state = layer.step(&xs.i((.., position, ..))?.contiguous()?, &state)?;
+                states.push(state.clone());
+            }
+            xs.device().synchronize()?;
+            before_step()?;
+            xs = layer.states_to_tensor(&states)?;
+        }
+        before_step()?;
+        (xs + residual)?.t()
+    }
 }
 
 impl Module for EncodecLSTM {
@@ -403,29 +551,70 @@ impl Module for EncodecLSTM {
 #[derive(Clone, Debug)]
 pub struct EncodecConvTranspose1d {
     conv: ConvTranspose1d,
+    norm: Option<candle_nn::GroupNorm>,
+    padding_left: usize,
+    padding_right: usize,
 }
-
 impl EncodecConvTranspose1d {
     fn new(
         in_c: usize,
         out_c: usize,
         k: usize,
         stride: usize,
-        _cfg: &Config,
+        cfg: &Config,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let cfg = candle_nn::ConvTranspose1dConfig {
+        let conv_cfg = candle_nn::ConvTranspose1dConfig {
             stride,
             ..Default::default()
         };
-        let conv = conv_transpose1d_weight_norm(in_c, out_c, k, true, cfg, vb.pp("conv"))?;
-        Ok(Self { conv })
+        let conv = match cfg.norm_type {
+            NormType::WeightNorm => {
+                conv_transpose1d_weight_norm(in_c, out_c, k, true, conv_cfg, vb.pp("conv"))?
+            }
+            NormType::None | NormType::TimeGroupNorm => {
+                candle_nn::conv_transpose1d(in_c, out_c, k, conv_cfg, vb.pp("conv"))?
+            }
+        };
+        let norm = if cfg.norm_type == NormType::TimeGroupNorm {
+            Some(candle_nn::group_norm(1, out_c, 1e-5, vb.pp("norm"))?)
+        } else {
+            None
+        };
+        let total = k
+            .checked_sub(stride)
+            .ok_or_else(|| candle::Error::Msg("codec kernel is smaller than stride".into()))?;
+        if !(0. ..=1.).contains(&cfg.trim_right_ratio)
+            || (!cfg.use_causal_conv && cfg.trim_right_ratio != 1.)
+        {
+            candle::bail!("invalid codec trim_right_ratio");
+        }
+        let padding_right = if cfg.use_causal_conv {
+            (total as f64 * cfg.trim_right_ratio).ceil() as usize
+        } else {
+            total / 2
+        };
+        Ok(Self {
+            conv,
+            norm,
+            padding_left: total - padding_right,
+            padding_right,
+        })
     }
 }
-
 impl Module for EncodecConvTranspose1d {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.conv)
+        let mut xs = xs.apply(&self.conv)?;
+        if let Some(norm) = &self.norm {
+            xs = xs.apply(norm)?;
+        }
+        let size = xs
+            .dim(D::Minus1)?
+            .checked_sub(self.padding_left + self.padding_right)
+            .ok_or_else(|| {
+                candle::Error::Msg("codec transposed-convolution output is too short".into())
+            })?;
+        xs.narrow(D::Minus1, self.padding_left, size)
     }
 }
 
@@ -467,7 +656,7 @@ impl EncodecConv1d {
                     padding: 0,
                     stride,
                     groups: 1,
-                    dilation: 1,
+                    dilation,
                     cudnn_fwd_algo: None,
                 },
                 vb.pp("conv"),
@@ -686,10 +875,50 @@ pub struct Decoder {
     init_lstm: EncodecLSTM,
     sampling_layers: Vec<(EncodecConvTranspose1d, Vec<EncodecResnetBlock>)>,
     final_conv: EncodecConv1d,
+    hop: usize,
+    convolution_halo: usize,
+    temporal_group_norm: bool,
 }
 
 impl Decoder {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        cfg.validate()?;
+        // Propagate an output dependency interval backwards through the CNN
+        // following the LSTM. Conv1d expands it by its effective kernel minus
+        // one; transposed convolution maps [a,b] to
+        // [ceil((a+trim_left-kernel+1)/stride), floor((b+trim_left)/stride)].
+        // A symmetric extra frame also covers reflection at true stream edges.
+        let mut left = 0usize;
+        let mut right = 0usize;
+        let expand = |kernel: usize| {
+            let padding = kernel - 1;
+            let pad_left = if cfg.use_causal_conv {
+                padding
+            } else {
+                padding.div_ceil(2)
+            };
+            (pad_left, padding - pad_left)
+        };
+        let (pad_left, pad_right) = expand(cfg.last_kernel_size);
+        left += pad_left;
+        right += pad_right;
+        for &ratio in cfg.upsampling_ratios.iter().rev() {
+            for j in 0..cfg.num_residual_layers {
+                let kernel =
+                    (cfg.residual_kernel_size - 1) * cfg.dilation_growth_rate.pow(j as u32) + 1;
+                let (pad_left, pad_right) = expand(kernel);
+                left += pad_left;
+                right += pad_right;
+            }
+            let trim_right = if cfg.use_causal_conv {
+                (ratio as f64 * cfg.trim_right_ratio).ceil() as usize
+            } else {
+                ratio / 2
+            };
+            let trim_left = ratio - trim_right;
+            left = (left + 2 * ratio - 1 - trim_left).div_ceil(ratio);
+            right = (right + trim_left).div_ceil(ratio);
+        }
         let mut layer = Layer::new(vb.pp("layers"));
         let mut scaling = usize::pow(2, cfg.upsampling_ratios.len() as u32);
         let init_conv = EncodecConv1d::new(
@@ -742,7 +971,81 @@ impl Decoder {
             init_lstm,
             sampling_layers,
             final_conv,
+            hop: cfg.upsampling_ratios.iter().product(),
+            convolution_halo: left.max(right) + 1,
+            temporal_group_norm: cfg.norm_type == NormType::TimeGroupNorm,
         })
+    }
+
+    fn convolution_with_callback(
+        &self,
+        xs: &Tensor,
+        before_step: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
+        let mut xs = xs.clone();
+        for (conv, resnets) in &self.sampling_layers {
+            before_step()?;
+            xs = xs.elu(1.)?.apply(conv)?;
+            for resnet in resnets {
+                before_step()?;
+                let residual = xs.clone();
+                xs = xs.elu(1.)?.apply(&resnet.block_conv1)?;
+                before_step()?;
+                xs = xs.elu(1.)?.apply(&resnet.block_conv2)?;
+                let residual = match &resnet.shortcut {
+                    None => residual,
+                    Some(shortcut) => {
+                        before_step()?;
+                        residual.apply(shortcut)?
+                    }
+                };
+                xs = (xs + residual)?;
+            }
+        }
+        before_step()?;
+        xs.elu(1.)?.apply(&self.final_conv)
+    }
+
+    fn forward_chunked_with_callback(
+        &self,
+        xs: &Tensor,
+        chunk_frames: usize,
+        before_step: &mut impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
+        before_step()?;
+        let xs = xs.apply(&self.init_conv)?;
+        let xs = self.init_lstm.forward_with_callback(&xs, before_step)?;
+        // Group norm includes the complete time axis. Independently normalizing
+        // chunks would change the model; retain exact whole-tensor operations.
+        if self.temporal_group_norm {
+            return self.convolution_with_callback(&xs, before_step);
+        }
+        let length = xs.dim(D::Minus1)?;
+        let mut parts = Vec::new();
+        for offset in (0..length).step_by(chunk_frames) {
+            before_step()?;
+            let end = offset.saturating_add(chunk_frames).min(length);
+            let start_context = offset.saturating_sub(self.convolution_halo);
+            let end_context = end.saturating_add(self.convolution_halo).min(length);
+            let context = xs
+                .narrow(D::Minus1, start_context, end_context - start_context)?
+                .contiguous()?;
+            let decoded = self.convolution_with_callback(&context, before_step)?;
+            // `contiguous` may return a mono narrow view without copying. A
+            // forced copy releases halo storage instead of retaining it until cat.
+            let part = decoded
+                .narrow(
+                    D::Minus1,
+                    (offset - start_context) * self.hop,
+                    (end - offset) * self.hop,
+                )?
+                .force_contiguous()?;
+            xs.device().synchronize()?;
+            before_step()?;
+            parts.push(part);
+        }
+        before_step()?;
+        Tensor::cat(&parts, D::Minus1)
     }
 }
 
@@ -766,8 +1069,12 @@ pub struct Model {
     quantizer: ResidualVectorQuantizer,
 }
 
+/// Latent frames per CNN decode block. The LSTM retains its complete history.
+pub const DEFAULT_DECODE_CHUNK_SIZE: usize = 32;
+
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        cfg.validate()?;
         let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
         let decoder = Decoder::new(cfg, vb.pp("decoder"))?;
         let quantizer = ResidualVectorQuantizer::new(cfg, vb.pp("quantizer"))?;
@@ -790,5 +1097,243 @@ impl Model {
         let embeddings = self.quantizer.decode(&codes)?;
         let outputs = self.decoder.forward(&embeddings)?;
         Ok(outputs)
+    }
+
+    /// Exact buffered decoding with cooperative checks between codebooks, every
+    /// 32 recurrent steps, and bounded CNN blocks/operations. Recurrent state is
+    /// never reset at a block boundary. TimeGroupNorm variants retain whole-time
+    /// CNN operations because their normalization has unbounded temporal support.
+    /// The callback cannot preempt a tensor kernel already in flight.
+    pub fn decode_with_callback(
+        &self,
+        codes: &Tensor,
+        mut before_step: impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
+        self.decode_chunked_with_callback(codes, DEFAULT_DECODE_CHUNK_SIZE, &mut before_step)
+    }
+
+    pub fn decode_chunked_with_callback(
+        &self,
+        codes: &Tensor,
+        chunk_frames: usize,
+        mut before_step: impl FnMut() -> Result<()>,
+    ) -> Result<Tensor> {
+        if chunk_frames == 0 {
+            candle::bail!("EnCodec decode chunk size must be positive");
+        }
+        let (_, _, length) = codes.dims3()?;
+        if length == 0 {
+            candle::bail!("EnCodec decode codes must not be empty");
+        }
+        before_step()?;
+        let embeddings = self
+            .quantizer
+            .decode_with_callback(&codes.transpose(0, 1)?, &mut before_step)?;
+        let output = self.decoder.forward_chunked_with_callback(
+            &embeddings,
+            chunk_frames,
+            &mut before_step,
+        )?;
+        before_step()?;
+        Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod codec_tests {
+    use super::*;
+    struct NonzeroWeights;
+    impl candle_nn::var_builder::SimpleBackend for NonzeroWeights {
+        fn get(
+            &self,
+            shape: Shape,
+            name: &str,
+            _: candle_nn::Init,
+            dtype: DType,
+            device: &candle::Device,
+        ) -> Result<Tensor> {
+            let seed = name.bytes().map(usize::from).sum::<usize>();
+            let values = (0..shape.elem_count())
+                .map(|i| {
+                    let value = ((i + seed) as f32 * 0.17).sin() * 0.1;
+                    if name.ends_with("norm.weight") {
+                        value + 1.
+                    } else {
+                        value
+                    }
+                })
+                .collect::<Vec<_>>();
+            Tensor::from_vec(values, shape, device)?.to_dtype(dtype)
+        }
+        fn get_unchecked(&self, _: &str, _: DType, _: &candle::Device) -> Result<Tensor> {
+            candle::bail!("test weights require a shape")
+        }
+        fn contains_tensor(&self, name: &str) -> bool {
+            name.ends_with("weight")
+        }
+    }
+    fn tiny_codec(causal: bool, norm: NormType, channels: usize) -> Result<(Model, Config)> {
+        let config = Config {
+            sampling_rate: 120,
+            audio_channels: channels,
+            hidden_size: 4,
+            num_filters: 2,
+            upsampling_ratios: vec![2, 3],
+            num_residual_layers: 2,
+            dilation_growth_rate: 3,
+            kernel_size: 3,
+            last_kernel_size: 5,
+            num_lstm_layers: 2,
+            codebook_size: 8,
+            target_bandwidths: vec![0.12],
+            use_causal_conv: causal,
+            norm_type: norm,
+            ..Default::default()
+        };
+        let model = Model::new(
+            &config,
+            VarBuilder::from_backend(Box::new(NonzeroWeights), DType::F32, candle::Device::Cpu),
+        )?;
+        Ok((model, config))
+    }
+    fn codes(config: &Config, frames: usize) -> Result<Tensor> {
+        Tensor::from_vec(
+            (0..config.num_quantizers() * frames)
+                .map(|i| ((i * 3 + i / 7) % config.codebook_size) as u32)
+                .collect::<Vec<_>>(),
+            (1, config.num_quantizers(), frames),
+            &candle::Device::Cpu,
+        )
+    }
+    fn difference(a: &Tensor, b: &Tensor) -> Result<f32> {
+        (a - b)?.abs()?.flatten_all()?.max(0)?.to_scalar::<f32>()
+    }
+    #[test]
+    fn bounded_decoder_preserves_recurrent_history_padding_and_temporal_norm() -> Result<()> {
+        for norm in [
+            NormType::None,
+            NormType::WeightNorm,
+            NormType::TimeGroupNorm,
+        ] {
+            for causal in [false, true] {
+                let (model, config) = tiny_codec(causal, norm, 2)?;
+                for frames in [1, 2, 17, 35] {
+                    let codes = codes(&config, frames)?;
+                    let full = model.decode(&codes)?;
+                    for chunk in [1, 4, 32] {
+                        let bounded =
+                            model.decode_chunked_with_callback(&codes, chunk, || Ok(()))?;
+                        assert_eq!(full.dims(), bounded.dims());
+                        let error = difference(&full, &bounded)?;
+                        assert!(error<2e-6,"norm={norm:?} causal={causal} frames={frames} chunk={chunk} error={error}");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    fn active_decode_cancellation_stops_recurrence_and_cnn_then_recovers() -> Result<()> {
+        let (model, config) = tiny_codec(false, NormType::None, 1)?;
+        let codes = codes(&config, 70)?;
+        let expected = model.decode(&codes)?;
+        // This fixture observes a real boundary error if context is omitted;
+        // constant/zero weights could otherwise make a broken halo test pass.
+        let embeddings = model.quantizer.decode(&codes.transpose(0, 1)?)?;
+        let mut without_halo = model.decoder.clone();
+        without_halo.convolution_halo = 0;
+        let broken = without_halo.forward_chunked_with_callback(&embeddings, 4, &mut || Ok(()))?;
+        let boundary_error = difference(&broken, &expected)?;
+        assert!(
+            boundary_error > 1e-6,
+            "insensitive boundary fixture: {boundary_error}"
+        );
+        let mut total = 0;
+        model.decode_with_callback(&codes, || {
+            total += 1;
+            Ok(())
+        })?;
+        assert!(total > 40);
+        for stop in [7, 15, total - 2] {
+            let mut count = 0;
+            let error = model
+                .decode_with_callback(&codes, || {
+                    count += 1;
+                    if count == stop {
+                        candle::bail!("cancel active decode");
+                    }
+                    Ok(())
+                })
+                .unwrap_err();
+            assert!(error.to_string().contains("cancel active decode"));
+            assert_eq!(count, stop, "callback must stop immediately");
+            assert!(difference(&model.decode_with_callback(&codes, || Ok(()))?, &expected)? < 2e-6);
+        }
+        assert!(model
+            .decode_chunked_with_callback(&codes, 0, || panic!("invalid chunk mutated decode"))
+            .is_err());
+        Ok(())
+    }
+    fn fixture() -> serde_json::Value {
+        serde_json::from_str(include_str!("../../tests/fixtures/encodec_padding.json")).unwrap()
+    }
+    fn values(value: &serde_json::Value) -> Vec<f32> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_f64().unwrap() as f32)
+            .collect()
+    }
+    #[test]
+    fn reflect_padding_matches_torch_including_short_input_extension() -> Result<()> {
+        for case in fixture()["reflect"].as_array().unwrap() {
+            let source = values(&case["input"]);
+            let left = case["left"].as_u64().unwrap() as usize;
+            let right = case["right"].as_u64().unwrap() as usize;
+            let expected = values(&case["expected"]);
+            let length = source.len();
+            let source = Tensor::from_vec(source, (1, 1, length), &candle::Device::Cpu)?;
+            let actual = pad1d(&source, left, right, PadMode::Reflect)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+    #[test]
+    fn transpose_convolution_removes_reference_padding_on_correct_side() -> Result<()> {
+        let device = candle::Device::Cpu;
+        for case in fixture()["transpose"].as_array().unwrap() {
+            let causal = case["causal"].as_bool().unwrap();
+            let right_ratio = case["ratio"].as_f64().unwrap();
+            let expected = values(&case["expected"]);
+            let mut weights = std::collections::HashMap::new();
+            weights.insert(
+                "conv.weight".into(),
+                Tensor::ones((1, 1, 4), DType::F32, &device)?,
+            );
+            weights.insert("conv.bias".into(), Tensor::zeros(1, DType::F32, &device)?);
+            let config = Config {
+                use_causal_conv: causal,
+                trim_right_ratio: right_ratio,
+                norm_type: NormType::None,
+                ..Default::default()
+            };
+            let conv = EncodecConvTranspose1d::new(
+                1,
+                1,
+                4,
+                2,
+                &config,
+                VarBuilder::from_tensors(weights, DType::F32, &device),
+            )?;
+            let actual = conv
+                .forward(&Tensor::new(&[[[1f32, 2.]]], &device)?)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            assert_eq!(actual, expected);
+        }
+        Ok(())
     }
 }

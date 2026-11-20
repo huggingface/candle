@@ -245,10 +245,16 @@ pub struct Decoder {
     hidden_size: usize,
     lm_heads: Vec<Linear>,
     dtype: candle::DType,
+    eos_token_id: u32,
+    vocab_size: usize,
 }
 
 impl Decoder {
     pub fn new(cfg: &DecoderConfig, vb: VarBuilder) -> Result<Self> {
+        if cfg.num_codebooks == 0 || cfg.eos_token_id >= cfg.vocab_size {
+            candle::bail!("Parler requires nonempty codebooks and an in-vocabulary EOS token");
+        }
+        let eos_token_id = u32::try_from(cfg.eos_token_id)?;
         let vb_d = vb.pp("model.decoder");
         let mut embed_tokens = Vec::with_capacity(cfg.num_codebooks);
         let vb_e = vb_d.pp("embed_tokens");
@@ -283,6 +289,8 @@ impl Decoder {
             lm_heads,
             hidden_size: cfg.hidden_size,
             dtype: vb.dtype(),
+            eos_token_id,
+            vocab_size: cfg.vocab_size,
         })
     }
 
@@ -335,6 +343,74 @@ impl Decoder {
     }
 }
 
+/// EOS may be sampled only by the first unfinished codebook (or earlier
+/// finished codebooks). This is the constraint in ParlerTTSLogitsProcessor:
+/// allowing a later codebook to end early can truncate valid speech in every
+/// codebook when the delayed streams are brought back to a common length.
+#[derive(Debug)]
+struct EosProcessor {
+    first_unfinished: usize,
+    codebooks: usize,
+    eos_mask: Tensor,
+    negative_infinity: Tensor,
+}
+impl EosProcessor {
+    fn new(
+        eos: u32,
+        codebooks: usize,
+        vocab: usize,
+        dtype: candle::DType,
+        device: &candle::Device,
+    ) -> Result<Self> {
+        if codebooks == 0 || eos as usize >= vocab {
+            candle::bail!("invalid Parler EOS processor configuration");
+        }
+        let mask = (0..vocab)
+            .map(|token| u8::from(token == eos as usize))
+            .collect::<Vec<_>>();
+        Ok(Self {
+            first_unfinished: 0,
+            codebooks,
+            eos_mask: Tensor::new(mask.as_slice(), device)?,
+            negative_infinity: Tensor::full(f32::NEG_INFINITY, vocab, device)?.to_dtype(dtype)?,
+        })
+    }
+    /// Call once per generation step, before sampling any codebook. A new EOS
+    /// in this step must not unlock the next codebook until the following step.
+    fn advance(&mut self, finished: &[bool]) -> Result<()> {
+        if finished.len() != self.codebooks {
+            candle::bail!("Parler EOS state/codebook mismatch");
+        }
+        if finished[self.first_unfinished] && self.first_unfinished + 1 < self.codebooks {
+            self.first_unfinished += 1;
+        }
+        Ok(())
+    }
+    fn apply(&self, book: usize, logits: &Tensor) -> Result<Tensor> {
+        if book >= self.codebooks {
+            candle::bail!("Parler EOS codebook index out of range");
+        }
+        if book > self.first_unfinished {
+            self.eos_mask.where_cond(&self.negative_infinity, logits)
+        } else {
+            Ok(logits.clone())
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GenerationResult {
+    /// Audio codes on the CPU, with shape `(num_codebooks, frames)`.
+    pub audio_codes: Tensor,
+    pub finish_reason: GenerationFinishReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenerationFinishReason {
+    EndOfSequence,
+    Length,
+}
+
 #[derive(Debug, Clone)]
 pub struct Model {
     pub embed_prompts: candle_nn::Embedding,
@@ -384,9 +460,46 @@ impl Model {
         &mut self,
         prompt_tokens: &Tensor,
         description_tokens: &Tensor,
-        mut lp: LogitsProcessor,
+        lp: LogitsProcessor,
         max_steps: usize,
     ) -> Result<Tensor> {
+        self.generate_with_callback(prompt_tokens, description_tokens, lp, max_steps, |_| Ok(()))
+    }
+
+    /// As `generate`, with a fallible callback before encoding and every decode
+    /// step. Applications can cooperatively cancel generation without waiting
+    /// for the full utterance. A callback error is propagated to the caller.
+    pub fn generate_with_callback(
+        &mut self,
+        prompt_tokens: &Tensor,
+        description_tokens: &Tensor,
+        lp: LogitsProcessor,
+        max_steps: usize,
+        before_step: impl FnMut(usize) -> Result<()>,
+    ) -> Result<Tensor> {
+        Ok(self
+            .generate_with_callback_detailed(
+                prompt_tokens,
+                description_tokens,
+                lp,
+                max_steps,
+                before_step,
+            )?
+            .audio_codes)
+    }
+
+    /// As `generate_with_callback`, also reporting whether every codebook
+    /// reached EOS or the generation exhausted `max_steps`. EOS on the final
+    /// allowed step is reported as `EndOfSequence`.
+    pub fn generate_with_callback_detailed(
+        &mut self,
+        prompt_tokens: &Tensor,
+        description_tokens: &Tensor,
+        mut lp: LogitsProcessor,
+        max_steps: usize,
+        mut before_step: impl FnMut(usize) -> Result<()>,
+    ) -> Result<GenerationResult> {
+        before_step(0)?;
         self.decoder.clear_kv_cache();
         self.text_encoder.clear_kv_cache();
         let encoded = self.text_encoder.forward(description_tokens)?;
@@ -398,8 +511,23 @@ impl Model {
         let num_codebooks = self.decoder.num_codebooks;
         let mut audio_tokens = vec![self.decoder_start_token_id; num_codebooks];
         let mut all_audio_tokens = vec![vec![]; num_codebooks];
+        let eos = self.decoder.eos_token_id;
+        let mut finished = vec![false; num_codebooks];
+        let mut first_eos_steps = vec![None; num_codebooks];
+        let mut steps_executed = 0;
+        let mut eos_processor = EosProcessor::new(
+            eos,
+            num_codebooks,
+            self.decoder.vocab_size,
+            self.decoder.dtype,
+            prompt_tokens.device(),
+        )?;
         let prompt_len = prompt_hidden_states.dim(1)?;
+        let mut finish_reason = GenerationFinishReason::Length;
         for step in 0..max_steps {
+            before_step(step)?;
+            steps_executed = step + 1;
+            eos_processor.advance(&finished)?;
             let input_ids = Tensor::from_slice(
                 audio_tokens.as_slice(),
                 (1, num_codebooks, 1),
@@ -427,28 +555,50 @@ impl Model {
                 if logit_idx > step {
                     break;
                 }
-                if audio_tokens[logit_idx] != self.pad_token_id {
+                if finished[logit_idx] {
+                    audio_tokens[logit_idx] = self.pad_token_id;
+                } else {
                     let logit = logit.i((0, logit.dim(1)? - 1))?;
+                    let logit = eos_processor.apply(logit_idx, &logit)?;
                     let token = lp.sample(&logit)?;
-                    audio_tokens[logit_idx] = token
+                    audio_tokens[logit_idx] = token;
+                    if token == eos {
+                        finished[logit_idx] = true;
+                        first_eos_steps[logit_idx] = Some(step);
+                        tracing::debug!(
+                            codebook = logit_idx,
+                            step,
+                            code_frames = all_audio_tokens[logit_idx].len(),
+                            "Parler codebook reached first EOS"
+                        );
+                    }
                 }
             }
-            if audio_tokens.iter().all(|v| v == &self.pad_token_id) {
+            if finished.iter().all(|finished| *finished) {
+                finish_reason = GenerationFinishReason::EndOfSequence;
                 break;
             }
             for (cb_idx, &token) in audio_tokens.iter().enumerate() {
-                if token != self.decoder_start_token_id && token != self.pad_token_id {
+                if !finished[cb_idx]
+                    && token != self.decoder_start_token_id
+                    && token != self.pad_token_id
+                {
                     all_audio_tokens[cb_idx].push(token)
                 }
             }
         }
 
-        let min_len = all_audio_tokens.iter().map(|v| v.len()).min().unwrap_or(0);
+        let raw_lengths = all_audio_tokens.iter().map(Vec::len).collect::<Vec<_>>();
+        let min_len = raw_lengths.iter().copied().min().unwrap_or(0);
+        tracing::debug!(steps = steps_executed, ?finish_reason, ?first_eos_steps, ?raw_lengths, code_frames = min_len, trimmed_frames = ?raw_lengths.iter().map(|length|length-min_len).collect::<Vec<_>>(), "Parler generation completed");
         all_audio_tokens.iter_mut().for_each(|v| {
             v.resize(min_len, 0);
         });
         let all_audio_tokens = Tensor::new(all_audio_tokens, &candle::Device::Cpu)?;
-        Ok(all_audio_tokens)
+        Ok(GenerationResult {
+            audio_codes: all_audio_tokens,
+            finish_reason,
+        })
     }
 
     fn prepare_causal_mask(
@@ -469,5 +619,280 @@ impl Model {
             })
             .collect();
         Tensor::from_slice(&mask, (q_len, kv_len), device)
+    }
+}
+
+#[cfg(test)]
+mod generation_tests {
+    use super::*;
+    #[test]
+    fn eos_logits_processor_matches_official_torch_reference() -> Result<()> {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/parler_eos.json"))
+                .map_err(candle::Error::wrap)?;
+        let device = candle::Device::Cpu;
+        let mut processor = EosProcessor::new(4, 3, 6, candle::DType::F32, &device)?;
+        for step in fixture["steps"].as_array().unwrap() {
+            let finished = step["finished"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_bool().unwrap())
+                .collect::<Vec<_>>();
+            processor.advance(&finished)?;
+            for book in 0..3 {
+                let logits = step["scores"][book]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_f64().unwrap() as f32)
+                    .collect::<Vec<_>>();
+                let masked = processor
+                    .apply(book, &Tensor::new(logits.as_slice(), &device)?)?
+                    .to_vec1::<f32>()?;
+                for (actual, expected) in masked
+                    .iter()
+                    .zip(step["expected"][book].as_array().unwrap())
+                {
+                    if expected.is_null() {
+                        assert_eq!(*actual, f32::NEG_INFINITY);
+                    } else {
+                        assert_eq!(*actual, expected.as_f64().unwrap() as f32);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    fn later_codebook_eos_cannot_truncate_earlier_speech() -> Result<()> {
+        let device = candle::Device::Cpu;
+        let mut processor = EosProcessor::new(4, 3, 6, candle::DType::F32, &device)?;
+        let mut sampler = LogitsProcessor::new(0, None, None);
+        let mut finished = [false; 3];
+        let mut eos_steps = [None; 3];
+        let mut lengths = [0; 3];
+        for step in 0..5 {
+            processor.advance(&finished)?;
+            for book in 0..3.min(step + 1) {
+                if finished[book] {
+                    continue;
+                }
+                let eos_score = if book == 0 && step < 2 { -10f32 } else { 10. };
+                let scores = Tensor::new(&[1f32, 0., 0., 0., eos_score, -1.], &device)?;
+                let token = sampler.sample(&processor.apply(book, &scores)?)?;
+                if token == 4 {
+                    finished[book] = true;
+                    eos_steps[book] = Some(step);
+                } else {
+                    lengths[book] += 1;
+                }
+            }
+        }
+        assert_eq!(eos_steps, [Some(2), Some(3), Some(4)]);
+        assert_eq!(
+            lengths,
+            [2, 2, 2],
+            "an early EOS in an upper codebook must not remove valid speech frames"
+        );
+        Ok(())
+    }
+    /// Opt-in QA against logits recorded by the official Parler implementation.
+    /// Loads only the text encoder, prompt embedding, and decoder on CPU.
+    #[test]
+    #[ignore = "requires the public Parler checkpoint and official Torch QA JSON"]
+    fn checkpoint_prefill_logits_match_official_torch() -> Result<()> {
+        let directory =
+            std::env::var("CANDLE_PARLER_CHECKPOINT_DIR").map_err(candle::Error::wrap)?;
+        let reference =
+            std::env::var("CANDLE_PARLER_REFERENCE_JSON").map_err(candle::Error::wrap)?;
+        let directory = std::path::Path::new(&directory);
+        let cfg: Config = serde_json::from_slice(
+            &std::fs::read(directory.join("config.json")).map_err(candle::Error::wrap)?,
+        )
+        .map_err(candle::Error::wrap)?;
+        let reference: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(reference).map_err(candle::Error::wrap)?)
+                .map_err(candle::Error::wrap)?;
+        let device = candle::Device::Cpu;
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(
+                &[directory.join("model.safetensors")],
+                candle::DType::F32,
+                &device,
+            )?
+        };
+        let ids = |key: &str| -> Result<Tensor> {
+            let tokens = reference[key][0]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as u32)
+                .collect::<Vec<_>>();
+            Tensor::new(tokens.as_slice(), &device)?.unsqueeze(0)
+        };
+        let mut encoder = t5::T5EncoderModel::load(vb.pp("text_encoder"), &cfg.text_encoder)?;
+        let encoded = encoder.forward(&ids("description_ids")?)?;
+        let encoded = if cfg.text_encoder.d_model == cfg.decoder.hidden_size {
+            encoded
+        } else {
+            encoded.apply(&linear(
+                cfg.text_encoder.d_model,
+                cfg.decoder.hidden_size,
+                true,
+                vb.pp("enc_to_dec_proj"),
+            )?)?
+        };
+        let prompt = ids("prompt_ids")?.apply(&candle_nn::embedding(
+            cfg.vocab_size,
+            cfg.decoder.hidden_size,
+            vb.pp("embed_prompts"),
+        )?)?;
+        let mut decoder = Decoder::new(&cfg.decoder, vb.pp("decoder"))?;
+        let length = prompt.dim(1)? + 1;
+        let mask = Tensor::from_vec(
+            (0..length)
+                .flat_map(|i| (0..length).map(move |j| if j > i { f32::NEG_INFINITY } else { 0. }))
+                .collect::<Vec<_>>(),
+            (length, length),
+            &device,
+        )?;
+        let audio = Tensor::new(
+            vec![vec![
+                vec![cfg.decoder_start_token_id];
+                cfg.decoder.num_codebooks
+            ]],
+            &device,
+        )?;
+        let logits = decoder.forward(&audio, Some(&prompt), Some(&mask), &encoded, None, 0)?;
+        let actual = Tensor::stack(
+            &logits
+                .iter()
+                .map(|head| head.i((0, length - 1)))
+                .collect::<Result<Vec<_>>>()?,
+            0,
+        )?;
+        let expected = reference["first_decoder"]["last_logits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|book| {
+                book.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_f64().unwrap() as f32)
+            })
+            .collect::<Vec<_>>();
+        let expected = Tensor::from_vec(expected, actual.shape(), &device)?;
+        let difference = (&actual - &expected)?
+            .abs()?
+            .flatten_all()?
+            .max(0)?
+            .to_scalar::<f32>()?;
+        let actual_tokens = actual.argmax(candle::D::Minus1)?.to_vec1::<u32>()?;
+        let expected_tokens = expected.argmax(candle::D::Minus1)?.to_vec1::<u32>()?;
+        eprintln!("Parler checkpoint prefill max_difference={difference} actual={actual_tokens:?} official={expected_tokens:?}");
+        assert!(
+            difference < 2e-3,
+            "real checkpoint prefill logits differ by {difference}"
+        );
+        assert_eq!(actual_tokens, expected_tokens);
+        Ok(())
+    }
+    #[test]
+    fn decoder_prompt_cross_attention_and_incremental_cache_match_official_torch() -> Result<()> {
+        let f: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/parler_decoder.json"))
+                .map_err(candle::Error::wrap)?;
+        let device = candle::Device::Cpu;
+        let values = |value: &serde_json::Value| {
+            value
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap() as f32)
+                .collect::<Vec<_>>()
+        };
+        let cfg: DecoderConfig =
+            serde_json::from_value(f["config"].clone()).map_err(candle::Error::wrap)?;
+        let weights = f["weights"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, value)| {
+                let shape = value["shape"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_u64().unwrap() as usize)
+                    .collect::<Vec<_>>();
+                Ok((
+                    name.clone(),
+                    Tensor::from_vec(values(&value["values"]), shape, &device)?,
+                ))
+            })
+            .collect::<Result<std::collections::HashMap<_, _>>>()?;
+        let mut decoder = Decoder::new(
+            &cfg,
+            VarBuilder::from_tensors(weights, candle::DType::F32, &device),
+        )?;
+        let ids = f["ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap() as u32)
+            .collect::<Vec<_>>();
+        let ids = Tensor::from_vec(ids, (1, 3, 4), &device)?;
+        let prompt = Tensor::from_vec(values(&f["prompt"]), (1, 2, 8), &device)?;
+        let context = Tensor::from_vec(values(&f["context"]), (1, 3, 8), &device)?;
+        let mask = |q: usize, kv: usize| {
+            Tensor::from_vec(
+                (0..q)
+                    .flat_map(|i| {
+                        (0..kv).map(move |j| {
+                            if i + kv < j + q {
+                                f32::NEG_INFINITY
+                            } else {
+                                0.
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+                (q, kv),
+                &device,
+            )
+        };
+        let pack =
+            |values: Vec<Tensor>| Tensor::stack(&values, 1)?.reshape((3, values[0].dim(1)?, 6));
+        let full =
+            pack(decoder.forward(&ids, Some(&prompt), Some(&mask(6, 6)?), &context, None, 0)?)?;
+        let expected = Tensor::from_vec(values(&f["expected"]), (3, 6, 6), &device)?;
+        let difference =
+            |a: &Tensor, b: &Tensor| (a - b)?.abs()?.flatten_all()?.max(0)?.to_scalar::<f32>();
+        let error = difference(&full, &expected)?;
+        assert!(error < 2e-6, "full decoder logits difference={error}");
+        decoder.clear_kv_cache();
+        let mut parts = Vec::new();
+        for step in 0..4 {
+            let (q, kv, pos) = if step == 0 {
+                (3, 3, 0)
+            } else {
+                (1, step + 3, step + 2)
+            };
+            parts.push(pack(decoder.forward(
+                &ids.narrow(2, step, 1)?,
+                if step == 0 { Some(&prompt) } else { None },
+                Some(&mask(q, kv)?),
+                &context,
+                None,
+                pos,
+            )?)?);
+        }
+        let incremental = Tensor::cat(&parts, 1)?;
+        let expected = Tensor::from_vec(values(&f["expected_incremental"]), (3, 6, 6), &device)?;
+        let error = difference(&incremental, &expected)?;
+        assert!(error < 2e-6, "cached decoder logits difference={error}");
+        assert!(difference(&full, &incremental)? < 2e-6);
+        Ok(())
     }
 }

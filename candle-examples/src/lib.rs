@@ -6,28 +6,44 @@ pub mod hub;
 pub mod imagenet;
 pub mod token_output_stream;
 pub mod wav;
-use candle::utils::{cuda_is_available, metal_is_available};
 use candle::{Device, Result, Tensor};
 
 pub fn device(cpu: bool) -> Result<Device> {
     if cpu {
-        Ok(Device::Cpu)
-    } else if cuda_is_available() {
-        Ok(Device::new_cuda(0)?)
-    } else if metal_is_available() {
-        Ok(Device::new_metal(0)?)
-    } else {
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        {
-            println!(
-                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
-            );
+        println!("Running the example using the cpu backend");
+        return Ok(Device::Cpu);
+    }
+    let backend = std::env::var("CANDLE_BACKEND").map_err(|_| {
+        candle::Error::Msg(
+            "CANDLE_BACKEND environment variable must be set to one of: cpu, cuda, metal, vulkan"
+                .to_string(),
+        )
+    })?;
+    match backend.as_str() {
+        "cpu" => {
+            println!("Running the example using the cpu backend");
+            Ok(Device::Cpu)
         }
-        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-        {
-            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        "cuda" => {
+            println!("Running the example using the cuda backend");
+            Device::new_cuda(0)
         }
-        Ok(Device::Cpu)
+        "metal" => {
+            println!("Running the example using the metal backend");
+            Device::new_metal(0)
+        }
+        "vulkan" => {
+            println!("Running the example using the vulkan backend");
+            let ordinal = std::env::var("CANDLE_VULKAN_TEST_GPU")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            Device::new_vulkan(ordinal)
+        }
+        other => candle::bail!(
+            "CANDLE_BACKEND environment variable must be set to one of: cpu, cuda, metal, \
+             vulkan (got {other:?})"
+        ),
     }
 }
 

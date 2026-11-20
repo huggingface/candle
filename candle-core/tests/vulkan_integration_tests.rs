@@ -1,0 +1,7586 @@
+//! Integration tests for the Vulkan support.
+//!
+//! Device selection:
+//! `CANDLE_VULKAN_TEST_GPU=<n> cargo test --features vulkan --test vulkan_integration_tests`
+//! (defaults to physical device 0).
+//!
+//! On a Linux system with multiple GPU devices the physical-device
+//! enumeration order is not guaranteed to place the most capable discrete
+//! GPU first: on the reference machine the integrated GPU is enumerated
+//! first, so physical device 0 is the weaker integrated GPU by default. To
+//! pin a specific GPU to index 0, export the Mesa Vulkan device-select
+//! layer variable `MESA_VK_DEVICE_SELECT` with that GPU's PCI
+//! vendor:device id (`vid:did`) for the duration of the test run, e.g.
+//!
+//!   MESA_VK_DEVICE_SELECT=1002:7551 CANDLE_VULKAN_TEST_GPU=0 \
+//!       cargo test --features vulkan --test vulkan_integration_tests
+//!
+//! `1002:7551` is the vid:did of the "AMD Radeon AI PRO R9700 (RADV
+//! GFX1201)" discrete GPU on the reference machine. List the available
+//! devices and their `vid:did` with:
+//!
+//!   MESA_VK_DEVICE_SELECT=list vulkaninfo --summary
+//!
+//! Selecting a GPU with `MESA_VK_DEVICE_SELECT` only reorders the
+//! enumeration (the selected device is reported first); it does not hide
+//! the other devices. `CANDLE_VULKAN_TEST_GPU=<n>` still enumerates the
+//! full device list, so the remaining devices stay selectable by index
+//! (e.g. with the R9700 pinned to 0, the integrated GPU is still reachable
+//! via `CANDLE_VULKAN_TEST_GPU=1`).
+#![cfg(feature = "vulkan")]
+
+use candle_core::{backend::BackendDevice, backend::BackendStorage, VulkanDevice};
+use std::sync::LazyLock;
+
+static INIT: LazyLock<()> = LazyLock::new(|| {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_test_writer()
+        .init();
+});
+static GPU_ID: LazyLock<usize> = LazyLock::new(|| {
+    std::env::var("CANDLE_VULKAN_TEST_GPU")
+        .map(|value| value.parse().unwrap())
+        .unwrap_or_default()
+});
+
+/// Sanity test: report the basic properties of the selected Vulkan
+/// device. No assertions; the point is that the properties can be
+/// read and printed.
+#[test]
+fn test_vulkan_device_properties() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let phys = device.physical_device();
+    let props = phys.properties();
+    let api = props.api_version;
+    let driver = props.driver_version;
+    let driver_str = format!(
+        "{}.{}.{}",
+        (driver >> 22) & 0x3FFFFF,
+        (driver >> 12) & 0x3FF,
+        driver & 0xFFF
+    );
+    let device_type = match props.device_type {
+        vulkano::device::physical::PhysicalDeviceType::DiscreteGpu => {
+            "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU"
+        }
+        vulkano::device::physical::PhysicalDeviceType::IntegratedGpu => {
+            "PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU"
+        }
+        vulkano::device::physical::PhysicalDeviceType::VirtualGpu => {
+            "PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU"
+        }
+        vulkano::device::physical::PhysicalDeviceType::Cpu => "PHYSICAL_DEVICE_TYPE_CPU",
+        _ => "PHYSICAL_DEVICE_TYPE_OTHER",
+    };
+    let has_bf16 = phys
+        .extension_properties()
+        .iter()
+        .any(|p| p.extension_name == "VK_KHR_shader_bfloat16");
+    let has_float8 = phys
+        .extension_properties()
+        .iter()
+        .any(|p| p.extension_name == "VK_EXT_shader_float8");
+    tracing::debug!(
+        "Vulkan device {gpu_id} name={} api_version={}.{}.{} driver_version={} type={device_type} VK_KHR_shader_bfloat16={has_bf16} VK_EXT_shader_float8={has_float8}",
+        props.device_name, api.major, api.minor, api.patch, driver_str
+    );
+}
+
+#[test]
+fn test_vulkan_device_f8e4m3_support() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let phys = device.physical_device();
+    // The cached capability must agree with the physical device: the
+    // VK_EXT_shader_float8 extension advertised AND the shaderFloat8
+    // feature supported are exactly what device creation enables.
+    let ext = phys
+        .extension_properties()
+        .iter()
+        .any(|p| p.extension_name == "VK_EXT_shader_float8");
+    let feat = phys.supported_features().shader_float8;
+    assert_eq!(
+        device.supports_f8e4m3(),
+        ext && feat,
+        "supports_f8e4m3 must reflect the device's VK_EXT_shader_float8 + shaderFloat8 support (ext={ext} feature={feat})"
+    );
+    tracing::debug!(
+        "Vulkan device {gpu_id} f8e4m3: ext={ext} feature={feat} enabled={}",
+        device.supports_f8e4m3()
+    );
+}
+
+#[test]
+fn test_vulkan_device_bf16_support() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let phys = device.physical_device();
+    // The cached capability must agree with the physical device: the
+    // VK_KHR_shader_bfloat16 extension advertised AND the
+    // shaderBFloat16Type feature supported are exactly what device
+    // creation enables.
+    let ext = phys
+        .extension_properties()
+        .iter()
+        .any(|p| p.extension_name == "VK_KHR_shader_bfloat16");
+    let feat = phys.supported_features().shader_b_float16_type;
+    assert_eq!(
+        device.supports_bf16(),
+        ext && feat,
+        "supports_bf16 must reflect the device's VK_KHR_shader_bfloat16 + shaderBFloat16Type support (ext={ext} feature={feat})"
+    );
+    tracing::debug!(
+        "Vulkan device {gpu_id} bf16: ext={ext} feature={feat} enabled={}",
+        device.supports_bf16()
+    );
+}
+
+#[test]
+fn test_vulkan_device_storage() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // A 1-D shape of 256 elements (NOT 256 zero-sized dims).
+    let shape = candle_core::Shape::from(256);
+    let dtype = candle_core::DType::F16;
+    let storage = device.zeros_impl(&shape, dtype).unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<half::f16>().unwrap();
+    assert_eq!(data.len(), 256);
+    assert!(
+        data.iter().all(|value| value.to_bits() == 0),
+        "expected every f16 element to be zero, got {data:?}"
+    );
+    tracing::debug!("Vulkan device {gpu_id} zeroed f16 storage round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // 65,536 elements: one slot for every possible f16 bit pattern.
+    let shape = candle_core::Shape::from(65536);
+    let storage = device.zeros_impl(&shape, candle_core::DType::F16).unwrap();
+    storage.fill_f16().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<half::f16>().unwrap();
+    assert_eq!(data.len(), 65536);
+    let mismatch = data
+        .iter()
+        .enumerate()
+        .find(|(index, value)| value.to_bits() != *index as u16);
+    if let Some((index, value)) = mismatch {
+        panic!(
+            "fill_f16 mismatch at index {index}: got bits {:04x}, expected {:04x}",
+            value.to_bits(),
+            index as u16
+        );
+    }
+    // All 65,536 bit patterns must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 65536, "fill_f16 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f16 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_u8() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // 256 elements: one slot for every possible byte value.
+    let shape = candle_core::Shape::from(256);
+    let storage = device.zeros_impl(&shape, candle_core::DType::U8).unwrap();
+    storage.fill_u8().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<u8>().unwrap().to_vec();
+    assert_eq!(data.len(), 256);
+    // Every element must be a valid byte matching its index.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(*value, index as u8, "fill_u8 mismatch at index {index}");
+    }
+    // All 256 values must be distinct.
+    let unique = data.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_u8 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_u8 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_i16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // 65,536 elements: one slot for every possible 16-bit bit pattern.
+    let shape = candle_core::Shape::from(65536);
+    let storage = device.zeros_impl(&shape, candle_core::DType::I16).unwrap();
+    storage.fill_i16().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<i16>().unwrap().to_vec();
+    assert_eq!(data.len(), 65536);
+    // Every element must hold the bit pattern of its index (a valid i16).
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            *value as u16, index as u16,
+            "fill_i16 mismatch at index {index}"
+        );
+    }
+    // All 65,536 bit patterns must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| *v as u16)
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 65536, "fill_i16 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_i16 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_bf16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // 65,536 elements: one slot for every possible 16-bit bit pattern.
+    let shape = candle_core::Shape::from(65536);
+    let storage = device.zeros_impl(&shape, candle_core::DType::BF16).unwrap();
+    storage.fill_bf16().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<half::bf16>().unwrap().to_vec();
+    assert_eq!(data.len(), 65536);
+    // Every element must hold the bit pattern of its index (a valid bf16).
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u16,
+            "fill_bf16 mismatch at index {index}"
+        );
+    }
+    // All 65,536 bit patterns must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 65536, "fill_bf16 produced duplicate values");
+    tracing::debug!(
+        "Vulkan device {gpu_id} fill_bf16 round-tripped OK (emulated path; hw_bf16={})",
+        device.supports_bf16()
+    );
+}
+
+#[test]
+fn test_vulkan_device_fill_bf16_emulated() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // 65,536 elements: one slot for every possible 16-bit bit pattern.
+    let shape = candle_core::Shape::from(65536);
+    let storage = device.zeros_impl(&shape, candle_core::DType::BF16).unwrap();
+    // Force the emulated (raw 16-bit) path regardless of native support.
+    storage.fill_bf16_emulated().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<half::bf16>().unwrap().to_vec();
+    assert_eq!(data.len(), 65536);
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u16,
+            "fill_bf16_emulated mismatch at index {index}"
+        );
+    }
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        unique.len(),
+        65536,
+        "fill_bf16_emulated produced duplicate values"
+    );
+    tracing::debug!("Vulkan device {gpu_id} fill_bf16_emulated round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_bf16_native() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    if !device.supports_bf16() {
+        tracing::debug!(
+            "Vulkan device {gpu_id} fill_bf16_native skipped: no native BFloat16 support"
+        );
+        return;
+    }
+    // 65,536 elements: one slot for every possible 16-bit bit pattern.
+    let shape = candle_core::Shape::from(65536);
+    let storage = device.zeros_impl(&shape, candle_core::DType::BF16).unwrap();
+    // Force the native BFloat16 path.
+    storage.fill_bf16_native().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<half::bf16>().unwrap().to_vec();
+    assert_eq!(data.len(), 65536);
+    // Every element must hold the bit pattern of its index (a valid bf16);
+    // all 65,536 f32->bf16 conversions in the shader are exact.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u16,
+            "fill_bf16_native mismatch at index {index}"
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} fill_bf16_native round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_u32() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let shape = candle_core::Shape::from(256);
+    let storage = device.zeros_impl(&shape, candle_core::DType::U32).unwrap();
+    storage.fill_u32().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<u32>().unwrap().to_vec();
+    assert_eq!(data.len(), 256);
+    // Each element must be (i + 1) * 100000 + 65536, all beyond the 16-bit range.
+    for (index, value) in data.iter().enumerate() {
+        let expected = (index as u32 + 1) * 100000 + 65536;
+        assert_eq!(*value, expected, "fill_u32 mismatch at index {index}");
+    }
+    // A truncated 16-bit buffer could not produce any of these values.
+    assert!(
+        data.iter().all(|v| *v > u16::MAX as u32),
+        "fill_u32 value not beyond the 16-bit range"
+    );
+    // All 256 values must be distinct.
+    let unique = data.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_u32 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_u32 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_i32() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let shape = candle_core::Shape::from(256);
+    let storage = device.zeros_impl(&shape, candle_core::DType::I32).unwrap();
+    storage.fill_i32().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<i32>().unwrap().to_vec();
+    assert_eq!(data.len(), 256);
+    // Each element must be (i - 128) * 100000, straddling the 16-bit range.
+    for (index, value) in data.iter().enumerate() {
+        let expected = (index as i32 - 128) * 100000;
+        assert_eq!(*value, expected, "fill_i32 mismatch at index {index}");
+    }
+    // A truncated i16 buffer could not produce these out-of-range values.
+    assert!(
+        data.iter().any(|v| *v > i16::MAX as i32) && data.iter().any(|v| *v < i16::MIN as i32),
+        "fill_i32 values do not straddle the 16-bit range"
+    );
+    // All 256 values must be distinct.
+    let unique = data.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_i32 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_i32 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_f32() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let shape = candle_core::Shape::from(256);
+    let storage = device.zeros_impl(&shape, candle_core::DType::F32).unwrap();
+    storage.fill_f32().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<f32>().unwrap().to_vec();
+    assert_eq!(data.len(), 256);
+    // Each element must be (i + 1) * 1000.0, some exceeding the f16 max (65504).
+    for (index, value) in data.iter().enumerate() {
+        let expected = (index as f32 + 1.0) * 1000.0;
+        assert_eq!(*value, expected, "fill_f32 mismatch at index {index}");
+    }
+    // An f16 buffer could not hold values above its max finite value.
+    assert!(
+        data.iter().any(|v| *v > 65504.0),
+        "fill_f32 no value above the f16 max"
+    );
+    // All 256 values must be distinct (compared by bit pattern).
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_f32 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f32 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_i64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let shape = candle_core::Shape::from(256);
+    let storage = device.zeros_impl(&shape, candle_core::DType::I64).unwrap();
+    storage.fill_i64().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<i64>().unwrap().to_vec();
+    assert_eq!(data.len(), 256);
+    // Each element must be (i - 128) * 1,000,000,000,000, beyond the 32-bit range.
+    for (index, value) in data.iter().enumerate() {
+        let expected = (index as i64 - 128) * 1_000_000_000_000;
+        assert_eq!(*value, expected, "fill_i64 mismatch at index {index}");
+    }
+    // A truncated i32 buffer could not produce these out-of-range values.
+    assert!(
+        data.iter().any(|v| *v > i32::MAX as i64) && data.iter().any(|v| *v < i32::MIN as i64),
+        "fill_i64 values do not straddle the 32-bit range"
+    );
+    // All 256 values must be distinct.
+    let unique = data.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_i64 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_i64 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let shape = candle_core::Shape::from(256);
+    let storage = device.zeros_impl(&shape, candle_core::DType::F64).unwrap();
+    storage.fill_f64().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<f64>().unwrap().to_vec();
+    assert_eq!(data.len(), 256);
+    // Each element must be (i + 1) * 16,777,217.0 (2^24 + 1), beyond f32 precision.
+    for (index, value) in data.iter().enumerate() {
+        let expected = (index as f64 + 1.0) * 16_777_217.0;
+        assert_eq!(*value, expected, "fill_f64 mismatch at index {index}");
+    }
+    // An f32 buffer could not hold values that are not exactly representable in f32.
+    assert!(
+        data.iter().any(|v| (*v as f32) as f64 != *v),
+        "fill_f64 all values exactly representable in f32"
+    );
+    // All 256 values must be distinct (compared by bit pattern).
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_f64 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f64 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_f4() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // 16 elements: one slot for every possible raw value.
+    let shape = candle_core::Shape::from(16);
+    let storage = device.zeros_impl(&shape, candle_core::DType::F4).unwrap();
+    storage.fill_f4().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = match cpu {
+        candle_core::CpuStorage::F4(data) => data,
+        _ => panic!("expected F4 storage"),
+    };
+    assert_eq!(data.len(), 16);
+    // Every element must be a raw byte matching its index.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u8,
+            "fill_f4 mismatch at index {index}"
+        );
+    }
+    // All values must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 16, "fill_f4 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f4 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_f6e2m3() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // 64 elements: one slot for every possible raw value.
+    let shape = candle_core::Shape::from(64);
+    let storage = device
+        .zeros_impl(&shape, candle_core::DType::F6E2M3)
+        .unwrap();
+    storage.fill_f6e2m3().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = match cpu {
+        candle_core::CpuStorage::F6E2M3(data) => data,
+        _ => panic!("expected F6E2M3 storage"),
+    };
+    assert_eq!(data.len(), 64);
+    // Every element must be a raw byte matching its index.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u8,
+            "fill_f6e2m3 mismatch at index {index}"
+        );
+    }
+    // All values must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 64, "fill_f6e2m3 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f6e2m3 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_f6e3m2() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // 64 elements: one slot for every possible raw value.
+    let shape = candle_core::Shape::from(64);
+    let storage = device
+        .zeros_impl(&shape, candle_core::DType::F6E3M2)
+        .unwrap();
+    storage.fill_f6e3m2().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = match cpu {
+        candle_core::CpuStorage::F6E3M2(data) => data,
+        _ => panic!("expected F6E3M2 storage"),
+    };
+    assert_eq!(data.len(), 64);
+    // Every element must be a raw byte matching its index.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u8,
+            "fill_f6e3m2 mismatch at index {index}"
+        );
+    }
+    // All values must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 64, "fill_f6e3m2 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f6e3m2 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_f8e4m3() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // 256 elements: one slot for every possible raw value.
+    let shape = candle_core::Shape::from(256);
+    let storage = device
+        .zeros_impl(&shape, candle_core::DType::F8E4M3)
+        .unwrap();
+    storage.fill_f8e4m3().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = match cpu {
+        candle_core::CpuStorage::F8E4M3(data) => data,
+        _ => panic!("expected F8E4M3 storage"),
+    };
+    assert_eq!(data.len(), 256);
+    // Every element must be a raw byte matching its index.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u8,
+            "fill_f8e4m3 mismatch at index {index}"
+        );
+    }
+    // All values must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_f8e4m3 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f8e4m3 round-tripped OK");
+}
+
+#[test]
+fn test_vulkan_device_fill_f8e8m0() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // 256 elements: one slot for every possible raw value.
+    let shape = candle_core::Shape::from(256);
+    let storage = device
+        .zeros_impl(&shape, candle_core::DType::F8E8M0)
+        .unwrap();
+    storage.fill_f8e8m0().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = match cpu {
+        candle_core::CpuStorage::F8E8M0(data) => data,
+        _ => panic!("expected F8E8M0 storage"),
+    };
+    assert_eq!(data.len(), 256);
+    // Every element must be a raw byte matching its index.
+    for (index, value) in data.iter().enumerate() {
+        assert_eq!(
+            value.to_bits(),
+            index as u8,
+            "fill_f8e8m0 mismatch at index {index}"
+        );
+    }
+    // All values must be distinct.
+    let unique = data
+        .iter()
+        .map(|v| v.to_bits())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), 256, "fill_f8e8m0 produced duplicate values");
+    tracing::debug!("Vulkan device {gpu_id} fill_f8e8m0 round-tripped OK");
+}
+/// `synchronize` must drain all deferred GPU work on the device.
+#[test]
+fn test_vulkan_device_synchronize() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let shape = candle_core::Shape::from((4, 4));
+    let storage = device.zeros_impl(&shape, candle_core::DType::F32).unwrap();
+    device.synchronize().unwrap();
+    let cpu = storage.to_cpu_storage().unwrap();
+    let data = cpu.as_slice::<f32>().unwrap();
+    assert!(data.iter().all(|value| *value == 0.0));
+    tracing::debug!("Vulkan device {gpu_id} synchronize drained OK");
+}
+/// `set_seed` must store the seed on the device.
+#[test]
+fn test_vulkan_device_set_seed() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    device.set_seed(0xDEADBEEF).unwrap();
+    assert_eq!(
+        device
+            .seed_atomic()
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0xDEADBEEF
+    );
+}
+/// `get_current_seed` must return the seed stored on the device.
+#[test]
+fn test_vulkan_device_get_current_seed() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    device.set_seed(42).unwrap();
+    assert_eq!(device.get_current_seed().unwrap(), 42);
+}
+/// `storage_from_slice` must upload host data to the device.
+#[test]
+fn test_vulkan_device_storage_from_slice() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let data: Vec<f32> = (0..64).map(|i| i as f32 * 0.5 - 8.0).collect();
+    let storage = device.storage_from_slice(&data).unwrap();
+    assert_eq!(storage.dtype(), candle_core::DType::F32);
+    let cpu = storage.to_cpu_storage().unwrap();
+    let back = cpu.as_slice::<f32>().unwrap();
+    assert_eq!(back.len(), data.len());
+    assert!(back.iter().zip(&data).all(|(a, b)| a == b));
+    tracing::debug!("Vulkan device {gpu_id} storage_from_slice round-tripped OK");
+}
+/// `storage_from_cpu_storage` must upload a CPU tensor to the device.
+#[test]
+fn test_vulkan_device_storage_from_cpu_storage() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let t = candle_core::Tensor::new(vec![1.5f32, -2.25, 0.0, 42.0], &cpu).unwrap();
+    let cpu_storage = candle_core::CpuStorage::F32(t.to_vec1::<f32>().unwrap());
+    let v = device.storage_from_cpu_storage(&cpu_storage).unwrap();
+    assert_eq!(v.dtype(), candle_core::DType::F32);
+    let back = v.to_cpu_storage().unwrap();
+    let data = back.as_slice::<f32>().unwrap();
+    assert_eq!(data, &[1.5f32, -2.25, 0.0, 42.0]);
+    tracing::debug!("Vulkan device {gpu_id} storage_from_cpu_storage round-tripped OK");
+}
+/// `storage_from_cpu_storage_owned` must consume the CPU storage.
+#[test]
+fn test_vulkan_device_storage_from_cpu_storage_owned() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let t = candle_core::Tensor::new(vec![7.5f32, 8.25, 9.0], &cpu).unwrap();
+    let cpu_storage = candle_core::CpuStorage::F32(t.to_vec1::<f32>().unwrap());
+    let v = device.storage_from_cpu_storage_owned(cpu_storage).unwrap();
+    assert_eq!(v.dtype(), candle_core::DType::F32);
+    let back = v.to_cpu_storage().unwrap();
+    let data = back.as_slice::<f32>().unwrap();
+    assert_eq!(data, &[7.5f32, 8.25, 9.0]);
+    tracing::debug!("Vulkan device {gpu_id} owned upload round-tripped OK");
+}
+/// `rand_uniform` must draw in [min, max] and be reproducible per seed.
+#[test]
+fn test_vulkan_device_rand_uniform() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let shape = candle_core::Shape::from(1024);
+    device.set_seed(1234).unwrap();
+    let a = device
+        .rand_uniform(&shape, candle_core::DType::F32, -1.0, 2.0)
+        .unwrap();
+    device.set_seed(1234).unwrap();
+    let b = device
+        .rand_uniform(&shape, candle_core::DType::F32, -1.0, 2.0)
+        .unwrap();
+    let va = a
+        .to_cpu_storage()
+        .unwrap()
+        .as_slice::<f32>()
+        .unwrap()
+        .to_vec();
+    let vb = b
+        .to_cpu_storage()
+        .unwrap()
+        .as_slice::<f32>()
+        .unwrap()
+        .to_vec();
+    assert_eq!(va, vb, "same seed must give the same draw");
+    assert!(va.iter().all(|x| *x >= -1.0 && *x <= 2.0));
+    assert!(
+        va.iter().any(|x| *x < -0.99) && va.iter().any(|x| *x > 1.99),
+        "draw should span the range: min {} max {}",
+        va.iter().cloned().fold(f32::INFINITY, f32::min),
+        va.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+    );
+    tracing::debug!("Vulkan device {gpu_id} rand_uniform OK");
+}
+/// `rand_normal` must be reproducible per seed with the right moment.
+#[test]
+fn test_vulkan_device_rand_normal() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let shape = candle_core::Shape::from(4096);
+    device.set_seed(99).unwrap();
+    let a = device
+        .rand_normal(&shape, candle_core::DType::F32, 1.0, 2.0)
+        .unwrap();
+    device.set_seed(99).unwrap();
+    let b = device
+        .rand_normal(&shape, candle_core::DType::F32, 1.0, 2.0)
+        .unwrap();
+    let va = a
+        .to_cpu_storage()
+        .unwrap()
+        .as_slice::<f32>()
+        .unwrap()
+        .to_vec();
+    let vb = b
+        .to_cpu_storage()
+        .unwrap()
+        .as_slice::<f32>()
+        .unwrap()
+        .to_vec();
+    assert_eq!(va, vb, "same seed must give the same draw");
+    let n = va.len() as f64;
+    let mean = va.iter().map(|x| *x as f64).sum::<f64>() / n;
+    let var = va
+        .iter()
+        .map(|x| (*x as f64 - 1.0) * (*x as f64 - 1.0))
+        .sum::<f64>()
+        / n;
+    assert!((mean - 1.0).abs() < 0.1, "mean {mean}");
+    assert!((var - 4.0).abs() < 0.5, "var {var}");
+    tracing::debug!("Vulkan device {gpu_id} rand_normal OK (mean {mean}, var {var})");
+}
+/// `const_set` fills a contiguous region with a constant value.
+#[test]
+fn test_vulkan_const_set() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let shape = candle_core::Shape::from((4, 8));
+    let mut storage = device.zeros_impl(&shape, candle_core::DType::F32).unwrap();
+    let l = candle_core::Layout::contiguous(shape);
+    storage
+        .const_set(candle_core::scalar::Scalar::F32(3.5), &l)
+        .unwrap();
+    device.synchronize().unwrap();
+    let binding = storage.to_cpu_storage().unwrap();
+    let data = binding.as_slice::<f32>().unwrap();
+    assert!(
+        data.iter().all(|x| *x == 3.5),
+        "expected all 3.5, got {:?}",
+        &data[..4]
+    );
+    tracing::debug!("Vulkan device {gpu_id} const_set OK");
+}
+/// All 19 `UnaryOp`s, compared element-wise against the CPU backend.
+#[test]
+fn test_vulkan_unary_ops() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    // Mix of positive/negative, in/out of the "interesting" ranges.
+    let xs: Vec<f32> = vec![
+        0.0, 1.0, -1.0, 0.5, -0.5, 2.5, -2.5, 10.0, -10.0, 0.25, -0.75, 3.7, -3.7,
+    ];
+    let t_cpu = candle_core::Tensor::new(xs.as_slice(), &cpu).unwrap();
+    let t = candle_core::Tensor::new(xs.as_slice(), &dev).unwrap();
+    let pairs: Vec<(&str, Vec<f32>)> = vec![
+        ("exp", t.exp().unwrap().to_vec1::<f32>().unwrap()),
+        ("log", t.log().unwrap().to_vec1::<f32>().unwrap()),
+        ("sin", t.sin().unwrap().to_vec1::<f32>().unwrap()),
+        ("cos", t.cos().unwrap().to_vec1::<f32>().unwrap()),
+        ("abs", t.abs().unwrap().to_vec1::<f32>().unwrap()),
+        ("neg", t.neg().unwrap().to_vec1::<f32>().unwrap()),
+        ("recip", t.recip().unwrap().to_vec1::<f32>().unwrap()),
+        ("sqr", t.sqr().unwrap().to_vec1::<f32>().unwrap()),
+        ("sqrt", t.sqrt().unwrap().to_vec1::<f32>().unwrap()),
+        ("gelu", t.gelu().unwrap().to_vec1::<f32>().unwrap()),
+        ("gelu_erf", t.gelu_erf().unwrap().to_vec1::<f32>().unwrap()),
+        ("erf", t.erf().unwrap().to_vec1::<f32>().unwrap()),
+        ("relu", t.relu().unwrap().to_vec1::<f32>().unwrap()),
+        ("silu", t.silu().unwrap().to_vec1::<f32>().unwrap()),
+        ("tanh", t.tanh().unwrap().to_vec1::<f32>().unwrap()),
+        ("floor", t.floor().unwrap().to_vec1::<f32>().unwrap()),
+        ("ceil", t.ceil().unwrap().to_vec1::<f32>().unwrap()),
+        ("round", t.round().unwrap().to_vec1::<f32>().unwrap()),
+        ("sign", t.sign().unwrap().to_vec1::<f32>().unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, gpu) in &pairs {
+        let cpu_t = match *name {
+            "exp" => t_cpu.exp().unwrap(),
+            "log" => t_cpu.log().unwrap(),
+            "sin" => t_cpu.sin().unwrap(),
+            "cos" => t_cpu.cos().unwrap(),
+            "abs" => t_cpu.abs().unwrap(),
+            "neg" => t_cpu.neg().unwrap(),
+            "recip" => t_cpu.recip().unwrap(),
+            "sqr" => t_cpu.sqr().unwrap(),
+            "sqrt" => t_cpu.sqrt().unwrap(),
+            "gelu" => t_cpu.gelu().unwrap(),
+            "gelu_erf" => t_cpu.gelu_erf().unwrap(),
+            "erf" => t_cpu.erf().unwrap(),
+            "relu" => t_cpu.relu().unwrap(),
+            "silu" => t_cpu.silu().unwrap(),
+            "tanh" => t_cpu.tanh().unwrap(),
+            "floor" => t_cpu.floor().unwrap(),
+            "ceil" => t_cpu.ceil().unwrap(),
+            "round" => t_cpu.round().unwrap(),
+            "sign" => t_cpu.sign().unwrap(),
+            _ => unreachable!(),
+        }
+        .to_vec1::<f32>()
+        .unwrap();
+        for (i, (g, c)) in gpu.iter().zip(cpu_t.iter()).enumerate() {
+            if !close(*g, *c, 1e-5) {
+                failures += 1;
+                tracing::debug!("unary {name}: mismatch at {i}: gpu {g} cpu {c}");
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} unary mismatches");
+    tracing::debug!("Vulkan device {gpu_id} all 19 unary ops OK");
+}
+/// Binary ops (all 6) including scalar and rank-broadcast against CPU.
+#[test]
+fn test_vulkan_binary_ops() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lhs_v: Vec<f32> = (0..32).map(|i| (i as f32) * 0.25 - 4.0).collect();
+    let rhs_v: Vec<f32> = (0..32).map(|i| 1.0 / (1.0 + (i as f32))).collect();
+    let l = candle_core::Tensor::new(lhs_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rhs_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lhs_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rhs_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    // 8 elements: broadcasts over the last dim of (4, 8).
+    let row =
+        candle_core::Tensor::new(&[0.5f32, -1.5, 2.0, 3.0, -2.5, 1.0, 0.25, -0.75], &dev).unwrap();
+    let rowc =
+        candle_core::Tensor::new(&[0.5f32, -1.5, 2.0, 3.0, -2.5, 1.0, 0.25, -0.75], &cpu).unwrap();
+    let rowr = row.broadcast_as(shape.clone()).unwrap();
+    let rowrc = rowc.broadcast_as(shape.clone()).unwrap();
+    let s_dev = candle_core::Tensor::new(1.5f32, &dev).unwrap();
+    let s_cpu = candle_core::Tensor::new(1.5f32, &cpu).unwrap();
+    let n_dev = candle_core::Tensor::new(-2.0f32, &dev).unwrap();
+    let n_cpu = candle_core::Tensor::new(-2.0f32, &cpu).unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+        // Scalar (0-dim) broadcast.
+        (
+            "add_scalar",
+            l.add(&sbcast_dev(s_dev, &shape)).unwrap(),
+            lc.add(&sbcast_cpu(s_cpu, &shape)).unwrap(),
+        ),
+        (
+            "mul_scalar",
+            l.mul(&sbcast_dev(n_dev, &shape)).unwrap(),
+            lc.mul(&sbcast_cpu(n_cpu, &shape)).unwrap(),
+        ),
+        (
+            "maximum_scalar",
+            l.maximum(0.0f32).unwrap(),
+            lc.maximum(0.0f32).unwrap(),
+        ),
+        // Rank-1 row broadcast over the last dim.
+        ("add_row", l.add(&rowr).unwrap(), lc.add(&rowrc).unwrap()),
+        ("mul_row", l.mul(&rowr).unwrap(), lc.mul(&rowrc).unwrap()),
+        (
+            "minimum_row",
+            l.minimum(&rowr).unwrap(),
+            lc.minimum(&rowrc).unwrap(),
+        ),
+    ];
+    let mut failures = 0usize;
+    for (name, g, c) in &cases {
+        let gv: Vec<f32> = g.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<f32> = c.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            let tol = 1e-5 * (1.0 + a.abs().max(b.abs()));
+            if (a - b).abs() > tol {
+                failures += 1;
+                tracing::debug!("binary {name}: mismatch at {i}: gpu {a} cpu {b}");
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} binary mismatches");
+    tracing::debug!("Vulkan device {gpu_id} binary ops OK (incl. broadcast)");
+}
+fn sbcast_dev(t: candle_core::Tensor, shape: &candle_core::Shape) -> candle_core::Tensor {
+    t.broadcast_as(shape.clone()).unwrap()
+}
+fn sbcast_cpu(t: candle_core::Tensor, shape: &candle_core::Shape) -> candle_core::Tensor {
+    t.broadcast_as(shape.clone()).unwrap()
+}
+/// All 6 CmpOps, same-shape and scalar rhs, compared against the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lhs_v: Vec<f32> = (0..32).map(|i| (i as f32) * 0.5 - 8.0).collect();
+    let rhs_v: Vec<f32> = (0..32).map(|i| ((i as f32) % 3.0) * 2.0 - 3.0).collect();
+    let l = candle_core::Tensor::new(lhs_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rhs_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lhs_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rhs_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+        // Scalar rhs.
+        ("eq_s", l.eq(0.0f32).unwrap(), lc.eq(0.0f32).unwrap()),
+        ("gt_s", l.gt(-4.0f32).unwrap(), lc.gt(-4.0f32).unwrap()),
+        ("le_s", l.le(-4.0f32).unwrap(), lc.le(-4.0f32).unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, g, c) in &cases {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if a != b {
+                failures += 1;
+                tracing::debug!("cmp {name}: mismatch at {i}: gpu {a} cpu {b}");
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} cmp mismatches");
+    tracing::debug!("Vulkan device {gpu_id} cmp ops OK");
+}
+/// `where_cond` with a cmp predicate, incl. a broadcast on_false.
+#[test]
+fn test_vulkan_where_cond() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let cond_v: Vec<f32> = (0..32).map(|i| (i as f32) - 15.0).collect();
+    let t_v: Vec<f32> = (0..32).map(|i| 100.0 + i as f32).collect();
+    let l = candle_core::Tensor::new(cond_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(cond_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let t = candle_core::Tensor::new(t_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let tc = candle_core::Tensor::new(t_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    // on_false: a single scalar (broadcast view) and a full tensor.
+    let f_scalar_dev = candle_core::Tensor::new(-1.0f32, &dev).unwrap();
+    let f_scalar_cpu = candle_core::Tensor::new(-1.0f32, &cpu).unwrap();
+    let f_v: Vec<f32> = (0..32).map(|i| -50.0 - i as f32).collect();
+    let f = candle_core::Tensor::new(f_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let fc = candle_core::Tensor::new(f_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let g1 = l
+        .gt(0.0f32)
+        .unwrap()
+        .where_cond(&t, &f_scalar_dev.broadcast_as(shape.clone()).unwrap())
+        .unwrap();
+    let c1 = lc
+        .gt(0.0f32)
+        .unwrap()
+        .where_cond(&tc, &f_scalar_cpu.broadcast_as(shape.clone()).unwrap())
+        .unwrap();
+    let g2 = l.lt(0.0f32).unwrap().where_cond(&t, &f).unwrap();
+    let c2 = lc.lt(0.0f32).unwrap().where_cond(&tc, &fc).unwrap();
+    for (name, g, c) in [("where_scalar", g1, c1), ("where_tensor", g2, c2)] {
+        let gv: Vec<f32> = g.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<f32> = c.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-4,
+                "where {name}: mismatch at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} where_cond OK");
+}
+/// `affine` (y = x * mul + add) vs the CPU backend.
+#[test]
+fn test_vulkan_affine() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..64).map(|i| (i as f32) * 0.25 - 8.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 16)))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 16)))
+        .unwrap();
+    let (mul, add) = (2.5f64, -1.0f64);
+    let gv: Vec<f32> = g
+        .affine(mul, add)
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect();
+    let cv: Vec<f32> = c
+        .affine(mul, add)
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect();
+    assert_eq!(gv.len(), cv.len());
+    for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-5 * (1.0 + a.abs().max(b.abs())),
+            "affine: mismatch at {i}: gpu {a} cpu {b}"
+        );
+    }
+    // mul = 0 -> constant fill via affine.
+    let g2 = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .affine(0.0f64, 3.5f64)
+        .unwrap();
+    let c2 = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .affine(0.0f64, 3.5f64)
+        .unwrap();
+    for (a, b) in g2
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(c2.to_vec1::<f32>().unwrap().iter())
+    {
+        assert!((a - b).abs() < 1e-6);
+    }
+    tracing::debug!("Vulkan device {gpu_id} affine OK");
+}
+/// `powf` (x^e) vs the CPU backend.
+#[test]
+fn test_vulkan_powf() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..64).map(|i| 0.5 + i as f32 * 0.0625).collect();
+    for e in [2.0f64, 0.5f64, 3.0f64] {
+        let g = candle_core::Tensor::new(v.as_slice(), &dev)
+            .unwrap()
+            .powf(e)
+            .unwrap();
+        let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+            .unwrap()
+            .powf(e)
+            .unwrap();
+        let gv = g.to_vec1::<f32>().unwrap();
+        let cv = c.to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+                "powf e={e}: mismatch at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} powf OK");
+}
+/// `elu` (x >= 0 ? x : alpha * (exp(x) - 1)) vs the CPU backend.
+#[test]
+fn test_vulkan_elu() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..64).map(|i| (i as f32) * 0.2 - 6.0).collect();
+    for alpha in [1.0f64, 0.5f64] {
+        let g = candle_core::Tensor::new(v.as_slice(), &dev)
+            .unwrap()
+            .elu(alpha)
+            .unwrap();
+        let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+            .unwrap()
+            .elu(alpha)
+            .unwrap();
+        let gv = g.to_vec1::<f32>().unwrap();
+        let cv = c.to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-5 * (1.0 + b.abs()),
+                "elu alpha={alpha}: mismatch at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} elu OK");
+}
+/// `to_dtype` conversions (F32/F16/BF16) vs the CPU backend.
+#[test]
+fn test_vulkan_to_dtype() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..64).map(|i| (i as f32) * 0.3 - 8.0).collect();
+    let base_g = candle_core::Tensor::new(v.as_slice(), &dev).unwrap();
+    let base_c = candle_core::Tensor::new(v.as_slice(), &cpu).unwrap();
+    // F32 -> F16 -> F32 round trip.
+    let r1g = base_g
+        .clone()
+        .to_dtype(candle_core::DType::F16)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    let r1c = base_c
+        .clone()
+        .to_dtype(candle_core::DType::F16)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    for (a, b) in r1g
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(r1c.to_vec1::<f32>().unwrap().iter())
+    {
+        assert!(
+            (a - b).abs() < 1e-3 * (1.0 + b.abs()),
+            "f32->f16->f32: gpu {a} cpu {b}"
+        );
+    }
+    // F32 -> BF16 -> F32 round trip (coarser: 8 mantissa bits).
+    let r2g = base_g
+        .clone()
+        .to_dtype(candle_core::DType::BF16)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    let r2c = base_c
+        .clone()
+        .to_dtype(candle_core::DType::BF16)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    for (a, b) in r2g
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(r2c.to_vec1::<f32>().unwrap().iter())
+    {
+        assert!(
+            (a - b).abs() < 1e-2 * (1.0 + b.abs()),
+            "f32->bf16->f32: gpu {a} cpu {b}"
+        );
+    }
+    // Direct dtype comparison on the GPU side via back-conversion equality.
+    let f16g = base_g.clone().to_dtype(candle_core::DType::F16).unwrap();
+    let bf16g = base_g.clone().to_dtype(candle_core::DType::BF16).unwrap();
+    assert_eq!(f16g.dtype(), candle_core::DType::F16);
+    assert_eq!(bf16g.dtype(), candle_core::DType::BF16);
+    let f16c = base_c.clone().to_dtype(candle_core::DType::F16).unwrap();
+    let bf16c = base_c.clone().to_dtype(candle_core::DType::BF16).unwrap();
+    let f16g_b: Vec<f32> = f16g
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap();
+    let f16c_b: Vec<f32> = f16c
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap();
+    for (a, b) in f16g_b.iter().zip(f16c_b.iter()) {
+        assert!((a - b).abs() < 1e-6, "f16 value: gpu {a} cpu {b}");
+    }
+    let bf16g_b: Vec<f32> = bf16g
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap();
+    let bf16c_b: Vec<f32> = bf16c
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap();
+    for (a, b) in bf16g_b.iter().zip(bf16c_b.iter()) {
+        assert!((a - b).abs() < 1e-6, "bf16 value: gpu {a} cpu {b}");
+    }
+    tracing::debug!("Vulkan device {gpu_id} to_dtype OK");
+}
+/// `copy_strided_src` via `slice_scatter0` (contiguous src at a nonzero dst
+///
+/// offset) and via `contiguous()` on a transposed view.
+#[test]
+fn test_vulkan_to_dtype_ints_f8() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    // --- Integer round-trips (exact) ---
+    let i32_vals: Vec<i32> = (0..64).map(|i| i * 3 - 96).collect();
+    let i32_g = candle_core::Tensor::new(i32_vals.as_slice(), &dev).unwrap();
+    let i32_c = candle_core::Tensor::new(i32_vals.as_slice(), &cpu).unwrap();
+    // I32 -> I16 -> I32
+    let r_g = i32_g
+        .clone()
+        .to_dtype(candle_core::DType::I16)
+        .unwrap()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap();
+    let r_c = i32_c
+        .clone()
+        .to_dtype(candle_core::DType::I16)
+        .unwrap()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<i32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<i32>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "i32->i16->i32: gpu {a} cpu {b}");
+    }
+    // I32 -> U8 -> I32
+    let r_g = i32_g
+        .clone()
+        .to_dtype(candle_core::DType::U8)
+        .unwrap()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap();
+    let r_c = i32_c
+        .clone()
+        .to_dtype(candle_core::DType::U8)
+        .unwrap()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<i32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<i32>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "i32->u8->i32: gpu {a} cpu {b}");
+    }
+    // U32 -> U8 -> U32
+    let u32_vals: Vec<u32> = (0..64).map(|i| (i as u32) * 7).collect();
+    let u32_g = candle_core::Tensor::new(u32_vals.as_slice(), &dev).unwrap();
+    let u32_c = candle_core::Tensor::new(u32_vals.as_slice(), &cpu).unwrap();
+    let r_g = u32_g
+        .clone()
+        .to_dtype(candle_core::DType::U8)
+        .unwrap()
+        .to_dtype(candle_core::DType::U32)
+        .unwrap();
+    let r_c = u32_c
+        .clone()
+        .to_dtype(candle_core::DType::U8)
+        .unwrap()
+        .to_dtype(candle_core::DType::U32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<u32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<u32>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "u32->u8->u32: gpu {a} cpu {b}");
+    }
+    // I64 -> I32 -> I64
+    let i64_vals: Vec<i64> = (0..64).map(|i| (i as i64) * 5 - 160).collect();
+    let i64_g = candle_core::Tensor::new(i64_vals.as_slice(), &dev).unwrap();
+    let i64_c = candle_core::Tensor::new(i64_vals.as_slice(), &cpu).unwrap();
+    let r_g = i64_g
+        .clone()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap()
+        .to_dtype(candle_core::DType::I64)
+        .unwrap();
+    let r_c = i64_c
+        .clone()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap()
+        .to_dtype(candle_core::DType::I64)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<i64>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<i64>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "i64->i32->i64: gpu {a} cpu {b}");
+    }
+    // --- F8E4M3 round-trips ---
+    let f32_vals: Vec<f32> = (0..64).map(|i| (i as f32) * 0.5 - 15.0).collect();
+    let f32_g = candle_core::Tensor::new(f32_vals.as_slice(), &dev).unwrap();
+    let f32_c = candle_core::Tensor::new(f32_vals.as_slice(), &cpu).unwrap();
+    // F32 -> F8E4M3 -> F32
+    let r_g = f32_g
+        .clone()
+        .to_dtype(candle_core::DType::F8E4M3)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    let r_c = f32_c
+        .clone()
+        .to_dtype(candle_core::DType::F8E4M3)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<f32>().unwrap().iter())
+    {
+        assert!(
+            (a - b).abs() < 0.2 * (1.0 + b.abs()),
+            "f32->f8e4m3->f32: gpu {a} cpu {b}"
+        );
+    }
+    // F16 -> F8E4M3 -> F32
+    let f16_g = f32_g.clone().to_dtype(candle_core::DType::F16).unwrap();
+    let f16_c = f32_c.clone().to_dtype(candle_core::DType::F16).unwrap();
+    let r_g = f16_g
+        .clone()
+        .to_dtype(candle_core::DType::F8E4M3)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    let r_c = f16_c
+        .clone()
+        .to_dtype(candle_core::DType::F8E4M3)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<f32>().unwrap().iter())
+    {
+        assert!(
+            (a - b).abs() < 0.2 * (1.0 + b.abs()),
+            "f16->f8e4m3->f32: gpu {a} cpu {b}"
+        );
+    }
+    // --- Int <-> Float conversions ---
+    let f32_int_vals: Vec<f32> = (0..64).map(|i| (i as f32) * 1.5 - 40.0).collect();
+    let fi_g = candle_core::Tensor::new(f32_int_vals.as_slice(), &dev).unwrap();
+    let fi_c = candle_core::Tensor::new(f32_int_vals.as_slice(), &cpu).unwrap();
+    // F32 -> I32 -> F32 (truncate toward zero)
+    let r_g = fi_g
+        .clone()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    let r_c = fi_c
+        .clone()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<f32>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "f32->i32->f32: gpu {a} cpu {b}");
+    }
+    // I32 -> F32 -> I32
+    let r_g = i32_g
+        .clone()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap();
+    let r_c = i32_c
+        .clone()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<i32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<i32>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "i32->f32->i32: gpu {a} cpu {b}");
+    }
+    // --- Cross-category: F8E4M3 -> I32 ---
+    let f8_g = f32_g.clone().to_dtype(candle_core::DType::F8E4M3).unwrap();
+    let f8_c = f32_c.clone().to_dtype(candle_core::DType::F8E4M3).unwrap();
+    let r_g = f8_g
+        .clone()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    let r_c = f8_c
+        .clone()
+        .to_dtype(candle_core::DType::I32)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<f32>().unwrap().iter())
+    {
+        assert_eq!(*a, *b, "f8e4m3->i32->f32: gpu {a} cpu {b}");
+    }
+    // --- Cross-category: I32 -> BF16 ---
+    let r_g = i32_g
+        .clone()
+        .to_dtype(candle_core::DType::BF16)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    let r_c = i32_c
+        .clone()
+        .to_dtype(candle_core::DType::BF16)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap();
+    for (a, b) in r_g
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(r_c.to_vec1::<f32>().unwrap().iter())
+    {
+        assert!(
+            (a - b).abs() < 1e-2 * (1.0 + b.abs()),
+            "i32->bf16->f32: gpu {a} cpu {b}"
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} to_dtype int/f8 OK");
+}
+
+#[test]
+fn test_vulkan_copy_strided_src() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let base_v: Vec<f32> = (0..32).map(|i| i as f32).collect();
+    let src_v: Vec<f32> = (0..16).map(|i| 100.0 + i as f32).collect();
+    let base = candle_core::Tensor::new(base_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let base_c = candle_core::Tensor::new(base_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let src = candle_core::Tensor::new(src_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((2, 8)))
+        .unwrap();
+    let src_c = candle_core::Tensor::new(src_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((2, 8)))
+        .unwrap();
+    let g = base.clone().slice_scatter0(&src, 1).unwrap();
+    let c = base_c.clone().slice_scatter0(&src_c, 1).unwrap();
+    let gv: Vec<f32> = g.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    let cv: Vec<f32> = c.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    assert_eq!(gv, cv);
+    // Transposed view -> contiguous (strided source).
+    let t_g = base.clone().t().unwrap();
+    let t_c = base_c.clone().t().unwrap();
+    let cg = t_g.contiguous().unwrap();
+    let cc = t_c.contiguous().unwrap();
+    let gv: Vec<f32> = cg.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    let cv: Vec<f32> = cc.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    assert_eq!(gv, cv);
+    tracing::debug!("Vulkan device {gpu_id} copy_strided_src OK");
+}
+/// `copy2d` via `Tensor::cat` on a non-contiguous (transposed) source.
+#[test]
+fn test_vulkan_copy2d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let a_v: Vec<f32> = (0..24).map(|i| i as f32).collect();
+    let b_v: Vec<f32> = (0..24).map(|i| 100.0 + i as f32).collect();
+    let a = candle_core::Tensor::new(a_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 6)))
+        .unwrap();
+    let b = candle_core::Tensor::new(b_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 6)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(a_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 6)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(b_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 6)))
+        .unwrap();
+    // cat along dim 0 (contiguous rows) and dim 1.
+    let g0 = candle_core::Tensor::cat(&[a.clone(), b.clone()], 0).unwrap();
+    let c0 = candle_core::Tensor::cat(&[ac.clone(), bc.clone()], 0).unwrap();
+    assert_eq!(g0.to_vec2::<f32>().unwrap(), c0.to_vec2::<f32>().unwrap());
+    let g1 = candle_core::Tensor::cat(&[a.clone(), b.clone()], 1).unwrap();
+    let c1 = candle_core::Tensor::cat(&[ac.clone(), bc.clone()], 1).unwrap();
+    assert_eq!(g1.to_vec2::<f32>().unwrap(), c1.to_vec2::<f32>().unwrap());
+    // Non-contiguous (transposed) source in a cat.
+    let at = a.t().unwrap();
+    let bt = b.t().unwrap();
+    let g2 = candle_core::Tensor::cat(&[at, bt], 0).unwrap();
+    let c2 = candle_core::Tensor::cat(&[ac.t().unwrap(), bc.t().unwrap()], 0).unwrap();
+    assert_eq!(g2.to_vec2::<f32>().unwrap(), c2.to_vec2::<f32>().unwrap());
+    tracing::debug!("Vulkan device {gpu_id} copy2d OK");
+}
+/// `reduce_op` over the last axis: sum, max, min, argmax, argmin.
+#[test]
+fn test_vulkan_reduce_op() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let v: Vec<f32> = (0..32).map(|i| (i as f32) * 0.7 - 10.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let (gs, cs) = (g.clone().sum(1).unwrap(), c.clone().sum(1).unwrap());
+    for (a, b) in gs
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(cs.to_vec1::<f32>().unwrap().iter())
+    {
+        assert!(
+            (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+            "sum: gpu {a} cpu {b}"
+        );
+    }
+    let (gm, cm) = (g.clone().max(1).unwrap(), c.clone().max(1).unwrap());
+    assert_eq!(gm.to_vec1::<f32>().unwrap(), cm.to_vec1::<f32>().unwrap());
+    let (gn, cn) = (g.clone().min(1).unwrap(), c.clone().min(1).unwrap());
+    assert_eq!(gn.to_vec1::<f32>().unwrap(), cn.to_vec1::<f32>().unwrap());
+    let (ga, ca) = (g.clone().argmax(1).unwrap(), c.clone().argmax(1).unwrap());
+    assert_eq!(ga.to_vec1::<u32>().unwrap(), ca.to_vec1::<u32>().unwrap());
+    let (gb, cb) = (g.clone().argmin(1).unwrap(), c.clone().argmin(1).unwrap());
+    assert_eq!(gb.to_vec1::<u32>().unwrap(), cb.to_vec1::<u32>().unwrap());
+    // Wide rows (cols > 256): each thread folds multiple columns, and the
+    // argmin/argmax index is the earliest across the whole row (the value mix
+    // repeats, so tie-breaking is exercised).
+    let shape = candle_core::Shape::from((3, 1024));
+    let v: Vec<f32> = (0..3 * 1024)
+        .map(|i| ((i * 7919) % 257) as f32 * 0.3 - 20.0)
+        .collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let (gs, cs) = (g.sum(1).unwrap(), c.sum(1).unwrap());
+    for (a, b) in gs
+        .to_vec1::<f32>()
+        .unwrap()
+        .iter()
+        .zip(cs.to_vec1::<f32>().unwrap().iter())
+    {
+        assert!(
+            (a - b).abs() < 1e-3 * (1.0 + b.abs()),
+            "wide sum: gpu {a} cpu {b}"
+        );
+    }
+    assert_eq!(
+        g.max(1).unwrap().to_vec1::<f32>().unwrap(),
+        c.max(1).unwrap().to_vec1::<f32>().unwrap()
+    );
+    assert_eq!(
+        g.min(1).unwrap().to_vec1::<f32>().unwrap(),
+        c.min(1).unwrap().to_vec1::<f32>().unwrap()
+    );
+    assert_eq!(
+        g.argmax(1).unwrap().to_vec1::<u32>().unwrap(),
+        c.argmax(1).unwrap().to_vec1::<u32>().unwrap()
+    );
+    assert_eq!(
+        g.argmin(1).unwrap().to_vec1::<u32>().unwrap(),
+        c.argmin(1).unwrap().to_vec1::<u32>().unwrap()
+    );
+    tracing::debug!("Vulkan device {gpu_id} reduce_op OK");
+}
+fn check_reduce_ops<T>(g: &candle_core::Tensor, c: &candle_core::Tensor)
+where
+    T: candle_core::WithDType + PartialEq + std::fmt::Debug,
+{
+    assert_eq!(
+        g.sum(1).unwrap().to_vec1::<T>().unwrap(),
+        c.sum(1).unwrap().to_vec1::<T>().unwrap(),
+        "int sum"
+    );
+    assert_eq!(
+        g.max(1).unwrap().to_vec1::<T>().unwrap(),
+        c.max(1).unwrap().to_vec1::<T>().unwrap(),
+        "int max"
+    );
+    assert_eq!(
+        g.min(1).unwrap().to_vec1::<T>().unwrap(),
+        c.min(1).unwrap().to_vec1::<T>().unwrap(),
+        "int min"
+    );
+    assert_eq!(
+        g.argmax(1).unwrap().to_vec1::<u32>().unwrap(),
+        c.argmax(1).unwrap().to_vec1::<u32>().unwrap(),
+        "int argmax"
+    );
+    assert_eq!(
+        g.argmin(1).unwrap().to_vec1::<u32>().unwrap(),
+        c.argmin(1).unwrap().to_vec1::<u32>().unwrap(),
+        "int argmin"
+    );
+}
+/// Integer reductions run natively (sum/min/max/argmin/argmax) instead of an
+/// F64 round-trip, so I64 values above 2^53 stay exact.
+#[test]
+fn test_vulkan_reduce_int() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    // I64: values straddling 2^53, where an F64 round-trip would round (and
+    // collapse distinct values).
+    let v: Vec<i64> = (0..16)
+        .map(|i| (1i64 << 53) + (i as i64) * 3 - 20)
+        .collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape((4, 4))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape((4, 4))
+        .unwrap();
+    check_reduce_ops::<i64>(&g, &c);
+    // Non-last-axis (dim 0) and multi-axis (all dims) native int reduce.
+    assert_eq!(
+        g.sum(0).unwrap().to_vec1::<i64>().unwrap(),
+        c.sum(0).unwrap().to_vec1::<i64>().unwrap(),
+        "i64 dim-0 sum"
+    );
+    assert_eq!(
+        g.sum_all().unwrap().to_scalar::<i64>().unwrap(),
+        c.sum_all().unwrap().to_scalar::<i64>().unwrap(),
+        "i64 sum_all"
+    );
+    // I32: full-range values (any F32 round-trip loses values above 2^24).
+    let v: Vec<i32> = (0..12).map(|i| i * 100_000_003 - 600_000_000).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape((3, 4))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape((3, 4))
+        .unwrap();
+    check_reduce_ops::<i32>(&g, &c);
+    // U32: large unsigned values.
+    let v: Vec<u32> = (0..12).map(|i| (i as u32) * 40_000_000 + 123_456).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape((3, 4))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape((3, 4))
+        .unwrap();
+    check_reduce_ops::<u32>(&g, &c);
+    // I16: signed 16-bit values (wraps naturally within the native width here).
+    let v: Vec<i16> = (0..16).map(|i| (i as i16) * 421 - 3000).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape((4, 4))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape((4, 4))
+        .unwrap();
+    check_reduce_ops::<i16>(&g, &c);
+    // U8: keep row sums below 255 (native-width wrapping would overflow the
+    // debug CPU build, which panics on `u8` addition overflow).
+    let v: Vec<u8> = (0..16).map(|i| (i as u8) * 4).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape((4, 4))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape((4, 4))
+        .unwrap();
+    check_reduce_ops::<u8>(&g, &c);
+    tracing::debug!("Vulkan device {gpu_id} reduce_int OK");
+}
+/// `Tensor::full` with wide i64/u32/f64 constants must round-trip exactly. The
+/// fill value travels through a native-width push constant, not an f32 (which
+/// only keeps 24 significant bits and would silently round >= 2^24 values).
+#[test]
+fn test_vulkan_const_set_wide() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    for &v in &[1i64 << 40, (1i64 << 40) + 12345, -(1i64 << 45)] {
+        let t = candle_core::Tensor::full(v, 4usize, &dev).unwrap();
+        assert_eq!(t.to_vec1::<i64>().unwrap(), vec![v; 4]);
+    }
+    for &v in &[(1u32 << 31) | 12345u32, 0xDEAD_BEEF] {
+        let t = candle_core::Tensor::full(v, 4usize, &dev).unwrap();
+        assert_eq!(t.to_vec1::<u32>().unwrap(), vec![v; 4]);
+    }
+    // 2^24 + 1 is the first integer that f32 cannot represent; 1e20 needs more
+    // than 24 significant bits.
+    for &v in &[16777217.0f64, 1e20f64] {
+        let t = candle_core::Tensor::full(v, 4usize, &dev).unwrap();
+        assert_eq!(t.to_vec1::<f64>().unwrap(), vec![v; 4]);
+    }
+    tracing::debug!("Vulkan device {gpu_id} const_set wide OK");
+}
+/// Empty-input reduce semantics match the CPU backend: `sum` over zero elements
+/// is the additive identity (zeros), while `min`/`max`/`argmin`/`argmax` over
+/// zero elements have no identity and error.
+#[test]
+fn test_vulkan_reduce_empty() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let t = candle_core::Tensor::zeros((4usize, 0usize), candle_core::DType::F32, &dev).unwrap();
+    assert_eq!(t.sum(1).unwrap().to_vec1::<f32>().unwrap(), vec![0.0; 4]);
+    assert!(t.max(1).is_err(), "empty max should error");
+    assert!(t.min(1).is_err(), "empty min should error");
+    assert!(t.argmax(1).is_err(), "empty argmax should error");
+    let ti = candle_core::Tensor::zeros((4usize, 0usize), candle_core::DType::I64, &dev).unwrap();
+    assert_eq!(ti.sum(1).unwrap().to_vec1::<i64>().unwrap(), vec![0i64; 4]);
+    assert!(ti.max(1).is_err(), "empty integer max should error");
+    tracing::debug!("Vulkan device {gpu_id} reduce empty OK");
+}
+/// Reduce over a non-last axis (exercises the permute/materialize path),
+/// `sum_all`, and `mean`, each against the CPU reference.
+#[test]
+fn test_vulkan_reduce_coverage() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((3usize, 4usize, 5usize));
+    let v: Vec<f32> = (0..60).map(|i| (i as f32) * 0.5 - 15.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    // sum over dim 0 (non-last axis).
+    let (gs, cs) = (g.sum(0).unwrap(), c.sum(0).unwrap());
+    for (a, b) in gs
+        .to_vec2::<f32>()
+        .unwrap()
+        .iter()
+        .flatten()
+        .zip(cs.to_vec2::<f32>().unwrap().iter().flatten())
+    {
+        assert!(
+            (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+            "sum dim0: gpu {a} cpu {b}"
+        );
+    }
+    // sum_all (reduce every axis).
+    let (gs, cs) = (g.sum_all().unwrap(), c.sum_all().unwrap());
+    let (gs, cs) = (
+        gs.to_scalar::<f32>().unwrap(),
+        cs.to_scalar::<f32>().unwrap(),
+    );
+    assert!(
+        (gs - cs).abs() < 1e-3 * (1.0 + cs.abs()),
+        "sum_all: gpu {gs} cpu {cs}"
+    );
+    // mean over the last axis.
+    let (gm, cm) = (g.mean(2).unwrap(), c.mean(2).unwrap());
+    for (a, b) in gm
+        .to_vec2::<f32>()
+        .unwrap()
+        .iter()
+        .flatten()
+        .zip(cm.to_vec2::<f32>().unwrap().iter().flatten())
+    {
+        assert!(
+            (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+            "mean dim2: gpu {a} cpu {b}"
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} reduce coverage OK");
+}
+/// Float -> integer `to_dtype` must match Rust's saturating `as` semantics: NaN
+/// converts to 0, and +/-inf/out-of-range values clamp to the destination range
+/// (a C-style cast would be UB on the out-of-range/NaN cases).
+#[test]
+fn test_vulkan_to_dtype_float_to_int_saturating() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let vals: Vec<f32> = vec![
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        3e9,
+        -3e9,
+        3.7,
+        -3.7,
+        300.0,
+        -1.0,
+    ];
+    let t = candle_core::Tensor::new(vals.as_slice(), &dev).unwrap();
+    for &dtype in &[
+        candle_core::DType::I32,
+        candle_core::DType::U32,
+        candle_core::DType::I16,
+        candle_core::DType::U8,
+    ] {
+        let got = t.to_dtype(dtype).unwrap();
+        match dtype {
+            candle_core::DType::I32 => {
+                let expected: Vec<i32> = vals.iter().map(|&v| v as i32).collect();
+                assert_eq!(got.to_vec1::<i32>().unwrap(), expected, "f32 -> i32");
+            }
+            candle_core::DType::U32 => {
+                let expected: Vec<u32> = vals.iter().map(|&v| v as u32).collect();
+                assert_eq!(got.to_vec1::<u32>().unwrap(), expected, "f32 -> u32");
+            }
+            candle_core::DType::I16 => {
+                let expected: Vec<i16> = vals.iter().map(|&v| v as i16).collect();
+                assert_eq!(got.to_vec1::<i16>().unwrap(), expected, "f32 -> i16");
+            }
+            candle_core::DType::U8 => {
+                let expected: Vec<u8> = vals.iter().map(|&v| v as u8).collect();
+                assert_eq!(got.to_vec1::<u8>().unwrap(), expected, "f32 -> u8");
+            }
+            _ => unreachable!(),
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} float->int saturating OK");
+}
+/// `matmul` (2D and 3D, standard and transposed rhs) vs the CPU backend.
+#[test]
+fn test_vulkan_matmul() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    // 2D: (4,8) @ (8,6) and (4,8) @ (6,8)^T.
+    let a: Vec<f32> = (0..32).map(|i| (i as f32) * 0.2 - 3.0).collect();
+    let b: Vec<f32> = (0..48).map(|i| (i as f32) * 0.1 - 2.0).collect();
+    let ag = candle_core::Tensor::new(a.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(a.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(b.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((8, 6)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(b.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((8, 6)))
+        .unwrap();
+    let g = ag.clone().matmul(&bg).unwrap();
+    let c = ac.clone().matmul(&bc).unwrap();
+    for (x, y) in g
+        .to_vec2::<f32>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .zip(c.to_vec2::<f32>().unwrap().into_iter().flatten())
+    {
+        assert!(
+            (x - y).abs() < 1e-3 * (1.0 + y.abs()),
+            "matmul: gpu {x} cpu {y}"
+        );
+    }
+    // Transposed rhs: (4,8) @ (6,8)^T -> (4,6).
+    let bt_g = candle_core::Tensor::new(b.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((6, 8)))
+        .unwrap();
+    let bt_c = candle_core::Tensor::new(b.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((6, 8)))
+        .unwrap();
+    let g2 = ag.clone().matmul(&bt_g.t().unwrap()).unwrap();
+    let c2 = ac.clone().matmul(&bt_c.t().unwrap()).unwrap();
+    for (x, y) in g2
+        .to_vec2::<f32>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .zip(c2.to_vec2::<f32>().unwrap().into_iter().flatten())
+    {
+        assert!(
+            (x - y).abs() < 1e-3 * (1.0 + y.abs()),
+            "matmul T: gpu {x} cpu {y}"
+        );
+    }
+    // 3D batched: (2,3,4) @ (2,4,5).
+    let a3: Vec<f32> = (0..24).map(|i| (i as f32) * 0.3 - 2.0).collect();
+    let b3: Vec<f32> = (0..40).map(|i| (i as f32) * 0.15 - 1.5).collect();
+    let a3g = candle_core::Tensor::new(a3.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((2, 3, 4)))
+        .unwrap();
+    let a3c = candle_core::Tensor::new(a3.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((2, 3, 4)))
+        .unwrap();
+    let b3g = candle_core::Tensor::new(b3.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((2, 4, 5)))
+        .unwrap();
+    let b3c = candle_core::Tensor::new(b3.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((2, 4, 5)))
+        .unwrap();
+    let g3 = a3g.matmul(&b3g).unwrap();
+    let c3 = a3c.matmul(&b3c).unwrap();
+    for (x, y) in g3
+        .to_vec3::<f32>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .zip(c3.to_vec3::<f32>().unwrap().into_iter().flatten().flatten())
+    {
+        assert!(
+            (x - y).abs() < 1e-3 * (1.0 + y.abs()),
+            "matmul 3d: gpu {x} cpu {y}"
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} matmul OK");
+}
+/// `gather` along dim 0 (embedding lookup) vs the CPU backend.
+#[test]
+fn test_vulkan_gather() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    // emb: (10, 8)
+    let emb_v: Vec<f32> = (0..80).map(|i| (i as f32) * 0.25 - 10.0).collect();
+    let emb = candle_core::Tensor::new(emb_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((10, 8)))
+        .unwrap();
+    let emb_c = candle_core::Tensor::new(emb_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((10, 8)))
+        .unwrap();
+    // ids: (4, 8), same rank as the embeddings, each entry < 10.
+    let ids_v: Vec<u32> = (0..32).map(|i| (i * 7 % 10) as u32).collect();
+    let ids = candle_core::Tensor::new(ids_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let ids_c = candle_core::Tensor::new(ids_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let g = emb.clone().gather(&ids, 0).unwrap();
+    let c = emb_c.clone().gather(&ids_c, 0).unwrap();
+    let gv: Vec<f32> = g.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    let cv: Vec<f32> = c.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    assert_eq!(gv, cv);
+    tracing::debug!("Vulkan device {gpu_id} gather OK");
+}
+/// `index_select` along dim 0 vs the CPU backend.
+#[test]
+fn test_vulkan_index_select() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let src_v: Vec<f32> = (0..64).map(|i| (i as f32) * 0.3 - 9.0).collect();
+    let src = candle_core::Tensor::new(src_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((8, 8)))
+        .unwrap();
+    let src_c = candle_core::Tensor::new(src_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((8, 8)))
+        .unwrap();
+    let ids_v: Vec<u32> = vec![5, 0, 7, 3, 3, 1, 6, 2];
+    let ids = candle_core::Tensor::new(ids_v.as_slice(), &dev).unwrap();
+    let ids_c = candle_core::Tensor::new(ids_v.as_slice(), &cpu).unwrap();
+    let g = src.clone().index_select(&ids, 0).unwrap();
+    let c = src_c.clone().index_select(&ids_c, 0).unwrap();
+    let gv: Vec<f32> = g.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    let cv: Vec<f32> = c.to_vec2::<f32>().unwrap().into_iter().flatten().collect();
+    assert_eq!(gv, cv);
+    tracing::debug!("Vulkan device {gpu_id} index_select OK");
+}
+/// `avg_pool2d` vs the CPU backend.
+#[test]
+fn test_vulkan_avg_pool2d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    // (b, c, h, w) = (1, 2, 8, 8)
+    let v: Vec<f32> = (0..128).map(|i| (i as f32) * 0.2 - 12.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 8, 8)))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 8, 8)))
+        .unwrap();
+    for (k, s) in [
+        ((2usize, 2usize), (2usize, 2usize)),
+        ((3usize, 2usize), (1usize, 1usize)),
+    ] {
+        let gg = g.clone().avg_pool2d_with_stride(k, s).unwrap();
+        let cc = c.clone().avg_pool2d_with_stride(k, s).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (a, b) in gv.iter().zip(cv.iter()) {
+            assert!(
+                (a - b).abs() < 1e-5 * (1.0 + b.abs()),
+                "avg_pool k={k:?} s={s:?}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} avg_pool2d OK");
+}
+/// `max_pool2d` vs the CPU backend.
+#[test]
+fn test_vulkan_max_pool2d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..128).map(|i| (i as f32) * 0.2 - 12.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 8, 8)))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 8, 8)))
+        .unwrap();
+    for (k, s) in [
+        ((2usize, 2usize), (2usize, 2usize)),
+        ((3usize, 2usize), (1usize, 1usize)),
+    ] {
+        let gg = g.clone().max_pool2d_with_stride(k, s).unwrap();
+        let cc = c.clone().max_pool2d_with_stride(k, s).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (a, b) in gv.iter().zip(cv.iter()) {
+            assert!(
+                (a - b).abs() < 1e-5 * (1.0 + b.abs()),
+                "max_pool k={k:?} s={s:?}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} max_pool2d OK");
+}
+/// `upsample_nearest1d` vs the CPU backend.
+#[test]
+fn test_vulkan_upsample_nearest1d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..48).map(|i| (i as f32) * 0.4 - 8.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((2, 3, 8)))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((2, 3, 8)))
+        .unwrap();
+    for dst in [16usize, 8usize, 3usize] {
+        let gg = g.clone().upsample_nearest1d(dst).unwrap();
+        let cc = c.clone().upsample_nearest1d(dst).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (a, b) in gv.iter().zip(cv.iter()) {
+            assert!(
+                (a - b).abs() < 1e-5 * (1.0 + b.abs()),
+                "upsample1d dst={dst}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} upsample_nearest1d OK");
+}
+/// `upsample_nearest2d` vs the CPU backend.
+#[test]
+fn test_vulkan_upsample_nearest2d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..128).map(|i| (i as f32) * 0.3 - 10.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 8, 8)))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 8, 8)))
+        .unwrap();
+    for (h, w) in [(16usize, 16usize), (4usize, 12usize), (6usize, 3usize)] {
+        let gg = g.clone().upsample_nearest2d(h, w).unwrap();
+        let cc = c.clone().upsample_nearest2d(h, w).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (a, b) in gv.iter().zip(cv.iter()) {
+            assert!(
+                (a - b).abs() < 1e-5 * (1.0 + b.abs()),
+                "upsample2d {h}x{w}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} upsample_nearest2d OK");
+}
+/// `upsample_bilinear2d` (align_corners on/off, with/without scale) vs CPU.
+#[test]
+fn test_vulkan_upsample_bilinear2d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let v: Vec<f32> = (0..128).map(|i| (i as f32) * 0.3 - 10.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 8, 8)))
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 8, 8)))
+        .unwrap();
+    let cases: Vec<(String, candle_core::Tensor, candle_core::Tensor)> = vec![
+        (
+            "ac_false 16x16".into(),
+            g.clone().upsample_bilinear2d(16, 16, false).unwrap(),
+            c.clone().upsample_bilinear2d(16, 16, false).unwrap(),
+        ),
+        (
+            "ac_true 6x10".into(),
+            g.clone().upsample_bilinear2d(6, 10, true).unwrap(),
+            c.clone().upsample_bilinear2d(6, 10, true).unwrap(),
+        ),
+        (
+            "scale 2x -> 16x16".into(),
+            g.clone()
+                .upsample_bilinear2d_with_scale(2.0f64, 2.0f64, false)
+                .unwrap(),
+            c.clone()
+                .upsample_bilinear2d_with_scale(2.0f64, 2.0f64, false)
+                .unwrap(),
+        ),
+    ];
+    for (name, gg, cc) in &cases {
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+                "bilinear {name}: mismatch at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} upsample_bilinear2d OK");
+}
+/// `conv1d` vs the CPU backend.
+#[test]
+fn test_vulkan_conv1d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let b = 2usize;
+    let c_in = 3usize;
+    let l_in = 12usize;
+    let c_out = 4usize;
+    let k = 4usize;
+    let in_v: Vec<f32> = (0..b * c_in * l_in)
+        .map(|i| (i as f32) * 0.1 - 5.0)
+        .collect();
+    let w_v: Vec<f32> = (0..c_out * c_in * k)
+        .map(|i| (i as f32) * 0.05 - 0.9)
+        .collect();
+    let cases: Vec<(usize, usize, usize)> = vec![(0, 1, 1), (2, 2, 1), (1, 2, 2)];
+    for (padding, stride, dilation) in cases {
+        {
+            let gin = candle_core::Tensor::new(in_v.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c_in, l_in)))
+                .unwrap();
+            let gk = candle_core::Tensor::new(w_v.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((c_out, c_in, k)))
+                .unwrap();
+            let cin = candle_core::Tensor::new(in_v.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c_in, l_in)))
+                .unwrap();
+            let ck = candle_core::Tensor::new(w_v.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((c_out, c_in, k)))
+                .unwrap();
+            let gg = gin.conv1d(&gk, padding, stride, dilation, 1).unwrap();
+            let cc = cin.conv1d(&ck, padding, stride, dilation, 1).unwrap();
+            let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            assert_eq!(gv.len(), cv.len());
+            for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+                assert!(
+                    (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+                    "conv1d p={padding} s={stride} d={dilation} at {i}: gpu {a} cpu {b}"
+                );
+            }
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} conv1d OK");
+}
+/// `conv2d` vs the CPU backend.
+#[test]
+fn test_vulkan_conv2d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let b = 2usize;
+    let c_in = 2usize;
+    let i_h = 8usize;
+    let i_w = 10usize;
+    let c_out = 3usize;
+    let k_h = 3usize;
+    let k_w = 3usize;
+    let in_v: Vec<f32> = (0..b * c_in * i_h * i_w)
+        .map(|i| (i as f32) * 0.1 - 6.0)
+        .collect();
+    let w_v: Vec<f32> = (0..c_out * c_in * k_h * k_w)
+        .map(|i| (i as f32) * 0.05 - 0.5)
+        .collect();
+    let cases: Vec<(usize, usize, usize)> = vec![(0, 1, 1), (1, 2, 1), (0, 1, 2)];
+    for (padding, stride, dilation) in cases {
+        let gin = candle_core::Tensor::new(in_v.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c_in, i_h, i_w)))
+            .unwrap();
+        let gk = candle_core::Tensor::new(w_v.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((c_out, c_in, k_h, k_w)))
+            .unwrap();
+        let cin = candle_core::Tensor::new(in_v.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c_in, i_h, i_w)))
+            .unwrap();
+        let ck = candle_core::Tensor::new(w_v.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((c_out, c_in, k_h, k_w)))
+            .unwrap();
+        let gg = gin.conv2d(&gk, padding, stride, dilation, 1).unwrap();
+        let cc = cin.conv2d(&ck, padding, stride, dilation, 1).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+                "conv2d p={padding} s={stride} d={dilation} at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} conv2d OK");
+}
+/// `conv_transpose1d` vs the CPU backend.
+#[test]
+fn test_vulkan_conv_transpose1d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let b = 2usize;
+    let c_in = 3usize;
+    let l_in = 6usize;
+    let c_out = 4usize;
+    let k = 4usize;
+    let in_v: Vec<f32> = (0..b * c_in * l_in)
+        .map(|i| (i as f32) * 0.2 - 3.0)
+        .collect();
+    let w_v: Vec<f32> = (0..c_in * c_out * k)
+        .map(|i| (i as f32) * 0.05 - 0.9)
+        .collect();
+    let cases: Vec<(usize, usize, usize, usize)> = vec![(0, 0, 1, 1), (1, 0, 2, 1), (0, 1, 2, 2)];
+    for (padding, out_padding, stride, dilation) in cases {
+        let gin = candle_core::Tensor::new(in_v.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c_in, l_in)))
+            .unwrap();
+        let gk = candle_core::Tensor::new(w_v.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((c_in, c_out, k)))
+            .unwrap();
+        let cin = candle_core::Tensor::new(in_v.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c_in, l_in)))
+            .unwrap();
+        let ck = candle_core::Tensor::new(w_v.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((c_in, c_out, k)))
+            .unwrap();
+        let gg = gin
+            .conv_transpose1d(&gk, padding, out_padding, stride, dilation, 1)
+            .unwrap();
+        let cc = cin
+            .conv_transpose1d(&ck, padding, out_padding, stride, dilation, 1)
+            .unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+                "convtr1d p={padding} op={out_padding} s={stride} d={dilation} at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} conv_transpose1d OK");
+}
+/// `conv_transpose2d` vs the CPU backend.
+#[test]
+fn test_vulkan_conv_transpose2d() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let b = 2usize;
+    let c_in = 2usize;
+    let i_h = 5usize;
+    let i_w = 6usize;
+    let c_out = 3usize;
+    let k_h = 3usize;
+    let k_w = 3usize;
+    let in_v: Vec<f32> = (0..b * c_in * i_h * i_w)
+        .map(|i| (i as f32) * 0.1 - 4.0)
+        .collect();
+    let w_v: Vec<f32> = (0..c_in * c_out * k_h * k_w)
+        .map(|i| (i as f32) * 0.05 - 0.7)
+        .collect();
+    let cases: Vec<(usize, usize, usize, usize)> = vec![(0, 0, 1, 1), (1, 0, 2, 1), (0, 1, 2, 1)];
+    for (padding, out_padding, stride, dilation) in cases {
+        let gin = candle_core::Tensor::new(in_v.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c_in, i_h, i_w)))
+            .unwrap();
+        let gk = candle_core::Tensor::new(w_v.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((c_in, c_out, k_h, k_w)))
+            .unwrap();
+        let cin = candle_core::Tensor::new(in_v.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c_in, i_h, i_w)))
+            .unwrap();
+        let ck = candle_core::Tensor::new(w_v.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((c_in, c_out, k_h, k_w)))
+            .unwrap();
+        let gg = gin
+            .conv_transpose2d(&gk, padding, out_padding, stride, dilation)
+            .unwrap();
+        let cc = cin
+            .conv_transpose2d(&ck, padding, out_padding, stride, dilation)
+            .unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-4 * (1.0 + b.abs()),
+                "convtr2d p={padding} op={out_padding} s={stride} d={dilation} at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} conv_transpose2d OK");
+}
+/// `scatter` (scatter_set) vs the CPU backend.
+#[test]
+fn test_vulkan_scatter() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let b = 3usize;
+    let c = 6usize;
+    let base: Vec<f32> = (0..b * c).map(|i| (i as f32) * 0.5).collect();
+    let idx: Vec<u32> = vec![3, 0, 5, 1, 4, 2, 0, 2, 4, 1, 5, 3, 2, 0, 5, 1, 3, 4];
+    let src: Vec<f32> = (0..b * c).map(|i| (i as f32) * -1.25 + 4.0).collect();
+    for dim in [0usize, 1usize] {
+        // scatter along dim 0 needs (c, b) shaped ids/src; transpose the 2D data.
+        let (b2, c2) = if dim == 0 { (c, b) } else { (b, c) };
+        let mut base2 = Vec::new();
+        let mut idx2 = Vec::new();
+        let mut src2 = Vec::new();
+        if dim == 0 {
+            // reshape to (c, b) by transposing the (b, c) layout
+            for i in 0..c {
+                for j in 0..b {
+                    base2.push(base[j * c + i]);
+                }
+            }
+            for i in 0..c {
+                for j in 0..b {
+                    idx2.push(idx[j * c + i]);
+                }
+            }
+            for i in 0..c {
+                for j in 0..b {
+                    src2.push(src[j * c + i]);
+                }
+            }
+        } else {
+            base2.extend_from_slice(base.as_slice());
+            idx2.extend_from_slice(idx.as_slice());
+            src2.extend_from_slice(src.as_slice());
+        }
+        let gid = candle_core::Tensor::new(idx2.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b2, c2)))
+            .unwrap();
+        let gsr = candle_core::Tensor::new(src2.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b2, c2)))
+            .unwrap();
+        let gdst = candle_core::Tensor::new(base2.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b2, c2)))
+            .unwrap();
+        let cid = candle_core::Tensor::new(idx2.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b2, c2)))
+            .unwrap();
+        let csr = candle_core::Tensor::new(src2.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b2, c2)))
+            .unwrap();
+        let cdst = candle_core::Tensor::new(base2.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b2, c2)))
+            .unwrap();
+        let gg = gdst.scatter(&gid, &gsr, dim).unwrap();
+        let cc = cdst.scatter(&cid, &csr, dim).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-6 * (1.0 + b.abs()),
+                "scatter dim={dim} at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} scatter OK");
+}
+/// `scatter_add` vs the CPU backend (host-side implementation on Vulkan).
+#[test]
+fn test_vulkan_scatter_add() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let b = 3usize;
+    let c = 6usize;
+    let base: Vec<f32> = (0..b * c).map(|i| (i as f32) * 0.5).collect();
+    // Duplicates on purpose: several rows hit the same target column.
+    let idx: Vec<u32> = vec![3, 3, 5, 1, 4, 2, 0, 0, 4, 1, 5, 3, 2, 0, 5, 1, 3, 4];
+    let src: Vec<f32> = (0..b * c).map(|i| (i as f32) * -1.25 + 4.0).collect();
+    for dim in [0usize, 1usize] {
+        let (b2, c2) = if dim == 0 { (c, b) } else { (b, c) };
+        let mut base2 = Vec::new();
+        let mut idx2 = Vec::new();
+        let mut src2 = Vec::new();
+        if dim == 0 {
+            for i in 0..c {
+                for j in 0..b {
+                    base2.push(base[j * c + i]);
+                    idx2.push(idx[j * c + i]);
+                    src2.push(src[j * c + i]);
+                }
+            }
+        } else {
+            base2.extend_from_slice(base.as_slice());
+            idx2.extend_from_slice(idx.as_slice());
+            src2.extend_from_slice(src.as_slice());
+        }
+        let gid = candle_core::Tensor::new(idx2.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b2, c2)))
+            .unwrap();
+        let gsr = candle_core::Tensor::new(src2.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b2, c2)))
+            .unwrap();
+        let gdst = candle_core::Tensor::new(base2.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b2, c2)))
+            .unwrap();
+        let cid = candle_core::Tensor::new(idx2.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b2, c2)))
+            .unwrap();
+        let csr = candle_core::Tensor::new(src2.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b2, c2)))
+            .unwrap();
+        let cdst = candle_core::Tensor::new(base2.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b2, c2)))
+            .unwrap();
+        let gg = gdst.scatter_add(&gid, &gsr, dim).unwrap();
+        let cc = cdst.scatter_add(&cid, &csr, dim).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-5 * (1.0 + b.abs()),
+                "scatter_add dim={dim} at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} scatter_add OK");
+}
+/// `scatter_add_set` into a narrow view: the host-side round-trip must read
+/// and write back only the view slice, not the whole destination buffer.
+#[test]
+fn test_vulkan_scatter_add_view() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let base: Vec<f32> = (0..8 * 3).map(|i| i as f32 * 0.5).collect();
+    let idx: Vec<u32> = vec![3, 0, 2, 1, 1, 2, 0, 3, 3, 2, 0, 1];
+    let src: Vec<f32> = (0..4 * 3).map(|i| i as f32 * -1.25 + 4.0).collect();
+    let gdst = candle_core::Tensor::new(base.as_slice(), &dev)
+        .unwrap()
+        .reshape((8, 3))
+        .unwrap();
+    let gid = candle_core::Tensor::new(idx.as_slice(), &dev)
+        .unwrap()
+        .reshape((4, 3))
+        .unwrap();
+    let gsrc = candle_core::Tensor::new(src.as_slice(), &dev)
+        .unwrap()
+        .reshape((4, 3))
+        .unwrap();
+    let gview = gdst.narrow(0, 2, 4).unwrap();
+    let cdst = candle_core::Tensor::new(base.as_slice(), &cpu)
+        .unwrap()
+        .reshape((8, 3))
+        .unwrap();
+    let cid = candle_core::Tensor::new(idx.as_slice(), &cpu)
+        .unwrap()
+        .reshape((4, 3))
+        .unwrap();
+    let csrc = candle_core::Tensor::new(src.as_slice(), &cpu)
+        .unwrap()
+        .reshape((4, 3))
+        .unwrap();
+    let cview = cdst.narrow(0, 2, 4).unwrap();
+    gview.scatter_add_set(&gid, &gsrc, 0).unwrap();
+    cview.scatter_add_set(&cid, &csrc, 0).unwrap();
+    let gv: Vec<f32> = gdst.flatten_all().unwrap().to_vec1().unwrap();
+    let cv: Vec<f32> = cdst.flatten_all().unwrap().to_vec1().unwrap();
+    assert_eq!(gv.len(), cv.len());
+    for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-5 * (1.0 + b.abs()),
+            "scatter_add view at {i}: gpu {a} cpu {b}"
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} scatter_add view OK");
+}
+/// `index_add` vs the CPU backend (host-side implementation on Vulkan).
+#[test]
+fn test_vulkan_index_add() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let b = 4usize;
+    let c = 5usize;
+    let base: Vec<f32> = (0..b * c).map(|i| (i as f32) * 0.25 - 2.0).collect();
+    // Duplicates on purpose: several indexes hit the same row/column.
+    let idx: Vec<u32> = vec![3, 0, 3, 1];
+    for dim in [0usize, 1usize] {
+        // source has the same shape as self except that dim, where its size
+        // is indexes.len(); index values address `self` along dim.
+        let (sb, sc) = if dim == 0 { (4usize, c) } else { (b, 4usize) };
+        let src: Vec<f32> = (0..sb * sc).map(|i| (i as f32) * -1.1 + 1.5).collect();
+        let gid = candle_core::Tensor::new(idx.as_slice(), &dev).unwrap();
+        let gsr = candle_core::Tensor::new(src.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((sb, sc)))
+            .unwrap();
+        let gdst = candle_core::Tensor::new(base.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c)))
+            .unwrap();
+        let cid = candle_core::Tensor::new(idx.as_slice(), &cpu).unwrap();
+        let csr = candle_core::Tensor::new(src.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((sb, sc)))
+            .unwrap();
+        let cdst = candle_core::Tensor::new(base.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c)))
+            .unwrap();
+        let gg = gdst.index_add(&gid, &gsr, dim).unwrap();
+        let cc = cdst.index_add(&cid, &csr, dim).unwrap();
+        let gv: Vec<f32> = gg.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cv: Vec<f32> = cc.clone().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, bv)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - bv).abs() < 1e-5 * (1.0 + bv.abs()),
+                "index_add dim={dim} at {i}: gpu {a} cpu {bv}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} index_add OK");
+}
+/// `index_add` skipping the sentinel index (the dtype's max value). The CPU
+///
+/// backend and the GPU (atomic) path both skip the sentinel, so the results
+///
+/// must match for u32, u8, and i64 index tensors.
+#[test]
+fn test_vulkan_index_add_sentinel() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let b = 4usize;
+    let c = 5usize;
+    let base: Vec<f32> = (0..b * c).map(|i| (i as f32) * 0.25 - 2.0).collect();
+    macro_rules! run_case {
+        ($idx:expr, $dim:expr, $name:expr) => {{
+            let name = $name;
+            let dim = $dim;
+            let (sb, sc) = if dim == 0 { (4usize, c) } else { (b, 4usize) };
+            let src: Vec<f32> = (0..sb * sc).map(|i| (i as f32) * -1.1 + 1.5).collect();
+            let gid = candle_core::Tensor::new($idx, &dev).unwrap();
+            let gsr = candle_core::Tensor::new(src.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let gdst = candle_core::Tensor::new(base.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let cid = candle_core::Tensor::new($idx, &cpu).unwrap();
+            let csr = candle_core::Tensor::new(src.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let cdst = candle_core::Tensor::new(base.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let gg = gdst.index_add(&gid, &gsr, dim).unwrap();
+            let cc = cdst.index_add(&cid, &csr, dim).unwrap();
+            let gv: Vec<f32> = gg.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            let cv: Vec<f32> = cc.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            assert_eq!(gv.len(), cv.len());
+            for (i, (a, bv)) in gv.iter().zip(cv.iter()).enumerate() {
+                assert!(
+                    (a - bv).abs() < 1e-5 * (1.0 + bv.abs()),
+                    "index_add sentinel {} dim={} at {}: gpu {} cpu {}",
+                    name,
+                    dim,
+                    i,
+                    a,
+                    bv
+                );
+            }
+        }};
+    }
+    let idx_u32: Vec<u32> = vec![3, 0, u32::MAX, 1];
+    let idx_u8: Vec<u8> = vec![3, 0, u8::MAX, 1];
+    let idx_i64: Vec<i64> = vec![3, 0, i64::MAX, 1];
+    for dim in [0usize, 1usize] {
+        run_case!(idx_u32.as_slice(), dim, "u32");
+        run_case!(idx_u8.as_slice(), dim, "u8");
+        run_case!(idx_i64.as_slice(), dim, "i64");
+    }
+    tracing::debug!("Vulkan device {gpu_id} index_add sentinel OK");
+}
+/// `index_add` with out-of-bounds indexes (neither valid nor the sentinel
+///
+/// max): the CPU backend errors, but the GPU path silently skips them.
+///
+/// Verify the GPU neither crashes nor adds the out-of-bounds contribution.
+#[test]
+fn test_vulkan_index_add_oob() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let vdev = match &dev {
+        candle_core::Device::Vulkan(v) => v,
+        _ => unreachable!(),
+    };
+    // The GPU (atomic) path silently skips out-of-bounds indexes; the host
+    // fallback (CPU semantics) errors on them. Test whichever is active.
+    let gpu_path = vdev.supports_atomic_fadd(candle_core::DType::F32);
+    let b = 4usize;
+    let c = 5usize;
+    let base: Vec<f32> = (0..b * c).map(|i| (i as f32) * 0.25 - 2.0).collect();
+    for dim in [0usize, 1usize] {
+        // One out-of-bounds entry (99) that is neither valid nor the sentinel.
+        let idx: Vec<u32> = if dim == 0 {
+            vec![0, 2, 99, 1]
+        } else {
+            vec![0, 2, 99, 1, 3]
+        };
+        let (sb, sc) = if dim == 0 {
+            (idx.len(), c)
+        } else {
+            (b, idx.len())
+        };
+        let src: Vec<f32> = (0..sb * sc).map(|i| (i as f32) * -1.1 + 1.5).collect();
+        let gid = candle_core::Tensor::new(idx.as_slice(), &dev).unwrap();
+        let gsr = candle_core::Tensor::new(src.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((sb, sc)))
+            .unwrap();
+        let gdst = candle_core::Tensor::new(base.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c)))
+            .unwrap();
+        let res = gdst.index_add(&gid, &gsr, dim);
+        if !gpu_path {
+            assert!(
+                res.is_err(),
+                "host fallback should error on OOB index (dim={dim})"
+            );
+            continue;
+        }
+        let gg = res.unwrap();
+        let gv: Vec<f32> = gg.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        // Expected: add only the in-bounds contributions.
+        let mut exp = base.clone();
+        if dim == 0 {
+            for r in 0..idx.len() {
+                let id = idx[r] as usize;
+                if id < b {
+                    for j in 0..c {
+                        exp[id * c + j] += src[r * c + j];
+                    }
+                }
+            }
+        } else {
+            for i in 0..b {
+                for j in 0..idx.len() {
+                    let id = idx[j] as usize;
+                    if id < c {
+                        exp[i * c + id] += src[i * c + j];
+                    }
+                }
+            }
+        }
+        assert_eq!(gv.len(), exp.len());
+        for (i, (a, e)) in gv.iter().zip(exp.iter()).enumerate() {
+            assert!(
+                (a - e).abs() < 1e-5 * (1.0 + e.abs()),
+                "index_add oob dim={dim} at {i}: gpu {a} expected {e}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} index_add oob OK (gpu_path={gpu_path})");
+}
+/// `index_add` across the supported element dtypes (F32/F16/F64) with u32
+///
+/// indexes. Duplicates are included; the CPU backend is the reference.
+#[test]
+fn test_vulkan_index_add_dtypes() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let b = 4usize;
+    let c = 5usize;
+    let idx: Vec<u32> = vec![3, 0, 3, 1];
+    for dim in [0usize, 1usize] {
+        let (sb, sc) = if dim == 0 { (4usize, c) } else { (b, 4usize) };
+        // F32
+        let base_f32: Vec<f32> = (0..b * c).map(|i| (i as f32) * 0.25 - 2.0).collect();
+        let src_f32: Vec<f32> = (0..sb * sc).map(|i| (i as f32) * -1.1 + 1.5).collect();
+        {
+            let gid = candle_core::Tensor::new(idx.as_slice(), &dev).unwrap();
+            let gsr = candle_core::Tensor::new(src_f32.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let gdst = candle_core::Tensor::new(base_f32.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let cid = candle_core::Tensor::new(idx.as_slice(), &cpu).unwrap();
+            let csr = candle_core::Tensor::new(src_f32.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let cdst = candle_core::Tensor::new(base_f32.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let gg = gdst.index_add(&gid, &gsr, dim).unwrap();
+            let cc = cdst.index_add(&cid, &csr, dim).unwrap();
+            let gv: Vec<f32> = gg.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            let cv: Vec<f32> = cc.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            for (i, (a, bv)) in gv.iter().zip(cv.iter()).enumerate() {
+                assert!(
+                    (a - bv).abs() < 1e-5 * (1.0 + bv.abs()),
+                    "index_add f32 dim={dim} at {i}: gpu {a} cpu {bv}"
+                );
+            }
+        }
+        // F16
+        let base_f16: Vec<half::f16> = base_f32.iter().map(|x| half::f16::from_f32(*x)).collect();
+        let src_f16: Vec<half::f16> = src_f32.iter().map(|x| half::f16::from_f32(*x)).collect();
+        {
+            let gid = candle_core::Tensor::new(idx.as_slice(), &dev).unwrap();
+            let gsr = candle_core::Tensor::new(src_f16.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let gdst = candle_core::Tensor::new(base_f16.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let cid = candle_core::Tensor::new(idx.as_slice(), &cpu).unwrap();
+            let csr = candle_core::Tensor::new(src_f16.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let cdst = candle_core::Tensor::new(base_f16.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let gg = gdst.index_add(&gid, &gsr, dim).unwrap();
+            let cc = cdst.index_add(&cid, &csr, dim).unwrap();
+            let gvh: Vec<half::f16> = gg.flatten_all().unwrap().to_vec1::<half::f16>().unwrap();
+            let cvh: Vec<half::f16> = cc.flatten_all().unwrap().to_vec1::<half::f16>().unwrap();
+            for (i, (a, bv)) in gvh.iter().zip(cvh.iter()).enumerate() {
+                let a = a.to_f32();
+                let bv = bv.to_f32();
+                assert!(
+                    (a - bv).abs() < 1e-2 * (1.0 + bv.abs()),
+                    "index_add f16 dim={dim} at {i}: gpu {a} cpu {bv}"
+                );
+            }
+        }
+        // F64
+        let base_f64: Vec<f64> = base_f32.iter().map(|x| *x as f64).collect();
+        let src_f64: Vec<f64> = src_f32.iter().map(|x| *x as f64).collect();
+        {
+            let gid = candle_core::Tensor::new(idx.as_slice(), &dev).unwrap();
+            let gsr = candle_core::Tensor::new(src_f64.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let gdst = candle_core::Tensor::new(base_f64.as_slice(), &dev)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let cid = candle_core::Tensor::new(idx.as_slice(), &cpu).unwrap();
+            let csr = candle_core::Tensor::new(src_f64.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((sb, sc)))
+                .unwrap();
+            let cdst = candle_core::Tensor::new(base_f64.as_slice(), &cpu)
+                .unwrap()
+                .reshape(candle_core::Shape::from((b, c)))
+                .unwrap();
+            let gg = gdst.index_add(&gid, &gsr, dim).unwrap();
+            let cc = cdst.index_add(&cid, &csr, dim).unwrap();
+            let gv: Vec<f64> = gg.flatten_all().unwrap().to_vec1::<f64>().unwrap();
+            let cv: Vec<f64> = cc.flatten_all().unwrap().to_vec1::<f64>().unwrap();
+            for (i, (a, bv)) in gv.iter().zip(cv.iter()).enumerate() {
+                assert!(
+                    (a - bv).abs() < 1e-9 * (1.0 + bv.abs()),
+                    "index_add f64 dim={dim} at {i}: gpu {a} cpu {bv}"
+                );
+            }
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} index_add dtypes OK");
+}
+/// Binary ops for BF16 (emulated) vs the CPU backend.
+#[test]
+fn test_vulkan_binary_ops_bf16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    // Values representable in bf16 (integers and simple fractions).
+    let f: Vec<f32> = (0..32).map(|i| ((i % 9) as f32 - 4.0) * 0.5).collect();
+    let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let rv: Vec<half::bf16> = f
+        .iter()
+        .rev()
+        .map(|x| half::bf16::from_f32(*x * 0.5 + 0.25))
+        .collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    // Same-dtype scalar broadcast (avoids to_dtype).
+    let s_dev = candle_core::Tensor::new(half::bf16::from_f32(1.5), &dev)
+        .unwrap()
+        .broadcast_as(shape.clone())
+        .unwrap();
+    let s_cpu = candle_core::Tensor::new(half::bf16::from_f32(1.5), &cpu)
+        .unwrap()
+        .broadcast_as(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+        ("add_s", l.add(&s_dev).unwrap(), lc.add(&s_cpu).unwrap()),
+        ("mul_s", l.mul(&s_dev).unwrap(), lc.mul(&s_cpu).unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<half::bf16> = g
+            .to_vec2::<half::bf16>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        let cv: Vec<half::bf16> = c
+            .to_vec2::<half::bf16>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if a.to_f32() != b.to_f32() {
+                failures += 1;
+                tracing::debug!(
+                    "bf16 binary {name}: mismatch at {i}: gpu {} cpu {}",
+                    a.to_f32(),
+                    b.to_f32()
+                );
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} bf16 binary mismatches");
+    tracing::debug!("Vulkan device {gpu_id} bf16 binary ops OK");
+}
+/// Binary ops for F8E4M3 (emulated) vs the CPU backend.
+#[test]
+fn test_vulkan_binary_ops_f8e4m3() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    // Values within f8e4m3 finite range (|x| < 248).
+    let f: Vec<f32> = (0..32).map(|i| (i % 11) as f32 - 5.0).collect();
+    let lv: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+    let rv: Vec<microfloat::f8e4m3> = f
+        .iter()
+        .map(|x| microfloat::f8e4m3::from_f32(*x * 0.5 + 1.0))
+        .collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    // Same-dtype scalar broadcast (avoids to_dtype).
+    let s_dev = candle_core::Tensor::new(microfloat::f8e4m3::from_f32(1.5), &dev)
+        .unwrap()
+        .broadcast_as(shape.clone())
+        .unwrap();
+    let s_cpu = candle_core::Tensor::new(microfloat::f8e4m3::from_f32(1.5), &cpu)
+        .unwrap()
+        .broadcast_as(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+        ("add_s", l.add(&s_dev).unwrap(), lc.add(&s_cpu).unwrap()),
+        ("mul_s", l.mul(&s_dev).unwrap(), lc.mul(&s_cpu).unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<microfloat::f8e4m3> = g
+            .to_vec2::<microfloat::f8e4m3>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        let cv: Vec<microfloat::f8e4m3> = c
+            .to_vec2::<microfloat::f8e4m3>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if a.to_f32() != b.to_f32() {
+                failures += 1;
+                tracing::debug!(
+                    "f8e4m3 binary {name}: mismatch at {i}: gpu {} cpu {}",
+                    a.to_f32(),
+                    b.to_f32()
+                );
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} f8e4m3 binary mismatches");
+    tracing::debug!("Vulkan device {gpu_id} f8e4m3 binary ops OK");
+}
+/// Cmp ops for BF16 (emulated) vs the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops_bf16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) - 16.0).collect();
+    let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x * 0.25)).collect();
+    let rv: Vec<half::bf16> = f
+        .iter()
+        .map(|x| half::bf16::from_f32((x % 7.0) - 3.0))
+        .collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    // Same-dtype scalar (avoids to_dtype).
+    let z_dev = candle_core::Tensor::new(half::bf16::from_f32(0.0), &dev)
+        .unwrap()
+        .broadcast_as(shape.clone())
+        .unwrap();
+    let z_cpu = candle_core::Tensor::new(half::bf16::from_f32(0.0), &cpu)
+        .unwrap()
+        .broadcast_as(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+        ("eq_s", l.eq(&z_dev).unwrap(), lc.eq(&z_cpu).unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if a != b {
+                failures += 1;
+                tracing::debug!("bf16 cmp {name}: mismatch at {i}: gpu {a} cpu {b}");
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} bf16 cmp mismatches");
+    tracing::debug!("Vulkan device {gpu_id} bf16 cmp ops OK");
+}
+/// Cmp ops for F8E4M3 (emulated) vs the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops_f8e4m3() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) - 16.0).collect();
+    let lv: Vec<microfloat::f8e4m3> = f
+        .iter()
+        .map(|x| microfloat::f8e4m3::from_f32(*x * 0.5))
+        .collect();
+    let rv: Vec<microfloat::f8e4m3> = f
+        .iter()
+        .map(|x| microfloat::f8e4m3::from_f32((x % 9.0) - 4.0))
+        .collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    // Same-dtype scalar (avoids to_dtype).
+    let z_dev = candle_core::Tensor::new(microfloat::f8e4m3::from_f32(0.0), &dev)
+        .unwrap()
+        .broadcast_as(shape.clone())
+        .unwrap();
+    let z_cpu = candle_core::Tensor::new(microfloat::f8e4m3::from_f32(0.0), &cpu)
+        .unwrap()
+        .broadcast_as(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+        ("eq_s", l.eq(&z_dev).unwrap(), lc.eq(&z_cpu).unwrap()),
+    ];
+    let mut failures = 0usize;
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if a != b {
+                failures += 1;
+                tracing::debug!("f8e4m3 cmp {name}: mismatch at {i}: gpu {a} cpu {b}");
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} f8e4m3 cmp mismatches");
+    tracing::debug!("Vulkan device {gpu_id} f8e4m3 cmp ops OK");
+}
+/// True if `a` and `b` are equal within `tol` (relative), handling NaN/inf.
+fn close(a: f32, b: f32, tol: f32) -> bool {
+    if a.is_nan() && b.is_nan() {
+        return true;
+    }
+    if a.is_infinite() && b.is_infinite() && a.signum() == b.signum() {
+        return true;
+    }
+    if a.is_nan() != b.is_nan() || a.is_infinite() != b.is_infinite() {
+        return false;
+    }
+    (a - b).abs() <= tol * (1.0 + a.abs().max(b.abs()))
+}
+/// True if `a` and `b` are equal within `tol` (relative, f64), handling NaN/inf.
+fn close64(a: f64, b: f64, tol: f64) -> bool {
+    if a.is_nan() && b.is_nan() {
+        return true;
+    }
+    if a.is_infinite() && b.is_infinite() && a.signum() == b.signum() {
+        return true;
+    }
+    if a.is_nan() != b.is_nan() || a.is_infinite() != b.is_infinite() {
+        return false;
+    }
+    (a - b).abs() <= tol * (1.0 + a.abs().max(b.abs()))
+}
+/// All 19 unary ops for BF16 (emulated) vs the CPU backend.
+#[test]
+fn test_vulkan_unary_ops_bf16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (-16..16).map(|i| i as f32 * 0.5).collect();
+    let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("log", l.log().unwrap(), lc.log().unwrap()),
+        ("abs", l.abs().unwrap(), lc.abs().unwrap()),
+        ("recip", l.recip().unwrap(), lc.recip().unwrap()),
+        ("sqr", l.sqr().unwrap(), lc.sqr().unwrap()),
+        ("gelu", l.gelu().unwrap(), lc.gelu().unwrap()),
+        ("gelu_erf", l.gelu_erf().unwrap(), lc.gelu_erf().unwrap()),
+        ("erf", l.erf().unwrap(), lc.erf().unwrap()),
+        ("relu", l.relu().unwrap(), lc.relu().unwrap()),
+        ("tanh", l.tanh().unwrap(), lc.tanh().unwrap()),
+        ("floor", l.floor().unwrap(), lc.floor().unwrap()),
+        ("ceil", l.ceil().unwrap(), lc.ceil().unwrap()),
+        ("round", l.round().unwrap(), lc.round().unwrap()),
+        ("sign", l.sign().unwrap(), lc.sign().unwrap()),
+        ("exp", l.exp().unwrap(), lc.exp().unwrap()),
+        ("silu", l.silu().unwrap(), lc.silu().unwrap()),
+        ("sqrt", l.sqrt().unwrap(), lc.sqrt().unwrap()),
+        ("sin", l.sin().unwrap(), lc.sin().unwrap()),
+        ("cos", l.cos().unwrap(), lc.cos().unwrap()),
+        ("neg", l.neg().unwrap(), lc.neg().unwrap()),
+    ];
+    // bf16 has ~8-bit mantissa; complex ops (gelu/silu) round intermediates to
+    // bf16 on the CPU (measured max rel diff ~0.006), so allow ~0.02.
+    let tol = 0.02f32;
+    let mut failures = 0usize;
+    for (name, g, c) in &cases {
+        let gv: Vec<half::bf16> = g.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+        let cv: Vec<half::bf16> = c.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if !close(a.to_f32(), b.to_f32(), tol) {
+                failures += 1;
+                tracing::debug!(
+                    "bf16 unary {name}: mismatch at {i}: gpu {} cpu {}",
+                    a.to_f32(),
+                    b.to_f32()
+                );
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} bf16 unary mismatches");
+    tracing::debug!("Vulkan device {gpu_id} bf16 unary ops OK");
+}
+/// All 19 unary ops for F8E4M3 (emulated) vs the CPU backend.
+#[test]
+fn test_vulkan_unary_ops_f8e4m3() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (-16..16).map(|i| i as f32 * 0.5).collect();
+    let lv: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("log", l.log().unwrap(), lc.log().unwrap()),
+        ("abs", l.abs().unwrap(), lc.abs().unwrap()),
+        ("recip", l.recip().unwrap(), lc.recip().unwrap()),
+        ("sqr", l.sqr().unwrap(), lc.sqr().unwrap()),
+        ("gelu", l.gelu().unwrap(), lc.gelu().unwrap()),
+        ("gelu_erf", l.gelu_erf().unwrap(), lc.gelu_erf().unwrap()),
+        ("erf", l.erf().unwrap(), lc.erf().unwrap()),
+        ("relu", l.relu().unwrap(), lc.relu().unwrap()),
+        ("tanh", l.tanh().unwrap(), lc.tanh().unwrap()),
+        ("floor", l.floor().unwrap(), lc.floor().unwrap()),
+        ("ceil", l.ceil().unwrap(), lc.ceil().unwrap()),
+        ("round", l.round().unwrap(), lc.round().unwrap()),
+        ("sign", l.sign().unwrap(), lc.sign().unwrap()),
+        ("exp", l.exp().unwrap(), lc.exp().unwrap()),
+        ("silu", l.silu().unwrap(), lc.silu().unwrap()),
+        ("sqrt", l.sqrt().unwrap(), lc.sqrt().unwrap()),
+        ("sin", l.sin().unwrap(), lc.sin().unwrap()),
+        ("cos", l.cos().unwrap(), lc.cos().unwrap()),
+        ("neg", l.neg().unwrap(), lc.neg().unwrap()),
+    ];
+    // f8e4m3 has a 3-bit mantissa and complex ops (gelu/silu) round intermediates
+    // to the narrow type on the CPU (measured max rel diff ~0.063), so allow ~0.15.
+    let tol = 0.15f32;
+    let mut failures = 0usize;
+    for (name, g, c) in &cases {
+        let gv: Vec<microfloat::f8e4m3> = g
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<microfloat::f8e4m3>()
+            .unwrap();
+        let cv: Vec<microfloat::f8e4m3> = c
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<microfloat::f8e4m3>()
+            .unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            if !close(a.to_f32(), b.to_f32(), tol) {
+                failures += 1;
+                tracing::debug!(
+                    "f8e4m3 unary {name}: mismatch at {i}: gpu {} cpu {}",
+                    a.to_f32(),
+                    b.to_f32()
+                );
+            }
+        }
+    }
+    assert_eq!(failures, 0, "{failures} f8e4m3 unary mismatches");
+    tracing::debug!("Vulkan device {gpu_id} f8e4m3 unary ops OK");
+}
+/// affine (x*mul+add) for BF16 and F8E4M3 vs the CPU backend.
+#[test]
+fn test_vulkan_affine_dtype() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.25 - 4.0).collect();
+    let (mul, add) = (2.5f64, -1.0f64);
+    // bf16
+    let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let g = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap()
+        .affine(mul, add)
+        .unwrap();
+    let c = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap()
+        .affine(mul, add)
+        .unwrap();
+    let gv: Vec<half::bf16> = g.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+    let cv: Vec<half::bf16> = c.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+    for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+        assert!(
+            close(a.to_f32(), b.to_f32(), 0.05),
+            "bf16 affine: mismatch at {i}: gpu {} cpu {}",
+            a.to_f32(),
+            b.to_f32()
+        );
+    }
+    // f8e4m3
+    let f8v: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+    let g8 = candle_core::Tensor::new(f8v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap()
+        .affine(mul, add)
+        .unwrap();
+    let c8 = candle_core::Tensor::new(f8v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap()
+        .affine(mul, add)
+        .unwrap();
+    let gv8: Vec<microfloat::f8e4m3> = g8
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<microfloat::f8e4m3>()
+        .unwrap();
+    let cv8: Vec<microfloat::f8e4m3> = c8
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<microfloat::f8e4m3>()
+        .unwrap();
+    for (i, (a, b)) in gv8.iter().zip(cv8.iter()).enumerate() {
+        assert!(
+            close(a.to_f32(), b.to_f32(), 0.2),
+            "f8e4m3 affine: mismatch at {i}: gpu {} cpu {}",
+            a.to_f32(),
+            b.to_f32()
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} affine (bf16/f8e4m3) OK");
+}
+/// powf (x^e) for BF16 and F8E4M3 vs the CPU backend.
+#[test]
+fn test_vulkan_powf_dtype() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| 0.5 + (i as f32) * 0.25).collect();
+    for exp in [2.0f64, 3.0f64] {
+        // bf16
+        let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+        let g = candle_core::Tensor::new(lv.as_slice(), &dev)
+            .unwrap()
+            .reshape(shape.clone())
+            .unwrap()
+            .powf(exp)
+            .unwrap();
+        let c = candle_core::Tensor::new(lv.as_slice(), &cpu)
+            .unwrap()
+            .reshape(shape.clone())
+            .unwrap()
+            .powf(exp)
+            .unwrap();
+        let gv: Vec<half::bf16> = g.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+        let cv: Vec<half::bf16> = c.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                close(a.to_f32(), b.to_f32(), 0.05),
+                "bf16 powf e={exp}: mismatch at {i}: gpu {} cpu {}",
+                a.to_f32(),
+                b.to_f32()
+            );
+        }
+        // f8e4m3
+        let f8v: Vec<microfloat::f8e4m3> =
+            f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+        let g8 = candle_core::Tensor::new(f8v.as_slice(), &dev)
+            .unwrap()
+            .reshape(shape.clone())
+            .unwrap()
+            .powf(exp)
+            .unwrap();
+        let c8 = candle_core::Tensor::new(f8v.as_slice(), &cpu)
+            .unwrap()
+            .reshape(shape.clone())
+            .unwrap()
+            .powf(exp)
+            .unwrap();
+        let gv8: Vec<microfloat::f8e4m3> = g8
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<microfloat::f8e4m3>()
+            .unwrap();
+        let cv8: Vec<microfloat::f8e4m3> = c8
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<microfloat::f8e4m3>()
+            .unwrap();
+        for (i, (a, b)) in gv8.iter().zip(cv8.iter()).enumerate() {
+            assert!(
+                close(a.to_f32(), b.to_f32(), 0.2),
+                "f8e4m3 powf e={exp}: mismatch at {i}: gpu {} cpu {}",
+                a.to_f32(),
+                b.to_f32()
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} powf (bf16/f8e4m3) OK");
+}
+/// elu for BF16 and F8E4M3 vs the CPU backend.
+#[test]
+fn test_vulkan_elu_dtype() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.5 - 8.0).collect();
+    for alpha in [1.0f64, 0.5f64] {
+        // bf16
+        let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+        let g = candle_core::Tensor::new(lv.as_slice(), &dev)
+            .unwrap()
+            .reshape(shape.clone())
+            .unwrap()
+            .elu(alpha)
+            .unwrap();
+        let c = candle_core::Tensor::new(lv.as_slice(), &cpu)
+            .unwrap()
+            .reshape(shape.clone())
+            .unwrap()
+            .elu(alpha)
+            .unwrap();
+        let gv: Vec<half::bf16> = g.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+        let cv: Vec<half::bf16> = c.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                close(a.to_f32(), b.to_f32(), 0.05),
+                "bf16 elu a={alpha}: mismatch at {i}: gpu {} cpu {}",
+                a.to_f32(),
+                b.to_f32()
+            );
+        }
+        // f8e4m3
+        let f8v: Vec<microfloat::f8e4m3> =
+            f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+        let g8 = candle_core::Tensor::new(f8v.as_slice(), &dev)
+            .unwrap()
+            .reshape(shape.clone())
+            .unwrap()
+            .elu(alpha)
+            .unwrap();
+        let c8 = candle_core::Tensor::new(f8v.as_slice(), &cpu)
+            .unwrap()
+            .reshape(shape.clone())
+            .unwrap()
+            .elu(alpha)
+            .unwrap();
+        let gv8: Vec<microfloat::f8e4m3> = g8
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<microfloat::f8e4m3>()
+            .unwrap();
+        let cv8: Vec<microfloat::f8e4m3> = c8
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<microfloat::f8e4m3>()
+            .unwrap();
+        for (i, (a, b)) in gv8.iter().zip(cv8.iter()).enumerate() {
+            assert!(
+                close(a.to_f32(), b.to_f32(), 0.2),
+                "f8e4m3 elu a={alpha}: mismatch at {i}: gpu {} cpu {}",
+                a.to_f32(),
+                b.to_f32()
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} elu (bf16/f8e4m3) OK");
+}
+/// where_cond for BF16 and F8E4M3 vs the CPU backend.
+#[test]
+fn test_vulkan_where_dtype() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.5 - 8.0).collect();
+    // bf16: pred = (l > r)
+    let lv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let rv: Vec<half::bf16> = f.iter().rev().map(|x| half::bf16::from_f32(*x)).collect();
+    let tv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x + 100.0)).collect();
+    let fv: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x - 100.0)).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let t = candle_core::Tensor::new(tv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let f_t = candle_core::Tensor::new(fv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let tc = candle_core::Tensor::new(tv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let fc = candle_core::Tensor::new(fv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let g = l.gt(&r).unwrap().where_cond(&t, &f_t).unwrap();
+    let c = lc.gt(&rc).unwrap().where_cond(&tc, &fc).unwrap();
+    let gv: Vec<half::bf16> = g.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+    let cv: Vec<half::bf16> = c.flatten_all().unwrap().to_vec1::<half::bf16>().unwrap();
+    for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+        assert_eq!(
+            a.to_f32(),
+            b.to_f32(),
+            "bf16 where: mismatch at {i}: gpu {} cpu {}",
+            a.to_f32(),
+            b.to_f32()
+        );
+    }
+    // f8e4m3
+    let l8: Vec<microfloat::f8e4m3> = f.iter().map(|x| microfloat::f8e4m3::from_f32(*x)).collect();
+    let r8: Vec<microfloat::f8e4m3> = f
+        .iter()
+        .rev()
+        .map(|x| microfloat::f8e4m3::from_f32(*x))
+        .collect();
+    let t8: Vec<microfloat::f8e4m3> = f
+        .iter()
+        .map(|x| microfloat::f8e4m3::from_f32(*x + 10.0))
+        .collect();
+    let f8: Vec<microfloat::f8e4m3> = f
+        .iter()
+        .map(|x| microfloat::f8e4m3::from_f32(*x - 10.0))
+        .collect();
+    let l8t = candle_core::Tensor::new(l8.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r8t = candle_core::Tensor::new(r8.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let t8t = candle_core::Tensor::new(t8.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let f8t = candle_core::Tensor::new(f8.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let l8c = candle_core::Tensor::new(l8.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r8c = candle_core::Tensor::new(r8.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let t8c = candle_core::Tensor::new(t8.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let f8c = candle_core::Tensor::new(f8.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let g8 = l8t.gt(&r8t).unwrap().where_cond(&t8t, &f8t).unwrap();
+    let c8 = l8c.gt(&r8c).unwrap().where_cond(&t8c, &f8c).unwrap();
+    let gv8: Vec<microfloat::f8e4m3> = g8
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<microfloat::f8e4m3>()
+        .unwrap();
+    let cv8: Vec<microfloat::f8e4m3> = c8
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<microfloat::f8e4m3>()
+        .unwrap();
+    for (i, (a, b)) in gv8.iter().zip(cv8.iter()).enumerate() {
+        assert_eq!(
+            a.to_f32(),
+            b.to_f32(),
+            "f8e4m3 where: mismatch at {i}: gpu {} cpu {}",
+            a.to_f32(),
+            b.to_f32()
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} where_cond (bf16/f8e4m3) OK");
+}
+/// Binary ops for F16 (native half) vs the CPU backend.
+#[test]
+fn test_vulkan_binary_ops_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| ((i % 9) as f32 - 4.0) * 0.5).collect();
+    let lv: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let rv: Vec<half::f16> = f
+        .iter()
+        .map(|x| half::f16::from_f32(*x * 0.5 + 0.25))
+        .collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<half::f16> = g
+            .to_vec2::<half::f16>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        let cv: Vec<half::f16> = c
+            .to_vec2::<half::f16>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                close(a.to_f32(), b.to_f32(), 0.02),
+                "f16 binary {name}: mismatch at {i}: gpu {} cpu {}",
+                a.to_f32(),
+                b.to_f32()
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} f16 binary ops OK");
+}
+/// Binary ops for F64 (native double) vs the CPU backend.
+#[test]
+fn test_vulkan_binary_ops_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f64> = (0..32).map(|i| ((i % 9) as f64 - 4.0) * 0.5).collect();
+    let lv: Vec<f64> = f.clone();
+    let rv: Vec<f64> = f.iter().map(|x| x * 0.5 + 0.25).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<f64> = g.to_vec2::<f64>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<f64> = c.to_vec2::<f64>().unwrap().into_iter().flatten().collect();
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                close64(*a, *b, 1e-9),
+                "f64 binary {name}: mismatch at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} f64 binary ops OK");
+}
+/// Cmp ops for F16 (native half) vs the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| ((i % 7) as f32 - 3.0) * 0.5).collect();
+    let lv: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let rv: Vec<half::f16> = f
+        .iter()
+        .map(|x| half::f16::from_f32(*x * 0.7 + 0.3))
+        .collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv, cv, "f16 cmp {name}: mismatch");
+    }
+    tracing::debug!("Vulkan device {gpu_id} f16 cmp ops OK");
+}
+/// Cmp ops for F64 (native double) vs the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f64> = (0..32).map(|i| ((i % 7) as f64 - 3.0) * 0.5).collect();
+    let lv: Vec<f64> = f.clone();
+    let rv: Vec<f64> = f.iter().map(|x| x * 0.7 + 0.3).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv, cv, "f64 cmp {name}: mismatch");
+    }
+    tracing::debug!("Vulkan device {gpu_id} f64 cmp ops OK");
+}
+/// Unary ops for F16 (native half) vs the CPU backend.
+#[test]
+fn test_vulkan_unary_ops_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| 0.5 + (i as f32) * 0.25).collect();
+    let lv: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("log", l.log().unwrap(), lc.log().unwrap()),
+        ("abs", l.abs().unwrap(), lc.abs().unwrap()),
+        ("recip", l.recip().unwrap(), lc.recip().unwrap()),
+        ("sqr", l.sqr().unwrap(), lc.sqr().unwrap()),
+        ("relu", l.relu().unwrap(), lc.relu().unwrap()),
+        ("tanh", l.tanh().unwrap(), lc.tanh().unwrap()),
+        ("exp", l.exp().unwrap(), lc.exp().unwrap()),
+        ("sqrt", l.sqrt().unwrap(), lc.sqrt().unwrap()),
+        ("silu", l.silu().unwrap(), lc.silu().unwrap()),
+        ("neg", l.neg().unwrap(), lc.neg().unwrap()),
+        ("gelu", l.gelu().unwrap(), lc.gelu().unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<half::f16> = g
+            .to_vec2::<half::f16>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        let cv: Vec<half::f16> = c
+            .to_vec2::<half::f16>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                close(a.to_f32(), b.to_f32(), 0.05),
+                "f16 unary {name}: mismatch at {i}: gpu {} cpu {}",
+                a.to_f32(),
+                b.to_f32()
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} f16 unary ops OK");
+}
+/// Unary ops for F64 (native double) vs the CPU backend.
+#[test]
+fn test_vulkan_unary_ops_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f64> = (0..32).map(|i| 0.5 + (i as f64) * 0.25).collect();
+    let lv: Vec<f64> = f.clone();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("log", l.log().unwrap(), lc.log().unwrap()),
+        ("abs", l.abs().unwrap(), lc.abs().unwrap()),
+        ("recip", l.recip().unwrap(), lc.recip().unwrap()),
+        ("sqr", l.sqr().unwrap(), lc.sqr().unwrap()),
+        ("relu", l.relu().unwrap(), lc.relu().unwrap()),
+        ("tanh", l.tanh().unwrap(), lc.tanh().unwrap()),
+        ("exp", l.exp().unwrap(), lc.exp().unwrap()),
+        ("sqrt", l.sqrt().unwrap(), lc.sqrt().unwrap()),
+        ("silu", l.silu().unwrap(), lc.silu().unwrap()),
+        ("neg", l.neg().unwrap(), lc.neg().unwrap()),
+        ("gelu", l.gelu().unwrap(), lc.gelu().unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<f64> = g.to_vec2::<f64>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<f64> = c.to_vec2::<f64>().unwrap().into_iter().flatten().collect();
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                close64(*a, *b, 1e-6),
+                "f64 unary {name}: mismatch at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} f64 unary ops OK");
+}
+/// affine for F16 and F64 (native) vs the CPU backend.
+#[test]
+fn test_vulkan_affine_f16_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.25 - 4.0).collect();
+    let (mul, add) = (2.5f64, -1.0f64);
+    // f16
+    let lv: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let g = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap()
+        .affine(mul, add)
+        .unwrap();
+    let c = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap()
+        .affine(mul, add)
+        .unwrap();
+    let gv: Vec<half::f16> = g.flatten_all().unwrap().to_vec1::<half::f16>().unwrap();
+    let cv: Vec<half::f16> = c.flatten_all().unwrap().to_vec1::<half::f16>().unwrap();
+    for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+        assert!(
+            close(a.to_f32(), b.to_f32(), 0.05),
+            "f16 affine: mismatch at {i}: gpu {} cpu {}",
+            a.to_f32(),
+            b.to_f32()
+        );
+    }
+    // f64
+    let fv: Vec<f64> = (0..32).map(|i| (i as f64) * 0.25 - 4.0).collect();
+    let g6 = candle_core::Tensor::new(fv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap()
+        .affine(mul, add)
+        .unwrap();
+    let c6 = candle_core::Tensor::new(fv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap()
+        .affine(mul, add)
+        .unwrap();
+    let gv6: Vec<f64> = g6.flatten_all().unwrap().to_vec1::<f64>().unwrap();
+    let cv6: Vec<f64> = c6.flatten_all().unwrap().to_vec1::<f64>().unwrap();
+    for (i, (a, b)) in gv6.iter().zip(cv6.iter()).enumerate() {
+        assert!(
+            close64(*a, *b, 1e-9),
+            "f64 affine: mismatch at {i}: gpu {a} cpu {b}"
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} affine (f16/f64) OK");
+}
+/// where_cond for F16 and F64 (native) vs the CPU backend.
+#[test]
+fn test_vulkan_where_f16_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.5 - 8.0).collect();
+    // f16
+    let lv: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let rv: Vec<half::f16> = f.iter().rev().map(|x| half::f16::from_f32(*x)).collect();
+    let tv: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x + 100.0)).collect();
+    let fv: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x - 100.0)).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let t = candle_core::Tensor::new(tv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let ft = candle_core::Tensor::new(fv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let tc = candle_core::Tensor::new(tv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let fc = candle_core::Tensor::new(fv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let g = l.gt(&r).unwrap().where_cond(&t, &ft).unwrap();
+    let c = lc.gt(&rc).unwrap().where_cond(&tc, &fc).unwrap();
+    let gv: Vec<half::f16> = g.flatten_all().unwrap().to_vec1::<half::f16>().unwrap();
+    let cv: Vec<half::f16> = c.flatten_all().unwrap().to_vec1::<half::f16>().unwrap();
+    for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+        assert_eq!(
+            a.to_f32(),
+            b.to_f32(),
+            "f16 where: mismatch at {i}: gpu {} cpu {}",
+            a.to_f32(),
+            b.to_f32()
+        );
+    }
+    // f64
+    let f6: Vec<f64> = (0..32).map(|i| (i as f64) * 0.5 - 8.0).collect();
+    let l6 = candle_core::Tensor::new(f6.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r6 = candle_core::Tensor::new(
+        f6.iter().rev().cloned().collect::<Vec<f64>>().as_slice(),
+        &dev,
+    )
+    .unwrap()
+    .reshape(shape.clone())
+    .unwrap();
+    let t6 = candle_core::Tensor::new(
+        f6.iter()
+            .map(|x| x + 100.0)
+            .collect::<Vec<f64>>()
+            .as_slice(),
+        &dev,
+    )
+    .unwrap()
+    .reshape(shape.clone())
+    .unwrap();
+    let f6f = candle_core::Tensor::new(
+        f6.iter()
+            .map(|x| x - 100.0)
+            .collect::<Vec<f64>>()
+            .as_slice(),
+        &dev,
+    )
+    .unwrap()
+    .reshape(shape.clone())
+    .unwrap();
+    let l6c = candle_core::Tensor::new(f6.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r6c = candle_core::Tensor::new(
+        f6.iter().rev().cloned().collect::<Vec<f64>>().as_slice(),
+        &cpu,
+    )
+    .unwrap()
+    .reshape(shape.clone())
+    .unwrap();
+    let t6c = candle_core::Tensor::new(
+        f6.iter()
+            .map(|x| x + 100.0)
+            .collect::<Vec<f64>>()
+            .as_slice(),
+        &cpu,
+    )
+    .unwrap()
+    .reshape(shape.clone())
+    .unwrap();
+    let f6fc = candle_core::Tensor::new(
+        f6.iter()
+            .map(|x| x - 100.0)
+            .collect::<Vec<f64>>()
+            .as_slice(),
+        &cpu,
+    )
+    .unwrap()
+    .reshape(shape.clone())
+    .unwrap();
+    let g6 = l6.gt(&r6).unwrap().where_cond(&t6, &f6f).unwrap();
+    let c6 = l6c.gt(&r6c).unwrap().where_cond(&t6c, &f6fc).unwrap();
+    let gv6: Vec<f64> = g6.flatten_all().unwrap().to_vec1::<f64>().unwrap();
+    let cv6: Vec<f64> = c6.flatten_all().unwrap().to_vec1::<f64>().unwrap();
+    for (i, (a, b)) in gv6.iter().zip(cv6.iter()).enumerate() {
+        assert_eq!(a, b, "f64 where: mismatch at {i}: gpu {a} cpu {b}");
+    }
+    tracing::debug!("Vulkan device {gpu_id} where_cond (f16/f64) OK");
+}
+/// Binary ops for U8 vs the CPU backend.
+#[test]
+fn test_vulkan_binary_ops_u8() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lv: Vec<u8> = (0..32).map(|i| (i % 5 + 3) as u8).collect();
+    let rv: Vec<u8> = (0..32).map(|i| (i % 3 + 1) as u8).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv, cv, "U8 binary {name}: mismatch");
+    }
+    tracing::debug!("Vulkan device {gpu_id} U8 binary ops OK");
+}
+/// Cmp ops for U8 vs the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops_u8() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lv: Vec<u8> = (0..32).map(|i| (i % 5 + 3) as u8).collect();
+    let rv: Vec<u8> = (0..32).map(|i| (i % 3 + 1) as u8).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv, cv, "U8 cmp {name}: mismatch");
+    }
+    tracing::debug!("Vulkan device {gpu_id} U8 cmp ops OK");
+}
+/// Binary ops for U32 vs the CPU backend.
+#[test]
+fn test_vulkan_binary_ops_u32() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lv: Vec<u32> = (0..32).map(|i| (i % 5 + 3) as u32).collect();
+    let rv: Vec<u32> = (0..32).map(|i| (i % 3 + 1) as u32).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u32> = g.to_vec2::<u32>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u32> = c.to_vec2::<u32>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv, cv, "U32 binary {name}: mismatch");
+    }
+    tracing::debug!("Vulkan device {gpu_id} U32 binary ops OK");
+}
+/// Cmp ops for U32 vs the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops_u32() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lv: Vec<u32> = (0..32).map(|i| (i % 5 + 3) as u32).collect();
+    let rv: Vec<u32> = (0..32).map(|i| (i % 3 + 1) as u32).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv, cv, "U32 cmp {name}: mismatch");
+    }
+    tracing::debug!("Vulkan device {gpu_id} U32 cmp ops OK");
+}
+/// Binary ops for I16 vs the CPU backend.
+#[test]
+fn test_vulkan_binary_ops_i16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lv: Vec<i16> = (0..32).map(|i| (i % 5 + 3) as i16).collect();
+    let rv: Vec<i16> = (0..32).map(|i| (i % 3 + 1) as i16).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<i16> = g.to_vec2::<i16>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<i16> = c.to_vec2::<i16>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv, cv, "I16 binary {name}: mismatch");
+    }
+    tracing::debug!("Vulkan device {gpu_id} I16 binary ops OK");
+}
+/// Cmp ops for I16 vs the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops_i16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lv: Vec<i16> = (0..32).map(|i| (i % 5 + 3) as i16).collect();
+    let rv: Vec<i16> = (0..32).map(|i| (i % 3 + 1) as i16).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv, cv, "I16 cmp {name}: mismatch");
+    }
+    tracing::debug!("Vulkan device {gpu_id} I16 cmp ops OK");
+}
+/// Binary ops for I32 vs the CPU backend.
+#[test]
+fn test_vulkan_binary_ops_i32() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lv: Vec<i32> = (0..32).map(|i| i % 5 + 3).collect();
+    let rv: Vec<i32> = (0..32).map(|i| i % 3 + 1).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<i32> = g.to_vec2::<i32>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<i32> = c.to_vec2::<i32>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv, cv, "I32 binary {name}: mismatch");
+    }
+    tracing::debug!("Vulkan device {gpu_id} I32 binary ops OK");
+}
+/// Cmp ops for I32 vs the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops_i32() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lv: Vec<i32> = (0..32).map(|i| i % 5 + 3).collect();
+    let rv: Vec<i32> = (0..32).map(|i| i % 3 + 1).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv, cv, "I32 cmp {name}: mismatch");
+    }
+    tracing::debug!("Vulkan device {gpu_id} I32 cmp ops OK");
+}
+/// Binary ops for I64 vs the CPU backend.
+#[test]
+fn test_vulkan_binary_ops_i64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lv: Vec<i64> = (0..32).map(|i| (i % 5 + 3) as i64).collect();
+    let rv: Vec<i64> = (0..32).map(|i| (i % 3 + 1) as i64).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("add", l.add(&r).unwrap(), lc.add(&rc).unwrap()),
+        ("sub", l.sub(&r).unwrap(), lc.sub(&rc).unwrap()),
+        ("mul", l.mul(&r).unwrap(), lc.mul(&rc).unwrap()),
+        ("div", l.div(&r).unwrap(), lc.div(&rc).unwrap()),
+        ("maximum", l.maximum(&r).unwrap(), lc.maximum(&rc).unwrap()),
+        ("minimum", l.minimum(&r).unwrap(), lc.minimum(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<i64> = g.to_vec2::<i64>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<i64> = c.to_vec2::<i64>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv, cv, "I64 binary {name}: mismatch");
+    }
+    tracing::debug!("Vulkan device {gpu_id} I64 binary ops OK");
+}
+/// Cmp ops for I64 vs the CPU backend.
+#[test]
+fn test_vulkan_cmp_ops_i64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let lv: Vec<i64> = (0..32).map(|i| (i % 5 + 3) as i64).collect();
+    let rv: Vec<i64> = (0..32).map(|i| (i % 3 + 1) as i64).collect();
+    let l = candle_core::Tensor::new(lv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let r = candle_core::Tensor::new(rv.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let lc = candle_core::Tensor::new(lv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let rc = candle_core::Tensor::new(rv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let cases: Vec<(&str, candle_core::Tensor, candle_core::Tensor)> = vec![
+        ("eq", l.eq(&r).unwrap(), lc.eq(&rc).unwrap()),
+        ("ne", l.ne(&r).unwrap(), lc.ne(&rc).unwrap()),
+        ("lt", l.lt(&r).unwrap(), lc.lt(&rc).unwrap()),
+        ("le", l.le(&r).unwrap(), lc.le(&rc).unwrap()),
+        ("gt", l.gt(&r).unwrap(), lc.gt(&rc).unwrap()),
+        ("ge", l.ge(&r).unwrap(), lc.ge(&rc).unwrap()),
+    ];
+    for (name, g, c) in cases.iter() {
+        let gv: Vec<u8> = g.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        let cv: Vec<u8> = c.to_vec2::<u8>().unwrap().into_iter().flatten().collect();
+        assert_eq!(gv, cv, "I64 cmp {name}: mismatch");
+    }
+    tracing::debug!("Vulkan device {gpu_id} I64 cmp ops OK");
+}
+/// Matmul for F16 (native half, F32 accumulate) vs the CPU backend.
+#[test]
+fn test_vulkan_matmul_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.2 - 3.0).collect();
+    let g: Vec<f32> = (0..48).map(|i| (i as f32) * 0.1 - 2.0).collect();
+    let av: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let bv: Vec<half::f16> = g.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let ag = candle_core::Tensor::new(av.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(av.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(bv.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((8, 6)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(bv.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((8, 6)))
+        .unwrap();
+    let gres = ag.clone().matmul(&bg).unwrap();
+    let cres = ac.clone().matmul(&bc).unwrap();
+    for (x, y) in gres
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .zip(cres.to_vec2::<half::f16>().unwrap().into_iter().flatten())
+    {
+        assert!(
+            (x.to_f32() - y.to_f32()).abs() < 0.05 * (1.0 + y.to_f32().abs()),
+            "matmul f16: gpu {} cpu {}",
+            x.to_f32(),
+            y.to_f32()
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} matmul f16 OK");
+}
+/// Matmul for F64 (native double) vs the CPU backend.
+#[test]
+fn test_vulkan_matmul_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let f: Vec<f64> = (0..32).map(|i| (i as f64) * 0.2 - 3.0).collect();
+    let g: Vec<f64> = (0..48).map(|i| (i as f64) * 0.1 - 2.0).collect();
+    let ag = candle_core::Tensor::new(f.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(f.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(g.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((8, 6)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(g.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((8, 6)))
+        .unwrap();
+    let gres = ag.clone().matmul(&bg).unwrap();
+    let cres = ac.clone().matmul(&bc).unwrap();
+    for (x, y) in gres
+        .to_vec2::<f64>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .zip(cres.to_vec2::<f64>().unwrap().into_iter().flatten())
+    {
+        assert!(
+            (x - y).abs() < 1e-9 * (1.0 + y.abs()),
+            "matmul f64: gpu {x} cpu {y}"
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} matmul f64 OK");
+}
+/// Matmul for BF16 (BFloat16) vs the CPU backend. The shapes are not
+///
+/// aligned to the cooperative-matrix GEMM gate (m, k, n multiples of
+///
+/// 16), so this exercises the f16-widening fallback path.
+#[test]
+fn test_vulkan_matmul_bf16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let f: Vec<half::bf16> = (0..512)
+        .map(|i| half::bf16::from_f32((i as f32) * 0.2 - 3.0))
+        .collect();
+    let g: Vec<half::bf16> = (0..384)
+        .map(|i| half::bf16::from_f32((i as f32) * 0.1 - 2.0))
+        .collect();
+    let ag = candle_core::Tensor::new(f.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((32, 16)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(f.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((32, 16)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(g.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((16, 24)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(g.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((16, 24)))
+        .unwrap();
+    let gres = ag.clone().matmul(&bg).unwrap();
+    let cres = ac.clone().matmul(&bc).unwrap();
+    for (x, y) in gres
+        .to_vec2::<half::bf16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .zip(cres.to_vec2::<half::bf16>().unwrap().into_iter().flatten())
+    {
+        assert!(
+            (x.to_f32() - y.to_f32()).abs() < 0.05 * (1.0 + y.to_f32().abs()),
+            "matmul bf16: gpu {} cpu {}",
+            x.to_f32(),
+            y.to_f32()
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} matmul bf16 OK");
+}
+/// Matmul with m, k and n multiples of 16, the shapes the
+///
+/// cooperative-matrix GEMM kernels are gated on (the cooperative-
+///
+/// matrix load/store stride must be a multiple of the 16-element
+///
+/// tile row, and the lhs rows must not run past the end of the lhs
+///
+/// allocation): exercises the `linalg.CoopMat` kernels for F16 and
+///
+/// BF16 on capable devices (other shapes use the classic kernels,
+///
+/// covered by the plain matmul tests).
+#[test]
+fn test_vulkan_matmul_coopmat_aligned() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // Path verification: this test exists to exercise the cooperative-matrix
+    // GEMM. When the device (or probe) does not select coopmat, the matmuls
+    // below would silently fall back to the tiled kernel and still compare
+    // equal, so skip rather than validating the wrong path.
+    let vdev = match &dev {
+        candle_core::Device::Vulkan(v) => v,
+        _ => unreachable!(),
+    };
+    if !vdev.coopmat_gemm_available(candle_core::DType::F16) {
+        eprintln!("skipping: cooperative-matrix F16 GEMM not available on this device");
+        return;
+    }
+    let cpu = candle_core::Device::Cpu;
+    let m = 48usize;
+    let k = 32usize;
+    let n = 48usize;
+    // Values are scaled so the products stay inside the f16/bf16
+    // accumulator range (f16 max 65504; the coop-mat kernels
+    // accumulate in f16).
+    let f: Vec<f32> = (0..(m * k)).map(|i| (i as f32) * 0.02 - 0.3).collect();
+    let g: Vec<f32> = (0..(k * n)).map(|i| (i as f32) * 0.01 - 0.2).collect();
+    // F16.
+    let af: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let gf: Vec<half::f16> = g.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let ag = candle_core::Tensor::new(af.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((m, k)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(af.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((m, k)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(gf.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((k, n)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(gf.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((k, n)))
+        .unwrap();
+    let gres = ag.clone().matmul(&bg).unwrap();
+    let cres = ac.clone().matmul(&bc).unwrap();
+    let gv: Vec<half::f16> = gres
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect();
+    let cv: Vec<half::f16> = cres
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect();
+    let bads: Vec<(usize, f32, f32)> = gv
+        .iter()
+        .zip(cv.iter())
+        .enumerate()
+        .filter(|(_, (a, b))| (a.to_f32() - b.to_f32()).abs() >= 0.05 * (1.0 + b.to_f32().abs()))
+        .map(|(i, (a, b))| (i, a.to_f32(), b.to_f32()))
+        .collect();
+    let first: Vec<(usize, f32, f32)> = bads.iter().take(24).cloned().collect();
+    assert!(
+        bads.is_empty(),
+        "matmul f16 coopmat: {} mismatches, first: {first:?}",
+        bads.len()
+    );
+    // BF16 coopmat needs shaderBFloat16CooperativeMatrix on top of the base
+    // feature (e.g. RDNA 3.5 iGPUs lack it). Skip the BF16 leg rather than
+    // silently validating the tiled fallback.
+    if !vdev.coopmat_gemm_available(candle_core::DType::BF16) {
+        eprintln!("skipping BF16 coopmat leg: not available on this device");
+        return;
+    }
+    // BF16.
+    let ab: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let gb: Vec<half::bf16> = g.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let ag = candle_core::Tensor::new(ab.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((m, k)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(ab.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((m, k)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(gb.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((k, n)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(gb.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((k, n)))
+        .unwrap();
+    let gres = ag.clone().matmul(&bg).unwrap();
+    let cres = ac.clone().matmul(&bc).unwrap();
+    for (x, y) in gres
+        .to_vec2::<half::bf16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .zip(cres.to_vec2::<half::bf16>().unwrap().into_iter().flatten())
+    {
+        assert!(
+            (x.to_f32() - y.to_f32()).abs() < 0.05 * (1.0 + y.to_f32().abs()),
+            "matmul bf16 coopmat: gpu {} cpu {}",
+            x.to_f32(),
+            y.to_f32()
+        );
+    }
+    tracing::debug!("Vulkan device {gpu_id} matmul coopmat-aligned OK");
+}
+/// Reduce ops for F16 (native half, F32 accumulate) vs the CPU backend.
+#[test]
+fn test_vulkan_reduce_op_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.7 - 10.0).collect();
+    let v: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let (gs, cs) = (g.clone().sum(1).unwrap(), c.clone().sum(1).unwrap());
+    for (a, b) in gs
+        .to_vec1::<half::f16>()
+        .unwrap()
+        .iter()
+        .zip(cs.to_vec1::<half::f16>().unwrap().iter())
+    {
+        assert!(
+            (a.to_f32() - b.to_f32()).abs() < 0.05 * (1.0 + b.to_f32().abs()),
+            "sum f16: gpu {} cpu {}",
+            a.to_f32(),
+            b.to_f32()
+        );
+    }
+    let (gm, cm) = (g.clone().max(1).unwrap(), c.clone().max(1).unwrap());
+    assert_eq!(
+        gm.to_vec1::<half::f16>().unwrap(),
+        cm.to_vec1::<half::f16>().unwrap()
+    );
+    let (gn, cn) = (g.clone().min(1).unwrap(), c.clone().min(1).unwrap());
+    assert_eq!(
+        gn.to_vec1::<half::f16>().unwrap(),
+        cn.to_vec1::<half::f16>().unwrap()
+    );
+    let (ga, ca) = (g.clone().argmax(1).unwrap(), c.clone().argmax(1).unwrap());
+    assert_eq!(ga.to_vec1::<u32>().unwrap(), ca.to_vec1::<u32>().unwrap());
+    let (gb, cb) = (g.clone().argmin(1).unwrap(), c.clone().argmin(1).unwrap());
+    assert_eq!(gb.to_vec1::<u32>().unwrap(), cb.to_vec1::<u32>().unwrap());
+    tracing::debug!("Vulkan device {gpu_id} reduce_op f16 OK");
+}
+/// Reduce ops for F64 (native double) vs the CPU backend.
+#[test]
+fn test_vulkan_reduce_op_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let v: Vec<f64> = (0..32).map(|i| (i as f64) * 0.7 - 10.0).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let (gs, cs) = (g.clone().sum(1).unwrap(), c.clone().sum(1).unwrap());
+    for (a, b) in gs
+        .to_vec1::<f64>()
+        .unwrap()
+        .iter()
+        .zip(cs.to_vec1::<f64>().unwrap().iter())
+    {
+        assert!(
+            (a - b).abs() < 1e-9 * (1.0 + b.abs()),
+            "sum f64: gpu {a} cpu {b}"
+        );
+    }
+    let (gm, cm) = (g.clone().max(1).unwrap(), c.clone().max(1).unwrap());
+    assert_eq!(gm.to_vec1::<f64>().unwrap(), cm.to_vec1::<f64>().unwrap());
+    let (gn, cn) = (g.clone().min(1).unwrap(), c.clone().min(1).unwrap());
+    assert_eq!(gn.to_vec1::<f64>().unwrap(), cn.to_vec1::<f64>().unwrap());
+    let (ga, ca) = (g.clone().argmax(1).unwrap(), c.clone().argmax(1).unwrap());
+    assert_eq!(ga.to_vec1::<u32>().unwrap(), ca.to_vec1::<u32>().unwrap());
+    let (gb, cb) = (g.clone().argmin(1).unwrap(), c.clone().argmin(1).unwrap());
+    assert_eq!(gb.to_vec1::<u32>().unwrap(), cb.to_vec1::<u32>().unwrap());
+    tracing::debug!("Vulkan device {gpu_id} reduce_op f64 OK");
+}
+/// Reduce ops for BF16 (decoded to f32, accumulated in f32) vs the CPU backend.
+#[test]
+fn test_vulkan_reduce_op_bf16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let shape = candle_core::Shape::from((4, 8));
+    let f: Vec<f32> = (0..32).map(|i| (i as f32) * 0.7 - 10.0).collect();
+    let v: Vec<half::bf16> = f.iter().map(|x| half::bf16::from_f32(*x)).collect();
+    let g = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let c = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(shape.clone())
+        .unwrap();
+    let (gs, cs) = (g.clone().sum(1).unwrap(), c.clone().sum(1).unwrap());
+    for (a, b) in gs
+        .to_vec1::<half::bf16>()
+        .unwrap()
+        .iter()
+        .zip(cs.to_vec1::<half::bf16>().unwrap().iter())
+    {
+        assert!(
+            (a.to_f32() - b.to_f32()).abs() < 0.05 * (1.0 + b.to_f32().abs()),
+            "sum bf16: gpu {} cpu {}",
+            a.to_f32(),
+            b.to_f32()
+        );
+    }
+    let (gm, cm) = (g.clone().max(1).unwrap(), c.clone().max(1).unwrap());
+    assert_eq!(
+        gm.to_vec1::<half::bf16>().unwrap(),
+        cm.to_vec1::<half::bf16>().unwrap()
+    );
+    let (gn, cn) = (g.clone().min(1).unwrap(), c.clone().min(1).unwrap());
+    assert_eq!(
+        gn.to_vec1::<half::bf16>().unwrap(),
+        cn.to_vec1::<half::bf16>().unwrap()
+    );
+    let (ga, ca) = (g.clone().argmax(1).unwrap(), c.clone().argmax(1).unwrap());
+    assert_eq!(ga.to_vec1::<u32>().unwrap(), ca.to_vec1::<u32>().unwrap());
+    let (gb, cb) = (g.clone().argmin(1).unwrap(), c.clone().argmin(1).unwrap());
+    assert_eq!(gb.to_vec1::<u32>().unwrap(), cb.to_vec1::<u32>().unwrap());
+    tracing::debug!("Vulkan device {gpu_id} reduce_op bf16 OK");
+}
+/// conv1d for F16 (native half, F32 accumulate) vs the CPU backend.
+#[test]
+fn test_vulkan_conv1d_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let b = 2usize;
+    let c_in = 3usize;
+    let l_in = 12usize;
+    let c_out = 4usize;
+    let k = 4usize;
+    let in_f: Vec<f32> = (0..b * c_in * l_in)
+        .map(|i| (i as f32) * 0.1 - 5.0)
+        .collect();
+    let w_f: Vec<f32> = (0..c_out * c_in * k)
+        .map(|i| (i as f32) * 0.05 - 0.9)
+        .collect();
+    let in_v: Vec<half::f16> = in_f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let w_v: Vec<half::f16> = w_f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    for (padding, stride, dilation) in [(0, 1, 1), (2, 2, 1)] {
+        let gin = candle_core::Tensor::new(in_v.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c_in, l_in)))
+            .unwrap();
+        let gk = candle_core::Tensor::new(w_v.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((c_out, c_in, k)))
+            .unwrap();
+        let cin = candle_core::Tensor::new(in_v.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c_in, l_in)))
+            .unwrap();
+        let ck = candle_core::Tensor::new(w_v.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((c_out, c_in, k)))
+            .unwrap();
+        let gg = gin.conv1d(&gk, padding, stride, dilation, 1).unwrap();
+        let cc = cin.conv1d(&ck, padding, stride, dilation, 1).unwrap();
+        let gv = gg
+            .clone()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<half::f16>()
+            .unwrap();
+        let cv = cc
+            .clone()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<half::f16>()
+            .unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a.to_f32() - b.to_f32()).abs() < 0.05 * (1.0 + b.to_f32().abs()),
+                "conv1d f16 p={padding} s={stride} at {i}: gpu {} cpu {}",
+                a.to_f32(),
+                b.to_f32()
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} conv1d f16 OK");
+}
+/// conv1d for F64 (native double) vs the CPU backend.
+#[test]
+fn test_vulkan_conv1d_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    let b = 2usize;
+    let c_in = 3usize;
+    let l_in = 12usize;
+    let c_out = 4usize;
+    let k = 4usize;
+    let in_v: Vec<f64> = (0..b * c_in * l_in)
+        .map(|i| (i as f64) * 0.1 - 5.0)
+        .collect();
+    let w_v: Vec<f64> = (0..c_out * c_in * k)
+        .map(|i| (i as f64) * 0.05 - 0.9)
+        .collect();
+    for (padding, stride, dilation) in [(0, 1, 1), (2, 2, 1)] {
+        let gin = candle_core::Tensor::new(in_v.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c_in, l_in)))
+            .unwrap();
+        let gk = candle_core::Tensor::new(w_v.as_slice(), &dev)
+            .unwrap()
+            .reshape(candle_core::Shape::from((c_out, c_in, k)))
+            .unwrap();
+        let cin = candle_core::Tensor::new(in_v.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((b, c_in, l_in)))
+            .unwrap();
+        let ck = candle_core::Tensor::new(w_v.as_slice(), &cpu)
+            .unwrap()
+            .reshape(candle_core::Shape::from((c_out, c_in, k)))
+            .unwrap();
+        let gg = gin.conv1d(&gk, padding, stride, dilation, 1).unwrap();
+        let cc = cin.conv1d(&ck, padding, stride, dilation, 1).unwrap();
+        let gv = gg.clone().flatten_all().unwrap().to_vec1::<f64>().unwrap();
+        let cv = cc.clone().flatten_all().unwrap().to_vec1::<f64>().unwrap();
+        assert_eq!(gv.len(), cv.len());
+        for (i, (a, b)) in gv.iter().zip(cv.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-9 * (1.0 + b.abs()),
+                "conv1d f64 p={padding} s={stride} at {i}: gpu {a} cpu {b}"
+            );
+        }
+    }
+    tracing::debug!("Vulkan device {gpu_id} conv1d f64 OK");
+}
+
+#[test]
+fn test_vulkan_avg_pool2d_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let f: Vec<f32> = (0..16).map(|i| (i as f32) * 0.5 - 3.0).collect();
+    let v: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let t = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 2, 4)))
+        .unwrap();
+    let out = t.avg_pool2d((2, 2)).unwrap();
+    let got: Vec<f32> = out
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .map(f32::from)
+        .collect();
+    let cpu = candle_core::Device::Cpu;
+    let tc = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 2, 4)))
+        .unwrap();
+    let exp: Vec<f32> = tc
+        .avg_pool2d((2, 2))
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    assert_eq!(got.len(), exp.len());
+    for (g, e) in got.iter().zip(exp.iter()) {
+        assert!((g - e).abs() < 0.05f32, "got {} vs exp {}", g, e);
+    }
+}
+
+#[test]
+fn test_vulkan_max_pool2d_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let f: Vec<f64> = (0..16).map(|i| (i as f64) * 0.5 - 3.0).collect();
+    let t = candle_core::Tensor::new(f.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 2, 4)))
+        .unwrap();
+    let out = t.max_pool2d((2, 2)).unwrap();
+    let got: Vec<f64> = out.flatten_all().unwrap().to_vec1().unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let tc = candle_core::Tensor::new(f.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 2, 4)))
+        .unwrap();
+    let exp: Vec<f64> = tc
+        .max_pool2d((2, 2))
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    assert_eq!(got.len(), exp.len());
+    for (g, e) in got.iter().zip(exp.iter()) {
+        assert!((g - e).abs() < 1e-9f64, "got {} vs exp {}", g, e);
+    }
+}
+
+#[test]
+fn test_vulkan_upsample_nearest2d_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let f: Vec<f32> = (0..8).map(|i| (i as f32) * 0.5 - 1.0).collect();
+    let v: Vec<half::f16> = f.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let t = candle_core::Tensor::new(v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 2, 2)))
+        .unwrap();
+    let out = t.upsample_nearest2d(4, 4).unwrap();
+    let got: Vec<f32> = out
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    let cpu = candle_core::Device::Cpu;
+    let tc = candle_core::Tensor::new(v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((1, 2, 2, 2)))
+        .unwrap();
+    let exp: Vec<f32> = tc
+        .upsample_nearest2d(4, 4)
+        .unwrap()
+        .to_dtype(candle_core::DType::F32)
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    assert_eq!(got.len(), exp.len());
+    for (g, e) in got.iter().zip(exp.iter()) {
+        assert!((g - e).abs() < 0.05f32, "got {} vs exp {}", g, e);
+    }
+}
+
+#[test]
+fn test_vulkan_gather_f16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    // emb: (10, 8)
+    let emb_v: Vec<f32> = (0..80).map(|i| (i as f32) * 0.25 - 10.0).collect();
+    let emb_f16: Vec<half::f16> = emb_v.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let emb = candle_core::Tensor::new(emb_f16.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((10, 8)))
+        .unwrap();
+    let emb_c = candle_core::Tensor::new(emb_f16.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((10, 8)))
+        .unwrap();
+    // ids: (4, 8), same rank as the embeddings, each entry < 10.
+    let ids_v: Vec<u32> = (0..32).map(|i| (i * 7 % 10) as u32).collect();
+    let ids = candle_core::Tensor::new(ids_v.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let ids_c = candle_core::Tensor::new(ids_v.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((4, 8)))
+        .unwrap();
+    let g = emb.clone().gather(&ids, 0).unwrap();
+    let c = emb_c.clone().gather(&ids_c, 0).unwrap();
+    let gv: Vec<f32> = g
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .map(f32::from)
+        .collect();
+    let cv: Vec<f32> = c
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .map(f32::from)
+        .collect();
+    for (a, b) in gv.iter().zip(cv.iter()) {
+        assert!((a - b).abs() < 0.05f32, "got {} vs exp {}", a, b);
+    }
+}
+
+#[test]
+fn test_vulkan_to_dtype_f64() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let f: Vec<f64> = (0..16).map(|i| (i as f64) * 0.5 - 3.0).collect();
+    let t = candle_core::Tensor::new(f.as_slice(), &dev).unwrap();
+    // F64 -> F32
+    let t32 = t.to_dtype(candle_core::DType::F32).unwrap();
+    let got: Vec<f32> = t32.flatten_all().unwrap().to_vec1().unwrap();
+    for (g, e) in got.iter().zip(f.iter().map(|x| *x as f32)) {
+        assert!((g - e).abs() < 1e-6f32, "got {} vs exp {}", g, e);
+    }
+    // F32 -> F64
+    let f32: Vec<f32> = (0..16).map(|i| (i as f32) * 0.5 - 3.0).collect();
+    let t32 = candle_core::Tensor::new(f32.as_slice(), &dev).unwrap();
+    let t64 = t32.to_dtype(candle_core::DType::F64).unwrap();
+    let got: Vec<f64> = t64.flatten_all().unwrap().to_vec1().unwrap();
+    for (g, e) in got.iter().zip(f32.iter().map(|x| *x as f64)) {
+        assert!((g - e).abs() < 1e-6f64, "got {} vs exp {}", g, e);
+    }
+}
+/// `Tensor::copy` (which calls `VulkanStorage::try_clone`) must return an
+///
+/// independent deep copy: same dtype, shape, and values as the original at
+///
+/// snapshot time, but unaffected by later in-place mutations of the
+///
+/// original tensor's storage.
+#[test]
+fn test_vulkan_try_clone() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // 1D F32: correctness + independence.
+    let base: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0];
+    let t = candle_core::Tensor::new(base.as_slice(), &dev).unwrap();
+    let copy = t.copy().unwrap();
+    // dtype and shape are preserved.
+    assert_eq!(copy.dtype(), candle_core::DType::F32);
+    assert_eq!(copy.dims(), t.dims());
+    // values match the original at snapshot time.
+    let cv: Vec<f32> = copy.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    assert_eq!(cv, base);
+    // Mutate the original in-place (index_add is an in-place op) and verify
+    // the copy is unaffected.
+    let ids = candle_core::Tensor::new(&[0u32], &dev).unwrap();
+    let src = candle_core::Tensor::new(&[10.0f32], &dev).unwrap();
+    let t2 = t.index_add(&ids, &src, 0).unwrap();
+    let tv: Vec<f32> = t2.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    let mut exp = base.clone();
+    exp[0] += 10.0;
+    assert_eq!(tv, exp, "in-place mutation should apply to the original");
+    let cv2: Vec<f32> = copy.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    assert_eq!(
+        cv2, base,
+        "copy must be independent of the original's mutation"
+    );
+    // 2D F32: correctness.
+    let m = 3usize;
+    let n = 4usize;
+    let base2: Vec<f32> = (0..m * n).map(|i| (i as f32) * 0.5 - 1.0).collect();
+    let t2d = candle_core::Tensor::new(base2.as_slice(), &dev)
+        .unwrap()
+        .reshape((m, n))
+        .unwrap();
+    let copy2d = t2d.copy().unwrap();
+    assert_eq!(copy2d.dtype(), candle_core::DType::F32);
+    assert_eq!(copy2d.dims(), [m, n].as_slice());
+    let cv2d: Vec<f32> = copy2d.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    assert_eq!(cv2d, base2);
+    // F16: correctness.
+    let base16: Vec<f32> = (0..8).map(|i| (i as f32) * 0.5 - 2.0).collect();
+    let f16v: Vec<half::f16> = base16.iter().map(|x| half::f16::from_f32(*x)).collect();
+    let t16 = candle_core::Tensor::new(f16v.as_slice(), &dev).unwrap();
+    let copy16 = t16.copy().unwrap();
+    assert_eq!(copy16.dtype(), candle_core::DType::F16);
+    let cv16: Vec<half::f16> = copy16
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<half::f16>()
+        .unwrap();
+    assert_eq!(cv16, f16v);
+    tracing::debug!("Vulkan device {gpu_id} try_clone OK");
+}
+/// Dequantize test: for each `GgmlDType`, quantize a deterministic f32 tensor
+///
+/// on the CPU, dequantize on the CPU (the reference), then load the same raw
+///
+/// quantized bytes onto the Vulkan device and dequantize there. The two
+///
+/// dequantizations must agree. This validates all 15 Slang dequantize kernels.
+#[test]
+fn test_vulkan_dequantize_all_dtypes() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(vk_dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu_dev = candle_core::Device::Cpu;
+    let dtypes: [candle_core::quantized::GgmlDType; 15] = [
+        candle_core::quantized::GgmlDType::F32,
+        candle_core::quantized::GgmlDType::F16,
+        candle_core::quantized::GgmlDType::BF16,
+        candle_core::quantized::GgmlDType::Q4_0,
+        candle_core::quantized::GgmlDType::Q4_1,
+        candle_core::quantized::GgmlDType::Q5_0,
+        candle_core::quantized::GgmlDType::Q5_1,
+        candle_core::quantized::GgmlDType::Q8_0,
+        candle_core::quantized::GgmlDType::Q8_1,
+        candle_core::quantized::GgmlDType::Q2K,
+        candle_core::quantized::GgmlDType::Q3K,
+        candle_core::quantized::GgmlDType::Q4K,
+        candle_core::quantized::GgmlDType::Q5K,
+        candle_core::quantized::GgmlDType::Q6K,
+        candle_core::quantized::GgmlDType::Q8K,
+    ];
+    for dtype in dtypes {
+        let tol = match dtype {
+            candle_core::quantized::GgmlDType::F32
+            | candle_core::quantized::GgmlDType::F16
+            | candle_core::quantized::GgmlDType::BF16 => 0.0,
+            _ => 1e-3,
+        };
+        let block = dtype.block_size();
+        let n_blocks = 4usize;
+        let elem_count = n_blocks * block;
+        let base: Vec<f32> = (0..elem_count).map(|i| (i as f32) * 0.13 - 3.0).collect();
+        let src = candle_core::Tensor::new(base.as_slice(), &cpu_dev).unwrap();
+        let cpu_q = candle_core::quantized::QTensor::quantize(&src, dtype).unwrap();
+        let ref_vals: Vec<f32> = cpu_q
+            .dequantize(&cpu_dev)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let bytes = cpu_q.data().unwrap();
+        let vk_storage =
+            candle_core::quantized::QStorage::from_data(bytes, &vk_dev, dtype).unwrap();
+        let vk_q = candle_core::quantized::QTensor::new(vk_storage, elem_count).unwrap();
+        let vk_vals: Vec<f32> = vk_q
+            .dequantize(&vk_dev)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        assert_eq!(vk_vals.len(), ref_vals.len(), "{dtype:?} length mismatch");
+        let max_diff = vk_vals
+            .iter()
+            .zip(ref_vals.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_diff <= tol,
+            "{dtype:?}: Vulkan dequantize max diff {max_diff} exceeds tolerance {tol}"
+        );
+        tracing::debug!("Vulkan device {gpu_id} dequantize {dtype:?} OK (max_diff={max_diff})");
+    }
+}
+/// Quantized matmul (fwd) test: for each `GgmlDType`, quantize a `(n, k)`
+///
+/// weight matrix on the CPU, run the quantized matmul `x @ w^T` on Vulkan, and
+///
+/// compare against the CPU reference computed with the dequantized weights.
+///
+/// This validates `QVulkanStorage::fwd` for all 15 dtypes.
+#[test]
+fn test_vulkan_quantized_matmul() {
+    use candle_core::Module;
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(vk_dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu_dev = candle_core::Device::Cpu;
+    let dtypes: [candle_core::quantized::GgmlDType; 15] = [
+        candle_core::quantized::GgmlDType::F32,
+        candle_core::quantized::GgmlDType::F16,
+        candle_core::quantized::GgmlDType::BF16,
+        candle_core::quantized::GgmlDType::Q4_0,
+        candle_core::quantized::GgmlDType::Q4_1,
+        candle_core::quantized::GgmlDType::Q5_0,
+        candle_core::quantized::GgmlDType::Q5_1,
+        candle_core::quantized::GgmlDType::Q8_0,
+        candle_core::quantized::GgmlDType::Q8_1,
+        candle_core::quantized::GgmlDType::Q2K,
+        candle_core::quantized::GgmlDType::Q3K,
+        candle_core::quantized::GgmlDType::Q4K,
+        candle_core::quantized::GgmlDType::Q5K,
+        candle_core::quantized::GgmlDType::Q6K,
+        candle_core::quantized::GgmlDType::Q8K,
+    ];
+    // (k, n) shapes: (256, 64) is a single quantized block per column;
+    // k=1024 spans four blocks per column (multi-block indexing); n=1000 is
+    // not a multiple of the 32-wide tile. m=1 exercises the fused
+    // dequant+GEMM path (decode) for Q4_0 and Q4_K; m=4 exercises the
+    // materialize-then-GEMM path.
+    for &(k, n) in &[
+        (256usize, 64usize),
+        (1024usize, 64usize),
+        (1024usize, 1024usize),
+        (1024usize, 1000usize),
+    ] {
+        for m in [1usize, 4, 16, 17] {
+            for dtype in dtypes {
+                let w_vals: Vec<f32> = (0..n * k).map(|i| (i as f32) * 0.11 - 2.0).collect();
+                let w_cpu = candle_core::Tensor::new(w_vals.as_slice(), &cpu_dev)
+                    .unwrap()
+                    .reshape((n, k))
+                    .unwrap();
+                let x_vals: Vec<f32> = (0..m * k).map(|i| (i as f32) * 0.17 - 1.0).collect();
+                let x_cpu = candle_core::Tensor::new(x_vals.as_slice(), &cpu_dev)
+                    .unwrap()
+                    .reshape((m, k))
+                    .unwrap();
+                let w_q_cpu = candle_core::quantized::QTensor::quantize(&w_cpu, dtype).unwrap();
+                let w_deq_cpu = w_q_cpu.dequantize(&cpu_dev).unwrap();
+                let ref_t = x_cpu.matmul(&w_deq_cpu.t().unwrap()).unwrap();
+                let ref_vals: Vec<f32> = ref_t.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+                let bytes = w_q_cpu.data().unwrap();
+                let w_q_storage =
+                    candle_core::quantized::QStorage::from_data(bytes, &vk_dev, dtype).unwrap();
+                let w_q_vk = candle_core::quantized::QTensor::new(w_q_storage, (n, k)).unwrap();
+                let qm = candle_core::quantized::QMatMul::from_qtensor(w_q_vk).unwrap();
+                let x_vk = candle_core::Tensor::new(x_vals.as_slice(), &vk_dev)
+                    .unwrap()
+                    .reshape((m, k))
+                    .unwrap();
+                let out = qm.forward(&x_vk).unwrap();
+                let out_vals: Vec<f32> = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+                assert_eq!(
+                    out_vals.len(),
+                    ref_vals.len(),
+                    "{dtype:?} matmul length mismatch"
+                );
+                let max_err = out_vals
+                    .iter()
+                    .zip(ref_vals.iter())
+                    .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+                    .fold(0.0f32, f32::max);
+                assert!(
+                    max_err <= 1e-3,
+                    "{dtype:?} m={m} k={k} n={n}: Vulkan quantized matmul max_err {max_err} exceeds 1e-3"
+                );
+                tracing::debug!(
+                    "Vulkan device {gpu_id} quantized matmul {dtype:?} m={m} k={k} n={n} OK (max_err={max_err})"
+                );
+            }
+        }
+    }
+}
+/// Fused routed-MoE quantized GEMM: for each fused-MoE dtype, quantize a few
+/// distinct (n, k) expert weight matrices, route (num_routes,) inputs to them,
+/// run `QVulkanStorage::fused_moe_gemm`, and compare against the CPU reference
+/// computed with the dequantized expert weights.
+#[test]
+fn test_vulkan_moe_gemm() {
+    use candle_core::backend::BackendStorage;
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(vk_dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let vk_device = match &vk_dev {
+        candle_core::Device::Vulkan(v) => v.clone(),
+        _ => unreachable!(),
+    };
+    let cpu_dev = candle_core::Device::Cpu;
+    let experts = 3usize;
+    let n = 64usize;
+    let k = 512usize; // multiple of the 256/32 block sizes across the dtypes
+    let num_routes = 5usize;
+    let dtypes = [
+        candle_core::quantized::GgmlDType::Q2K,
+        candle_core::quantized::GgmlDType::Q3K,
+        candle_core::quantized::GgmlDType::Q4K,
+        candle_core::quantized::GgmlDType::Q6K,
+        candle_core::quantized::GgmlDType::Q8_0,
+    ];
+    for dtype in dtypes {
+        // Distinct (n, k) f32 weights per expert; quantize each on the CPU and
+        // concatenate the quantized bytes into the (experts, n, k) storage.
+        let mut expert_deq: Vec<Vec<f32>> = Vec::new();
+        let mut all_bytes: Vec<u8> = Vec::new();
+        for e in 0..experts {
+            let w: Vec<f32> = (0..n * k)
+                .map(|i| i as f32 * 0.11 + e as f32 * 1.7 - 5.0)
+                .collect();
+            let w_t = candle_core::Tensor::new(w.as_slice(), &cpu_dev)
+                .unwrap()
+                .reshape((n, k))
+                .unwrap();
+            let q = candle_core::quantized::QTensor::quantize(&w_t, dtype).unwrap();
+            expert_deq.push(
+                q.dequantize(&cpu_dev)
+                    .unwrap()
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap(),
+            );
+            all_bytes.extend_from_slice(&q.data().unwrap());
+        }
+        let lhs_vals: Vec<f32> = (0..num_routes * k).map(|i| i as f32 * 0.17 - 1.0).collect();
+        let ids_vals: Vec<u32> = (0..num_routes)
+            .map(|r| (r as u32 * 7919) % experts as u32)
+            .collect();
+        let q_storage = candle_core::quantized::QStorage::from_data(
+            std::borrow::Cow::Owned(all_bytes),
+            &vk_dev,
+            dtype,
+        )
+        .unwrap();
+        let candle_core::quantized::QStorage::Vulkan(moe) = q_storage else {
+            panic!("expected Vulkan quantized storage");
+        };
+        let lhs = vk_device.storage_from_slice(&lhs_vals).unwrap();
+        let ids = vk_device.storage_from_slice(&ids_vals).unwrap();
+        let out = moe
+            .fused_moe_gemm(&lhs, &ids, experts, n, k, num_routes)
+            .unwrap();
+        let out_vals = match out.to_cpu_storage().unwrap() {
+            candle_core::CpuStorage::F32(v) => v,
+            _ => panic!("fused moe gemm output must be f32"),
+        };
+        // CPU reference: out[r, j] = sum_i lhs[r, i] * W[ids[r], j, i].
+        let mut ref_vals = vec![0.0f32; num_routes * n];
+        for r in 0..num_routes {
+            let e = ids_vals[r] as usize;
+            let w = &expert_deq[e];
+            for j in 0..n {
+                let mut acc = 0.0;
+                for i in 0..k {
+                    acc += lhs_vals[r * k + i] * w[j * k + i];
+                }
+                ref_vals[r * n + j] = acc;
+            }
+        }
+        assert_eq!(out_vals.len(), ref_vals.len(), "{dtype:?} length mismatch");
+        let max_err = out_vals
+            .iter()
+            .zip(ref_vals.iter())
+            .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_err <= 1e-3,
+            "{dtype:?}: Vulkan fused MoE GEMM max_err {max_err} exceeds 1e-3"
+        );
+        tracing::debug!("Vulkan device {gpu_id} fused MoE GEMM {dtype:?} OK (max_err={max_err})");
+    }
+}
+/// Quantized embedding test: for each `GgmlDType`, quantize a `(rows, hidden)`
+///
+/// weight matrix on the CPU, gather rows on Vulkan via `QMatMul::embedding`,
+///
+/// and compare against the CPU reference (dequantized weights, index_select).
+///
+/// Covers both the multi-id (whole-matrix dequant + gather) and the single-id
+///
+/// (row-only dequant, decode) paths. Validates `QVulkanStorage::embedding` for
+///
+/// all 15 dtypes.
+#[test]
+fn test_vulkan_quantized_embedding() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(vk_dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu_dev = candle_core::Device::Cpu;
+    let dtypes: [candle_core::quantized::GgmlDType; 15] = [
+        candle_core::quantized::GgmlDType::F32,
+        candle_core::quantized::GgmlDType::F16,
+        candle_core::quantized::GgmlDType::BF16,
+        candle_core::quantized::GgmlDType::Q4_0,
+        candle_core::quantized::GgmlDType::Q4_1,
+        candle_core::quantized::GgmlDType::Q5_0,
+        candle_core::quantized::GgmlDType::Q5_1,
+        candle_core::quantized::GgmlDType::Q8_0,
+        candle_core::quantized::GgmlDType::Q8_1,
+        candle_core::quantized::GgmlDType::Q2K,
+        candle_core::quantized::GgmlDType::Q3K,
+        candle_core::quantized::GgmlDType::Q4K,
+        candle_core::quantized::GgmlDType::Q5K,
+        candle_core::quantized::GgmlDType::Q6K,
+        candle_core::quantized::GgmlDType::Q8K,
+    ];
+    let rows = 16usize;
+    let hidden = 256usize;
+    // Multi-id (prefill) exercises the whole-matrix dequant + gather path;
+    // single-id (decode) exercises the row-only dequant fast path.
+    let id_sets: [Vec<u32>; 4] = [vec![5, 11, 2, 15], vec![9], vec![0], vec![15]];
+    for dtype in dtypes {
+        let w_vals: Vec<f32> = (0..rows * hidden)
+            .map(|i| (i as f32) * 0.07 - 2.0)
+            .collect();
+        let w_cpu = candle_core::Tensor::new(w_vals.as_slice(), &cpu_dev)
+            .unwrap()
+            .reshape((rows, hidden))
+            .unwrap();
+        let w_q_cpu = candle_core::quantized::QTensor::quantize(&w_cpu, dtype).unwrap();
+        let w_deq_cpu = w_q_cpu.dequantize(&cpu_dev).unwrap();
+        let bytes = w_q_cpu.data().unwrap();
+        let w_q_storage =
+            candle_core::quantized::QStorage::from_data(bytes, &vk_dev, dtype).unwrap();
+        let w_q_vk = candle_core::quantized::QTensor::new(w_q_storage, (rows, hidden)).unwrap();
+        let qm = candle_core::quantized::QMatMul::from_qtensor(w_q_vk).unwrap();
+        for ids in &id_sets {
+            let ids_cpu = candle_core::Tensor::new(&ids[..], &cpu_dev).unwrap();
+            let ref_t = w_deq_cpu.index_select(&ids_cpu, 0).unwrap();
+            let ref_vals: Vec<f32> = ref_t.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            let ids_vk = candle_core::Tensor::new(&ids[..], &vk_dev).unwrap();
+            let out = qm.embedding(&ids_vk).unwrap();
+            let out_vals: Vec<f32> = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            assert_eq!(
+                out_vals.len(),
+                ref_vals.len(),
+                "{dtype:?} embedding length mismatch"
+            );
+            let max_err = out_vals
+                .iter()
+                .zip(ref_vals.iter())
+                .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+                .fold(0.0f32, f32::max);
+            assert!(
+                max_err <= 1e-5,
+                "{dtype:?}: Vulkan quantized embedding max_err {max_err} exceeds 1e-5"
+            );
+            tracing::debug!(
+                "Vulkan device {gpu_id} quantized embedding {dtype:?} ids={ids:?} OK (max_err={max_err})"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_vulkan_rms_norm() {
+    use candle_core::backend::BackendDevice;
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let n_rows = 5usize;
+    let n = 64usize;
+    let eps: f64 = 1e-6;
+    let x_vals: Vec<f32> = (0..n_rows * n)
+        .map(|i| ((i % 7) as f32) * 0.3 - 1.0)
+        .collect();
+    let alpha_vals: Vec<f32> = (0..n).map(|i| 1.0 + ((i % 5) as f32) * 0.2).collect();
+    // CPU reference
+    let mut ref_t = vec![0.0f32; n_rows * n];
+    for i in 0..n_rows {
+        let base = i * n;
+        let sum2: f32 = (0..n).map(|j| x_vals[base + j] * x_vals[base + j]).sum();
+        let m = (sum2 / n as f32 + eps as f32).sqrt();
+        for j in 0..n {
+            ref_t[base + j] = x_vals[base + j] / m * alpha_vals[j];
+        }
+    }
+    for dtype in [
+        candle_core::DType::F32,
+        candle_core::DType::F16,
+        candle_core::DType::BF16,
+    ] {
+        let shape = (n_rows, n);
+        let in_storage = match dtype {
+            candle_core::DType::F32 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F32(x_vals.clone()))
+                .unwrap(),
+            candle_core::DType::BF16 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::BF16(
+                    x_vals.iter().map(|v| half::bf16::from_f32(*v)).collect(),
+                ))
+                .unwrap(),
+            _ => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F16(
+                    x_vals.iter().map(|v| half::f16::from_f32(*v)).collect(),
+                ))
+                .unwrap(),
+        };
+        let alpha_storage = match dtype {
+            candle_core::DType::F32 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F32(alpha_vals.clone()))
+                .unwrap(),
+            candle_core::DType::BF16 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::BF16(
+                    alpha_vals
+                        .iter()
+                        .map(|v| half::bf16::from_f32(*v))
+                        .collect(),
+                ))
+                .unwrap(),
+            _ => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F16(
+                    alpha_vals.iter().map(|v| half::f16::from_f32(*v)).collect(),
+                ))
+                .unwrap(),
+        };
+        let in_l = candle_core::Layout::contiguous(shape);
+        let alpha_l = candle_core::Layout::contiguous(n);
+        let out = in_storage
+            .rms_norm(&in_l, &alpha_storage, &alpha_l, eps)
+            .unwrap();
+        assert_eq!(out.dtype(), dtype, "rms_norm output dtype mismatch");
+        let out_cpu = out.to_cpu_storage().unwrap();
+        let out_f32: Vec<f32> = match out_cpu {
+            candle_core::CpuStorage::F32(v) => v,
+            candle_core::CpuStorage::F16(v) => v.iter().map(|v| v.to_f32()).collect(),
+            candle_core::CpuStorage::BF16(v) => v.iter().map(|v| v.to_f32()).collect(),
+            _ => panic!("unexpected out dtype"),
+        };
+        assert_eq!(out_f32.len(), ref_t.len(), "rms_norm length mismatch");
+        let max_err = out_f32
+            .iter()
+            .zip(ref_t.iter())
+            .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+            .fold(0.0f32, f32::max);
+        let tol = if dtype == candle_core::DType::BF16 {
+            1e-2
+        } else {
+            2e-3
+        };
+        assert!(
+            max_err <= tol,
+            "{dtype:?}: rms_norm max_err {max_err} exceeds {tol}"
+        );
+    }
+    tracing::debug!("Vulkan rms_norm OK for F32 + F16 + BF16");
+}
+/// LayerNorm (fused mean/variance reduction + normalize) vs the CPU reference,
+/// with a row longer than the workgroup so each thread folds multiple columns.
+#[test]
+fn test_vulkan_layer_norm() {
+    use candle_core::backend::BackendDevice;
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let n_rows = 3usize;
+    let n = 512usize;
+    let eps = 1e-5f64;
+    let x: Vec<f32> = (0..n_rows * n).map(|i| (i as f32) * 0.01 - 2.0).collect();
+    let alpha: Vec<f32> = (0..n).map(|i| (i as f32) * 0.001 + 0.5).collect();
+    let beta: Vec<f32> = (0..n).map(|i| (i as f32) * 0.002 - 0.1).collect();
+    let mut ref_t = vec![0.0f32; n_rows * n];
+    for i in 0..n_rows {
+        let base = i * n;
+        let sum: f64 = (0..n).map(|j| x[base + j] as f64).sum();
+        let sum2: f64 = (0..n).map(|j| (x[base + j] as f64).powi(2)).sum();
+        let mean = sum / n as f64;
+        let var = sum2 / n as f64 - mean * mean;
+        let inv_std = 1.0 / (var + eps).sqrt();
+        for j in 0..n {
+            ref_t[base + j] =
+                ((x[base + j] as f64 - mean) * inv_std * alpha[j] as f64 + beta[j] as f64) as f32;
+        }
+    }
+    let in_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(x))
+        .unwrap();
+    let alpha_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(alpha))
+        .unwrap();
+    let beta_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(beta))
+        .unwrap();
+    let in_l = candle_core::Layout::contiguous((n_rows, n));
+    let p_l = candle_core::Layout::contiguous(n);
+    let out = in_storage
+        .layer_norm(&in_l, &alpha_storage, &p_l, &beta_storage, &p_l, eps)
+        .unwrap();
+    let out_f32 = match out.to_cpu_storage().unwrap() {
+        candle_core::CpuStorage::F32(v) => v,
+        _ => panic!("unexpected out dtype"),
+    };
+    let max_err = out_f32
+        .iter()
+        .zip(ref_t.iter())
+        .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+        .fold(0.0f32, f32::max);
+    assert!(max_err <= 2e-3, "layer_norm max_err {max_err} exceeds 2e-3");
+    tracing::debug!("Vulkan layer_norm OK (max_err {max_err})");
+}
+
+#[test]
+fn test_vulkan_softmax_last_dim() {
+    use candle_core::backend::BackendDevice;
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let n_rows = 4usize;
+    let n = 32usize;
+    let x_vals: Vec<f32> = (0..n_rows * n)
+        .map(|i| ((i % 11) as f32) * 0.4 - 2.0)
+        .collect();
+    // CPU reference (numerically-stable softmax per row)
+    let mut ref_t = vec![0.0f32; n_rows * n];
+    for i in 0..n_rows {
+        let base = i * n;
+        let mx = (0..n)
+            .map(|j| x_vals[base + j])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let exps: Vec<f32> = (0..n).map(|j| (x_vals[base + j] - mx).exp()).collect();
+        let sum: f32 = exps.iter().sum();
+        for j in 0..n {
+            ref_t[base + j] = exps[j] / sum;
+        }
+    }
+    for dtype in [
+        candle_core::DType::F32,
+        candle_core::DType::F16,
+        candle_core::DType::BF16,
+    ] {
+        let shape = (n_rows, n);
+        let in_storage = match dtype {
+            candle_core::DType::F32 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F32(x_vals.clone()))
+                .unwrap(),
+            candle_core::DType::BF16 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::BF16(
+                    x_vals.iter().map(|v| half::bf16::from_f32(*v)).collect(),
+                ))
+                .unwrap(),
+            _ => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F16(
+                    x_vals.iter().map(|v| half::f16::from_f32(*v)).collect(),
+                ))
+                .unwrap(),
+        };
+        let in_l = candle_core::Layout::contiguous(shape);
+        let out = in_storage.softmax_last_dim(&in_l).unwrap();
+        assert_eq!(out.dtype(), dtype, "softmax output dtype mismatch");
+        let out_cpu = out.to_cpu_storage().unwrap();
+        let out_f32: Vec<f32> = match out_cpu {
+            candle_core::CpuStorage::F32(v) => v,
+            candle_core::CpuStorage::F16(v) => v.iter().map(|v| v.to_f32()).collect(),
+            candle_core::CpuStorage::BF16(v) => v.iter().map(|v| v.to_f32()).collect(),
+            _ => panic!("unexpected out dtype"),
+        };
+        assert_eq!(out_f32.len(), ref_t.len(), "softmax length mismatch");
+        let max_err = out_f32
+            .iter()
+            .zip(ref_t.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        // bf16 has an 8-bit mantissa, so its output values are quantized to
+        // ~0.4% before comparison; use a looser tolerance for it.
+        let (tol, sum_tol) = if dtype == candle_core::DType::BF16 {
+            (1e-2, 1e-2)
+        } else {
+            (2e-3, 1e-3)
+        };
+        assert!(
+            max_err <= tol,
+            "{dtype:?}: softmax max_err {max_err} exceeds {tol}"
+        );
+        // each row must sum to 1
+        for i in 0..n_rows {
+            let row_sum: f32 = (i * n..(i + 1) * n).map(|k| out_f32[k]).sum();
+            assert!(
+                (row_sum - 1.0).abs() <= sum_tol,
+                "{dtype:?}: softmax row {i} sum {row_sum} != 1"
+            );
+        }
+    }
+    tracing::debug!("Vulkan softmax_last_dim OK for F32 + F16 + BF16");
+}
+/// Softmax with a row longer than the 256-thread workgroup: each thread walks a
+/// strided slice of the row, so the parallel reduction spans multiple elements
+/// per thread.
+#[test]
+fn test_vulkan_softmax_wide_row() {
+    use candle_core::backend::BackendDevice;
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let n_rows = 3usize;
+    let n = 1024usize;
+    let x_vals: Vec<f32> = (0..n_rows * n)
+        .map(|i| ((i % 37) as f32) * 0.13 - 2.0)
+        .collect();
+    let mut ref_t = vec![0.0f32; n_rows * n];
+    for i in 0..n_rows {
+        let base = i * n;
+        let mx = (0..n)
+            .map(|j| x_vals[base + j])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let exps: Vec<f32> = (0..n).map(|j| (x_vals[base + j] - mx).exp()).collect();
+        let sum: f32 = exps.iter().sum();
+        for j in 0..n {
+            ref_t[base + j] = exps[j] / sum;
+        }
+    }
+    let in_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(x_vals))
+        .unwrap();
+    let in_l = candle_core::Layout::contiguous((n_rows, n));
+    let out = in_storage.softmax_last_dim(&in_l).unwrap();
+    let out_f32 = match out.to_cpu_storage().unwrap() {
+        candle_core::CpuStorage::F32(v) => v,
+        _ => panic!("unexpected out dtype"),
+    };
+    let max_err = out_f32
+        .iter()
+        .zip(ref_t.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        max_err <= 2e-3,
+        "softmax wide-row max_err {max_err} exceeds 2e-3"
+    );
+    tracing::debug!("Vulkan softmax wide row (n={n}) OK (max_err {max_err})");
+}
+
+#[test]
+fn test_vulkan_rotary_emb() {
+    use candle_core::backend::BackendDevice;
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let (b, h, t, d) = (1usize, 2usize, 4usize, 16usize);
+    let half_d = d / 2;
+    let src_vals: Vec<f32> = (0..b * h * t * d)
+        .map(|i| ((i % 9) as f32) * 0.25 - 1.0)
+        .collect();
+    let cos_vals: Vec<f32> = (0..t * half_d).map(|i| f32::cos(i as f32 * 0.3)).collect();
+    let sin_vals: Vec<f32> = (0..t * half_d).map(|i| f32::sin(i as f32 * 0.3)).collect();
+    // CPU reference (candle contiguous, non-interleaved, 2D cos/sin)
+    let mut ref_t = vec![0.0f32; b * h * t * d];
+    for bh_i in 0..b * h {
+        for i_t in 0..t {
+            for i_d in 0..half_d {
+                let i1 = bh_i * t * d + i_t * d + i_d;
+                let i2 = i1 + half_d;
+                let i_cs = i_t * half_d + i_d;
+                let s1 = src_vals[i1];
+                let s2 = src_vals[i2];
+                let c = cos_vals[i_cs];
+                let s = sin_vals[i_cs];
+                ref_t[i1] = s1 * c - s2 * s;
+                ref_t[i2] = s1 * s + s2 * c;
+            }
+        }
+    }
+    for dtype in [candle_core::DType::F32, candle_core::DType::F16] {
+        let to_storage = |vals: &Vec<f32>| match dtype {
+            candle_core::DType::F32 => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F32(vals.clone()))
+                .unwrap(),
+            _ => device
+                .storage_from_cpu_storage(&candle_core::CpuStorage::F16(
+                    vals.iter().map(|v| half::f16::from_f32(*v)).collect(),
+                ))
+                .unwrap(),
+        };
+        let src = to_storage(&src_vals);
+        let cos_s = to_storage(&cos_vals);
+        let sin_s = to_storage(&sin_vals);
+        let src_l = candle_core::Layout::contiguous((b, h, t, d));
+        let cos_l = candle_core::Layout::contiguous((t, half_d));
+        let out = src.rope(&src_l, &cos_s, &cos_l, &sin_s, &cos_l).unwrap();
+        assert_eq!(out.dtype(), dtype, "rope output dtype mismatch");
+        let out_cpu = out.to_cpu_storage().unwrap();
+        let out_f32: Vec<f32> = match out_cpu {
+            candle_core::CpuStorage::F32(v) => v,
+            candle_core::CpuStorage::F16(v) => v.iter().map(|v| v.to_f32()).collect(),
+            _ => panic!("unexpected out dtype"),
+        };
+        assert_eq!(out_f32.len(), ref_t.len(), "rope length mismatch");
+        let max_err = out_f32
+            .iter()
+            .zip(ref_t.iter())
+            .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_err <= 2e-3,
+            "{dtype:?}: rope max_err {max_err} exceeds 2e-3"
+        );
+    }
+    tracing::debug!("Vulkan rotary_emb OK for F32 + F16");
+}
+/// The 18 64-bit words fed to the `test_printf` kernel: the bit patterns
+///
+/// of the lowest and highest representable values, in dtype order
+///
+/// u8, u32, i16, i32, i64, bf16, f16, f32, f64 (lowest in word 2*d,
+///
+/// highest in word 2*d+1).
+fn printf_probe_words() -> Vec<i64> {
+    vec![
+        i64::from(u8::MIN),
+        i64::from(u8::MAX),
+        i64::from(u32::MIN),
+        i64::from(u32::MAX),
+        i64::from(i16::MIN),
+        i64::from(i16::MAX),
+        i64::from(i32::MIN),
+        i64::from(i32::MAX),
+        i64::MIN,
+        i64::MAX,
+        i64::from(half::bf16::MIN.to_bits()),
+        i64::from(half::bf16::MAX.to_bits()),
+        i64::from(half::f16::MIN.to_bits()),
+        i64::from(half::f16::MAX.to_bits()),
+        i64::from(f32::MIN.to_bits()),
+        i64::from(f32::MAX.to_bits()),
+        f64::MIN.to_bits() as i64,
+        f64::MAX.to_bits() as i64,
+    ]
+}
+/// Runs the `test_printf` kernel, which copies `in_buf` to `out_buf` while
+///
+/// printing one "Expected ..., actual ..." line per 64-bit word.
+fn run_test_printf(
+    device: &VulkanDevice,
+    in_buf: &vulkano::buffer::Subbuffer<[i64]>,
+    out_buf: &vulkano::buffer::Subbuffer<[i64]>,
+) -> candle_core::Result<()> {
+    let kernels = device.kernels();
+    let in_buf = in_buf.clone();
+    let out_buf = out_buf.clone();
+    device.execute(move |cbb| {
+        candle_vulkan_kernels::call_test_printf(cbb, &kernels, &in_buf, &out_buf)
+            .map_err(|e| e.to_string())
+    })
+}
+/// Validates the slang `printf()` debug statements on the Vulkan backend
+/// for every supported data type (u8, u32, i16, i32, i64, bf16, f16, f32,
+/// f64).
+///
+/// The `test_printf` kernel copies 18 64-bit words — the lowest and
+/// highest representable value of each dtype — from an input buffer to an
+/// output buffer, printing one "Expected ..., actual ..." line per value.
+///
+/// The data path is always verified. The printed lines are verified when
+/// the Khronos validation layer is enabled, which is what captures and
+/// routes the shader `printf` output. The layer writes that output to fd 1
+/// (C-level stdout), bypassing Rust's stdout, and its flush timing is not
+/// observable from within the process, so the test re-runs itself in a
+/// child process with a piped stdout and validates the child's captured
+/// output after it exits:
+///
+///   VK_LAYER_PRINTF_ENABLE=1 VK_LAYER_PRINTF_TO_STDOUT=1 \
+///     cargo test --features vulkan --test vulkan_integration_tests \
+///     -- test_vulkan_shader_printf --exact
+#[test]
+fn test_vulkan_shader_printf() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let words = printf_probe_words();
+    let in_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::I64(words.clone()))
+        .unwrap();
+    let out_storage = device
+        .zeros_impl(&candle_core::Shape::from(18), candle_core::DType::I64)
+        .unwrap();
+    let in_buf = match in_storage.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::I64(b) => b.clone(),
+        _ => panic!("expected I64 storage buffer"),
+    };
+    let out_buf = match out_storage.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::I64(b) => b.clone(),
+        _ => panic!("expected I64 storage buffer"),
+    };
+    // Child mode: run the kernel once (the parent captures our stdout)
+    // and exit; the exit guarantees every layer printf write has reached
+    // the pipe.
+    if std::env::var("CANDLE_VULKAN_TEST_PRINTF_CHILD").is_ok() {
+        run_test_printf(&device, &in_buf, &out_buf).unwrap();
+        let cpu = out_storage.to_cpu_storage().unwrap();
+        let got = cpu.as_slice::<i64>().unwrap().to_vec();
+        assert_eq!(got, words, "test_printf data path mismatch");
+        return;
+    }
+    run_test_printf(&device, &in_buf, &out_buf).unwrap();
+    // Data path: `to_cpu_storage` drains the pending encodes and every
+    // word must round-trip bit-exactly.
+    let cpu = out_storage.to_cpu_storage().unwrap();
+    let got = cpu.as_slice::<i64>().unwrap().to_vec();
+    assert_eq!(got, words, "test_printf data path mismatch");
+    tracing::debug!("Vulkan device {gpu_id} test_printf data path OK");
+    // The shader printf output is only produced when the Khronos
+    // validation layer is enabled (VK_LAYER_PRINTF_ENABLE); without it
+    // there is nothing to capture.
+    if std::env::var("VK_LAYER_PRINTF_ENABLE").is_err() {
+        eprintln!("VK_LAYER_PRINTF_ENABLE not set: test_printf data path verified only");
+        return;
+    }
+    // Re-run this test in a child process with a piped stdout and wait
+    // for it to exit before reading: the child's exit guarantees that all
+    // the layer's printf output has been written to the pipe.
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("test_vulkan_shader_printf")
+        .arg("--exact")
+        .env("CANDLE_VULKAN_TEST_PRINTF_CHILD", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut captured = String::new();
+    let mut stdout = child.stdout.take().unwrap();
+    std::io::Read::read_to_string(&mut stdout, &mut captured).unwrap();
+    assert!(
+        child.wait().unwrap().success(),
+        "printf child process failed"
+    );
+    assert_printf_lines(&captured);
+    tracing::debug!("Vulkan device {gpu_id} test_printf printf output OK");
+}
+/// Returns the actual-value text of the first captured printf line
+///
+/// starting with `prefix` (the text between the prefix and the closing
+///
+/// quote).
+fn actual_from_line(captured: &str, prefix: &str) -> Option<String> {
+    captured
+        .lines()
+        .find(|line| line.starts_with(prefix))
+        .and_then(|line| line[prefix.len()..].strip_suffix('\''))
+        .map(str::to_string)
+}
+/// Verifies that the 18 "Expected ..., actual ..." lines were printed with
+///
+/// the correct actual values: 10 integer lines compared as exact strings,
+///
+/// and 8 floating-point lines parsed back and compared exactly (the %f
+///
+/// rendering of these extreme values is exact).
+fn assert_printf_lines(captured: &str) {
+    let int_expectations: [(&str, &str); 10] = [
+        ("Expected u8 lowest value '0', actual value '", "0"),
+        ("Expected u8 highest value '255', actual value '", "255"),
+        ("Expected u32 lowest value '0', actual value '", "0"),
+        (
+            "Expected u32 highest value '4294967295', actual value '",
+            "4294967295",
+        ),
+        (
+            "Expected i16 lowest value '-32768', actual value '",
+            "-32768",
+        ),
+        (
+            "Expected i16 highest value '32767', actual value '",
+            "32767",
+        ),
+        (
+            "Expected i32 lowest value '-2147483648', actual value '",
+            "-2147483648",
+        ),
+        (
+            "Expected i32 highest value '2147483647', actual value '",
+            "2147483647",
+        ),
+        (
+            "Expected i64 lowest value '-9223372036854775808', actual value '",
+            "-9223372036854775808",
+        ),
+        (
+            "Expected i64 highest value '9223372036854775807', actual value '",
+            "9223372036854775807",
+        ),
+    ];
+    for (prefix, expected) in int_expectations {
+        let actual = actual_from_line(captured, prefix)
+            .unwrap_or_else(|| panic!("missing printf line {prefix:?}; captured:\n{captured}"));
+        assert_eq!(actual, expected, "printf mismatch for {prefix:?}");
+    }
+    let float_expectations: [(&str, f64); 8] = [
+        (
+            "Expected bf16 lowest value '-3.3895313892515355e+38', actual value '",
+            half::bf16::MIN.to_f32() as f64,
+        ),
+        (
+            "Expected bf16 highest value '3.3895313892515355e+38', actual value '",
+            half::bf16::MAX.to_f32() as f64,
+        ),
+        (
+            "Expected f16 lowest value '-65504', actual value '",
+            half::f16::MIN.to_f32() as f64,
+        ),
+        (
+            "Expected f16 highest value '65504', actual value '",
+            half::f16::MAX.to_f32() as f64,
+        ),
+        (
+            "Expected f32 lowest value '-3.4028234663852886e+38', actual value '",
+            f32::MIN as f64,
+        ),
+        (
+            "Expected f32 highest value '3.4028234663852886e+38', actual value '",
+            f32::MAX as f64,
+        ),
+        (
+            "Expected f64 lowest value '-1.7976931348623157e+308', actual value '",
+            f64::MIN,
+        ),
+        (
+            "Expected f64 highest value '1.7976931348623157e+308', actual value '",
+            f64::MAX,
+        ),
+    ];
+    for (prefix, expected) in float_expectations {
+        let actual = actual_from_line(captured, prefix)
+            .unwrap_or_else(|| panic!("missing printf line {prefix:?}; captured:\n{captured}"));
+        let parsed: f64 = actual
+            .parse()
+            .unwrap_or_else(|e| panic!("unparseable printf value {actual:?} for {prefix:?}: {e}"));
+        assert_eq!(
+            parsed, expected,
+            "printf mismatch for {prefix:?}: actual {actual:?}"
+        );
+    }
+}
+/// Fused single-query decode attention must match a decomposed
+///
+/// (q @ k^T * scale -> softmax -> @ v) reference computed in f32 on the
+///
+/// host from the f16-rounded K/V values (the cache dtype on Vulkan),
+///
+/// including the GQA block grouping (query head h -> kv head
+///
+/// h * num_kv_heads / num_heads, matching `repeat_kv`).
+#[test]
+fn test_vulkan_fused_decode_attention() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let dev = candle_core::Device::Vulkan(device);
+    // Small case: not a multiple of the 32-wide workgroup; the kv_len is
+    // not a multiple of the 128-position chunk either.
+    check_fused_decode_attention(&dev, 4, 2, 16, 33, 0.5, None);
+    // Large case: kv_len above the old 4096 kernel cap (two-kernel
+    // flash-decode removes the cap), not a multiple of 128 or 32, and
+    // enough chunks (40) to exercise the combine pass.
+    check_fused_decode_attention(&dev, 4, 2, 16, 5000, 0.5, None);
+    // Pre-allocated cache: the rows are strided by max_kv * head_dim
+    // (larger than kv_len * head_dim), the layout the GPU KV cache
+    // produces; the kernel must index with kv_stride, not kv_len * D.
+    check_fused_decode_attention(&dev, 4, 2, 16, 33, 0.5, Some(64));
+    check_fused_decode_attention(&dev, 4, 2, 16, 5000, 0.5, Some(8192));
+    // Multi-query attention: a single KV head shared by every head.
+    check_fused_decode_attention(&dev, 4, 1, 16, 33, 0.5, None);
+    // Non-divisible GQA: num_heads / num_kv_heads is not an integer, so the
+    // `h * num_kv_heads / num_heads` grouping is uneven (heads 6/4 -> [0,0,1,2,2,3]).
+    check_fused_decode_attention(&dev, 6, 4, 16, 33, 0.5, None);
+    // Edge cases: empty and single-position caches (num_chunks 0 and 1).
+    check_fused_decode_attention(&dev, 4, 2, 16, 0, 0.5, None);
+    check_fused_decode_attention(&dev, 4, 2, 16, 1, 0.5, None);
+}
+fn check_fused_decode_attention(
+    dev: &candle_core::Device,
+    num_heads: usize,
+    num_kv_heads: usize,
+    head_dim: usize,
+    kv_len: usize,
+    scale: f32,
+    max_kv: Option<usize>,
+) {
+    // Deterministic pseudo-random data in [-1, 1] (keeps exp() bounded).
+    fn prng(i: usize) -> f32 {
+        let x =
+            (i as u64).wrapping_mul(2654435761u64).wrapping_shr(11) as f32 / (1u64 << 21) as f32;
+        x * 2.0 - 1.0
+    }
+    let q_data: Vec<f32> = (0..num_heads * head_dim).map(|i| prng(i + 1)).collect();
+    let k_data: Vec<f32> = (0..num_kv_heads * kv_len * head_dim)
+        .map(|i| prng(i + 1000))
+        .collect();
+    let v_data: Vec<f32> = (0..num_kv_heads * kv_len * head_dim)
+        .map(|i| prng(i + 2000))
+        .collect();
+    let q = candle_core::Tensor::from_vec(q_data.clone(), (num_heads, head_dim), dev).unwrap();
+    // The Vulkan decode cache is f16: the kernel loads K/V as f16 and
+    // accumulates in f32. The tensors are f16, and the reference below
+    // uses the same f16-rounded values.
+    let k_data_f16: Vec<half::f16> = k_data.iter().map(|&x| half::f16::from_f32(x)).collect();
+    let v_data_f16: Vec<half::f16> = v_data.iter().map(|&x| half::f16::from_f32(x)).collect();
+    let k_ref: Vec<f32> = k_data_f16.iter().map(|&x| x.to_f32()).collect();
+    let v_ref: Vec<f32> = v_data_f16.iter().map(|&x| x.to_f32()).collect();
+    // With a pre-allocated cache the k/v rows are strided: allocate
+    // (num_kv_heads, max_kv, head_dim) and take a narrow view of the
+    // first kv_len rows (the tail padding must never be read).
+    let (k, v) = match max_kv {
+        None => {
+            let k = candle_core::Tensor::from_vec(
+                k_data_f16.clone(),
+                (num_kv_heads, kv_len, head_dim),
+                dev,
+            )
+            .unwrap();
+            let v = candle_core::Tensor::from_vec(
+                v_data_f16.clone(),
+                (num_kv_heads, kv_len, head_dim),
+                dev,
+            )
+            .unwrap();
+            (k, v)
+        }
+        Some(max_kv) => {
+            let mut k_full = k_data_f16.clone();
+            let mut v_full = v_data_f16.clone();
+            k_full.resize(num_kv_heads * max_kv * head_dim, half::f16::from_f32(0.0));
+            v_full.resize(num_kv_heads * max_kv * head_dim, half::f16::from_f32(0.0));
+            let k = candle_core::Tensor::from_vec(k_full, (num_kv_heads, max_kv, head_dim), dev)
+                .unwrap()
+                .narrow(1, 0, kv_len)
+                .unwrap();
+            let v = candle_core::Tensor::from_vec(v_full, (num_kv_heads, max_kv, head_dim), dev)
+                .unwrap()
+                .narrow(1, 0, kv_len)
+                .unwrap();
+            (k, v)
+        }
+    };
+    let out = q
+        .fused_decode_attention(&k, &v, scale, num_kv_heads)
+        .unwrap();
+    let out_cpu = out
+        .to_device(&candle_core::Device::Cpu)
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+    // Decomposed f32 reference with the same GQA block grouping.
+    let mut ref_out = vec![0.0f32; num_heads * head_dim];
+    for h in 0..num_heads {
+        let g = h * num_kv_heads / num_heads;
+        let mut scores = vec![0.0f32; kv_len];
+        for j in 0..kv_len {
+            let mut s = 0.0f32;
+            for d in 0..head_dim {
+                s += q_data[h * head_dim + d] * k_ref[g * kv_len * head_dim + j * head_dim + d];
+            }
+            scores[j] = s * scale;
+        }
+        let m = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let exps: Vec<f32> = scores.iter().map(|&s| (s - m).exp()).collect();
+        let sum = exps.iter().sum::<f32>();
+        let probs: Vec<f32> = exps.iter().map(|&e| e / sum).collect();
+        for d in 0..head_dim {
+            let mut acc = 0.0f32;
+            for j in 0..kv_len {
+                acc += probs[j] * v_ref[g * kv_len * head_dim + j * head_dim + d];
+            }
+            ref_out[h * head_dim + d] = acc;
+        }
+    }
+    let max_err = out_cpu
+        .iter()
+        .flatten()
+        .zip(ref_out.iter())
+        .map(|(a, b)| (*a - *b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        max_err < 1e-4,
+        "fused_decode_attention (kv_len {kv_len}) max abs error {max_err} (expected < 1e-4)"
+    );
+    tracing::debug!("Vulkan fused decode attention (kv_len {kv_len}) matches the f32 reference (max err {max_err})");
+}
+/// Fused add + RMSNorm: `residual = x + h`, `norm = RMSNorm(residual) * alpha`.
+#[test]
+fn test_vulkan_fused_add_rms_norm() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let dev = candle_core::Device::Vulkan(device);
+    let n_rows = 5usize;
+    let n = 129usize; // not a multiple of the thread count
+    let eps = 1e-5f32;
+    fn prng(i: usize) -> f32 {
+        let x =
+            (i as u64).wrapping_mul(2654435761u64).wrapping_shr(11) as f32 / (1u64 << 21) as f32;
+        x * 2.0 - 1.0
+    }
+    let x_data: Vec<f32> = (0..n_rows * n).map(|i| prng(i + 1)).collect();
+    let h_data: Vec<f32> = (0..n_rows * n).map(|i| prng(i + 5000)).collect();
+    let alpha_data: Vec<f32> = (0..n).map(|i| prng(i + 9000)).collect();
+    let x = candle_core::Tensor::from_vec(x_data.clone(), (n_rows, n), &dev).unwrap();
+    let h = candle_core::Tensor::from_vec(h_data.clone(), (n_rows, n), &dev).unwrap();
+    let alpha = candle_core::Tensor::from_vec(alpha_data.clone(), (n,), &dev).unwrap();
+    let (residual, norm) = x.fused_add_rms_norm(&h, &alpha, eps).unwrap();
+    let residual_cpu = residual
+        .to_device(&candle_core::Device::Cpu)
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+    let norm_cpu = norm
+        .to_device(&candle_core::Device::Cpu)
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+    // Reference: residual = x + h; norm = residual / m * alpha.
+    let mut ref_residual = vec![0.0f32; n_rows * n];
+    let mut ref_norm = vec![0.0f32; n_rows * n];
+    for i in 0..n_rows {
+        let sum2: f64 = (0..n)
+            .map(|j| {
+                let a = (x_data[i * n + j] + h_data[i * n + j]) as f64;
+                ref_residual[i * n + j] = a as f32;
+                a * a
+            })
+            .sum();
+        let m = (sum2 / n as f64 + eps as f64).sqrt();
+        for j in 0..n {
+            ref_norm[i * n + j] =
+                (ref_residual[i * n + j] as f64 / m * alpha_data[j] as f64) as f32;
+        }
+    }
+    let res_err = residual_cpu
+        .iter()
+        .flatten()
+        .zip(ref_residual.iter())
+        .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+        .fold(0.0f32, f32::max);
+    let norm_err = norm_cpu
+        .iter()
+        .flatten()
+        .zip(ref_norm.iter())
+        .map(|(a, b)| (a - b).abs() / (b.abs() + 1.0))
+        .fold(0.0f32, f32::max);
+    assert!(
+        res_err <= 2e-3,
+        "fused_add_rms_norm residual max err {res_err} exceeds 2e-3"
+    );
+    assert!(
+        norm_err <= 2e-3,
+        "fused_add_rms_norm norm max err {norm_err} exceeds 2e-3"
+    );
+    tracing::debug!(
+        "Vulkan fused add + rmsnorm matches the reference (residual {res_err}, norm {norm_err})"
+    );
+}
+/// 16x16 f16 matmul (single tile, single K slab): the smallest shape
+///
+/// that reaches the cooperative-matrix GEMM path (or its probe-driven
+///
+/// fallback to the classic kernel).
+#[test]
+fn test_vulkan_matmul_f16_16x16() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // Path verification: only meaningful when the cooperative-matrix kernel
+    // is actually selected (16-multiple dims); otherwise the tiled fallback
+    // would pass here and mask a coopmat regression.
+    let vdev = match &dev {
+        candle_core::Device::Vulkan(v) => v,
+        _ => unreachable!(),
+    };
+    if !vdev.coopmat_gemm_available(candle_core::DType::F16) {
+        eprintln!("skipping: cooperative-matrix F16 GEMM not available on this device");
+        return;
+    }
+    let cpu = candle_core::Device::Cpu;
+    let m = 16usize;
+    let k = 16usize;
+    let n = 16usize;
+    let f: Vec<half::f16> = (0..(m * k))
+        .map(|i| half::f16::from_f32((i as f32) * 0.01 - 0.8))
+        .collect();
+    let g: Vec<half::f16> = (0..(k * n))
+        .map(|i| half::f16::from_f32((i as f32) * 0.01 - 0.8))
+        .collect();
+    let ag = candle_core::Tensor::new(f.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((m, k)))
+        .unwrap();
+    let ac = candle_core::Tensor::new(f.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((m, k)))
+        .unwrap();
+    let bg = candle_core::Tensor::new(g.as_slice(), &dev)
+        .unwrap()
+        .reshape(candle_core::Shape::from((k, n)))
+        .unwrap();
+    let bc = candle_core::Tensor::new(g.as_slice(), &cpu)
+        .unwrap()
+        .reshape(candle_core::Shape::from((k, n)))
+        .unwrap();
+    let gres = ag.clone().matmul(&bg).unwrap();
+    let cres = ac.clone().matmul(&bc).unwrap();
+    let gv: Vec<half::f16> = gres
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect();
+    let cv: Vec<half::f16> = cres
+        .to_vec2::<half::f16>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect();
+    let bads: Vec<(usize, f32, f32)> = gv
+        .iter()
+        .zip(cv.iter())
+        .enumerate()
+        .filter(|(_, (a, b))| (a.to_f32() - b.to_f32()).abs() >= 0.05 * (1.0 + b.to_f32().abs()))
+        .map(|(i, (a, b))| (i, a.to_f32(), b.to_f32()))
+        .collect();
+    let first: Vec<(usize, f32, f32)> = bads.iter().take(5).cloned().collect();
+    assert!(
+        bads.is_empty(),
+        "16x16 f16 matmul: {} mismatches, first: {first:?}",
+        bads.len()
+    );
+}
+// ============================================================================
+// Constant-fill transfer paths: vkCmdFillBuffer / vkCmdUpdateBuffer / shaders.
+// Each case is sized/aligned to hit exactly one of the three strategies in
+// `VulkanStorage::zero_fill` and `const_set`/`try_fill_const`.
+// ============================================================================
+
+#[test]
+fn test_vulkan_const_fill_transfer_paths() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(vk) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let device = candle_core::Device::Vulkan(vk);
+    use candle_core::{DType, Tensor};
+    // const_set -> vkCmdFillBuffer: f32, 20000 elements (80000 B:
+    // multiple of 4, above 64 KiB).
+    let t = Tensor::full(1.5f32, &[20000], &device).unwrap();
+    let v = t.to_vec1::<f32>().unwrap();
+    assert!(v.iter().all(|&x| x == 1.5f32), "fill_buffer f32 mismatch");
+    // const_set -> const-set shader: f32, 100 elements (400 B: multiple of
+    // 4, at or below 64 KiB).
+    let t = Tensor::full(-2.25f32, &[100], &device).unwrap();
+    let v = t.to_vec1::<f32>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == -2.25f32),
+        "const-set shader f32 mismatch"
+    );
+    // const_set -> vkCmdUpdateBuffer: f16, 1001 elements (2002 B: not a
+    // multiple of 4, at or below 64 KiB).
+    let t = Tensor::full(half::f16::from_f32(0.5), &[1001], &device).unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == half::f16::from_f32(0.5)),
+        "update_buffer f16 mismatch"
+    );
+    // const_set with a 4-byte-aligned non-zero start offset ->
+    // vkCmdUpdateBuffer (1000-element prefix) plus the 1-element
+    // const-set kernel for the 2-byte tail: f16 view [2..1003] of a
+    // 20000-element tensor (2002 B region, 4-byte offset).
+    let t = Tensor::full(half::f16::from_f32(0.0), &[20000], &device).unwrap();
+    let view = t.narrow(0, 2, 1001).unwrap();
+    view.const_set(candle_core::scalar::Scalar::F16(half::f16::from_f32(2.5)))
+        .unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v[..2].iter().all(|&x| x == half::f16::ZERO)
+            && v[2..1003].iter().all(|&x| x == half::f16::from_f32(2.5))
+            && v[1003..].iter().all(|&x| x == half::f16::ZERO),
+        "update_buffer narrow f16 mismatch"
+    );
+    // const_set with an unaligned start offset -> const-set kernel for
+    // the whole region: f16 view [3..1004] (2002 B region, 6-byte offset).
+    let t = Tensor::full(half::f16::from_f32(0.0), &[20000], &device).unwrap();
+    let view = t.narrow(0, 3, 1001).unwrap();
+    view.const_set(candle_core::scalar::Scalar::F16(half::f16::from_f32(1.25)))
+        .unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v[..3].iter().all(|&x| x == half::f16::ZERO)
+            && v[3..1004].iter().all(|&x| x == half::f16::from_f32(1.25))
+            && v[1004..].iter().all(|&x| x == half::f16::ZERO),
+        "const-set kernel unaligned-offset f16 mismatch"
+    );
+    // const_set -> vkCmdFillBuffer: bf16, 40000 elements (80000 B).
+    let t = Tensor::full(half::bf16::from_f32(3.5), &[40000], &device).unwrap();
+    let v = t.to_vec1::<half::bf16>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == half::bf16::from_f32(3.5)),
+        "fill_buffer bf16 mismatch"
+    );
+    // zeros -> vkCmdFillBuffer: f32, 16385 elements (65540 B: multiple of 4,
+    // just above 64 KiB).
+    let t = Tensor::zeros(&[16385], DType::F32, &device).unwrap();
+    let v = t.to_vec1::<f32>().unwrap();
+    assert!(v.iter().all(|&x| x == 0.0), "zero fill_buffer f32 mismatch");
+    // zeros -> vkCmdUpdateBuffer: f16, 1001 elements (2002 B: not a multiple
+    // of 4, at or below 64 KiB).
+    let t = Tensor::zeros(&[1001], DType::F16, &device).unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == half::f16::ZERO),
+        "zero update_buffer f16 mismatch"
+    );
+    // zeros -> zero-fill shader: f16, 20001 elements (40002 B: not a
+    // multiple of 4, above the 64 KiB update cap).
+    let t = Tensor::zeros(&[20001], DType::F16, &device).unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == half::f16::ZERO),
+        "zero-fill shader odd-size f16 mismatch"
+    );
+    // zeros -> zero-fill shader: tiny regions under 4 bytes have no
+    // 4-byte-multiple prefix, so they always take the kernel path.
+    let t = Tensor::zeros(&[3], DType::U8, &device).unwrap();
+    let v = t.to_vec1::<u8>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == 0),
+        "zero-fill shader u8 tiny mismatch"
+    );
+    let t = Tensor::zeros(&[1], DType::F16, &device).unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == half::f16::ZERO),
+        "zero-fill shader f16 tiny mismatch"
+    );
+    // const_set -> const-set kernel: f16, 1 element (2 B: under 4 bytes).
+    let t = Tensor::full(half::f16::from_f32(7.0), &[1], &device).unwrap();
+    let v = t.to_vec1::<half::f16>().unwrap();
+    assert!(
+        v.iter().all(|&x| x == half::f16::from_f32(7.0)),
+        "const-set kernel f16 tiny mismatch"
+    );
+}
+// ============================================================================
+// Affine matrix product (matmul + bias) via `Tensor::affine_matmul`.
+// Aligned 16-bit shapes run the fused cooperative-matrix kernel when the
+// device's affine probe passes, the rest run the unfused matmul + add;
+// every case must match the CPU reference.
+// ============================================================================
+/// One affine case: builds the f32 data, the CPU f32 reference
+///
+/// (`lhs @ rhs + bias`), and the GPU f16/bf16 results.
+fn affine_case(
+    dev: &candle_core::Device,
+    cpu: &candle_core::Device,
+    m: usize,
+    n: usize,
+    k: usize,
+    batch: usize,
+    transposed: bool,
+) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    use candle_core::Tensor;
+    let lhs: Vec<f32> = (0..batch * m * k)
+        .map(|i| ((i % 7) as f32) * 0.1 - 0.5)
+        .collect();
+    let rhs: Vec<f32> = (0..batch * k * n)
+        .map(|i| ((i % 5) as f32) * 0.1 - 0.3)
+        .collect();
+    let bias: Vec<f32> = (0..n).map(|i| (i as f32) * 0.25 - 1.0).collect();
+    // CPU reference in f32.
+    let lc = if batch == 1 {
+        Tensor::new(lhs.as_slice(), cpu)
+            .unwrap()
+            .reshape((m, k))
+            .unwrap()
+    } else {
+        Tensor::new(lhs.as_slice(), cpu)
+            .unwrap()
+            .reshape((batch, m, k))
+            .unwrap()
+    };
+    // The CPU reference must use the same matrix the GPU sees: the
+    // transposed cases build the rhs as a (.., n, k) storage viewed as
+    // (.., k, n), so mirror that construction here.
+    let rc = if batch == 1 {
+        if transposed {
+            Tensor::new(rhs.as_slice(), cpu)
+                .unwrap()
+                .reshape((n, k))
+                .unwrap()
+                .t()
+                .unwrap()
+        } else {
+            Tensor::new(rhs.as_slice(), cpu)
+                .unwrap()
+                .reshape((k, n))
+                .unwrap()
+        }
+    } else if transposed {
+        Tensor::new(rhs.as_slice(), cpu)
+            .unwrap()
+            .reshape((batch, n, k))
+            .unwrap()
+            .t()
+            .unwrap()
+    } else {
+        Tensor::new(rhs.as_slice(), cpu)
+            .unwrap()
+            .reshape((batch, k, n))
+            .unwrap()
+    };
+    let bc = Tensor::new(bias.as_slice(), cpu).unwrap();
+    let ref_out = lc.matmul(&rc).unwrap().broadcast_add(&bc).unwrap();
+    let ref_v: Vec<f32> = match ref_out.dims().len() {
+        2 => ref_out
+            .to_vec2::<f32>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect(),
+        _ => ref_out
+            .to_vec3::<f32>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .collect(),
+    };
+    // GPU in f16 and bf16.
+    let run = |dt: candle_core::DType| -> Vec<f32> {
+        let conv = |v: &Vec<f32>| match dt {
+            candle_core::DType::F16 => Tensor::new(
+                v.iter()
+                    .map(|x| half::f16::from_f32(*x))
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                dev,
+            )
+            .unwrap(),
+            _ => Tensor::new(
+                v.iter()
+                    .map(|x| half::bf16::from_f32(*x))
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                dev,
+            )
+            .unwrap(),
+        };
+        let lg = if batch == 1 {
+            conv(&lhs).reshape((m, k)).unwrap()
+        } else {
+            conv(&lhs).reshape((batch, m, k)).unwrap()
+        };
+        let rg = match (batch == 1, transposed) {
+            (true, false) => conv(&rhs).reshape((k, n)).unwrap(),
+            (true, true) => conv(&rhs).reshape((n, k)).unwrap().t().unwrap(),
+            (false, false) => conv(&rhs).reshape((batch, k, n)).unwrap(),
+            (false, true) => conv(&rhs).reshape((batch, n, k)).unwrap().t().unwrap(),
+        };
+        let bg = conv(&bias);
+        let out = lg.affine_matmul(&rg, &bg).unwrap();
+        match dt {
+            candle_core::DType::F16 => {
+                let v: Vec<half::f16> = match out.dims().len() {
+                    2 => out
+                        .to_vec2::<half::f16>()
+                        .unwrap()
+                        .into_iter()
+                        .flatten()
+                        .collect(),
+                    _ => out
+                        .to_vec3::<half::f16>()
+                        .unwrap()
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .collect(),
+                };
+                v.into_iter().map(|x| x.to_f32()).collect()
+            }
+            _ => {
+                let v: Vec<half::bf16> = match out.dims().len() {
+                    2 => out
+                        .to_vec2::<half::bf16>()
+                        .unwrap()
+                        .into_iter()
+                        .flatten()
+                        .collect(),
+                    _ => out
+                        .to_vec3::<half::bf16>()
+                        .unwrap()
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .collect(),
+                };
+                v.into_iter().map(|x| x.to_f32()).collect()
+            }
+        }
+    };
+    let f16_v = run(candle_core::DType::F16);
+    let bf16_v = run(candle_core::DType::BF16);
+    (f16_v, bf16_v, ref_v)
+}
+
+#[test]
+fn test_vulkan_affine_matmul() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    // (m, n, k, batch, rhs-transposed)
+    let cases: Vec<(usize, usize, usize, usize, bool)> = vec![
+        (16, 8, 16, 1, true),
+        (16, 8, 16, 2, true),
+        (16, 16, 32, 2, true),
+        (17, 16, 32, 1, true),
+        (17, 16, 32, 2, true),
+    ];
+    for (m, n, k, batch, transposed) in cases.iter().copied() {
+        let (f16_v, bf16_v, ref_v) = affine_case(&dev, &cpu, m, n, k, batch, transposed);
+        let label = format!("m={} n={} k={} b={} rt={}", m, n, k, batch, transposed);
+        let f16_bad: Vec<(usize, f32, f32)> = f16_v
+            .iter()
+            .zip(ref_v.iter())
+            .enumerate()
+            .filter(|(_, (a, b))| (*a - *b).abs() >= 0.05 * (1.0 + b.abs()))
+            .map(|(i, (a, b))| (i, *a, *b))
+            .collect();
+        assert!(
+            f16_bad.is_empty(),
+            "f16 affine_matmul {label}: {} mismatches, first: {f16_bad:?}",
+            f16_bad.len()
+        );
+        let bf16_bad: Vec<(usize, f32, f32)> = bf16_v
+            .iter()
+            .zip(ref_v.iter())
+            .enumerate()
+            .filter(|(_, (a, b))| (*a - *b).abs() >= 0.1 + 0.05 * b.abs())
+            .map(|(i, (a, b))| (i, *a, *b))
+            .collect();
+        assert!(
+            bf16_bad.is_empty(),
+            "bf16 affine_matmul {label}: {} mismatches, first: {bf16_bad:?}",
+            bf16_bad.len()
+        );
+    }
+}
+
+#[test]
+fn test_vulkan_argsort() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(dev) = candle_core::Device::new_vulkan(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    // 3 rows x 64 cols, with duplicates (ties) to exercise the stable
+    // (value, index) ordering that must match the CPU reference.
+    let cols = 64usize;
+    let rows = 3usize;
+    let vals: Vec<f32> = (0..rows * cols)
+        .map(|i| {
+            let x = ((i % cols) as f32) * 0.37 - 5.0;
+            (x * 3.0).round() / 3.0
+        })
+        .collect();
+    let vg = candle_core::Tensor::new(vals.as_slice(), &dev)
+        .unwrap()
+        .reshape((rows, cols))
+        .unwrap();
+    let vc = candle_core::Tensor::new(vals.as_slice(), &cpu)
+        .unwrap()
+        .reshape((rows, cols))
+        .unwrap();
+    for asc in [true, false] {
+        let gidx = vg.arg_sort_last_dim(asc).unwrap();
+        let cidx = vc.arg_sort_last_dim(asc).unwrap();
+        let g: Vec<u32> = gidx
+            .to_vec2::<u32>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        let c: Vec<u32> = cidx
+            .to_vec2::<u32>()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(g, c, "argsort asc={asc} indices differ from CPU");
+    }
+}
+
+#[test]
+fn test_vulkan_dp4a_probe() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    // 256 packed u32: a[i] packs four i8 = i, b[i] packs i8 = (1,2,3,4).
+    // dot4add_u8packed(a[i], b[i], 0) = i*1 + i*2 + i*3 + i*4 = 10*i. This
+    // proves the VK_KHR_shader_integer_dot_product path (OpUDot,
+    // PackedVectorFormat4x8Bit) actually compiles and runs on the device.
+    let a_data: Vec<u32> = (0..256u32)
+        .map(|i| i | (i << 8) | (i << 16) | (i << 24))
+        .collect();
+    let b_data: Vec<u32> = vec![1u32 | (2u32 << 8) | (3u32 << 16) | (4u32 << 24); 256];
+    let a_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::U32(a_data))
+        .unwrap();
+    let b_storage = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::U32(b_data))
+        .unwrap();
+    let out_storage = device
+        .zeros_impl(&candle_core::Shape::from(256), candle_core::DType::U32)
+        .unwrap();
+    let a_buf = match a_storage.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::U32(b) => b.clone(),
+        _ => panic!("expected U32 storage"),
+    };
+    let b_buf = match b_storage.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::U32(b) => b.clone(),
+        _ => panic!("expected U32 storage"),
+    };
+    let out_buf = match out_storage.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::U32(b) => b.clone(),
+        _ => panic!("expected U32 storage"),
+    };
+    let kernels = device.kernels();
+    device
+        .execute(move |cbb| {
+            candle_vulkan_kernels::call_dp4a_probe_slang(cbb, &kernels, &a_buf, &b_buf, &out_buf)
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
+    let cpu = out_storage.to_cpu_storage().unwrap();
+    let got = cpu.as_slice::<u32>().unwrap().to_vec();
+    let expected: Vec<u32> = (0..256u32).map(|i| i * 10u32).collect();
+    assert_eq!(got, expected, "dp4a probe result mismatch");
+}
+
+#[test]
+fn test_vulkan_dp4a_q8_0_gemm() {
+    (*INIT);
+    let gpu_id = *GPU_ID;
+    let Some(device) = VulkanDevice::new(gpu_id).ok() else {
+        eprintln!("skipping: no Vulkan device available");
+        return;
+    };
+    let cpu = candle_core::Device::Cpu;
+    // Single-row lhs (decode), k = 64 (two Q8_0 blocks), n = 32 columns.
+    let k = 64usize;
+    let n = 32usize;
+    let lhs: Vec<f32> = (0..k).map(|i| (i % 17) as f32 - 8.0).collect();
+    let w: Vec<f32> = (0..n * k)
+        .map(|i| ((i % 23) as f32 - 11.0) * 0.05)
+        .collect();
+    // CPU reference: lhs @ dequant(Q8_0(W)).
+    let lhs_cpu = candle_core::Tensor::new(lhs.as_slice(), &cpu)
+        .unwrap()
+        .reshape((1, k))
+        .unwrap();
+    let w_cpu = candle_core::Tensor::new(w.as_slice(), &cpu)
+        .unwrap()
+        .reshape((n, k))
+        .unwrap();
+    let w_q =
+        candle_core::quantized::QTensor::quantize(&w_cpu, candle_core::quantized::GgmlDType::Q8_0)
+            .unwrap();
+    let w_deq = w_q.dequantize(&cpu).unwrap();
+    let ref_t = lhs_cpu.matmul(&w_deq.t().unwrap()).unwrap();
+    let ref_vals: Vec<f32> = ref_t.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    let w_bytes = w_q.data().unwrap().to_vec();
+    // DP4A path: quantize the lhs to i8, then the integer-dot GEMM.
+    let lhs_s = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(lhs))
+        .unwrap();
+    let lhsq_s = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::U8(vec![0u8; k]))
+        .unwrap();
+    let scale_s = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(vec![0.0f32]))
+        .unwrap();
+    let w_s = device.upload_u8(&w_bytes).unwrap();
+    let out_s = device
+        .storage_from_cpu_storage(&candle_core::CpuStorage::F32(vec![0.0f32; n]))
+        .unwrap();
+    let lhs_b = match lhs_s.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
+        _ => panic!("expected F32"),
+    };
+    let lhsq_b = match lhsq_s.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::U8(b) => b.clone(),
+        _ => panic!("expected U8"),
+    };
+    let scale_b = match scale_s.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
+        _ => panic!("expected F32"),
+    };
+    let out_b = match out_s.buffer() {
+        candle_core::vulkan_backend::VulkanStorageBuffer::F32(b) => b.clone(),
+        _ => panic!("expected F32"),
+    };
+    let kernels = device.kernels();
+    let qparams = candle_vulkan_kernels::UnaryParams {
+        count: k as u64,
+        extra: 0.0,
+    };
+    let gparams = candle_vulkan_kernels::push_constants::FusedQuantGemmParams {
+        m: 1,
+        n: n as u64,
+        k: k as u64,
+    };
+    device
+        .execute(move |cbb| {
+            candle_vulkan_kernels::call_quantize_lhs_i8(
+                cbb, &kernels, &lhs_b, &lhsq_b, &scale_b, &qparams,
+            )
+            .map_err(|e| e.to_string())?;
+            candle_vulkan_kernels::call_fused_q8_0_gemm_dp4a(
+                cbb, &kernels, &lhsq_b, &w_s, &scale_b, &out_b, &gparams, n,
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+    let got_cpu = out_s.to_cpu_storage().unwrap();
+    let got = got_cpu.as_slice::<f32>().unwrap();
+    // The activation is quantized to i8, which adds a ~0.4% relative error
+    // on top of the Q8_0 weight quantization; compare loosely.
+    let bads: Vec<(usize, f32, f32)> = got
+        .iter()
+        .zip(ref_vals.iter())
+        .enumerate()
+        .filter(|(_, (a, b))| (*a - *b).abs() > 0.03 * (1.0 + b.abs()))
+        .map(|(i, (a, b))| (i, *a, *b))
+        .collect();
+    assert!(
+        bads.is_empty(),
+        "dp4a q8_0 gemm: {} mismatches, first: {:?}",
+        bads.len(),
+        &bads[..bads.len().min(8)]
+    );
+}

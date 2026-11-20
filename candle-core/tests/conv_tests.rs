@@ -975,47 +975,86 @@ fn conv2d_grad_noncontiguous_kernel(dev: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
+test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal, conv1d_vulkan);
 test_device!(
     conv1d_small,
     conv1d_small_cpu,
     conv1d_small_gpu,
-    conv1d_small_metal
+    conv1d_small_metal,
+    conv1d_small_vulkan
 );
-test_device!(conv2d, conv2d_cpu, conv2d_gpu, conv2d_metal);
+test_device!(conv2d, conv2d_cpu, conv2d_gpu, conv2d_metal, conv2d_vulkan);
 test_device!(
     conv2d_non_square,
     conv2d_non_square_cpu,
     conv2d_non_square_gpu,
-    conv2d_non_square_metal
+    conv2d_non_square_metal,
+    conv2d_non_square_vulkan
 );
 test_device!(
     conv2d_small,
     conv2d_small_cpu,
     conv2d_small_gpu,
-    conv2d_small_metal
+    conv2d_small_metal,
+    conv2d_small_vulkan
 );
 test_device!(
     conv2d_smaller,
     conv2d_smaller_cpu,
     conv2d_smaller_gpu,
-    conv2d_smaller_metal
+    conv2d_smaller_metal,
+    conv2d_smaller_vulkan
 );
 test_device!(
     conv2d_grad,
     conv2d_grad_cpu,
     conv2d_grad_gpu,
-    conv2_grad_metal
+    conv2_grad_metal,
+    conv2_grad_vulkan
 );
 test_device!(
     conv2d_c_eq_h_eq_w,
     conv2d_c_eq_h_eq_w_cpu,
     conv2d_c_eq_h_eq_w_gpu,
-    conv2d_c_eq_h_eq_w_metal
+    conv2d_c_eq_h_eq_w_metal,
+    conv2d_c_eq_h_eq_w_vulkan
 );
 test_device!(
     conv2d_grad_noncontiguous_kernel,
     conv2d_grad_noncontiguous_kernel_cpu,
     conv2d_grad_noncontiguous_kernel_gpu,
-    conv2d_grad_noncontiguous_kernel_metal
+    conv2d_grad_noncontiguous_kernel_metal,
+    conv2d_grad_noncontiguous_kernel_vulkan
 );
+
+/// Regression: batched conv_transpose1d with padding=0 exercises the CPU matmul
+/// batch-fold path with a transposed (column-major per batch) lhs. The fold is only
+/// valid when the batch skip is exactly m row steps; a per-batch contiguous (m, k)
+/// block with lhs_rs < k must not be folded.
+#[test]
+fn conv_transpose1d_batched() -> Result<()> {
+    let dev = Device::Cpu;
+    let t = Tensor::new(
+        &[
+            1f32, 2., 3., 4., 10., 20., 30., 40., 5., 6., 7., 8., 50., 60., 70., 80.,
+        ],
+        &dev,
+    )?
+    .reshape((2, 2, 4))?;
+    let w = Tensor::new(
+        &[1f32, 2., 3., 4., 5., 6., 10., 12., 14., 16., 18., 20.],
+        &dev,
+    )?
+    .reshape((2, 3, 2))?;
+    let res = t.conv_transpose1d(&w, 0, 0, 1, 1, 1)?;
+    assert_eq!(res.dims(), [2, 3, 5]);
+    assert_eq!(
+        test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+        [
+            101., 324., 547., 770., 488., 143., 450., 757., 1064., 656., 185., 576., 967., 1358.,
+            824., 505., 1216., 1439., 1662., 976., 715., 1678., 1985., 2292., 1312., 925., 2140.,
+            2531., 2922., 1648.,
+        ]
+    );
+    Ok(())
+}

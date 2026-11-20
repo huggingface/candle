@@ -1,0 +1,23 @@
+error[E0502]: cannot borrow `api` as immutable because it is also borrowed as mutable
+  --> tests/fail/long_lived_root_struct_borrow.rs:13:10
+   |
+10 |     let pdev_props = vk::PhysicalDeviceProperties2::default().push(&mut api);
+   |                                                                    -------- mutable borrow occurs here
+...
+13 |     dbg!(&api);
+   |          ^^^^ immutable borrow occurs here
+...
+16 |     dbg!(pdev_props); // Holds a borrow on api and layers
+   |          ---------- mutable borrow later used here
+
+error[E0502]: cannot borrow `layers` as immutable because it is also borrowed as mutable
+  --> tests/fail/long_lived_root_struct_borrow.rs:14:10
+   |
+ 9 |         vk::PhysicalDeviceLayeredApiPropertiesListKHR::default().layered_apis(&mut layers);
+   |                                                                               ----------- mutable borrow occurs here
+...
+14 |     dbg!(&layers);
+   |          ^^^^^^^ immutable borrow occurs here
+15 |
+16 |     dbg!(pdev_props); // Holds a borrow on api and layers
+   |          ---------- mutable borrow later used here

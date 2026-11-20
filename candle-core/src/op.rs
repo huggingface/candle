@@ -2,8 +2,8 @@
 //!
 #![allow(clippy::redundant_closure_call)]
 use crate::Tensor;
-use float8::F8E4M3 as f8e4m3;
 use half::{bf16, f16};
+use microfloat::f8e4m3;
 use num_traits::float::Float;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -80,6 +80,9 @@ pub enum Op {
     // The third argument is the reduced shape with `keepdim=true`.
     Reduce(Tensor, ReduceOp, Vec<usize>),
     Matmul(Tensor, Tensor),
+    // `y = lhs @ rhs + bias`: the matrix product with the bias
+    // (one value per column) added to every row.
+    AffineMatmul(Tensor, Tensor, Tensor),
     Gather(Tensor, Tensor, usize),
     Scatter(Tensor, Tensor, Tensor, usize),
     ScatterAdd(Tensor, Tensor, Tensor, usize),
@@ -991,7 +994,7 @@ impl UnaryOpT for Round {
     }
     #[inline(always)]
     fn f8e4m3(v: f8e4m3) -> f8e4m3 {
-        v.round()
+        v.round_ties_even()
     }
 }
 

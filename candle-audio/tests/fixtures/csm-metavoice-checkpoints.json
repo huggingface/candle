@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "native": true,
+  "repositories": [
+    {
+      "repository": "sesame/csm-1b",
+      "revision": "c92a71e1c419772e25be7dc14d952c2521a740ab",
+      "public_weight_access": false,
+      "files": [
+        {
+          "file": "config.json",
+          "size": 3280,
+          "sha256": null,
+          "git_blob": "eb34392016242d345cec269e1623413f9071d910"
+        },
+        {
+          "file": "model.safetensors",
+          "size": 6211186784,
+          "sha256": "2e7721144afe38b906d4f1048671da639fe142423f4a26283606ecebe894f4bf",
+          "git_blob": "67a4748fc437cb9a2fdeb90e6bec9dedb0ad9f86"
+        },
+        {
+          "file": "tokenizer.json",
+          "size": 17209980,
+          "sha256": "80f511469b4aceda8c17ccafef2310eceeda9dd4589cf2c062bd0279eef5646d",
+          "git_blob": "8de5df033b78de76dbe15fdd8b934678b5017aaf"
+        }
+      ]
+    },
+    {
+      "repository": "lmz/candle-metavoice",
+      "revision": "be4f5758c5a50bdb57777f7c7b1a6c39ec1a491d",
+      "public_weight_access": true,
+      "files": [
+        {
+          "file": "first_stage.meta.json",
+          "size": 6409,
+          "sha256": "24e68d06c5040c2590502e47ea4adbcccd0cd1af9dec5c2f1ea827e4ded31a45"
+        },
+        {
+          "file": "first_stage.model_args.json",
+          "size": 321,
+          "sha256": "b5f43364d8d4776bd910a278ac2d574df01c532be9544e210e3487eb47ca0171"
+        },
+        {
+          "file": "first_stage.safetensors",
+          "size": 4993771712,
+          "sha256": "5ffbebad2b338f47b5d0a61423c11a99f4a3a02cb419142adc5cef5a532bb56e"
+        },
+        {
+          "file": "first_stage_q4k.gguf",
+          "size": 702603488,
+          "sha256": "8bd2c4951d3600f5c17e70c4b01f0104d774cd44e485f6244cc2dd71edbbc2b2"
+        },
+        {
+          "file": "second_stage.safetensors",
+          "size": 57841232,
+          "sha256": "d201aeaae8c4672a7b57a3aecbe438e88bc3f004bc992e2c0e82c07062194ccd"
+        },
+        {
+          "file": "spk_emb.safetensors",
+          "size": 592,
+          "sha256": "3122fb56bc11df4ec7c07b65e6e9ebecd4b59654d139504081e37960757d21ba"
+        },
+        {
+          "file": "speaker_encoder.safetensors",
+          "size": 5695800,
+          "sha256": "3f2f3650622aa42c2b99c10189c16040bc04df170d1ec7ea91af44f92485f3e0"
+        }
+      ]
+    },
+    {
+      "repository": "kyutai/mimi",
+      "revision": "89091b3e466eb6a9d11e537bf26b144f194978f7",
+      "configuration": "v0_1(Some(32)); sample_rate=24000, frame_rate=12.5, channels=1",
+      "files": [
+        {
+          "file": "config.json",
+          "size": 1117,
+          "sha256": null,
+          "git_blob": "907c57dc64c983785bfc68572e4e8ab8eddd64b8"
+        },
+        {
+          "file": "model.safetensors",
+          "size": 384649828,
+          "sha256": "bac7e85083dcded655d24eaadde7e6eea34c0da1b35fa2d284e641bd2b942a5e",
+          "git_blob": "76014877d4b6e844b44244cd8115a641ca5dc136"
+        }
+      ]
+    },
+    {
+      "repository": "facebook/encodec_24khz",
+      "revision": "c1dbe2ae3f1de713481a3b3e7c47f357092ee040",
+      "weight_sha256": "37a7cb100f71a29e6c1d815aca8666a1d7ea8885ebe44c306c751a5103559d57"
+    }
+  ],
+  "tests": {
+    "csm_native_streaming_context_reset_and_cancellation": "CANDLE_AUDIO_CSM",
+    "csm_native_transcribed_speaker_reference": "CANDLE_AUDIO_CSM",
+    "metavoice_native_two_stage_safetensors": "CANDLE_AUDIO_METAVOICE",
+    "metavoice_native_two_stage_gguf": "CANDLE_AUDIO_METAVOICE_GGUF",
+    "metavoice_native_speaker_embedding_parity": "CANDLE_AUDIO_METAVOICE_GGUF",
+    "metavoice_native_audio_reference_gguf": "CANDLE_AUDIO_METAVOICE_GGUF"
+  },
+  "csm_access_evidence": {
+    "checked": "2026-11-12",
+    "metadata_gated": "auto",
+    "unauthenticated_config_http": 401
+  },
+  "quality_scope": "Checkpoint synthesis tests require finite, non-silent PCM and runtime contracts; speaker encoder embedding matches independent Librosa/PyTorch. Listening/transcription evaluation is recorded separately.",
+  "speaker_encoder_fixture": "candle-transformers/tests/fixtures/metavoice_speaker_encoder.json"
+}

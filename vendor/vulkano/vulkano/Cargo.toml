@@ -1,0 +1,53 @@
+[package]
+name = "vulkano"
+version = "0.35.0"
+authors = ["Pierre Krieger <pierre.krieger1708@gmail.com>", "The vulkano contributors"]
+repository = "https://github.com/vulkano-rs/vulkano/tree/master/vulkano"
+description = "Safe wrapper for the Vulkan graphics API"
+documentation = "https://docs.rs/vulkano"
+readme = "../README.md"
+build = "build.rs"
+edition = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+keywords = { workspace = true }
+categories = { workspace = true }
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--extend-css", "assets/rustdoc.css"]
+
+[dependencies]
+ash = { workspace = true }
+bytemuck = { workspace = true, features = ["min_const_generics"] }
+crossbeam-queue = { workspace = true }
+foldhash = { workspace = true }
+half = { workspace = true, features = ["bytemuck"] }
+libloading = { workspace = true }
+parking_lot = { workspace = true, features = ["send_guard"] }
+raw-window-handle = { workspace = true, optional = true, features = ["std"] }
+serde = { workspace = true, optional = true }
+slabbin = { workspace = true }
+smallvec = { workspace = true }
+thread_local = { workspace = true }
+vulkano-macros = { workspace = true, optional = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+raw-window-metal = { workspace = true }
+
+[target.'cfg(any(target_os = "dragonfly", target_os = "freebsd", target_os = "hurd", target_os = "illumos", target_os = "linux", target_os = "netbsd", target_os = "openbsd", target_os = "solaris"))'.dependencies]
+x11-dl = { workspace = true, optional = true }
+x11rb = { workspace = true, optional = true, features = ["allow-unsafe-code"] }
+
+[dev-dependencies]
+libc = "0.2.153"
+
+[features]
+default = ["macros", "raw_window_handle", "x11"]
+document_unchecked = []
+macros = ["dep:vulkano-macros"]
+raw_window_handle = ["dep:raw-window-handle"]
+x11 = ["dep:x11-dl", "dep:x11rb"]
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+name: Question
+description: Ask a question
+type: Question
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Question description
+      description: >
+        Our #support Discord channel is preferred for questions, but if you don't have Discord,
+        feel free to ask here. Please don't create an issue to ask if feature X is supported. We
+        have a [COVERAGE.md](https://github.com/vulkano-rs/vulkano/blob/master/COVERAGE.md) file.
+        If you have an issue with your code you're trying to solve, please include any error
+        messages, relevant code, and additional information that could help us solve the issue.
+    validations:
+      required: true

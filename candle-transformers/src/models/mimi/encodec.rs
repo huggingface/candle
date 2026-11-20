@@ -216,6 +216,7 @@ impl Encodec {
         self.encoder_transformer.reset_state();
         self.decoder.reset_state();
         self.decoder_transformer.reset_state();
+        self.downsample.reset_state();
         self.upsample.reset_state();
     }
 }

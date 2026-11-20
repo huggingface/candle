@@ -507,62 +507,6 @@ pub(crate) fn quantize_lhs(lhs: &[f32], m: usize, k: usize) -> Vec<BlockQ8K> {
     out
 }
 
-// Fused multi-projection gemv: one lhs quantization and one barrier region across
-// all projections sharing the same activations (qkv, gate/up). 512-bit only; the
-// per-unit body reuses matmul_unit_512 so intrinsics inline in portable builds.
-pub(crate) fn gemv_fused(
-    parts: &[(&PackedX86, usize)],
-    lhs_q: &[BlockQ8K],
-    m: usize,
-    k: usize,
-    dsts: &mut [Vec<f32>],
-) {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let kb = k / QK_K;
-        let mt_step = kernels::MAX_MT;
-        let m_units = m.div_ceil(mt_step);
-        // (n, dst ptr, unit offset)
-        let mut metas: Vec<(usize, usize, usize)> = Vec::with_capacity(parts.len());
-        let mut total = 0usize;
-        for (i, (_p, n)) in parts.iter().enumerate() {
-            metas.push((*n, dsts[i].as_mut_ptr() as usize, total));
-            total += (n / TILE_N) * m_units;
-        }
-        let parts_ref = parts;
-        crate::utils::barrier_pool().execute_chunked(total, |range| {
-            for unit in range {
-                let pi = metas
-                    .iter()
-                    .rposition(|(_n, _d, off)| unit >= *off)
-                    .unwrap();
-                let (n, dst_ptr, off) = metas[pi];
-                let local = unit - off;
-                let nt = local / m_units;
-                let m0 = (local % m_units) * mt_step;
-                let mt = (m - m0).min(mt_step);
-                unsafe {
-                    matmul_unit_512(
-                        parts_ref[pi].0,
-                        lhs_q,
-                        kb,
-                        nt,
-                        m0,
-                        mt,
-                        dst_ptr as *mut f32,
-                        n,
-                    );
-                }
-            }
-        });
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        let _ = (parts, lhs_q, m, k, dsts);
-        unreachable!("x86 repack kernels on non-x86 arch");
-    }
-}
-
 // AMX-int8 path for large-m (prefill) q4k matmuls: weights unpacked to i8 in tile
 // layout (B tile = 8 rows x 64 bytes = 32k x 16n VNNI-paired), activations repacked
 // per 16-row block, tdpbssd accumulating 16x16 i32 per 32-k subblock so the q4k

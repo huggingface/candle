@@ -1,7 +1,7 @@
 #![allow(clippy::redundant_closure_call)]
 #![allow(clippy::useless_conversion)]
-use float8::F8E4M3;
 use half::{bf16, f16};
+use microfloat::f8e4m3;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::CompareOp;
@@ -41,7 +41,7 @@ impl std::ops::Deref for PyTensor {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[pyclass(from_py_object, name = "DType")]
 /// A `candle` dtype.
 struct PyDType(DType);
@@ -71,12 +71,14 @@ impl PyDType {
 
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 static METAL_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+static VULKAN_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PyDevice {
     Cpu,
     Cuda,
     Metal,
+    Vulkan,
 }
 
 impl PyDevice {
@@ -85,6 +87,7 @@ impl PyDevice {
             Device::Cpu => Self::Cpu,
             Device::Cuda(_) => Self::Cuda,
             Device::Metal(_) => Self::Metal,
+            Device::Vulkan(_) => Self::Vulkan,
         }
     }
 
@@ -109,6 +112,15 @@ impl PyDevice {
                 *device = Some(d.clone());
                 Ok(d)
             }
+            Self::Vulkan => {
+                let mut device = VULKAN_DEVICE.lock().unwrap();
+                if let Some(device) = device.as_ref() {
+                    return Ok(device.clone());
+                };
+                let d = Device::new_vulkan(0).map_err(wrap_err)?;
+                *device = Some(d.clone());
+                Ok(d)
+            }
         }
     }
 }
@@ -122,6 +134,7 @@ impl FromPyObject<'_, '_> for PyDevice {
             "cpu" => PyDevice::Cpu,
             "cuda" => PyDevice::Cuda,
             "metal" => PyDevice::Metal,
+            "vulkan" => PyDevice::Vulkan,
             _ => Err(PyTypeError::new_err(format!("invalid device '{device}'")))?,
         };
         Ok(device)
@@ -138,6 +151,7 @@ impl<'py> IntoPyObject<'py> for PyDevice {
             PyDevice::Cpu => "cpu",
             PyDevice::Cuda => "cuda",
             PyDevice::Metal => "metal",
+            PyDevice::Vulkan => "vulkan",
         };
         Ok(str.into_pyobject(py).unwrap())
     }
@@ -165,7 +179,7 @@ pydtype!(f16, f32::from);
 pydtype!(bf16, f32::from);
 pydtype!(f32, |v| v);
 pydtype!(f64, |v| v);
-pydtype!(F8E4M3, f32::from);
+pydtype!(f8e4m3, |v: f8e4m3| v.to_f32());
 
 fn actual_index(t: &Tensor, dim: usize, index: i64) -> ::candle::Result<usize> {
     let dim = t.dim(dim)?;

@@ -47,6 +47,107 @@ Having installed `candle` with Cuda support, simply define the `device` to be on
 
 For more advanced examples, please have a look at the following section.
 
+For native speech applications, [`candle-audio`](candle-audio/README.md) provides
+model-independent ASR, synthesis, and realtime session APIs plus a local CLI.
+It includes Whisper, Parler-TTS, and streaming Mimi adapters, with shared PCM
+conversion, cancellation, bounded input, and typed output events.
+
+## Vulkan
+
+Candle has a Vulkan backend that runs on AMD, Intel, and other GPUs (and CPU
+software drivers) through the Vulkan API. It is enabled with the `vulkan`
+feature of `candle-core`.
+
+### Enabling the feature
+
+Add `candle-core` with the `vulkan` feature to your `Cargo.toml`:
+
+```toml
+[dependencies]
+candle-core = { version = "0.11.1", features = ["vulkan"] }
+```
+
+When building the examples, pass `--features vulkan` instead:
+
+```sh
+cargo run --release --features vulkan --example quantized-qwen3 -- --prompt "Hello"
+```
+
+### System dependencies
+
+Building with the `vulkan` feature requires the Slang shader compiler
+(`slangc`) and a few system libraries. On Ubuntu, install:
+
+```sh
+sudo apt install build-essential cmake pkg-config git libvulkan-dev libx11-dev
+```
+
+- `build-essential`, `cmake`, `pkg-config`, `git` — a C/C++ toolchain and
+  build tools, needed to build `slangc` and to link the native dependencies.
+- `libvulkan-dev` — the Vulkan loader (`libvulkan1`) and development headers.
+- `libx11-dev` — pulls in `libxcb1-dev`, needed to link the X11 window-system
+  bindings that the `vulkano` wrapper depends on.
+
+To actually run on a GPU you also need a Vulkan driver (the ICD) and the
+loader:
+
+```sh
+sudo apt install mesa-vulkan-drivers
+```
+
+`vulkan-tools` (which provides `vulkaninfo`) is useful for inspecting the
+available devices:
+
+```sh
+sudo apt install vulkan-tools
+```
+
+### Installing the Slang shader compiler
+
+`candle-vulkan-kernels` compiles its `.slang` shaders to SPIR-V at build time
+using `slangc`. Ubuntu's `slang-compiler` package is too old for the candle
+shaders, so install a recent `slangc` from source using the
+`build-install-slang.sh` script in this repository:
+
+```sh
+.devops/build-install-slang.sh
+```
+
+This clones a pinned release of
+[shader-slang](https://github.com/shader-slang/slang), builds it, and installs
+`slangc` (and friends) into `$HOME/.local/bin` (override with `--install-dir`).
+Make sure `$HOME/.local/bin` is on your `PATH`. The script needs `git`, `cmake`,
+and a C/C++ toolchain (installed above).
+
+### Selecting the Vulkan device
+
+By default candle uses the first Vulkan device (`Device::new_vulkan(0)`). On a
+machine with multiple GPUs, the Mesa driver's `MESA_VK_DEVICE_SELECT`
+environment variable selects which physical device is the default:
+
+```sh
+export MESA_VK_DEVICE_SELECT=1002:7551
+```
+
+The value is the `vendor_id:device_id` PCI pair (in hex), or a device name. To
+find the values for your devices, run `vulkaninfo --summary` and look at the
+`deviceID` and `vendorID` fields (or the device name) of each device.
+
+### Example
+
+```rust
+use candle_core::Device;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let device = Device::new_vulkan(0)?;
+    // ... use `device` like any other candle device
+    Ok(())
+}
+```
+
+`Device::new_vulkan(0)` selects the first Vulkan device; pass `1`, `2`, ... to
+select others.
+
 ## Check out our examples
 
 These online demos run entirely in your browser:
@@ -213,6 +314,7 @@ If you have an addition to this list, please submit a pull request.
 - Backends.
     - Optimized CPU backend with optional MKL support for x86 and Accelerate for macs.
     - CUDA backend for efficiently running on GPUs, multiple GPU distribution via NCCL.
+    - Vulkan backend for running on AMD, Intel, and other GPUs.
     - WASM support, run your models in a browser.
 - Included models.
     - Language Models.
@@ -294,6 +396,68 @@ Cheatsheet:
 - [candle-transformers](./candle-transformers): transformers-related utilities.
 - [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.
 - [candle-onnx](./candle-onnx/): ONNX model evaluation.
+
+## Vulkan development
+
+This section is for developers working on the Vulkan backend itself.
+
+### Running the tests
+
+The Vulkan test suite honors the `CANDLE_VULKAN_TEST_GPU` environment
+variable, which selects the Vulkan device index (default `0`). Run the full
+workspace test suite once per real GPU device:
+
+```sh
+cargo clippy --all-targets --features vulkan
+CANDLE_VULKAN_TEST_GPU=0 cargo test --features vulkan --workspace --no-fail-fast
+CANDLE_VULKAN_TEST_GPU=1 cargo test --features vulkan --workspace --no-fail-fast  # second GPU only
+cargo bench --features vulkan --profile release -- --test
+```
+
+Never target a `PHYSICAL_DEVICE_TYPE_CPU` device (llvmpipe): it is only a CPU
+fallback for keeping a display alive, and anything that runs there runs faster
+on candle's own CPU backend. Use `vulkaninfo --summary` to list the devices and
+their indices.
+
+### Running the examples
+
+The examples select their backend with the `CANDLE_BACKEND` environment
+variable (`cpu`, `cuda`, `metal`, or `vulkan`). For example, the quantized
+Qwen3 example:
+
+```sh
+CANDLE_BACKEND=vulkan cargo run --release --features vulkan \
+    --example quantized-qwen3 -- --prompt "Explain the Rust compilation process."
+```
+
+Use `CANDLE_BACKEND=cpu` to run the same example on the CPU backend for
+comparison. Other examples (e.g. `quantized-gemma`, `llama`, `muse-glimmer`)
+work the same way.
+
+### Development container
+
+A container with the full toolchain (Rust, the Vulkan loader and Mesa drivers,
+Slang, plus debugging and profiling tools) is provided under `.devops/`. Build
+it with:
+
+```sh
+.devops/build-vulkan-dev.sh
+```
+
+and run it (mounting the checkout at `/mnt/workspace` and passing the host GPU
+through) with:
+
+```sh
+.devops/run-vulkan-dev.sh
+```
+
+or run a command inside it:
+
+```sh
+.devops/run-vulkan-dev.sh -- cargo test --features vulkan --workspace --no-fail-fast
+```
+
+See [`.devops/README.md`](./.devops/README.md) for the full details.
 
 ## FAQ
 
