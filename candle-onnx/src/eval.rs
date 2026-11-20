@@ -1620,8 +1620,8 @@ fn simple_eval_(
                     Some(Ok(axes)) => axes
                         .to_vec1::<i64>()?
                         .into_iter()
-                        .map(|x| x as usize)
-                        .collect::<Vec<_>>(),
+                        .map(|x| input.normalize_axis(x))
+                        .collect::<Result<Vec<_>>>()?,
                     Some(Err(_)) | None => {
                         if noop_with_empty_axes == 1 {
                             vec![]
@@ -1655,8 +1655,8 @@ fn simple_eval_(
                     Some(axes) => axes?
                         .to_vec1::<i64>()?
                         .into_iter()
-                        .map(|x| x as usize)
-                        .collect::<Vec<_>>(),
+                        .map(|x| input.normalize_axis(x))
+                        .collect::<Result<Vec<_>>>()?,
                     None => {
                         if noop_with_empty_axes == 1 {
                             vec![]

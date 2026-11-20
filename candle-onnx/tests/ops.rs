@@ -5954,6 +5954,45 @@ fn test_reduce_sum_do_not_keep_dims() -> Result<()> {
     Ok(())
 }
 
+// ReduceSum and ReduceL2 accept axes in [-r, r-1], a negative one counts from the back.
+#[test]
+fn test_reduce_sum_l2_negative_axes() -> Result<()> {
+    let data = Tensor::arange(1f32, 13., &Device::Cpu)?.reshape((3, 2, 2))?;
+    let keepdims = AttributeProto {
+        name: "keepdims".to_string(),
+        r#type: AttributeType::Int.into(),
+        i: 0,
+        ..AttributeProto::default()
+    };
+    for (op, expected) in [
+        ("ReduceSum", [data.sum(2)?, data.sum(0)?]),
+        (
+            "ReduceL2",
+            [data.sqr()?.sum(2)?.sqrt()?, data.sqr()?.sum(0)?.sqrt()?],
+        ),
+    ] {
+        let manual_graph =
+            make_graph_helper(op, &["data", "axes"], &["reduced"], vec![keepdims.clone()]);
+        for (axis, expected) in [-1i64, -3].into_iter().zip(expected) {
+            let inputs = HashMap::from_iter([
+                ("data".to_string(), data.clone()),
+                (
+                    "axes".to_string(),
+                    Tensor::from_vec(vec![axis], (1,), &Device::Cpu)?,
+                ),
+            ]);
+            let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+            let reduced = eval.get("reduced").expect("Output 'reduced' not found");
+            assert_eq!(
+                reduced.to_vec2::<f32>()?,
+                expected.to_vec2::<f32>()?,
+                "{op} axis {axis}"
+            );
+        }
+    }
+    Ok(())
+}
+
 // Xor
 #[test]
 fn test_xor() -> Result<()> {
