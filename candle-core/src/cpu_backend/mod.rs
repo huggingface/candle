@@ -385,7 +385,17 @@ impl Map1 for Affine {
     fn f<T: WithDType>(&self, vs: &[T], layout: &Layout) -> Result<Vec<T>> {
         let mul = T::from_f64(self.0);
         let add = T::from_f64(self.1);
-        Ok(unary_map(vs, layout, |v| v * mul + add))
+        // `t / 2.0` is `affine(0.5, 0)`. Casting those scalars to an integer dtype
+        // truncates them first, so the whole tensor becomes zero. Stay in the
+        // storage dtype when the scalars survive the round trip (exact i64 scaling).
+        if mul.to_f64() == self.0 && add.to_f64() == self.1 {
+            Ok(unary_map(vs, layout, |v| v * mul + add))
+        } else {
+            let (m, a) = (self.0, self.1);
+            Ok(unary_map(vs, layout, move |v| {
+                T::from_f64(v.to_f64() * m + a)
+            }))
+        }
     }
 }
 

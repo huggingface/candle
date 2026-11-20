@@ -2217,6 +2217,24 @@ fn tensor_new() -> Result<()> {
 }
 
 #[test]
+fn integer_affine_keeps_fractional_scale() -> Result<()> {
+    // `Div` by an f64 goes through affine(1/rhs, 0). Casting 0.5 to u32 used to
+    // zero the scale, so every element came back 0.
+    let t = Tensor::new(&[10u32, 3, 0, 7], &Device::Cpu)?;
+    let halved = (&t / 2.0)?;
+    assert_eq!(halved.dtype(), DType::U32);
+    assert_eq!(halved.to_vec1::<u32>()?, vec![5, 1, 0, 3]);
+
+    let shifted = t.affine(0.5, 1.5)?;
+    assert_eq!(shifted.to_vec1::<u32>()?, vec![6, 3, 1, 5]);
+
+    // An exactly representable scale still uses integer arithmetic.
+    let doubled = (&t * 2.0)?;
+    assert_eq!(doubled.to_vec1::<u32>()?, vec![20, 6, 0, 14]);
+    Ok(())
+}
+
+#[test]
 fn tensor_norm() -> Result<()> {
     let t = Tensor::new(&[[3., 4.], [0., 0.]], &Device::Cpu)?;
     let norm = t.norm()?;
