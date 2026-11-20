@@ -616,24 +616,24 @@ fn simple_eval_(
                     Some(axis) => axis.to_vec(),
                     None => get(&node.input[1])?.to_vec1::<i64>()?,
                 };
+                // Axes refer to the output tensor, whose rank is the input rank
+                // plus the number of inserted dimensions.
+                let out_rank = (xs.rank() + axes.len()) as i64;
                 let mut axes = axes
                     .iter()
                     .map(|&i| {
-                        if i == xs.rank() as i64 {
-                            Ok(xs.rank())
-                        } else if i < 0 {
-                            // normalize_axis doesn't work correctly here
-                            // because we actually want normalized with respect
-                            // to the final size, not the current (off by one)
-                            Ok(xs.rank() - (-i as usize) + 1)
-                        } else {
-                            xs.normalize_axis(i)
+                        let axis = if i < 0 { i + out_rank } else { i };
+                        if axis < 0 || axis >= out_rank {
+                            bail!("Unsqueeze axis {i} out of range for output rank {out_rank}")
                         }
+                        Ok(axis as usize)
                     })
                     .collect::<Result<Vec<_>>>()?;
                 axes.sort();
+                // Insert in ascending order so each axis is already in its
+                // final position when the next one is inserted.
                 let mut xs = xs.clone();
-                for &axis in axes.iter().rev() {
+                for &axis in axes.iter() {
                     xs = xs.unsqueeze(axis)?
                 }
                 values.insert(node.output[0].clone(), xs);
