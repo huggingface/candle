@@ -740,16 +740,19 @@ fn simple_eval_(
             }
             "Shape" => {
                 // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Shape
+                // `end` is exclusive and out-of-range values are clamped to [0, rank].
                 let xs = get(&node.input[0])?;
+                let rank = xs.rank() as i64;
                 let start = get_attr_opt::<i64>(node, "start")?.copied().unwrap_or(0);
-                let end = get_attr_opt::<i64>(node, "end")?.copied().unwrap_or(-1);
-                let start = xs.normalize_axis(start)?;
-                let end = xs.normalize_axis(end)?;
-                let mut dims = vec![];
-                for idx in start..=end {
-                    dims.push(xs.dim(idx)? as i64)
-                }
-                let dims = Tensor::from_vec(dims, xs.rank(), xs.device())?;
+                let end = get_attr_opt::<i64>(node, "end")?.copied().unwrap_or(rank);
+                let clamp = |i: i64| (if i < 0 { i + rank } else { i }).clamp(0, rank) as usize;
+                let (start, end) = (clamp(start), clamp(end));
+                let dims: Vec<i64> = xs.dims()[start..end.max(start)]
+                    .iter()
+                    .map(|&d| d as i64)
+                    .collect();
+                let len = dims.len();
+                let dims = Tensor::from_vec(dims, len, xs.device())?;
                 values.insert(node.output[0].clone(), dims);
             }
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Size
