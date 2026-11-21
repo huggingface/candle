@@ -32,6 +32,26 @@ fn kv_cache() -> Result<()> {
 }
 
 #[test]
+fn kv_cache_truncate() -> Result<()> {
+    let mut cache = candle_nn::kv_cache::KvCache::new(0, 16);
+    let t = Tensor::new(&[1f32, 2., 3., 4., 5.], &Device::Cpu)?;
+    cache.append(&t, &t)?;
+    cache.truncate(3)?;
+    assert_eq!(cache.current_seq_len(), 3);
+    assert_eq!(cache.k()?.unwrap().to_vec1::<f32>()?, [1., 2., 3.]);
+    assert_eq!(cache.v()?.unwrap().to_vec1::<f32>()?, [1., 2., 3.]);
+    // The next append writes over the removed positions.
+    let t = Tensor::new(&[6f32, 7.], &Device::Cpu)?;
+    let (k, v) = cache.append(&t, &t)?;
+    assert_eq!(k.to_vec1::<f32>()?, [1., 2., 3., 6., 7.]);
+    assert_eq!(v.to_vec1::<f32>()?, [1., 2., 3., 6., 7.]);
+    assert!(cache.truncate(6).is_err());
+    cache.truncate(0)?;
+    assert_eq!(cache.current_seq_len(), 0);
+    Ok(())
+}
+
+#[test]
 fn rotating_kv_cache() -> Result<()> {
     let mut cache = candle_nn::kv_cache::RotatingCache::new(0, 6);
     for _ in [0, 1] {
