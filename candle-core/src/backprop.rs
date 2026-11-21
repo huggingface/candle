@@ -425,8 +425,9 @@ impl Tensor {
                         *sum_grad = sum_grad.scatter_add(indexes, &grad, *dim)?;
                     }
                     Op::Scatter(init, indexes, src, dim) => {
+                        let init_grad = grad.scatter(indexes, &src.zeros_like()?, *dim)?;
                         let init_sum_grad = grads.or_insert(init)?;
-                        *init_sum_grad = init_sum_grad.add(&grad)?;
+                        *init_sum_grad = init_sum_grad.add(&init_grad)?;
 
                         let src_grad = grad.gather(indexes, *dim)?;
                         let src_sum_grad = grads.or_insert(src)?;
@@ -434,9 +435,7 @@ impl Tensor {
                     }
                     Op::ScatterAdd(init, indexes, src, dim) => {
                         let init_sum_grad = grads.or_insert(init)?;
-                        let mask = init.ones_like()?;
-                        let mask = mask.scatter(indexes, &mask.zeros_like()?, *dim)?;
-                        *init_sum_grad = init_sum_grad.add(&grad.mul(&mask)?)?;
+                        *init_sum_grad = init_sum_grad.add(&grad)?;
 
                         let src_grad = grad.gather(indexes, *dim)?;
                         let src_sum_grad = grads.or_insert(src)?;

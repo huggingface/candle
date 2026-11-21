@@ -568,6 +568,120 @@ fn binary_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn scatter_grad(device: &Device) -> Result<()> {
+    for partial in [false, true] {
+        let ids = if partial {
+            Tensor::new(&[1u32], device)?
+        } else {
+            Tensor::new(&[2u32, 0, 1], device)?
+        };
+        let values: &[f32] = if partial { &[5.] } else { &[2., 3., 5.] };
+        let weights = Tensor::new(&[1f32, 2., 4.], device)?;
+        for add in [false, true] {
+            let init = Var::new(&[10f32, 20., 30.], device)?;
+            let src = Var::new(values, device)?;
+            let out = if add {
+                init.scatter_add(&ids, &src, 0)?
+            } else {
+                init.scatter(&ids, &src, 0)?
+            };
+            let expected_out = match (partial, add) {
+                (false, false) => [3., 5., 2.],
+                (false, true) => [13., 25., 32.],
+                (true, false) => [10., 5., 30.],
+                (true, true) => [10., 25., 30.],
+            };
+            assert_eq!(out.to_vec1::<f32>()?, expected_out);
+            let grads = out.mul(&weights)?.sum_all()?.backward()?;
+            let expected_init = if add {
+                [1., 2., 4.]
+            } else if partial {
+                [1., 0., 4.]
+            } else {
+                [0., 0., 0.]
+            };
+            assert_eq!(
+                grads
+                    .get(&init)
+                    .context("no grad for init")?
+                    .to_vec1::<f32>()?,
+                expected_init
+            );
+            let expected_src: &[f32] = if partial { &[2.] } else { &[4., 1., 2.] };
+            assert_eq!(
+                grads
+                    .get(&src)
+                    .context("no grad for src")?
+                    .to_vec1::<f32>()?,
+                expected_src
+            );
+        }
+    }
+    Ok(())
+}
+
+fn scatter_2d_grad(device: &Device) -> Result<()> {
+    for dim in [1, 0] {
+        for add in [false, true] {
+            let init = Var::new(&[[10f32, 20., 30.], [40., 50., 60.]], device)?;
+            let src = Var::new(&[[2f32, 3.], [5., 7.]], device)?;
+            let ids = Tensor::new(&[[2u32, 0], [1, 2]], device)?;
+            let weights = Tensor::new(&[[1f32, 2., 4.], [8., 16., 32.]], device)?;
+            let (input, source, ids, weights) = if dim == 0 {
+                // Transposing the destination exercises the supported strided-input path.
+                let input = init.t()?;
+                assert!(!input.is_contiguous());
+                (
+                    input,
+                    src.t()?.contiguous()?,
+                    ids.t()?.contiguous()?,
+                    weights.t()?.contiguous()?,
+                )
+            } else {
+                (
+                    init.as_tensor().clone(),
+                    src.as_tensor().clone(),
+                    ids,
+                    weights,
+                )
+            };
+            let out = if add {
+                input.scatter_add(&ids, &source, dim)?
+            } else {
+                input.scatter(&ids, &source, dim)?
+            };
+            let expected_out = if add {
+                [[13., 20., 32.], [40., 55., 67.]]
+            } else {
+                [[3., 20., 2.], [40., 5., 7.]]
+            };
+            let actual_out = if dim == 0 { out.t()? } else { out.clone() };
+            assert_eq!(actual_out.to_vec2::<f32>()?, expected_out);
+            let grads = out.mul(&weights)?.sum_all()?.backward()?;
+            let expected_init = if add {
+                [[1., 2., 4.], [8., 16., 32.]]
+            } else {
+                [[0., 2., 0.], [8., 0., 0.]]
+            };
+            assert_eq!(
+                grads
+                    .get(&init)
+                    .context("no grad for init")?
+                    .to_vec2::<f32>()?,
+                expected_init
+            );
+            assert_eq!(
+                grads
+                    .get(&src)
+                    .context("no grad for src")?
+                    .to_vec2::<f32>()?,
+                [[4., 1.], [16., 32.]]
+            );
+        }
+    }
+    Ok(())
+}
+
 fn index_select_strided_ids_grad(device: &Device) -> Result<()> {
     let w = Var::new(&[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]], device)?;
     let all_ids = Tensor::new(&[[0u32, 1], [2, 1]], device)?;
@@ -658,4 +772,17 @@ test_device!(
     index_select_strided_ids_grad_cpu,
     index_select_strided_ids_grad_gpu,
     index_select_strided_ids_grad_metal
+);
+
+test_device!(
+    scatter_grad,
+    scatter_grad_cpu,
+    scatter_grad_gpu,
+    scatter_grad_metal
+);
+test_device!(
+    scatter_2d_grad,
+    scatter_2d_grad_cpu,
+    scatter_2d_grad_gpu,
+    scatter_2d_grad_metal
 );
