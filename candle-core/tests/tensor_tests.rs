@@ -1120,6 +1120,18 @@ fn index_select(device: &Device) -> Result<()> {
             hs.to_vec2::<f32>()?,
             &[[0.0, 1.0, 2.0], [6.0, 7.0, 8.0], [3.0, 4.0, 5.0]]
         );
+        let strided_ids = Tensor::stack(&[&ids, &ids], 1)?.i((.., 1))?;
+        assert!(!strided_ids.is_contiguous());
+        let hs = t.index_select(&strided_ids, 1)?;
+        assert_eq!(
+            hs.to_vec2::<f32>()?,
+            &[
+                [0.0, 2.0, 1.0],
+                [3.0, 5.0, 4.0],
+                [6.0, 8.0, 7.0],
+                [9.0, 11.0, 10.0]
+            ]
+        );
         // Prior to https://github.com/huggingface/candle/pull/1022
         // There would be a bug where the last values in the result tensor would be set to 0.
         let ids = Tensor::new(&[0u32, 2u32, 1u32, 0u32, 2u32, 1u32], device)?;

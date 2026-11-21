@@ -1603,7 +1603,11 @@ impl BackendStorage for MetalStorage {
 
     fn index_select(&self, ids: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
         if !ids_l.is_contiguous() {
-            crate::bail!("Metal index_select requires contiguous ids")
+            // The kernel reads the ids as a flat array, so copy strided ids first.
+            let mut ids_c = self.device.zeros_impl(ids_l.shape(), ids.dtype())?;
+            ids.copy_strided_src(&mut ids_c, 0, ids_l)?;
+            let ids_l = Layout::contiguous(ids_l.shape());
+            return self.index_select(&ids_c, src_l, &ids_l, dim);
         }
         let left_size: usize = src_l.dims()[..dim].iter().product();
         let right_size: usize = src_l.dims()[dim + 1..].iter().product();
