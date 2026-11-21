@@ -1,0 +1,834 @@
+
+STAGE: inspect CPU runtime
++ lscpu
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           48 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  2
+On-line CPU(s) list:                     0,1
+Vendor ID:                               AuthenticAMD
+Model name:                              AMD EPYC 7B12
+CPU family:                              23
+Model:                                   49
+Thread(s) per core:                      2
+Core(s) per socket:                      1
+Socket(s):                               1
+Stepping:                                0
+BogoMIPS:                                4499.99
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext ssbd ibrs ibpb stibp vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr arat umip rdpid
+Hypervisor vendor:                       KVM
+Virtualization type:                     full
+L1d cache:                               32 KiB (1 instance)
+L1i cache:                               32 KiB (1 instance)
+L2 cache:                                512 KiB (1 instance)
+L3 cache:                                16 MiB (1 instance)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0,1
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Indirect target selection: Not affected
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Vulnerable
+Vulnerability Spec rstack overflow:      Vulnerable
+Vulnerability Spec store bypass:         Vulnerable
+Vulnerability Spectre v1:                Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers
+Vulnerability Spectre v2:                Vulnerable; IBPB: disabled; STIBP: disabled; PBRSB-eIBRS: Not affected; BHI: Not affected
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
++ free -h
+               total        used        free      shared  buff/cache   available
+Mem:            12Gi       946Mi       8.9Gi       2.2Mi       3.2Gi        11Gi
+Swap:             0B          0B          0B
+
+STAGE: fetch pinned source and unpack Rust experiment
++ git init /content/candle
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in /content/candle/.git/
++ git remote add origin https://github.com/huggingface/candle.git
++ git fetch --depth 1 --filter=blob:none origin c68b24997319b8d76e5a4e775dab197c7f26322a
+From https://github.com/huggingface/candle
+ * branch            c68b24997319b8d76e5a4e775dab197c7f26322a -> FETCH_HEAD
++ git checkout --detach FETCH_HEAD
+HEAD is now at c68b249 Tile lhs rows in the generic CPU quantized matmul for prefill (#4003)
++ git init /content/candle/experiments/kev
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in /content/candle/experiments/kev/.git/
++ git remote add origin https://github.com/jaredpalmer/kev.git
++ git fetch --depth 1 --filter=blob:none origin 0a6d3fafeee7f3f76a9a4a522bf8b9d5b50bd7e5
+From https://github.com/jaredpalmer/kev
+ * branch            0a6d3fafeee7f3f76a9a4a522bf8b9d5b50bd7e5 -> FETCH_HEAD
++ git sparse-checkout init --cone
++ git sparse-checkout set kev
++ git checkout --detach FETCH_HEAD
+HEAD is now at 0a6d3fa README: distinguish Modal HTTP performance from model time (#237)
++ tar -xzf /content/kev-rust-colab.tar.gz -C /content/candle/experiments/kev-rust
+
+STAGE: install Rust and CPU Python dependencies
++ bash -c curl -LsSf https://astral.sh/uv/install.sh | sh
+downloading uv 0.13.0 x86_64-unknown-linux-gnu
+installing to /usr/local/bin
+  uv
+  uvx
+everything's installed!
++ bash -c curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+info: downloading installer
+info: profile set to minimal
+info: default host tuple is x86_64-unknown-linux-gnu
+info: syncing channel updates for stable-x86_64-unknown-linux-gnu
+info: latest update on 2026-10-01 for version 1.99.0 (b940084d7 2026-09-28)
+info: downloading 3 components
+info: default toolchain set to stable-x86_64-unknown-linux-gnu
+
+  stable-x86_64-unknown-linux-gnu installed - rustc 1.99.0 (b940084d7 2026-09-28)
+
+
+Rust is installed now. Great!
+
+To get started you may need to restart your current shell.
+This would reload your PATH environment variable to include
+Cargo's bin directory ($HOME/.cargo/bin).
+
+To configure your current shell, you need to source the
+corresponding env file under $HOME/.cargo.
+
+Consider running the right command for your shell (note the leading DOT):
+. "$HOME/.cargo/env" # For sh/ash/dash/pdksh/bash
+cargo:rerun-if-env-changed=CC_x86_64-unknown-linux-gnu
+CC_x86_64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=CC_x86_64_unknown_linux_gnu
+CC_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_CC
+HOST_CC = None
+cargo:rerun-if-env-changed=CC
+CC = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64_unknown_linux_gnu
+CFLAGS_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64-unknown-linux-gnu
+CFLAGS_x86_64-unknown-linux-gnu = None
++ uv venv --python 3.13 .venv
+warning: The `--system` flag has no effect, `uv venv` always ignores virtual environments when finding a Python interpreter; did you mean `--no-managed-python`?
+Using CPython 3.13.16 interpreter at: /usr/bin/python3
+Creating virtual environment at: .venv
+Activate with: source .venv/bin/activate
++ uv pip install --python /content/candle/experiments/kev-rust/.venv/bin/python torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+Resolved 10 packages in 193ms
+Downloading networkx (2.0MiB)
+Downloading setuptools (1.2MiB)
+Downloading sympy (6.0MiB)
+Downloading torch (175.4MiB)
+ Downloaded networkx
+ Downloaded setuptools
+ Downloaded sympy
+ Downloaded torch
+Prepared 10 packages in 2.78s
+Installed 10 packages in 256ms
+ + filelock==3.32.3
+ + fsspec==2026.7.0
+ + jinja2==3.1.6
+ + markupsafe==3.0.3
+ + mpmath==1.3.0
+ + networkx==3.6.1
+ + setuptools==78.1.0
+ + sympy==1.14.0
+ + torch==2.8.0+cpu
+ + typing-extensions==4.16.0
++ uv pip install --python /content/candle/experiments/kev-rust/.venv/bin/python -r requirements.txt
+Resolved 41 packages in 283ms
+Downloading numpy (15.9MiB)
+Downloading pydantic-core (2.1MiB)
+Downloading pygments (1.2MiB)
+Downloading tokenizers (3.2MiB)
+Downloading transformers (12.0MiB)
+Downloading hf-xet (4.0MiB)
+ Downloaded pygments
+ Downloaded pydantic-core
+ Downloaded hf-xet
+ Downloaded tokenizers
+ Downloaded numpy
+ Downloaded transformers
+Prepared 31 packages in 647ms
+Installed 31 packages in 94ms
+ + accelerate==1.15.0
+ + annotated-doc==0.0.5
+ + annotated-types==0.8.0
+ + anyio==4.15.1
+ + click==8.5.0
+ + h11==0.16.0
+ + hf-xet==1.7.0
+ + httpcore2==2.13.1
+ + httpx2==2.13.1
+ + huggingface-hub==2.2.0
+ + idna==3.20
+ + markdown-it-py==4.2.0
+ + mdurl==0.1.2
+ + numpy==2.5.4
+ + packaging==26.3
+ + peft==0.21.2
+ + psutil==7.2.2
+ + pydantic==2.14.1
+ + pydantic-core==2.50.1
+ + pygments==2.21.0
+ + pyyaml==6.0.3
+ + regex==2026.9.29
+ + rich==15.0.0
+ + safetensors==0.8.0
+ + shellingham==1.5.4
+ + tokenizers==0.23.3
+ + tqdm==4.70.1
+ + transformers==5.19.0
+ + truststore==0.10.5
+ + typer==0.27.3
+ + typing-inspection==0.4.4
+
+STAGE: export pinned Kev-0.8B weights
++ /content/candle/experiments/kev-rust/.venv/bin/python scripts/prepare.py
+Fetching 9 files:   0%|          | 0/9 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 9 files:  44%|████▍     | 4/9 [00:00<00:00, 34.35it/s]Fetching 9 files:  89%|████████▉ | 8/9 [00:00<00:00, 11.40it/s]Fetching 9 files: 100%|██████████| 9/9 [00:00<00:00,  9.48it/s]
+Fetching 3 files:   0%|          | 0/3 [00:00<?, ?it/s]Fetching 3 files:  67%|██████▋   | 2/3 [00:00<00:00,  7.37it/s]Fetching 3 files: 100%|██████████| 3/3 [00:14<00:00,  5.86s/it]Fetching 3 files: 100%|██████████| 3/3 [00:14<00:00,  4.72s/it]
+Writing 320 backbone tensors
+{
+  "base": "Qwen/Qwen3.5-0.8B-Base",
+  "base_revision": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+  "head_dim": 256,
+  "temperature": 2.3510958125672174,
+  "lora": 16,
+  "option_isolation": false,
+  "kev_revision": "bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+  "adapter_scale": 2.0,
+  "dtype": "float32",
+  "kev_path": "/root/.cache/huggingface/hub/models--jaredpalmer--kev-0.8b/snapshots/bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+  "base_path": "/root/.cache/huggingface/hub/models--Qwen--Qwen3.5-0.8B-Base/snapshots/dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+  "merged_tensors": 186,
+  "adapter_sha256": "9b908623acb162118575f4e7a94524f9c139c335be4bfb74d6cfceca01e1885a"
+}
+
+STAGE: build, verify Python parity, and benchmark CPU inference
++ /content/candle/experiments/kev-rust/.venv/bin/python scripts/validate.py --repeats 5
++ cargo test --release
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded anstyle-query v1.1.5
+  Downloaded monostate v0.1.18
+  Downloaded crossbeam-utils v0.8.23
+  Downloaded darling_core v0.20.11
+  Downloaded rand v0.9.5
+  Downloaded anstream v1.0.0
+  Downloaded pulp v0.22.3
+  Downloaded rand_distr v0.5.1
+  Downloaded derive_builder_core v0.20.2
+  Downloaded ahash v0.8.12
+  Downloaded anstyle v1.0.14
+  Downloaded aho-corasick v1.1.5
+  Downloaded gemm-c32 v0.19.0
+  Downloaded esaxx-rs v0.1.10
+  Downloaded errno v0.3.14
+  Downloaded find-msvc-tools v0.1.14
+  Downloaded heck v0.5.0
+  Downloaded float8 v0.7.0
+  Downloaded allocator-api2 v0.2.21
+  Downloaded dyn-stack-macros v0.1.3
+  Downloaded foldhash v0.2.0
+  Downloaded gemm-f16 v0.19.0
+  Downloaded is_terminal_polyfill v1.70.2
+  Downloaded itoa v1.0.18
+  Downloaded macro_rules_attribute v0.2.3
+  Downloaded dary_heap v0.3.9
+  Downloaded gemm v0.19.0
+  Downloaded crossbeam-deque v0.8.8
+  Downloaded dyn-stack v0.13.2
+  Downloaded getrandom v0.3.4
+  Downloaded getrandom v0.4.3
+  Downloaded autocfg v1.5.1
+  Downloaded clap v4.6.7
+  Downloaded fancy-regex v0.17.0
+  Downloaded indexmap v2.14.2
+  Downloaded pulp-wasm-simd-flag v0.1.1
+  Downloaded darling v0.20.11
+  Downloaded anyhow v1.0.104
+  Downloaded lock_api v0.4.14
+  Downloaded byteorder v1.5.0
+  Downloaded paste v1.0.15
+  Downloaded anstyle-parse v1.0.0
+  Downloaded equivalent v1.0.2
+  Downloaded castaway v0.2.4
+  Downloaded half v2.7.1
+  Downloaded hashbrown v0.16.1
+  Downloaded nom v7.1.3
+  Downloaded parking_lot_core v0.9.12
+  Downloaded bit-vec v0.8.0
+  Downloaded bytemuck v1.25.2
+  Downloaded compact_str v0.9.1
+  Downloaded derive_builder_macro v0.20.2
+  Downloaded num-complex v0.4.6
+  Downloaded once_cell v1.21.4
+  Downloaded libc v0.2.190
+  Downloaded clap_builder v4.6.7
+  Downloaded ident_case v1.0.1
+  Downloaded minimal-lexical v0.2.1
+  Downloaded proc-macro2 v1.0.107
+  Downloaded rand_chacha v0.9.0
+  Downloaded pastey v0.2.3
+  Downloaded gemm-common v0.19.0
+  Downloaded gemm-c64 v0.19.0
+  Downloaded bytemuck_derive v1.12.1
+  Downloaded daachorse v3.0.3
+  Downloaded colorchoice v1.0.5
+  Downloaded fnv v1.0.7
+  Downloaded cc v1.8.0
+  Downloaded memmap2 v0.9.11
+  Downloaded onig v6.5.3
+  Downloaded quote v1.0.47
+  Downloaded crc32fast v1.5.2
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded libm v0.2.16
+  Downloaded either v1.19.0
+  Downloaded memchr v2.8.3
+  Downloaded clap_lex v1.1.1
+  Downloaded num-traits v0.2.19
+  Downloaded rayon-cond v0.4.0
+  Downloaded reborrow v0.5.5
+  Downloaded macro_rules_attribute-proc_macro v0.2.3
+  Downloaded rand_core v0.9.5
+  Downloaded cfg-if v1.0.5
+  Downloaded log v0.4.34
+  Downloaded bitflags v2.13.2
+  Downloaded hashbrown v0.17.1
+  Downloaded yoke-derive v0.8.4
+  Downloaded zerofrom v0.1.8
+  Downloaded derive_builder v0.20.2
+  Downloaded onig_sys v69.9.3
+  Downloaded num_cpus v1.17.0
+  Downloaded parking_lot v0.12.5
+  Downloaded shlex v2.0.1
+  Downloaded static_assertions v1.1.0
+  Downloaded strsim v0.11.1
+  Downloaded zerofrom-derive v0.1.8
+  Downloaded thiserror v2.0.21
+  Downloaded thiserror-impl v2.0.21
+  Downloaded safetensors v0.8.0
+  Downloaded smallvec v1.16.3
+  Downloaded synstructure v0.14.0
+  Downloaded tempfile v3.27.0
+  Downloaded zmij v1.0.23
+  Downloaded serde_core v1.0.229
+  Downloaded unicode-ident v1.0.27
+  Downloaded yoke v0.8.3
+  Downloaded itertools v0.14.0
+  Downloaded serde_derive v1.0.229
+  Downloaded linux-raw-sys v0.12.1
+  Downloaded monostate-impl v0.1.18
+  Downloaded gemm-f32 v0.19.0
+  Downloaded serde v1.0.229
+  Downloaded unicode_categories v0.1.1
+  Downloaded base64 v0.13.1
+  Downloaded fastrand v2.5.0
+  Downloaded unicode-segmentation v1.13.3
+  Downloaded raw-cpuid v11.6.0
+  Downloaded bit-set v0.8.0
+  Downloaded gemm-f64 v0.19.0
+  Downloaded pkg-config v0.3.34
+  Downloaded ryu v1.0.23
+  Downloaded zerocopy-derive v0.8.62
+  Downloaded darling_macro v0.20.11
+  Downloaded crossbeam-epoch v0.9.21
+  Downloaded syn v3.0.9
+  Downloaded rustversion v1.0.23
+  Downloaded clap_derive v4.6.7
+  Downloaded rustix v1.1.5
+  Downloaded spm_precompiled v0.1.4
+  Downloaded tokenizers v0.23.2
+  Downloaded zerocopy v0.8.62
+  Downloaded regex-syntax v0.8.11
+  Downloaded rayon v1.12.0
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded typed-path v0.12.3
+  Downloaded syn v2.0.119
+  Downloaded unicode-normalization-alignments v0.1.12
+  Downloaded regex v1.13.1
+  Downloaded version_check v0.9.5
+  Downloaded seq-macro v0.3.6
+  Downloaded rayon-core v1.13.0
+  Downloaded utf8parse v0.2.2
+  Downloaded scopeguard v1.2.0
+  Downloaded serde_json v1.0.154
+  Downloaded zip v8.6.0
+  Downloaded regex-automata v0.4.18
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling cfg-if v1.0.5
+   Compiling libc v0.2.190
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+   Compiling zerocopy v0.8.62
+   Compiling getrandom v0.3.4
+   Compiling zerocopy-derive v0.8.62
+   Compiling crossbeam-utils v0.8.23
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling num-traits v0.2.19
+   Compiling version_check v0.9.5
+   Compiling crossbeam-epoch v0.9.21
+   Compiling bitflags v2.13.2
+   Compiling rand_core v0.9.5
+   Compiling bytemuck_derive v1.12.1
+   Compiling crossbeam-deque v0.8.8
+   Compiling bytemuck v1.25.2
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.9.0
+   Compiling rayon-core v1.13.0
+   Compiling serde_core v1.0.229
+   Compiling once_cell v1.21.4
+   Compiling rand v0.9.5
+   Compiling paste v1.0.15
+   Compiling either v1.19.0
+   Compiling memchr v2.8.3
+   Compiling rayon v1.12.0
+   Compiling rand_distr v0.5.1
+   Compiling pulp v0.22.3
+   Compiling half v2.7.1
+   Compiling num-complex v0.4.6
+   Compiling raw-cpuid v11.6.0
+   Compiling reborrow v0.5.5
+   Compiling serde v1.0.229
+   Compiling pulp-wasm-simd-flag v0.1.1
+   Compiling dyn-stack-macros v0.1.3
+   Compiling dyn-stack v0.13.2
+   Compiling serde_derive v1.0.229
+   Compiling strsim v0.11.1
+   Compiling fnv v1.0.7
+   Compiling ident_case v1.0.1
+   Compiling seq-macro v0.3.6
+   Compiling darling_core v0.20.11
+   Compiling gemm-common v0.19.0
+   Compiling equivalent v1.0.2
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.14
+   Compiling cc v1.8.0
+   Compiling darling_macro v0.20.11
+   Compiling zmij v1.0.23
+   Compiling rustversion v1.0.23
+   Compiling pkg-config v0.3.34
+   Compiling hashbrown v0.17.1
+   Compiling onig_sys v69.9.3
+   Compiling darling v0.20.11
+   Compiling aho-corasick v1.1.5
+   Compiling indexmap v2.14.2
+   Compiling synstructure v0.14.0
+   Compiling serde_json v1.0.154
+   Compiling foldhash v0.2.0
+   Compiling rustix v1.1.5
+   Compiling smallvec v1.16.3
+   Compiling getrandom v0.4.3
+   Compiling itoa v1.0.18
+   Compiling regex-syntax v0.8.11
+   Compiling regex-automata v0.4.18
+   Compiling derive_builder_core v0.20.2
+   Compiling ahash v0.8.12
+   Compiling thiserror v2.0.21
+   Compiling bit-vec v0.8.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling parking_lot_core v0.9.12
+   Compiling minimal-lexical v0.2.1
+   Compiling crc32fast v1.5.2
+   Compiling esaxx-rs v0.1.10
+   Compiling nom v7.1.3
+   Compiling bit-set v0.8.0
+   Compiling castaway v0.2.4
+   Compiling derive_builder_macro v0.20.2
+   Compiling zerofrom-derive v0.1.8
+   Compiling gemm-f32 v0.19.0
+   Compiling itertools v0.14.0
+   Compiling monostate-impl v0.1.18
+   Compiling thiserror-impl v2.0.21
+   Compiling fastrand v2.5.0
+   Compiling macro_rules_attribute-proc_macro v0.2.3
+   Compiling base64 v0.13.1
+   Compiling scopeguard v1.2.0
+   Compiling static_assertions v1.1.0
+   Compiling utf8parse v0.2.2
+   Compiling unicode-segmentation v1.13.3
+   Compiling pastey v0.2.3
+   Compiling stable_deref_trait v1.2.1
+   Compiling allocator-api2 v0.2.21
+   Compiling ryu v1.0.23
+   Compiling compact_str v0.9.1
+   Compiling hashbrown v0.16.1
+   Compiling macro_rules_attribute v0.2.3
+   Compiling spm_precompiled v0.1.4
+   Compiling anstyle-parse v1.0.0
+   Compiling lock_api v0.4.14
+   Compiling tempfile v3.27.0
+   Compiling rayon-cond v0.4.0
+   Compiling monostate v0.1.18
+   Compiling gemm-f16 v0.19.0
+   Compiling zerofrom v0.1.8
+   Compiling derive_builder v0.20.2
+   Compiling onig v6.5.3
+   Compiling fancy-regex v0.17.0
+   Compiling regex v1.13.1
+   Compiling unicode-normalization-alignments v0.1.12
+   Compiling yoke-derive v0.8.4
+   Compiling gemm-f64 v0.19.0
+   Compiling gemm-c32 v0.19.0
+   Compiling gemm-c64 v0.19.0
+   Compiling dary_heap v0.3.9
+   Compiling colorchoice v1.0.5
+   Compiling anstyle-query v1.1.5
+   Compiling typed-path v0.12.3
+   Compiling daachorse v3.0.3
+   Compiling log v0.4.34
+   Compiling anstyle v1.0.14
+   Compiling unicode_categories v0.1.1
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstream v1.0.0
+   Compiling tokenizers v0.23.2
+   Compiling zip v8.6.0
+   Compiling gemm v0.19.0
+   Compiling yoke v0.8.3
+   Compiling parking_lot v0.12.5
+   Compiling safetensors v0.8.0
+   Compiling memmap2 v0.9.11
+   Compiling float8 v0.7.0
+   Compiling num_cpus v1.17.0
+   Compiling clap_lex v1.1.1
+   Compiling heck v0.5.0
+   Compiling byteorder v1.5.0
+   Compiling anyhow v1.0.104
+   Compiling candle-core v0.11.0 (/content/candle/candle-core)
+   Compiling clap_derive v4.6.7
+   Compiling clap_builder v4.6.7
+   Compiling clap v4.6.7
+   Compiling candle-nn v0.11.0 (/content/candle/candle-nn)
+   Compiling kev-rust v0.1.0 (/content/candle/experiments/kev-rust)
+    Finished `release` profile [optimized] target(s) in 3m 46s
+     Running unittests src/lib.rs (target/release/deps/kev_rust-d175f8e1823f2a0f)
+
+running 3 tests
+test delta::tests::depthwise_matches_grouped_convolution ... ok
+test tests::structured_state_matches_python_rendering ... ok
+test delta::tests::scan_matches_independent_tensor_rule_and_continuation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/release/deps/kev_rust-68eb6236606a25ae)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kev_rust
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
++ cargo build --release
+   Compiling kev-rust v0.1.0 (/content/candle/experiments/kev-rust)
+    Finished `release` profile [optimized] target(s) in 1.84s
++ /content/candle/experiments/kev-rust/.venv/bin/python /content/candle/experiments/kev-rust/scripts/reference.py --input /content/candle/experiments/kev-rust/fixtures/parity.jsonl --out /content/candle/experiments/kev-rust/results/python-parity.jsonl
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/320 [00:00<?, ?it/s]Loading weights:   0%|          | 1/320 [00:00<01:59,  2.68it/s]Loading weights:  48%|████▊     | 153/320 [00:00<00:00, 422.14it/s]Loading weights:  76%|███████▌  | 243/320 [00:00<00:00, 455.12it/s]Loading weights:  98%|█████████▊| 315/320 [00:00<00:00, 482.82it/s]Loading weights: 100%|██████████| 320/320 [00:00<00:00, 404.75it/s]
+Loaded reference in 3.42s
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `chunk_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+record=12 state tokens, 3 questions: 2483ms
+record=33 state tokens, 2 questions: 2087ms
+record=40 state tokens, 2 questions: 2962ms
+record=1 state tokens, 3 questions: 1305ms
+record=12 state tokens, 3 questions: 2273ms
+record=12 state tokens, 1 questions: 1020ms
+record=12 state tokens, 1 questions: 866ms
+record=12 state tokens, 1 questions: 985ms
+record=286 state tokens, 3 questions: 15233ms
++ /content/candle/experiments/kev-rust/target/release/kev-rust --input /content/candle/experiments/kev-rust/fixtures/parity.jsonl --rows --tensor
+Loaded Kev-0.8B in 10.07s
++ /content/candle/experiments/kev-rust/.venv/bin/python /content/candle/experiments/kev-rust/scripts/compare.py /content/candle/experiments/kev-rust/results/python-parity.jsonl /content/candle/experiments/kev-rust/results/rows-tensor-parity.jsonl --out /content/candle/experiments/kev-rust/results/rows-tensor-parity.json
+{
+  "records": 9,
+  "questions": 19,
+  "max_logit_error": 2.3245811462402344e-06,
+  "max_probability_error": 6.006629785781925e-07,
+  "argmax_flips": 0,
+  "token_ids_identical": true,
+  "max_serialized_probability_error": 4.717888832092565e-05,
+  "reference_median_ms": 2086.9997069999613,
+  "candidate_median_ms": 3107.529246,
+  "speedup": 0.6715945504571966,
+  "atol": 0.0001,
+  "logit_atol": 0.001,
+  "passed": true
+}
++ /content/candle/experiments/kev-rust/target/release/kev-rust --input /content/candle/experiments/kev-rust/fixtures/parity.jsonl --rows
+Loaded Kev-0.8B in 1.67s
++ /content/candle/experiments/kev-rust/.venv/bin/python /content/candle/experiments/kev-rust/scripts/compare.py /content/candle/experiments/kev-rust/results/python-parity.jsonl /content/candle/experiments/kev-rust/results/rows-fused-parity.jsonl --out /content/candle/experiments/kev-rust/results/rows-fused-parity.json
+{
+  "records": 9,
+  "questions": 19,
+  "max_logit_error": 4.1425228118896484e-06,
+  "max_probability_error": 7.592672383038845e-07,
+  "argmax_flips": 0,
+  "token_ids_identical": true,
+  "max_serialized_probability_error": 4.717888832092565e-05,
+  "reference_median_ms": 2086.9997069999613,
+  "candidate_median_ms": 2637.199047,
+  "speedup": 0.7913698093339108,
+  "atol": 0.0001,
+  "logit_atol": 0.001,
+  "passed": true
+}
++ /content/candle/experiments/kev-rust/target/release/kev-rust --input /content/candle/experiments/kev-rust/fixtures/parity.jsonl
+Loaded Kev-0.8B in 5.02s
++ /content/candle/experiments/kev-rust/.venv/bin/python /content/candle/experiments/kev-rust/scripts/compare.py /content/candle/experiments/kev-rust/results/python-parity.jsonl /content/candle/experiments/kev-rust/results/prefix-fused-parity.jsonl --out /content/candle/experiments/kev-rust/results/prefix-fused-parity.json
+{
+  "records": 9,
+  "questions": 19,
+  "max_logit_error": 3.2782554626464844e-06,
+  "max_probability_error": 6.401664996436018e-07,
+  "argmax_flips": 0,
+  "token_ids_identical": true,
+  "max_serialized_probability_error": 4.7208690643313345e-05,
+  "reference_median_ms": 2086.9997069999613,
+  "candidate_median_ms": 2745.4165120000002,
+  "speedup": 0.7601759870962563,
+  "atol": 0.0001,
+  "logit_atol": 0.001,
+  "passed": true
+}
++ /content/candle/experiments/kev-rust/.venv/bin/python /content/candle/experiments/kev-rust/scripts/reference.py --input /content/candle/experiments/kev-rust/fixtures/requests.jsonl --out /content/candle/experiments/kev-rust/results/python-bench.jsonl --repeats 5
+Loading weights:   0%|          | 0/320 [00:00<?, ?it/s]Loading weights:   0%|          | 1/320 [00:00<03:23,  1.57it/s]Loading weights:  63%|██████▎   | 201/320 [00:00<00:00, 365.68it/s]Loading weights:  99%|█████████▉| 317/320 [00:01<00:00, 251.56it/s]Loading weights: 100%|██████████| 320/320 [00:01<00:00, 229.81it/s]
+Loaded reference in 3.58s
+[transformers] `causal_conv1d_fn` is falling back to its reference PyTorch implementation because `causal_conv1d` is not installed. This is correct but much slower; install `causal_conv1d` for the optimized kernel.
+[transformers] `chunk_gated_delta_rule` is falling back to its reference PyTorch implementation because `flash-linear-attention` is not installed. This is correct but much slower; install `flash-linear-attention` for the optimized kernel.
+record=12 state tokens, 3 questions: 2513ms
+record=12 state tokens, 3 questions: 2337ms
+record=12 state tokens, 3 questions: 2633ms
+record=12 state tokens, 3 questions: 2924ms
+record=12 state tokens, 3 questions: 2441ms
+record=33 state tokens, 2 questions: 2282ms
+record=33 state tokens, 2 questions: 2287ms
+record=33 state tokens, 2 questions: 3085ms
+record=33 state tokens, 2 questions: 2219ms
+record=33 state tokens, 2 questions: 2223ms
+record=40 state tokens, 2 questions: 2216ms
+record=40 state tokens, 2 questions: 2255ms
+record=40 state tokens, 2 questions: 3068ms
+record=40 state tokens, 2 questions: 2228ms
+record=40 state tokens, 2 questions: 2150ms
+record=1 state tokens, 3 questions: 1400ms
+record=1 state tokens, 3 questions: 1351ms
+record=1 state tokens, 3 questions: 1400ms
+record=1 state tokens, 3 questions: 2354ms
+record=1 state tokens, 3 questions: 1366ms
++ /content/candle/experiments/kev-rust/target/release/kev-rust --input /content/candle/experiments/kev-rust/fixtures/requests.jsonl --repeats 5 --rows --tensor
+Loaded Kev-0.8B in 1.85s
++ /content/candle/experiments/kev-rust/.venv/bin/python /content/candle/experiments/kev-rust/scripts/compare.py /content/candle/experiments/kev-rust/results/python-bench.jsonl /content/candle/experiments/kev-rust/results/rows-tensor-bench.jsonl --out /content/candle/experiments/kev-rust/results/rows-tensor-bench.json
+{
+  "records": 20,
+  "questions": 50,
+  "max_logit_error": 2.3245811462402344e-06,
+  "max_probability_error": 5.50840944524289e-07,
+  "argmax_flips": 0,
+  "token_ids_identical": true,
+  "max_serialized_probability_error": 3.9343595504781614e-05,
+  "reference_median_ms": 2268.4854130000076,
+  "candidate_median_ms": 3296.218089,
+  "speedup": 0.688208532248003,
+  "atol": 0.0001,
+  "logit_atol": 0.001,
+  "passed": true
+}
++ /content/candle/experiments/kev-rust/target/release/kev-rust --input /content/candle/experiments/kev-rust/fixtures/requests.jsonl --repeats 5 --rows
+Loaded Kev-0.8B in 1.83s
++ /content/candle/experiments/kev-rust/.venv/bin/python /content/candle/experiments/kev-rust/scripts/compare.py /content/candle/experiments/kev-rust/results/python-bench.jsonl /content/candle/experiments/kev-rust/results/rows-fused-bench.jsonl --out /content/candle/experiments/kev-rust/results/rows-fused-bench.json
+{
+  "records": 20,
+  "questions": 50,
+  "max_logit_error": 2.8312206268310547e-06,
+  "max_probability_error": 7.592672383038845e-07,
+  "argmax_flips": 0,
+  "token_ids_identical": true,
+  "max_serialized_probability_error": 3.916478157045544e-05,
+  "reference_median_ms": 2268.4854130000076,
+  "candidate_median_ms": 2639.3022535,
+  "speedup": 0.8595019422242188,
+  "atol": 0.0001,
+  "logit_atol": 0.001,
+  "passed": true
+}
++ /content/candle/experiments/kev-rust/target/release/kev-rust --input /content/candle/experiments/kev-rust/fixtures/requests.jsonl --repeats 5
+Loaded Kev-0.8B in 1.69s
++ /content/candle/experiments/kev-rust/.venv/bin/python /content/candle/experiments/kev-rust/scripts/compare.py /content/candle/experiments/kev-rust/results/python-bench.jsonl /content/candle/experiments/kev-rust/results/prefix-fused-bench.jsonl --out /content/candle/experiments/kev-rust/results/prefix-fused-bench.json
+{
+  "records": 20,
+  "questions": 50,
+  "max_logit_error": 2.8312206268310547e-06,
+  "max_probability_error": 6.401664996436018e-07,
+  "argmax_flips": 0,
+  "token_ids_identical": true,
+  "max_serialized_probability_error": 3.925418853761853e-05,
+  "reference_median_ms": 2268.4854130000076,
+  "candidate_median_ms": 2701.738879,
+  "speedup": 0.839639030489744,
+  "atol": 0.0001,
+  "logit_atol": 0.001,
+  "passed": true
+}
+{
+  "hardware": {
+    "architecture": "x86_64",
+    "cpu_count": 2,
+    "threads": 2
+  },
+  "packages": {
+    "torch": "2.8.0+cpu",
+    "transformers": "5.19.0",
+    "peft": "0.21.2",
+    "tokenizers": "0.23.3",
+    "safetensors": "0.8.0"
+  },
+  "candle_commit": "c68b24997319b8d76e5a4e775dab197c7f26322a",
+  "kev_commit": "0a6d3fafeee7f3f76a9a4a522bf8b9d5b50bd7e5",
+  "checkpoint": {
+    "base": "Qwen/Qwen3.5-0.8B-Base",
+    "base_revision": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+    "head_dim": 256,
+    "temperature": 2.3510958125672174,
+    "lora": 16,
+    "option_isolation": false,
+    "kev_revision": "bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+    "adapter_scale": 2.0,
+    "dtype": "float32",
+    "kev_path": "/root/.cache/huggingface/hub/models--jaredpalmer--kev-0.8b/snapshots/bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+    "base_path": "/root/.cache/huggingface/hub/models--Qwen--Qwen3.5-0.8B-Base/snapshots/dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+    "merged_tensors": 186,
+    "adapter_sha256": "9b908623acb162118575f4e7a94524f9c139c335be4bfb74d6cfceca01e1885a"
+  },
+  "parity": {
+    "rows-tensor": {
+      "records": 9,
+      "questions": 19,
+      "max_logit_error": 2.3245811462402344e-06,
+      "max_probability_error": 6.006629785781925e-07,
+      "argmax_flips": 0,
+      "token_ids_identical": true,
+      "max_serialized_probability_error": 4.717888832092565e-05,
+      "reference_median_ms": 2086.9997069999613,
+      "candidate_median_ms": 3107.529246,
+      "speedup": 0.6715945504571966,
+      "atol": 0.0001,
+      "logit_atol": 0.001,
+      "passed": true
+    },
+    "rows-fused": {
+      "records": 9,
+      "questions": 19,
+      "max_logit_error": 4.1425228118896484e-06,
+      "max_probability_error": 7.592672383038845e-07,
+      "argmax_flips": 0,
+      "token_ids_identical": true,
+      "max_serialized_probability_error": 4.717888832092565e-05,
+      "reference_median_ms": 2086.9997069999613,
+      "candidate_median_ms": 2637.199047,
+      "speedup": 0.7913698093339108,
+      "atol": 0.0001,
+      "logit_atol": 0.001,
+      "passed": true
+    },
+    "prefix-fused": {
+      "records": 9,
+      "questions": 19,
+      "max_logit_error": 3.2782554626464844e-06,
+      "max_probability_error": 6.401664996436018e-07,
+      "argmax_flips": 0,
+      "token_ids_identical": true,
+      "max_serialized_probability_error": 4.7208690643313345e-05,
+      "reference_median_ms": 2086.9997069999613,
+      "candidate_median_ms": 2745.4165120000002,
+      "speedup": 0.7601759870962563,
+      "atol": 0.0001,
+      "logit_atol": 0.001,
+      "passed": true
+    }
+  },
+  "isolation_passed": true,
+  "chunk_boundary_passed": true,
+  "benchmarks": {
+    "python": {
+      "warm_median_ms": 2270.7313330000147,
+      "samples": 16,
+      "by_record_ms": [
+        2537.068514999987,
+        2255.0020639999957,
+        2241.2079389999917,
+        1382.8522124999836
+      ]
+    },
+    "rows-tensor": {
+      "warm_median_ms": 3288.9145145,
+      "samples": 16,
+      "by_record_ms": [
+        4116.027923,
+        3302.2632329999997,
+        3250.4557845,
+        2515.7100425
+      ]
+    },
+    "rows-fused": {
+      "warm_median_ms": 2648.8496725,
+      "samples": 16,
+      "by_record_ms": [
+        3038.9048995000003,
+        2657.4774875000003,
+        2632.477369,
+        1939.716407
+      ]
+    },
+    "prefix-fused": {
+      "warm_median_ms": 2705.095629,
+      "samples": 16,
+      "by_record_ms": [
+        3371.657745,
+        2714.175986,
+        2591.074206,
+        1995.8015460000001
+      ]
+    }
+  },
+  "speedup_vs_python": 0.8394273787058102,
+  "speedup_vs_native_baseline": 1.2158219026496384
+}
++ tar -czf /content/kev-cpu-results.tar.gz -C /content/candle/experiments/kev-rust results
+CPU JOB COMPLETE

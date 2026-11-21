@@ -1,0 +1,7 @@
+# Reference oracle and one-time checkpoint export (Python 3.13).
+torch==2.8.0
+transformers==5.19.0
+peft==0.21.2
+safetensors==0.8.0
+huggingface-hub==2.2.0
+pydantic>=2,<3

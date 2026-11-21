@@ -1,0 +1,124 @@
+{
+  "hardware": {
+    "architecture": "x86_64",
+    "cpu_count": 2,
+    "threads": 2
+  },
+  "packages": {
+    "torch": "2.8.0+cpu",
+    "transformers": "5.19.0",
+    "peft": "0.21.2",
+    "tokenizers": "0.23.3",
+    "safetensors": "0.8.0"
+  },
+  "candle_commit": "c68b24997319b8d76e5a4e775dab197c7f26322a",
+  "kev_commit": "0a6d3fafeee7f3f76a9a4a522bf8b9d5b50bd7e5",
+  "checkpoint": {
+    "base": "Qwen/Qwen3.5-0.8B-Base",
+    "base_revision": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+    "head_dim": 256,
+    "temperature": 2.3510958125672174,
+    "lora": 16,
+    "option_isolation": false,
+    "kev_revision": "bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+    "adapter_scale": 2.0,
+    "dtype": "float32",
+    "kev_path": "/root/.cache/huggingface/hub/models--jaredpalmer--kev-0.8b/snapshots/bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+    "base_path": "/root/.cache/huggingface/hub/models--Qwen--Qwen3.5-0.8B-Base/snapshots/dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+    "merged_tensors": 186,
+    "adapter_sha256": "9b908623acb162118575f4e7a94524f9c139c335be4bfb74d6cfceca01e1885a"
+  },
+  "parity": {
+    "rows-tensor": {
+      "records": 9,
+      "questions": 19,
+      "max_logit_error": 2.3245811462402344e-06,
+      "max_probability_error": 6.006629785781925e-07,
+      "argmax_flips": 0,
+      "token_ids_identical": true,
+      "max_serialized_probability_error": 4.717888832092565e-05,
+      "reference_median_ms": 2086.9997069999613,
+      "candidate_median_ms": 3107.529246,
+      "speedup": 0.6715945504571966,
+      "atol": 0.0001,
+      "logit_atol": 0.001,
+      "passed": true
+    },
+    "rows-fused": {
+      "records": 9,
+      "questions": 19,
+      "max_logit_error": 4.1425228118896484e-06,
+      "max_probability_error": 7.592672383038845e-07,
+      "argmax_flips": 0,
+      "token_ids_identical": true,
+      "max_serialized_probability_error": 4.717888832092565e-05,
+      "reference_median_ms": 2086.9997069999613,
+      "candidate_median_ms": 2637.199047,
+      "speedup": 0.7913698093339108,
+      "atol": 0.0001,
+      "logit_atol": 0.001,
+      "passed": true
+    },
+    "prefix-fused": {
+      "records": 9,
+      "questions": 19,
+      "max_logit_error": 3.2782554626464844e-06,
+      "max_probability_error": 6.401664996436018e-07,
+      "argmax_flips": 0,
+      "token_ids_identical": true,
+      "max_serialized_probability_error": 4.7208690643313345e-05,
+      "reference_median_ms": 2086.9997069999613,
+      "candidate_median_ms": 2745.4165120000002,
+      "speedup": 0.7601759870962563,
+      "atol": 0.0001,
+      "logit_atol": 0.001,
+      "passed": true
+    }
+  },
+  "isolation_passed": true,
+  "chunk_boundary_passed": true,
+  "benchmarks": {
+    "python": {
+      "warm_median_ms": 2270.7313330000147,
+      "samples": 16,
+      "by_record_ms": [
+        2537.068514999987,
+        2255.0020639999957,
+        2241.2079389999917,
+        1382.8522124999836
+      ]
+    },
+    "rows-tensor": {
+      "warm_median_ms": 3288.9145145,
+      "samples": 16,
+      "by_record_ms": [
+        4116.027923,
+        3302.2632329999997,
+        3250.4557845,
+        2515.7100425
+      ]
+    },
+    "rows-fused": {
+      "warm_median_ms": 2648.8496725,
+      "samples": 16,
+      "by_record_ms": [
+        3038.9048995000003,
+        2657.4774875000003,
+        2632.477369,
+        1939.716407
+      ]
+    },
+    "prefix-fused": {
+      "warm_median_ms": 2705.095629,
+      "samples": 16,
+      "by_record_ms": [
+        3371.657745,
+        2714.175986,
+        2591.074206,
+        1995.8015460000001
+      ]
+    }
+  },
+  "speedup_vs_python": 0.8394273787058102,
+  "speedup_vs_native_baseline": 1.2158219026496384
+}
