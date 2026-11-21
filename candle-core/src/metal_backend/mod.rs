@@ -1733,6 +1733,44 @@ impl BackendStorage for MetalStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
+        fn striding_error(lhs: &Layout, rhs: &Layout, mnk: (usize, usize, usize)) -> Error {
+            MetalError::from(
+                candle_metal_kernels::MetalKernelError::MatMulNonContiguous {
+                    lhs_stride: lhs.stride().to_vec(),
+                    rhs_stride: rhs.stride().to_vec(),
+                    mnk,
+                },
+            )
+            .into()
+        }
+
+        fn batch_strides(layout: &Layout) -> Option<Vec<usize>> {
+            let mut strides = layout.stride().to_vec();
+            let batch_rank = strides.len() - 2;
+            let mut step = None;
+            let mut span = None;
+            for dim in (0..batch_rank).rev() {
+                let size = layout.dims()[dim];
+                if size == 1 {
+                    continue;
+                }
+                if span.is_some_and(|span| strides[dim] != span) {
+                    return None;
+                }
+                step.get_or_insert(strides[dim]);
+                span = Some(strides[dim].checked_mul(size)?);
+            }
+            // The kernels use the last batch stride, even if that dimension has size 1.
+            if batch_rank > 0 {
+                strides[batch_rank - 1] = step.unwrap_or(0);
+            }
+            Some(strides)
+        }
+
+        let lhs_stride =
+            batch_strides(lhs_l).ok_or_else(|| striding_error(lhs_l, rhs_l, (m, n, k)))?;
+        let rhs_stride =
+            batch_strides(rhs_l).ok_or_else(|| striding_error(lhs_l, rhs_l, (m, n, k)))?;
         let buffer = self
             .device
             .new_buffer_builder()
@@ -1756,10 +1794,10 @@ impl BackendStorage for MetalStorage {
             &self.device.kernels,
             dtype,
             (b, m, n, k),
-            lhs_l.stride(),
+            &lhs_stride,
             lhs_l.start_offset() * self.dtype.size_in_bytes(),
             &self.buffer,
-            rhs_l.stride(),
+            &rhs_stride,
             rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
             &rhs.buffer,
             &buffer,
