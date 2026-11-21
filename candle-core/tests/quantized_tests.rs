@@ -1097,6 +1097,32 @@ fn vec_dot_reference(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(a, b)| a * b).sum()
 }
 
+#[test]
+fn q5_0_vec_dot_matches_scalar_reference() {
+    use k_quants::{BlockQ5_0, BlockQ8_0};
+
+    for n in [64, 128, 256, 1024, 4096] {
+        for seed in 0..16 {
+            let a: Vec<_> = (0..n)
+                .map(|i| (((i * 17 + seed * 13) % 257) as f32 - 128.) / 31.)
+                .collect();
+            let b: Vec<_> = (0..n)
+                .map(|i| (((i * 43 + seed * 19) % 251) as f32 - 125.) / 29.)
+                .collect();
+            let mut qa = vec![BlockQ5_0::zeros(); n / 32];
+            let mut qb = vec![BlockQ8_0::zeros(); n / 32];
+            BlockQ5_0::from_float(&a, &mut qa);
+            BlockQ8_0::from_float(&b, &mut qb);
+            let actual = BlockQ5_0::vec_dot(n, &qa, &qb);
+            let expected = BlockQ5_0::vec_dot_unopt(n, &qa, &qb);
+            assert!(
+                (actual - expected).abs() <= 1e-5 * expected.abs().max(1.),
+                "n={n} seed={seed}: {actual} != {expected}"
+            );
+        }
+    }
+}
+
 /// Returns the error achieved by the GGML matmul unit test.
 fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
     let err = match dtype {

@@ -418,6 +418,11 @@ impl GgmlType for BlockQ5_0 {
             (n / qk).is_multiple_of(2),
             "vec_dot_q5_0_q8_0: {n}, nb is not divisible by 2"
         );
+        #[cfg(target_arch = "aarch64")]
+        if std::arch::is_aarch64_feature_detected!("dotprod") {
+            // SAFETY: the dot-product instruction is supported on this CPU.
+            return unsafe { super::neon::vec_dot_q5_0_q8_0(xs, ys) };
+        }
         Self::vec_dot_unopt(n, xs, ys)
     }
 
