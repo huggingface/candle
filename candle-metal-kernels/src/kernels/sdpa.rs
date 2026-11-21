@@ -36,6 +36,7 @@ pub fn call_sdpa_full(
     v_strides: &[usize],
     mask_type: Option<SdpaDType>,
     mask_buffer: Option<&Buffer>,
+    mask_offset: usize,
     m_strides: Option<&[usize]>,
     output: &Buffer,
     o_strides: &[usize],
@@ -222,7 +223,7 @@ pub fn call_sdpa_full(
                 Output::new(output),
                 params,
                 mask_params,
-                mask
+                (mask, mask_offset)
             )
         );
     } else {
