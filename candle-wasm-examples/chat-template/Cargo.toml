@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Template engine
-minijinja = { version = "2", features = ["loader"] }
+minijinja = { version = "3", features = ["loader"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
