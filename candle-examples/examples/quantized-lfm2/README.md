@@ -1,11 +1,20 @@
 # candle-quantized-lfm2
 
-Candle implementation of various quantized lfm2 models.
+Candle implementation of the quantized (GGUF) LFM2 and LFM2.5 text models,
+including the LFM2.5-8B-A1B mixture of experts.
+
+`--which` picks the model and `--quant` the GGUF file, e.g. `Q4_0`, `Q4_K_M`,
+`Q5_K_M`, `Q6_K`, `Q8_0` or `F16`. The file is fetched from
+`LiquidAI/<model>-GGUF`.
+
+```bash
+cargo run --example quantized-lfm2 --release -- --which lfm2.5-8b-a1b --quant Q4_K_M
+```
 
 ## Running an example
 
 ```bash
-$ cargo run --example quantized-lfm2 --release -- --prompt "Tell me a story in 100 words."
+$ cargo run --example quantized-lfm2 --release -- --which lfm2-2.6b --prompt "Tell me a story in 100 words."
 avx: false, neon: true, simd128: false, f16c: false
 temp: 0.80 repeat-penalty: 1.10 repeat-last-n: 64
 Running on CPU, to run on GPU(metal), build this example with `--features metal`
