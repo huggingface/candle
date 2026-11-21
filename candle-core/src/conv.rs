@@ -178,6 +178,26 @@ impl Tensor {
             }
             .bt())?
         }
+        if stride == 0 {
+            Err(Error::Conv1dInvalidArgs {
+                inp_shape: self.shape().clone(),
+                k_shape: kernel.shape().clone(),
+                padding,
+                stride,
+                msg: "the stride has to be non-zero",
+            }
+            .bt())?
+        }
+        if l_in + 2 * padding < dilation * k_size.saturating_sub(1) + 1 {
+            Err(Error::Conv1dInvalidArgs {
+                inp_shape: self.shape().clone(),
+                k_shape: kernel.shape().clone(),
+                padding,
+                stride,
+                msg: "the dilated kernel is larger than the padded input",
+            }
+            .bt())?
+        }
 
         let params = ParamsConv1D {
             b_size,
@@ -311,6 +331,16 @@ impl Tensor {
         if c_in != c_in_k * groups {
             crate::bail!(
                 "in_channel mismatch between input ({c_in}, groups {groups}) and kernel ({c_in_k})"
+            )
+        }
+        if stride == 0 {
+            crate::bail!("conv2d: the stride has to be non-zero")
+        }
+        if i_h + 2 * padding < dilation * k_h.saturating_sub(1) + 1
+            || i_w + 2 * padding < dilation * k_w.saturating_sub(1) + 1
+        {
+            crate::bail!(
+                "conv2d: kernel ({k_h}, {k_w}) with dilation {dilation} is larger than the padded input ({i_h}, {i_w}) with padding {padding}"
             )
         }
         let params = ParamsConv2D {
