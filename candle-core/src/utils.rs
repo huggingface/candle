@@ -142,7 +142,7 @@ impl BarrierPool {
                     .name(format!("candle-bp-{tid}"))
                     .spawn(move || {
                         IN_BARRIER_POOL.with(|f| f.set(true));
-                        set_thread_affinity();
+                        set_thread_affinity_for_index(tid);
                         let inner = unsafe { &*(inner_ptr as *const BarrierPoolInner) };
                         let slot = &inner.slots[tid];
                         let mut gen = 0usize;
@@ -375,7 +375,7 @@ pub fn init_global_threadpool() {
     set_thread_affinity();
     let _ = rayon::ThreadPoolBuilder::new()
         .num_threads(get_num_threads())
-        .start_handler(|_| set_thread_affinity())
+        .start_handler(set_thread_affinity_for_index)
         .build_global();
 }
 
@@ -548,7 +548,7 @@ pub(crate) fn candle_pool() -> &'static rayon::ThreadPool {
     POOL.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(get_num_threads())
-            .start_handler(|_| set_thread_affinity())
+            .start_handler(set_thread_affinity_for_index)
             .build()
             .expect("failed to build candle rayon threadpool")
     })
@@ -581,6 +581,44 @@ pub fn set_thread_affinity() {
             );
         }
     }
+}
+
+/// Like [`set_thread_affinity`], but pins the calling thread to a single core
+/// derived from `worker_index`, instead of a shared mask covering every
+/// allowed core. Pinning each worker to its own core avoids the OS scheduler
+/// migrating threads across cores (and the resulting cross-core cache-line
+/// bouncing) within the shared affinity set.
+///
+/// On Linux this requires `CANDLE_CPU_AFFINITY=1` or `CANDLE_CPU_MASK` to be
+/// set; otherwise `linux_affinity_cpus()` returns `None` and this is a no-op,
+/// matching the existing behavior of `set_thread_affinity`.
+#[cfg(target_os = "macos")]
+pub fn set_thread_affinity_for_index(_worker_index: usize) {
+    // macOS does not expose a per-core pinning API comparable to Linux's
+    // `pthread_setaffinity_np`; fall back to the existing QoS-based hint,
+    // which already applies per-thread without needing a worker index.
+    set_thread_affinity();
+}
+
+#[cfg(not(target_os = "macos"))]
+#[inline(always)]
+pub fn set_thread_affinity_for_index(worker_index: usize) {
+    #[cfg(target_os = "linux")]
+    if let Some(cpus) = linux_affinity_cpus() {
+        let cpu = cpus[worker_index % cpus.len()];
+        unsafe {
+            let mut set: libc::cpu_set_t = std::mem::zeroed();
+            libc::CPU_ZERO(&mut set);
+            libc::CPU_SET(cpu, &mut set);
+            let _ = libc::pthread_setaffinity_np(
+                libc::pthread_self(),
+                std::mem::size_of::<libc::cpu_set_t>(),
+                &set,
+            );
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = worker_index;
 }
 
 pub fn has_accelerate() -> bool {
