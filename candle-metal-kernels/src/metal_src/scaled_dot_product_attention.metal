@@ -2061,10 +2061,18 @@ template <
   }
 
   int kb_lim = params->NK;
+  int kb_min_causal = params->NK;
 
   if (do_causal) {
     int q_max = (tid.x + 1) * BQ + params->qL_off;
     kb_lim = (q_max + BK - 1) / BK;
+    kb_lim = min(params->NK, kb_lim);
+
+    // Key blocks before the one holding key q_min need no causal mask: every
+    // key in them is at or before every query in this block.
+    int q_min = tid.x * BQ + params->qL_off;
+    q_min = max(0, q_min);
+    kb_min_causal = (q_min / BK);
   }
 
   // Loop over KV seq length
@@ -2118,7 +2126,7 @@ template <
     }
 
     // Mask out if causal
-    if (do_causal && kb >= (kb_lim - (BQ + BK - 1) / BK - int(!align_K))) {
+    if (do_causal && kb >= kb_min_causal) {
       using stile_t = decltype(Stile);
       using selem_t = typename stile_t::elem_type;
       constexpr auto neg_inf = -metal::numeric_limits<selem_t>::infinity();
