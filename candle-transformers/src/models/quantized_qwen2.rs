@@ -13,7 +13,7 @@
 //! - [Model Card](https://huggingface.co/Qwen/Qwen2)
 //!
 
-use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
+use crate::quantized_nn::RmsNorm;
 use candle::{
     quantized::{gguf_file, QMatMul},
     DType, Device, IndexOp, Result, Tensor,
@@ -65,6 +65,47 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
     let shape = mask.shape();
     let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
     Ok(m)
+}
+
+fn grouped_query_attention(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: Option<&Tensor>,
+    neg_inf: &Tensor,
+) -> Result<Tensor> {
+    let (batch, n_head, seq_len, head_dim) = q.dims4()?;
+    let (_, n_kv_head, kv_len, _) = k.dims4()?;
+    let rep = n_head / n_kv_head;
+    let k = crate::utils::repeat_kv(k.clone(), rep)?;
+    let att = (q.matmul(&k.t()?)? / (head_dim as f64).sqrt())?;
+    let att = match mask {
+        None => att,
+        Some(mask) => masked_fill(&att, &mask.broadcast_as(att.shape())?, neg_inf)?,
+    };
+    let att = candle_nn::ops::softmax_last_dim(&att)?;
+    // Decode reuses V across query heads without materializing copies.
+    if q.device().is_cpu() && seq_len == 1 && rep > 1 {
+        let lhs = att.reshape((batch, n_kv_head, rep, seq_len, kv_len))?;
+        let rhs = v
+            .unsqueeze(2)?
+            .broadcast_as((batch, n_kv_head, rep, kv_len, head_dim))?;
+        match lhs.matmul(&rhs) {
+            Ok(y) => return y.reshape((batch, n_head, seq_len, head_dim)),
+            Err(e) if is_unsupported_matmul_striding(&e) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    let v = crate::utils::repeat_kv(v.clone(), rep)?;
+    att.matmul(&v.contiguous()?)
+}
+
+fn is_unsupported_matmul_striding(error: &candle::Error) -> bool {
+    match error {
+        candle::Error::MatMulUnexpectedStriding(_) => true,
+        candle::Error::WithBacktrace { inner, .. } => is_unsupported_matmul_striding(inner),
+        _ => false,
+    }
 }
 
 impl LayerWeights {
@@ -126,21 +167,7 @@ impl LayerWeights {
         };
         self.kv_cache = Some((k.clone(), v.clone()));
 
-        // Support for MQA, useful for 70B models and mistral.
-        let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
-        let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
-
-        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-        let att = match mask {
-            None => att,
-            Some(mask) => {
-                let mask = mask.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, &self.neg_inf)?
-            }
-        };
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        let y = att.matmul(&v.contiguous()?)?;
+        let y = grouped_query_attention(&q, &k, &v, mask, &self.neg_inf)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.forward(&y)?;
         Ok(y)
@@ -342,5 +369,67 @@ impl ModelWeights {
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
         self.output.forward(&x)
+    }
+}
+
+#[cfg(test)]
+mod grouped_attention_tests {
+    use super::*;
+    use crate::utils::{build_causal_mask, repeat_kv};
+
+    #[test]
+    fn grouped_attention_matches_repeated_kv() -> Result<()> {
+        check_grouped_attention(Device::Cpu)
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn grouped_attention_matches_repeated_kv_metal() -> Result<()> {
+        check_grouped_attention(Device::new_metal(0)?)
+    }
+
+    fn check_grouped_attention(dev: Device) -> Result<()> {
+        let neg_inf = Tensor::new(f32::NEG_INFINITY, &dev)?;
+        for (batch, kv_heads, rep, seq, kv_len) in [
+            (1, 2, 1, 1, 7),
+            (1, 1, 4, 1, 7),
+            (1, 2, 3, 3, 3),
+            (2, 1, 4, 2, 5),
+            (1, 2, 7, 1, 512),
+        ] {
+            let dim = if kv_len == 512 { 64 } else { 8 };
+            let q = Tensor::arange(0u32, (batch * kv_heads * rep * seq * dim) as u32, &dev)?
+                .to_dtype(DType::F32)?
+                .sin()?
+                .reshape((batch, kv_heads * rep, seq, dim))?;
+            let k = Tensor::arange(0u32, (batch * kv_heads * kv_len * dim) as u32, &dev)?
+                .to_dtype(DType::F32)?
+                .cos()?
+                .reshape((batch, kv_heads, kv_len, dim))?;
+            let v = (&k * 0.5)?;
+            let mask = if seq == 1 {
+                None
+            } else {
+                Some(build_causal_mask(seq, kv_len - seq, &dev)?)
+            };
+            let actual = grouped_query_attention(&q, &k, &v, mask.as_ref(), &neg_inf)?;
+            let rk = repeat_kv(k, rep)?;
+            let rv = repeat_kv(v, rep)?;
+            let att = (q.matmul(&rk.t()?)? / (dim as f64).sqrt())?;
+            let att = match &mask {
+                None => att,
+                Some(m) => masked_fill(&att, &m.broadcast_as(att.shape())?, &neg_inf)?,
+            };
+            let expected = candle_nn::ops::softmax_last_dim(&att)?.matmul(&rv.contiguous()?)?;
+            let errors = (actual - expected)?
+                .abs()?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            assert!(
+                errors.iter().all(|&e| e < 1e-5),
+                "shape {batch}/{kv_heads}/{rep}/{seq}/{kv_len}"
+            );
+        }
+        Ok(())
     }
 }

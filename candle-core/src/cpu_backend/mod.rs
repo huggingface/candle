@@ -1404,6 +1404,7 @@ impl Map2 for ConvTranspose2D<'_> {
 struct MatMul((usize, usize, usize, usize));
 
 impl MatMul {
+    #[cfg(any(feature = "mkl", feature = "accelerate"))]
     fn striding_error(&self, lhs_l: &Layout, rhs_l: &Layout, msg: &'static str) -> Error {
         Error::MatMulUnexpectedStriding(Box::new(crate::error::MatMulUnexpectedStriding {
             lhs_l: lhs_l.clone(),
@@ -1414,28 +1415,26 @@ impl MatMul {
         .bt()
     }
 
+    fn batch_skip(layout: &Layout) -> Option<usize> {
+        let strides = layout.stride();
+        let rank = strides.len();
+        match strides[..rank - 2] {
+            [s1, stride] if s1 == stride * layout.dims()[1] => Some(stride),
+            [_, stride] if layout.dims()[0] == 1 => Some(stride),
+            [stride, _] if layout.dims()[1] == 1 => Some(stride),
+            [stride] => Some(stride),
+            [] => Some(layout.dims()[rank - 2] * layout.dims()[rank - 1]),
+            _ => None,
+        }
+    }
+
+    #[cfg(any(feature = "mkl", feature = "accelerate"))]
     fn ab_skip(&self, lhs_l: &Layout, rhs_l: &Layout) -> Result<(usize, usize)> {
-        let lhs_stride = lhs_l.stride();
-        let rhs_stride = rhs_l.stride();
-        let rank = lhs_stride.len();
-        let (_b, m, n, k) = self.0;
-        let a_skip: usize = match lhs_stride[..rank - 2] {
-            [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
-            [_, stride] if lhs_l.dims()[0] == 1 => stride,
-            [stride, _] if lhs_l.dims()[1] == 1 => stride,
-            [stride] => stride,
-            [] => m * k,
-            _ => Err(self.striding_error(lhs_l, rhs_l, "non-contiguous lhs"))?,
-        };
-        let b_skip: usize = match rhs_stride[..rank - 2] {
-            [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
-            [_, stride] if rhs_l.dims()[0] == 1 => stride,
-            [stride, _] if rhs_l.dims()[1] == 1 => stride,
-            [stride] => stride,
-            [] => n * k,
-            _ => Err(self.striding_error(lhs_l, rhs_l, "non-contiguous rhs"))?,
-        };
-        Ok((a_skip, b_skip))
+        let a = Self::batch_skip(lhs_l)
+            .ok_or_else(|| self.striding_error(lhs_l, rhs_l, "non-contiguous lhs"))?;
+        let b = Self::batch_skip(rhs_l)
+            .ok_or_else(|| self.striding_error(lhs_l, rhs_l, "non-contiguous rhs"))?;
+        Ok((a, b))
     }
 }
 
@@ -1470,7 +1469,10 @@ impl Map2 for MatMul {
         let rhs_cs = rhs_stride[rank - 1];
         let rhs_rs = rhs_stride[rank - 2];
 
-        let (a_skip, b_skip) = self.ab_skip(lhs_l, rhs_l)?;
+        // Some batched layouts (e.g. grouped attention) broadcast one
+        // intermediate batch dimension while advancing another.
+        let skips = Self::batch_skip(lhs_l).zip(Self::batch_skip(rhs_l));
+        let (a_skip, b_skip) = skips.unwrap_or((0, 0));
         let c_skip: usize = m * n;
 
         let dst_shape: Shape = (m, n).into();
@@ -1485,7 +1487,7 @@ impl Map2 for MatMul {
         } else {
             Parallelism::None
         };
-        let (b, m, n, k) = if b_skip == 0 && a_skip == m * k {
+        let (b, m, n, k) = if skips.is_some() && b_skip == 0 && a_skip == m * k {
             // A batch-invariant rhs lets the batches of lhs stack into the rows of a single
             // (b * m, k) matrix, which the destination already matches row for row.
             // a_skip and c_skip should be updated but step is always 0 so
@@ -1500,8 +1502,23 @@ impl Map2 for MatMul {
             (b, m, n, k)
         };
         for step in 0..b {
-            let lhs_p = &lhs[step * a_skip..];
-            let rhs_p = &rhs[step * b_skip..];
+            let batch_offset = |layout: &Layout| {
+                let batch_rank = layout.dims().len() - 2;
+                let mut idx = step;
+                let mut offset = 0;
+                for axis in (0..batch_rank).rev() {
+                    offset += (idx % layout.dims()[axis]) * layout.stride()[axis];
+                    idx /= layout.dims()[axis];
+                }
+                offset
+            };
+            let (a_offset, b_offset) = if skips.is_some() {
+                (step * a_skip, step * b_skip)
+            } else {
+                (batch_offset(lhs_l), batch_offset(rhs_l))
+            };
+            let lhs_p = &lhs[a_offset..];
+            let rhs_p = &rhs[b_offset..];
             let dst_p = &mut dst[step * c_skip..];
             unsafe {
                 gemm(

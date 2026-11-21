@@ -2285,3 +2285,49 @@ fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
     assert_ne!(id1, id2);
     Ok(())
 }
+
+#[cfg(all(not(feature = "mkl"), not(feature = "accelerate")))]
+#[test]
+fn matmul_nonuniform_batched_strides_cpu() -> Result<()> {
+    let dev = Device::Cpu;
+    for dtype in [DType::F16, DType::BF16, DType::F32] {
+        let lhs = Tensor::arange(0u32, 48, &dev)?
+            .to_dtype(dtype)?
+            .reshape((2, 3, 2, 4))?;
+        let rhs = Tensor::arange(0u32, 60, &dev)?
+            .to_dtype(dtype)?
+            .reshape((3, 1, 4, 5))?
+            .narrow(0, 1, 2)?
+            .broadcast_as((2, 3, 4, 5))?;
+        let actual = lhs.matmul(&rhs)?.to_dtype(DType::F32)?;
+        let expected = lhs.matmul(&rhs.contiguous()?)?.to_dtype(DType::F32)?;
+        assert_eq!(
+            actual.flatten_all()?.to_vec1::<f32>()?,
+            expected.flatten_all()?.to_vec1::<f32>()?
+        );
+
+        let lhs = lhs.narrow(1, 0, 1)?.broadcast_as((2, 3, 2, 4))?;
+        let rhs = rhs.contiguous()?;
+        let actual = lhs.matmul(&rhs)?.to_dtype(DType::F32)?;
+        let expected = lhs.contiguous()?.matmul(&rhs)?.to_dtype(DType::F32)?;
+        assert_eq!(
+            actual.flatten_all()?.to_vec1::<f32>()?,
+            expected.flatten_all()?.to_vec1::<f32>()?
+        );
+
+        let lhs = Tensor::arange(0u32, 48, &dev)?
+            .to_dtype(dtype)?
+            .reshape((2, 2, 3, 1, 4))?;
+        let rhs = Tensor::arange(0u32, 80, &dev)?
+            .to_dtype(dtype)?
+            .reshape((2, 2, 1, 4, 5))?
+            .broadcast_as((2, 2, 3, 4, 5))?;
+        let actual = lhs.matmul(&rhs)?.to_dtype(DType::F32)?;
+        let expected = lhs.matmul(&rhs.contiguous()?)?.to_dtype(DType::F32)?;
+        assert_eq!(
+            actual.flatten_all()?.to_vec1::<f32>()?,
+            expected.flatten_all()?.to_vec1::<f32>()?
+        );
+    }
+    Ok(())
+}
