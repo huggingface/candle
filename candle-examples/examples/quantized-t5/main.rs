@@ -45,6 +45,10 @@ struct Args {
     #[arg(long)]
     config_file: Option<String>,
 
+    /// Local path or Hub filename for the tokenizer.
+    #[arg(long)]
+    tokenizer_file: Option<String>,
+
     // Enable/disable decoding.
     #[arg(long, default_value = "false")]
     disable_cache: bool,
@@ -104,7 +108,10 @@ impl T5ModelBuilder {
                 Which::FlanT5Xxl => api.get("config-flan-t5-xxl.json")?,
             },
         };
-        let tokenizer_filename = api.get("tokenizer.json")?;
+        let tokenizer_filename = match &args.tokenizer_file {
+            Some(filename) => Self::get_local_or_remote_file(filename, &api)?,
+            None => api.get("tokenizer.json")?,
+        };
         let weights_filename = match &args.weight_file {
             Some(filename) => Self::get_local_or_remote_file(filename, &api)?,
             None => match args.which {
