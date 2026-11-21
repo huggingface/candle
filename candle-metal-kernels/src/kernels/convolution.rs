@@ -231,7 +231,7 @@ pub fn call_pool2d(
     h_k: usize,
     w_stride: usize,
     h_stride: usize,
-    input: &Buffer,
+    input: BufferOffset,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let dst_el = out_w * out_h * shape[0] * shape[1];
@@ -250,7 +250,7 @@ pub fn call_pool2d(
             h_stride,
             shape,
             strides,
-            input,
+            &input,
             Output::new(output)
         )
     );
