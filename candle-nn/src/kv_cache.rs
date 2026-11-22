@@ -55,6 +55,27 @@ impl Cache {
         self.all_data = None;
     }
 
+    /// Roll the cache back to `new_len` positions, discarding everything
+    /// appended after that point.
+    ///
+    /// This only rewinds the `current_seq_len` counter — the underlying
+    /// buffer keeps its allocated capacity and the discarded slots' stale
+    /// contents, which the next [`Self::append`] overwrites in place, same
+    /// as [`Self::reset`] already relies on for a full-zero rewind. Used
+    /// by speculative-decoding-style callers that verify several
+    /// tentatively-appended positions in one forward pass and then need to
+    /// discard a rejected suffix without replaying the whole sequence.
+    pub fn truncate(&mut self, new_len: usize) -> Result<()> {
+        if new_len > self.current_seq_len {
+            candle::bail!(
+                "cannot truncate cache of length {} to a longer length {new_len}",
+                self.current_seq_len
+            );
+        }
+        self.current_seq_len = new_len;
+        Ok(())
+    }
+
     pub fn append(&mut self, src: &Tensor) -> Result<()> {
         let seq_len = src.dim(self.dim)?;
         // This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
@@ -142,6 +163,13 @@ impl KvCache {
 
     pub fn current_seq_len(&self) -> usize {
         self.k.current_seq_len()
+    }
+
+    /// Roll both the key and value caches back to `new_len` positions. See
+    /// [`Cache::truncate`] for the exact semantics.
+    pub fn truncate(&mut self, new_len: usize) -> Result<()> {
+        self.k.truncate(new_len)?;
+        self.v.truncate(new_len)
     }
 
     pub fn reset(&mut self) {
@@ -711,6 +739,27 @@ impl ConcatKvCache {
         self.dim
     }
 
+    /// Roll the cache back to `new_len` positions along the concatenation
+    /// dimension, discarding everything appended after that point (e.g. a
+    /// rejected suffix after speculative-decoding verification). `new_len
+    /// == 0` is equivalent to [`Self::reset`].
+    pub fn truncate(&mut self, new_len: usize) -> Result<()> {
+        if new_len == 0 {
+            self.reset();
+            return Ok(());
+        }
+        let current = self.current_seq_len();
+        if new_len > current {
+            candle::bail!("cannot truncate cache of length {current} to a longer length {new_len}");
+        }
+        if new_len == current {
+            return Ok(());
+        }
+        self.k = Some(self.k.as_ref().unwrap().narrow(self.dim, 0, new_len)?);
+        self.v = Some(self.v.as_ref().unwrap().narrow(self.dim, 0, new_len)?);
+        Ok(())
+    }
+
     /// Append key and value tensors to the cache
     ///
     /// This is the core operation that uses optimized concatenation kernels.
@@ -975,6 +1024,70 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_cache_truncate() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = Cache::new(2, 4);
+        let a = Tensor::zeros((1, 2, 5, 3), DType::F32, &device)?;
+        cache.append(&a)?;
+        assert_eq!(cache.current_seq_len(), 5);
+
+        cache.truncate(2)?;
+        assert_eq!(cache.current_seq_len(), 2);
+        assert_eq!(cache.current_data()?.unwrap().dims(), &[1, 2, 2, 3]);
+
+        // A later append must resume exactly at the truncated length, not
+        // the pre-truncation one.
+        let b = Tensor::ones((1, 2, 1, 3), DType::F32, &device)?;
+        cache.append(&b)?;
+        assert_eq!(cache.current_seq_len(), 3);
+
+        // Truncating past the current length is rejected.
+        assert!(cache.truncate(100).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_kv_cache_truncate() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = KvCache::new(2, 4);
+        let k = Tensor::zeros((1, 2, 5, 3), DType::F32, &device)?;
+        let v = Tensor::zeros((1, 2, 5, 3), DType::F32, &device)?;
+        cache.append(&k, &v)?;
+        assert_eq!(cache.current_seq_len(), 5);
+
+        cache.truncate(2)?;
+        assert_eq!(cache.current_seq_len(), 2);
+        assert_eq!(cache.k()?.unwrap().dims(), &[1, 2, 2, 3]);
+        assert_eq!(cache.v()?.unwrap().dims(), &[1, 2, 2, 3]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_concat_cache_truncate() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = ConcatKvCache::new(2);
+        let k = Tensor::zeros((1, 8, 10, 64), DType::F32, &device)?;
+        let v = Tensor::zeros((1, 8, 10, 64), DType::F32, &device)?;
+        cache.append(&k, &v)?;
+        assert_eq!(cache.current_seq_len(), 10);
+
+        cache.truncate(4)?;
+        assert_eq!(cache.current_seq_len(), 4);
+        assert_eq!(cache.k().unwrap().dims(), &[1, 8, 4, 64]);
+
+        // Truncating to 0 behaves like `reset`.
+        cache.truncate(0)?;
+        assert!(cache.is_empty());
+        assert_eq!(cache.current_seq_len(), 0);
+
+        assert!(cache.truncate(1).is_err());
+
+        Ok(())
+    }
 }
 
 /// Stores a single tensor with shape `(S, H_kv, 2*D)` where the first D
@@ -1030,6 +1143,26 @@ impl InterleavedKvCache {
 
     pub fn head_dim(&self) -> usize {
         self.head_dim
+    }
+
+    /// Roll the cache back to `new_len` positions, discarding everything
+    /// appended after that point (e.g. a rejected suffix after
+    /// speculative-decoding verification). `new_len == 0` is equivalent to
+    /// [`Self::reset`].
+    pub fn truncate(&mut self, new_len: usize) -> Result<()> {
+        if new_len == 0 {
+            self.reset();
+            return Ok(());
+        }
+        let current = self.current_seq_len();
+        if new_len > current {
+            candle::bail!("cannot truncate cache of length {current} to a longer length {new_len}");
+        }
+        if new_len == current {
+            return Ok(());
+        }
+        self.kv = Some(self.kv.as_ref().unwrap().narrow(0, 0, new_len)?);
+        Ok(())
     }
 
     pub fn reset(&mut self) {
@@ -1115,6 +1248,23 @@ impl RawInterleavedKvCache {
         self.len = 0;
     }
 
+    /// Roll the cache back to `new_len` positions, discarding everything
+    /// written after that point (e.g. a rejected suffix after
+    /// speculative-decoding verification). The underlying buffer keeps its
+    /// allocated capacity and the discarded slots' stale contents, which
+    /// the next [`Self::write_kv`]/[`Self::write_kv_batch`] overwrites in
+    /// place, same as [`Self::reset`] already relies on for a full rewind.
+    pub fn truncate(&mut self, new_len: usize) -> Result<()> {
+        if new_len > self.len {
+            candle::bail!(
+                "cannot truncate cache of length {} to a longer length {new_len}",
+                self.len
+            );
+        }
+        self.len = new_len;
+        Ok(())
+    }
+
     pub fn h_kv(&self) -> usize {
         self.h_kv
     }
@@ -1138,5 +1288,68 @@ pub fn rope_i_inplace(data: &mut [f32], cos: &[f32], sin: &[f32], num_heads: usi
             data[base + 2 * i] = a * cos[i] - b * sin[i];
             data[base + 2 * i + 1] = b * cos[i] + a * sin[i];
         }
+    }
+}
+
+#[cfg(test)]
+mod interleaved_cache_tests {
+    use super::*;
+
+    #[test]
+    fn test_interleaved_cache_truncate() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = InterleavedKvCache::new(4);
+        let k = Tensor::zeros((1, 2, 6, 4), DType::F32, &device)?;
+        let v = Tensor::zeros((1, 2, 6, 4), DType::F32, &device)?;
+        cache.append(&k, &v)?;
+        assert_eq!(cache.current_seq_len(), 6);
+
+        cache.truncate(2)?;
+        assert_eq!(cache.current_seq_len(), 2);
+        assert_eq!(cache.kv().unwrap().dims()[0], 2);
+
+        // A later append must resume exactly at the truncated length.
+        let k2 = Tensor::ones((1, 2, 1, 4), DType::F32, &device)?;
+        let v2 = Tensor::ones((1, 2, 1, 4), DType::F32, &device)?;
+        cache.append(&k2, &v2)?;
+        assert_eq!(cache.current_seq_len(), 3);
+
+        cache.truncate(0)?;
+        assert!(cache.is_empty());
+
+        assert!(cache.truncate(1).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_raw_interleaved_cache_truncate() {
+        let h_kv = 2;
+        let d = 4;
+        let mut cache = RawInterleavedKvCache::new(h_kv, d, 8);
+        for step in 0..5 {
+            let k = vec![step as f32; h_kv * d];
+            let v = vec![step as f32; h_kv * d];
+            cache.write_kv(&k, &v);
+        }
+        assert_eq!(cache.len(), 5);
+
+        cache.truncate(2).unwrap();
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.data().len(), 2 * h_kv * 2 * d);
+
+        // A later write must resume exactly at the truncated length,
+        // overwriting the discarded positions' stale data rather than
+        // appending after them.
+        let k = vec![9f32; h_kv * d];
+        let v = vec![9f32; h_kv * d];
+        cache.write_kv(&k, &v);
+        assert_eq!(cache.len(), 3);
+        // The last written position's data should reflect the new write,
+        // not the original step=2 write it replaced.
+        let last_pos_start = 2 * cache.pos_stride;
+        assert_eq!(cache.data()[last_pos_start], 9.0);
+
+        assert!(cache.truncate(100).is_err());
     }
 }

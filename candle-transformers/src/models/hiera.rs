@@ -224,10 +224,10 @@ fn hiera_blocks(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
     let mut q_stride = 1;
     let mut window_size = 64;
 
-    for s in 0..4 {
+    for (s, &depth) in cfg.stages.iter().enumerate().take(4) {
         let use_mask_attention = s < 2;
 
-        for _ in 0..cfg.stages[s] {
+        for _ in 0..depth {
             blocks.push(hiera_block(
                 heads,
                 in_channels,
