@@ -298,6 +298,17 @@ typedef struct {
 } block_q4_0;
 static_assert(sizeof(block_q4_0) == sizeof(ggml_fp16_t) + QK4_0 / 2, "wrong q4_0 block size/padding");
 
+#define QK4_NL 32
+typedef struct {
+    half     d;              // delta
+    uint8_t qs[QK4_NL / 2];  // codebook indices
+} block_iq4_nl;
+static_assert(sizeof(block_iq4_nl) == sizeof(ggml_fp16_t) + QK4_NL / 2, "wrong iq4_nl block size/padding");
+
+static __device__ const int8_t kvalues_iq4nl[16] = {
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
+};
+
 #define QK4_1 32
 #define QR4_1 2
 #define QI4_1 (QK4_1 / (4 * QR4_1))
@@ -672,6 +683,17 @@ static __device__ __forceinline__ void dequantize_q4_0(const void * vx, const in
 #endif // GGML_CUDA_F16
 }
 
+static __device__ __forceinline__ void dequantize_iq4_nl(const void * vx, const int ib, const int iqs, dfloat2 & v){
+    const block_iq4_nl * x = (const block_iq4_nl *) vx;
+
+    const dfloat d = x[ib].d;
+
+    const int vui = x[ib].qs[iqs];
+
+    v.x = d * (dfloat)kvalues_iq4nl[vui & 0xF];
+    v.y = d * (dfloat)kvalues_iq4nl[vui >> 4];
+}
+
 static __device__ __forceinline__ void dequantize_q4_1(const void * vx, const int ib, const int iqs, dfloat2 & v){
     const block_q4_1 * x = (const block_q4_1 *) vx;
 
@@ -802,6 +824,33 @@ static __device__ void dequantize_block_q4_0(const void * __restrict__ vx, dst_t
     for (int l = 0; l < 4; ++l) {
         y[l+ 0] = d * (q[l] & 0xF) + dm;
         y[l+16] = d * (q[l] >>  4) + dm;
+    }
+}
+
+template<typename dst_t>
+static __device__ void dequantize_block_iq4_nl(const void * __restrict__ vx, dst_t * __restrict__ yy, int nb32) {
+
+    const int64_t i = blockIdx.x;
+
+    // assume 32 threads
+    const int tid = threadIdx.x;
+    const int il  = tid/8;
+    const int ir  = tid%8;
+    const int64_t ib = 8*i + ir;
+    if (ib >= nb32) {
+        return;
+    }
+
+    dst_t * y = yy + 256*i + 32*ir + 4*il;
+
+    const block_iq4_nl * x = (const block_iq4_nl *)vx + ib;
+    const float d = __half2float(x->d);
+
+    const uint8_t * q = x->qs + 4*il;
+    #pragma unroll
+    for (int l = 0; l < 4; ++l) {
+        y[l + 0]  = (dst_t)(d * (float)kvalues_iq4nl[q[l] & 0xF]);
+        y[l + 16] = (dst_t)(d * (float)kvalues_iq4nl[q[l] >>  4]);
     }
 }
 
@@ -1152,6 +1201,7 @@ DEQUANTIZE_K(q5_K)
 DEQUANTIZE_K(q6_K)
 DEQUANTIZE_K(q8_K)
 DEQUANTIZE(q4_0)
+DEQUANTIZE(iq4_nl)
 DEQUANTIZE(q4_1)
 DEQUANTIZE(q5_0)
 DEQUANTIZE(q5_1)
@@ -1413,6 +1463,12 @@ extern "C" __global__ void get_rows_q4_0(
     get_rows_q<QK4_0, QR4_0, dequantize_q4_0>(src0, src1, dst, ne00, nb01);
 }
 
+extern "C" __global__ void get_rows_iq4_nl(
+        const void * __restrict__ src0, const uint32_t * __restrict__ src1, float * __restrict__ dst,
+        const int64_t ne00, const size_t nb01) {
+    get_rows_q<QK4_NL, QR4_0, dequantize_iq4_nl>(src0, src1, dst, ne00, nb01);
+}
+
 extern "C" __global__ void get_rows_q4_1(
         const void * __restrict__ src0, const uint32_t * __restrict__ src1, float * __restrict__ dst,
         const int64_t ne00, const size_t nb01) {
@@ -1534,6 +1590,10 @@ static __device__ void dequantize_mul_mat_vec(const void * __restrict__ vx, cons
 
 extern "C" __global__ void dequantize_mul_mat_vec_q4_0_cuda(const void * vx, const dfloat * y, float * dst, const int ncols, const int nrows) {
     dequantize_mul_mat_vec<QK4_0, QR4_0, dequantize_q4_0>(vx, y, dst, ncols, nrows);
+}
+
+extern "C" __global__ void dequantize_mul_mat_vec_iq4_nl_cuda(const void * vx, const dfloat * y, float * dst, const int ncols, const int nrows) {
+    dequantize_mul_mat_vec<QK4_NL, QR4_0, dequantize_iq4_nl>(vx, y, dst, ncols, nrows);
 }
 
 extern "C" __global__ void dequantize_mul_mat_vec_q4_1_cuda(const void * vx, const dfloat * y, float * dst, const int ncols, const int nrows) {
