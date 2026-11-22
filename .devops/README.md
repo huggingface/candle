@@ -19,7 +19,6 @@ docker runtime is provided by Podman.
 | `vulkan.Dockerfile` | Builds the `candle-vulkan-dev` image from `ubuntu:latest` (multi-stage). |
 | `build-vulkan-dev.sh` | Builds the image. |
 | `run-vulkan-dev.sh` | Runs the image with GPU access and the usual mounts. |
-| `vendor-vulkano-ash.sh` | Vendoring helper for the vulkano/ash path dependencies. |
 
 ## Image contents
 

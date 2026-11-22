@@ -17,7 +17,7 @@ default = []
 thiserror = "2"
 bytemuck = "1"
 half = "2.5.0"
-vulkano = { path = "../vendor/vulkano/vulkano" }
+vulkano = { git = "https://github.com/amejia1/vulkano.git", rev = "82fed2cd2af1155e14e3136f1c13be910ade61bf" }
 parking_lot = "0.12"
 
 [build-dependencies]

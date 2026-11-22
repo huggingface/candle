@@ -1,34 +1,18 @@
 # Candle Development Notes
 
-## Vendored Vulkan dependencies
+## Vulkan dependencies
 
 The Vulkan backend depends on two crates whose unreleased changes live in the
 `amejia1` forks, neither of which is expected to see a crates.io release soon
-(ash is blocked on ash-rs/ash#1001):
+(ash is blocked on ash-rs/ash#1001). They are pinned as git dependencies at
+exact revisions:
 
-- `vulkano` — `https://github.com/amejia1/vulkano.git` @ `f37721a7b4cf930f963793aca6d137346f939e24`
-- `ash` — `https://github.com/amejia1/ash` @ `69ef938a8f94602defc6a5862faebe26b661e7e4`
+- `vulkano` — `https://github.com/amejia1/vulkano.git` @ `82fed2cd2af1155e14e3136f1c13be910ade61bf`
+- `ash` — `https://github.com/amejia1/ash` @ `7fbcba4656e00ae06f24f4343a2919a539a8da0c`
+  (declared in vulkano's own `[workspace.dependencies]`)
 
-`vulkano` depends on `ash` (via its `[workspace.dependencies]`), so both are
-vendored under `vendor/` (with no `.git` metadata) and wired up as path
-dependencies:
-
-- `vendor/vulkano/Cargo.toml`: `ash = { path = "../ash/ash", ... }`
-- `Cargo.toml`: `vulkano = { path = "vendor/vulkano/vulkano" }`
-- `candle-vulkan-kernels/Cargo.toml`: `vulkano = { path = "../vendor/vulkano/vulkano" }`
-
-`vendor` is listed in the workspace `exclude` so cargo treats the vendored
-trees as nested workspaces (vulkano uses workspace inheritance, which would
-otherwise resolve against candle's root manifest and fail).
-
-To re-vendor (e.g. after bumping a revision), run:
-
-```sh
-.devops/vendor-vulkano-ash.sh
-```
-
-The script shallow-clones both repos at the pinned revisions (with shallow
-submodules), strips the `.git` metadata, and applies the path patches above.
+`vulkano` is wired up as a git dependency on the revision above in `Cargo.toml`
+and in `candle-vulkan-kernels/Cargo.toml`.
 
 ## Shader-Slang Debug Printing
 

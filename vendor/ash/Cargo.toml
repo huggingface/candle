@@ -1,8 +1,0 @@
-[workspace]
-resolver = "2"
-members = [
-    "ash",
-    "ash-examples",
-    "ash-window",
-    "generator",
-]

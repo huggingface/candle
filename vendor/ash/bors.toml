@@ -1,3 +1,0 @@
-status = ["check"]
-
-timeout_sec = 18000 # 5 hours
