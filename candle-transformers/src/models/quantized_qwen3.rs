@@ -388,6 +388,25 @@ impl AttentionWeights {
             c.reset();
         }
     }
+
+    /// Rolls every populated cache back to `new_len` positions. See
+    /// `candle_nn::kv_cache`'s `truncate()` methods for the exact
+    /// semantics; all caches that exist for this layer (exactly one of
+    /// `kv_cache` on non-CPU devices, or `interleaved_cache`+`raw_cache`
+    /// together on CPU) are kept at the same logical length, so this
+    /// truncates whichever are `Some`.
+    fn truncate_kv_cache(&mut self, new_len: usize) -> Result<()> {
+        if let Some(c) = &mut self.kv_cache {
+            c.truncate(new_len)?;
+        }
+        if let Some(c) = &mut self.interleaved_cache {
+            c.truncate(new_len)?;
+        }
+        if let Some(c) = &mut self.raw_cache {
+            c.truncate(new_len)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -444,6 +463,10 @@ impl LayerWeights {
 
     fn clear_kv_cache(&mut self) {
         self.self_attn.clear_kv_cache();
+    }
+
+    fn truncate_kv_cache(&mut self, new_len: usize) -> Result<()> {
+        self.self_attn.truncate_kv_cache(new_len)
     }
 }
 
@@ -536,6 +559,18 @@ impl ModelWeights {
     }
 
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
+        let l = input.dim(1)?;
+        let logits = self.forward_all_logits(input, offset)?;
+        logits.narrow(1, l - 1, 1)?.squeeze(1)
+    }
+
+    /// Like [`Self::forward`], but returns logits for *every* position in
+    /// `input`, shape `(b, l, vocab)`, instead of narrowing to just the
+    /// last one. Used by speculative decoding's draft-verification step,
+    /// which needs each draft token's own logits to check it against what
+    /// the verifier model would have sampled at that position — not just
+    /// the position after the whole draft sequence.
+    pub fn forward_all_logits(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (_b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
@@ -556,13 +591,24 @@ impl ModelWeights {
         }
         let h = self.norm.forward(&h)?;
         let _enter = self.span_output.enter();
-        let last_hidden = h.narrow(1, l - 1, 1)?;
-        self.lm_head.forward(&last_hidden)?.squeeze(1)
+        self.lm_head.forward(&h)
     }
 
     pub fn clear_kv_cache(&mut self) {
         for layer in &mut self.layers {
             layer.clear_kv_cache();
         }
+    }
+
+    /// Rolls every layer's KV-cache back to `new_len` positions, discarding
+    /// everything cached after that point (e.g. a rejected draft-token
+    /// suffix after speculative-decoding verification). See
+    /// `candle_nn::kv_cache`'s `truncate()` for the exact per-cache
+    /// semantics.
+    pub fn truncate_kv_cache(&mut self, new_len: usize) -> Result<()> {
+        for layer in &mut self.layers {
+            layer.truncate_kv_cache(new_len)?;
+        }
+        Ok(())
     }
 }
