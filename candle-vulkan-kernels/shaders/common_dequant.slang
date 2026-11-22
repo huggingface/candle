@@ -7,4 +7,5 @@ module common_dequant;
 public struct Params
 {
     public uint64_t num_blocks;
+    public uint64_t src_offset;
 };

@@ -18,7 +18,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         return;
     }
 
-    uint off = b * 18u;
+    uint off = (uint)g_Params.src_offset + b * 18u;
     float d = f16_bits_to_f32(uint16_t(g_Src[off]) | (uint16_t(g_Src[off + 1]) << 8));
     if (e < 16u)
     {

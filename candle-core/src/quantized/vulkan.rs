@@ -210,13 +210,23 @@ impl QVulkanStorage {
                 "dequantize: elem_count {elem_count} is not a multiple of block size {block}"
             );
         }
-        self.dequantize_src(self.src_bytes(), elem_count)
+        self.dequantize_src(self.src_bytes(), 0, elem_count)
     }
 
-    /// Dequantizes `elem_count` elements from `src` (a byte-view of the
-    /// quantized data holding exactly `elem_count / block` blocks) to an f32
-    /// `VulkanStorage`. `elem_count` must be a multiple of the block size.
-    fn dequantize_src(&self, src: Subbuffer<[u8]>, elem_count: usize) -> Result<VulkanStorage> {
+    /// Dequantizes `elem_count` elements starting at byte offset `src_offset`
+    /// of `src` (a byte-view of the quantized data holding at least
+    /// `src_offset + (elem_count / block)` blocks) to an f32 `VulkanStorage`.
+    /// `elem_count` must be a multiple of the block size. The offset is passed
+    /// to the shader rather than as a descriptor-buffer offset so that the
+    /// descriptor offset stays a multiple of the storage-buffer offset
+    /// alignment (the per-row byte stride of e.g. Q3K is 110 bytes, which is
+    /// not 4-byte aligned).
+    fn dequantize_src(
+        &self,
+        src: Subbuffer<[u8]>,
+        src_offset: u64,
+        elem_count: usize,
+    ) -> Result<VulkanStorage> {
         let num_blocks = elem_count / self.dtype.block_size();
         let (source, name) = dequantize_kernel(self.dtype);
         let out = VulkanStorage::new(&self.device, elem_count, DType::F32)?;
@@ -226,6 +236,7 @@ impl QVulkanStorage {
         };
         let params = candle_vulkan_kernels::push_constants::DequantParams {
             num_blocks: num_blocks as u64,
+            src_offset,
         };
         let kernels = self.device.kernels();
         self.device.execute(move |cbb| {
@@ -243,9 +254,9 @@ impl QVulkanStorage {
     ///
     /// A single id (decode) dequantizes only the requested row: each row is a
     /// contiguous range of quantized blocks, so the per-type dequantize kernel
-    /// runs over a byte-view of that row (`hidden / block` blocks) instead of
-    /// the whole `(rows, hidden)` matrix. Multiple ids (prefill) dequantize
-    /// the whole matrix to f32 and gather along dim 0.
+    /// runs over the whole source buffer at the row's byte offset (`hidden /
+    /// block` blocks) instead of the whole `(rows, hidden)` matrix. Multiple
+    /// ids (prefill) dequantize the whole matrix to f32 and gather along dim 0.
     pub fn embedding(
         &self,
         rows: usize,
@@ -273,8 +284,7 @@ impl QVulkanStorage {
             let block = self.dtype.block_size();
             let row_bytes = (hidden / block) * self.dtype.type_size();
             let start = id as u64 * row_bytes as u64;
-            let src = self.src_bytes().slice(start..start + row_bytes as u64);
-            return self.dequantize_src(src, hidden);
+            return self.dequantize_src(self.src_bytes(), start, hidden);
         }
         let num_ids = ids_vals.len();
         let data_f32 = self.dequantize(rows * hidden)?;

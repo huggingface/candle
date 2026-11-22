@@ -964,7 +964,7 @@ impl Source {
             KernelName::DecodeAttention | KernelName::DecodeAttentionCombine => 48,
             // `zero_fill`: `uint64_t count`.
             KernelName::ZeroFill => 8,
-            // `dequant`/`sigmoid`: `uint64_t count`.
+            // `dequant`: `uint64_t num_blocks; uint64_t src_offset;`.
             KernelName::DequantF32
             | KernelName::DequantF16
             | KernelName::DequantBf16
@@ -979,8 +979,9 @@ impl Source {
             | KernelName::DequantQ4K
             | KernelName::DequantQ5K
             | KernelName::DequantQ6K
-            | KernelName::DequantQ8K
-            | KernelName::Sigmoid => 8,
+            | KernelName::DequantQ8K => 16,
+            // `sigmoid`: `uint64_t count`.
+            KernelName::Sigmoid => 8,
             // `softmax`: `uint64_t n_rows; uint64_t n`.
             KernelName::Softmax => 16,
             // `copy2d`: six `uint64_t` fields.

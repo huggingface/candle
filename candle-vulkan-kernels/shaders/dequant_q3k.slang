@@ -36,7 +36,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         return;
     }
 
-    uint off = b * 110u;
+    uint off = (uint)g_Params.src_offset + b * 110u;
     float d = f16_bits_to_f32(uint16_t(g_Src[off + 108u]) | (uint16_t(g_Src[off + 109u]) << 8));
     // Reconstruct the 16 scale bytes from the 12-byte packed scales (Q3K layout).
     uint KMASK1 = 0x03030303u;

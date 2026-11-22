@@ -16,7 +16,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
 
-    uint off = b * 4u;
+    uint off = (uint)g_Params.src_offset + b * 4u;
     uint32_t bits = uint32_t(g_Src[off]) | (uint32_t(g_Src[off + 1]) << 8)
         | (uint32_t(g_Src[off + 2]) << 16) | (uint32_t(g_Src[off + 3]) << 24);
     g_Dst[b] = asfloat(bits);

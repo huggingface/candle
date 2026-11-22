@@ -19,7 +19,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     // candle's Q8_1 to_float is just q * d (the `s` field is unused in dequantize).
-    uint off = b * 36u;
+    uint off = (uint)g_Params.src_offset + b * 36u;
     float d = f16_bits_to_f32(uint16_t(g_Src[off]) | (uint16_t(g_Src[off + 1]) << 8));
     int q = sbyte(g_Src[off + 4u + e]);
     g_Dst[b * 32u + e] = float(q) * d;

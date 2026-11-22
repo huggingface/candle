@@ -36,7 +36,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         return;
     }
 
-    uint off = b * 292u;
+    uint off = (uint)g_Params.src_offset + b * 292u;
     uint32_t dbits = uint32_t(g_Src[off]) | (uint32_t(g_Src[off + 1]) << 8)
         | (uint32_t(g_Src[off + 2]) << 16) | (uint32_t(g_Src[off + 3]) << 24);
     float d = asfloat(dbits);

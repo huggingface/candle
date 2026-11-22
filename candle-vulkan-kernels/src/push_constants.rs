@@ -171,12 +171,14 @@ pub struct ZeroFillParams {
     pub count: u64,
 }
 
-/// `dequant` shader: `Params { uint64_t num_blocks; }`.
+/// `dequant` shader: `Params { uint64_t num_blocks; uint64_t src_offset; }`.
 #[repr(C)]
 #[derive(Clone, Copy, AnyBitPattern)]
 pub struct DequantParams {
     /// Number of quantized blocks to dequantize.
     pub num_blocks: u64,
+    /// Byte offset into `g_Src` where the first block starts.
+    pub src_offset: u64,
 }
 
 /// `sigmoid` shader: `Params { uint64_t count; }`.

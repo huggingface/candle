@@ -18,7 +18,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         return;
     }
 
-    uint off = b * 34u;
+    uint off = (uint)g_Params.src_offset + b * 34u;
     float d = f16_bits_to_f32(uint16_t(g_Src[off]) | (uint16_t(g_Src[off + 1]) << 8));
     int q = sbyte(g_Src[off + 2u + e]);
     g_Dst[b * 32u + e] = float(q) * d;
