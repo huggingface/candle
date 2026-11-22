@@ -248,6 +248,31 @@ fn asort_big(device: &Device) -> Result<()> {
     Ok(())
 }
 
+// The CPU sort must order NaN consistently (last when ascending, first when descending, as
+// PyTorch does) instead of leaving the rest of the row unsorted.
+#[test]
+fn asort_nan_cpu() -> Result<()> {
+    let nan = f32::NAN;
+    let tensor = Tensor::new(&[[3f32, nan, 1., 2.], [nan, 1., nan, 0.]], &Device::Cpu)?;
+
+    let (sorted, indexes) = tensor.sort_last_dim(true)?;
+    assert_eq!(indexes.to_vec2::<u32>()?, [[2, 3, 0, 1], [3, 1, 0, 2]]);
+    let sorted = sorted.to_vec2::<f32>()?;
+    assert_eq!(sorted[0][..3], [1., 2., 3.]);
+    assert!(sorted[0][3].is_nan());
+    assert_eq!(sorted[1][..2], [0., 1.]);
+    assert!(sorted[1][2..].iter().all(|v| v.is_nan()));
+
+    let (sorted, indexes) = tensor.sort_last_dim(false)?;
+    assert_eq!(indexes.to_vec2::<u32>()?, [[1, 0, 3, 2], [0, 2, 1, 3]]);
+    let sorted = sorted.to_vec2::<f32>()?;
+    assert!(sorted[0][0].is_nan());
+    assert_eq!(sorted[0][1..], [3., 2., 1.]);
+    assert!(sorted[1][..2].iter().all(|v| v.is_nan()));
+    assert_eq!(sorted[1][2..], [1., 0.]);
+    Ok(())
+}
+
 fn unary_op(device: &Device) -> Result<()> {
     let data = &[[-3f32, 1., 4., -0.1, 0.5], [2.7, -1.8, -0.28, 1.8, 2.8]];
     let tensor = Tensor::new(data, device)?;
