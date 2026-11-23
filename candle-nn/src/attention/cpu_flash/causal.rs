@@ -8,6 +8,13 @@ use rayon::prelude::*;
 
 use super::dot_f32;
 use super::online_softmax::online_softmax_step;
+// f16-KV CPU flash decode helpers. The dot fn is feature-selected: f16-attn-dot
+// uses a native f16.f16 dot, otherwise K is widened in-register (dot_f32_f16).
+use super::axpy_f16;
+#[cfg(feature = "f16-attn-dot")]
+use super::dot_f16_f16;
+#[cfg(not(feature = "f16-attn-dot"))]
+use super::dot_f32_f16;
 
 // These utils are mostly for readability.
 
@@ -29,9 +36,9 @@ fn vec_add(acc: &mut [f32], v: &[f32]) {
     acc.iter_mut().zip(v).for_each(|(a, e)| *a += e);
 }
 
-/// Prefetch a cache line for read.
+// Prefetch a cache line for read. Generic so f32 and f16-KV callers share it.
 #[inline(always)]
-fn prefetch_read(ptr: *const f32) {
+fn prefetch_read<T>(ptr: *const T) {
     #[cfg(target_arch = "aarch64")]
     unsafe {
         std::arch::asm!("prfm pldl1keep, [{ptr}]", ptr = in(reg) ptr, options(nostack, preserves_flags));
@@ -960,6 +967,339 @@ fn causal_prefill_generic<T: WithDType>(
                 }
             },
         );
+
+    Tensor::from_vec(out, (h_q, s_q, d), &Device::Cpu)
+}
+
+// Opt-in (CANDLE_VEC_SOFTMAX_EXP=1) NEON polynomial exp for softmax, replacing scalar
+// libm expf (~1e-6, normalized out). Default OFF to stay bit-reproducible.
+#[cfg(target_arch = "aarch64")]
+static VEC_SOFTMAX_EXP: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var("CANDLE_VEC_SOFTMAX_EXP").is_ok());
+
+// exp(x) via range reduction x = n*ln2 + r, exp(x) = 2^n * poly(r). Scalar form so the
+// vector body and the <4 tail share one approximation.
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn poly_exp_scalar(x: f32) -> f32 {
+    let x = x.clamp(-87.0, 88.0);
+    let n = (x * std::f32::consts::LOG2_E).round();
+    let r = x - n * std::f32::consts::LN_2;
+    let mut p = 1.0 / 720.0;
+    p = p * r + 1.0 / 120.0;
+    p = p * r + 1.0 / 24.0;
+    p = p * r + 1.0 / 6.0;
+    p = p * r + 0.5;
+    p = p * r + 1.0;
+    p = p * r + 1.0;
+    p * f32::from_bits((((n as i32) + 127) << 23) as u32)
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn vec_exp_sub_sum_neon(s: &mut [f32], mr: f32) -> f32 {
+    use std::arch::aarch64::*;
+    #[inline(always)]
+    unsafe fn vexpq(x: float32x4_t) -> float32x4_t {
+        let x = vminq_f32(vmaxq_f32(x, vdupq_n_f32(-87.0)), vdupq_n_f32(88.0));
+        let n = vrndnq_f32(vmulq_f32(x, vdupq_n_f32(std::f32::consts::LOG2_E)));
+        let r = vfmsq_f32(x, n, vdupq_n_f32(std::f32::consts::LN_2));
+        let mut p = vdupq_n_f32(1.0 / 720.0);
+        p = vfmaq_f32(vdupq_n_f32(1.0 / 120.0), p, r);
+        p = vfmaq_f32(vdupq_n_f32(1.0 / 24.0), p, r);
+        p = vfmaq_f32(vdupq_n_f32(1.0 / 6.0), p, r);
+        p = vfmaq_f32(vdupq_n_f32(0.5), p, r);
+        p = vfmaq_f32(vdupq_n_f32(1.0), p, r);
+        p = vfmaq_f32(vdupq_n_f32(1.0), p, r);
+        let bits = vshlq_n_s32(vaddq_s32(vcvtq_s32_f32(n), vdupq_n_s32(127)), 23);
+        vmulq_f32(p, vreinterpretq_f32_s32(bits))
+    }
+    let vmr = vdupq_n_f32(mr);
+    let mut vsum = vdupq_n_f32(0.0);
+    let n = s.len();
+    let p = s.as_mut_ptr();
+    let mut i = 0;
+    while i + 4 <= n {
+        let e = vexpq(vsubq_f32(vld1q_f32(p.add(i)), vmr));
+        vst1q_f32(p.add(i), e);
+        vsum = vaddq_f32(vsum, e);
+        i += 4;
+    }
+    let mut sum = vaddvq_f32(vsum);
+    while i < n {
+        let e = poly_exp_scalar(*p.add(i) - mr);
+        *p.add(i) = e;
+        sum += e;
+        i += 1;
+    }
+    sum
+}
+
+// For each x in s, set x = exp(x - mr) and return the sum (softmax inner loop).
+#[inline(always)]
+fn exp_sub_sum(s: &mut [f32], mr: f32) -> f32 {
+    #[cfg(target_arch = "aarch64")]
+    if *VEC_SOFTMAX_EXP {
+        return unsafe { vec_exp_sub_sum_neon(s, mr) };
+    }
+    let mut sum = 0.0f32;
+    for x in s.iter_mut() {
+        let e = (*x - mr).exp();
+        *x = e;
+        sum += e;
+    }
+    sum
+}
+
+// f16-KV interleaved causal decode (q_len=1). Reads the head-major f16 KV cache one
+// head's stream at a time - half the bytes of an f32 cache.
+#[allow(clippy::too_many_arguments)]
+pub fn causal_decode_f16kv_interleaved(
+    q_data: &[f32],
+    kv_data: &[half::f16],
+    head_stride: usize,
+    h_q: usize,
+    h_kv: usize,
+    d: usize,
+    kv_len: usize,
+    scale: f32,
+) -> Result<Tensor> {
+    let rk = h_q / h_kv;
+
+    let mut out = vec![0f32; h_q * d];
+
+    // One task per kv head, all rk GQA query heads in one pass so each contiguous
+    // K/V row is read from memory once, not once per query head.
+    let process =
+        |kv_h: usize, out_chunk: &mut [f32], acc: &mut [f32], m: &mut [f32], ssum: &mut [f32]| {
+            let head_base = kv_h * head_stride;
+
+            acc.fill(0.0);
+            m.fill(f32::NEG_INFINITY);
+            ssum.fill(0.0);
+
+            // f16-attn-dot: narrow this kv-head's rk query rows to f16 once (amortized
+            // over kv_len), so the inner score is a pure f16.f16 dot. Off by default.
+            #[cfg(feature = "f16-attn-dot")]
+            let q_f16: Vec<half::f16> = {
+                let base = kv_h * rk * d;
+                q_data[base..base + rk * d]
+                    .iter()
+                    .map(|&x| half::f16::from_f32(x))
+                    .collect()
+            };
+
+            for kv_pos in 0..kv_len {
+                // K and V share a base pointer (adjacent in memory)
+                let kv_base = head_base + kv_pos * 2 * d;
+                let k_row = &kv_data[kv_base..kv_base + d];
+                let v_row = &kv_data[kv_base + d..kv_base + 2 * d];
+
+                // One prefetch loads both next K and V
+                if kv_pos + 1 < kv_len {
+                    prefetch_read(kv_data[kv_base + 2 * d..].as_ptr());
+                }
+
+                for r in 0..rk {
+                    let h_i = kv_h * rk + r;
+                    #[cfg(not(feature = "f16-attn-dot"))]
+                    let score = {
+                        let q_row = &q_data[h_i * d..(h_i + 1) * d];
+                        dot_f32_f16(q_row, k_row) * scale
+                    };
+                    #[cfg(feature = "f16-attn-dot")]
+                    let score = {
+                        let _ = h_i;
+                        dot_f16_f16(&q_f16[r * d..(r + 1) * d], k_row) * scale
+                    };
+                    let acc_r = &mut acc[r * d..(r + 1) * d];
+                    online_softmax_step(score, &mut m[r], &mut ssum[r], acc_r, |acc, w| {
+                        axpy_f16(acc, v_row, w);
+                    });
+                }
+            }
+
+            for r in 0..rk {
+                let inv = if ssum[r] > 0.0 { 1.0 / ssum[r] } else { 0.0 };
+                let acc_r = &acc[r * d..(r + 1) * d];
+                let out_r = &mut out_chunk[r * d..(r + 1) * d];
+                for t in 0..d {
+                    out_r[t] = acc_r[t] * inv;
+                }
+            }
+        };
+
+    // Contiguous per-thread partition of the h_kv kv-heads on the barrier pool (vs rayon's
+    // par_chunks, which thrashed shared cache on N1). 0-worker pool runs f(0) inline.
+    struct OutPtr(*mut f32);
+    unsafe impl Sync for OutPtr {}
+    let optr = OutPtr(out.as_mut_ptr());
+    let pool = candle::utils::barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let hpt = h_kv.div_ceil(n_total);
+    pool.execute(|tid| {
+        let p = &optr; // capture the whole OutPtr (Sync), not the raw `.0` field
+        let start = tid * hpt;
+        if start < h_kv {
+            let end = h_kv.min((tid + 1) * hpt);
+            let mut acc = vec![0f32; rk * d];
+            let mut m = vec![0f32; rk];
+            let mut ssum = vec![0f32; rk];
+            for kv_h in start..end {
+                let out_chunk =
+                    unsafe { std::slice::from_raw_parts_mut(p.0.add(kv_h * rk * d), rk * d) };
+                process(kv_h, out_chunk, &mut acc, &mut m, &mut ssum);
+            }
+        }
+    });
+
+    Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
+}
+
+// Causal prefill over the f16 head-major interleaved KV cache (same layout decode reads).
+// One task per (kv head, query block), rk GQA heads sharing every K/V row, KV-blocked
+// softmax; QK widens f16 K in-register, PV accumulator stays f32.
+#[allow(clippy::too_many_arguments)]
+pub fn causal_prefill_f16kv_headmajor(
+    q_data: &[f32],
+    kv_data: &[half::f16],
+    head_stride: usize,
+    s_q: usize,
+    h_q: usize,
+    h_kv: usize,
+    d: usize,
+    kv_len: usize,
+    scale: f32,
+    kv_offset: usize,
+) -> Result<Tensor> {
+    let rk = h_q / h_kv;
+    let q_seq_stride = h_q * d;
+
+    const KB: usize = 128;
+    const QB: usize = 32;
+    let n_qblocks = s_q.div_ceil(QB);
+
+    let mut out = vec![0f32; h_q * s_q * d];
+    struct OutPtr(*mut f32);
+    unsafe impl Sync for OutPtr {}
+    let out_ptr = OutPtr(out.as_mut_ptr());
+
+    // Contiguous per-thread partition of (kv-head, q-block) tasks on the barrier pool.
+    // 0-worker pool runs f(0) inline.
+    let n_tasks = h_kv * n_qblocks;
+    let pool = candle::utils::barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let tpt = n_tasks.div_ceil(n_total);
+    pool.execute(|tid| {
+        let t_start = tid * tpt;
+        if t_start >= n_tasks {
+            return;
+        }
+        let t_end = n_tasks.min((tid + 1) * tpt);
+        let mut acc = vec![0f32; rk * d];
+        let mut w = vec![0f32; rk * KB];
+        let mut m = vec![f32::NEG_INFINITY; rk];
+        let mut ssum = vec![0f32; rk];
+        for task in t_start..t_end {
+            let kv_h = task / n_qblocks;
+            let q0 = (task % n_qblocks) * QB;
+            let q1 = (q0 + QB).min(s_q);
+            let head_base = kv_h * head_stride;
+            let p = &out_ptr;
+
+            // f16-attn-dot: narrow this q block's rows to f16 so the QK dot is a pure
+            // f16.f16 FMLA. Default keeps Q in f32 and widens K in-register.
+            #[cfg(feature = "f16-attn-dot")]
+            let mut qf16 = vec![half::f16::ZERO; rk * d];
+
+            for q_pos in q0..q1 {
+                let q_pos_base = q_pos * q_seq_stride + kv_h * rk * d;
+                #[cfg(feature = "f16-attn-dot")]
+                for (o, &x) in qf16
+                    .iter_mut()
+                    .zip(&q_data[q_pos_base..q_pos_base + rk * d])
+                {
+                    *o = half::f16::from_f32(x);
+                }
+
+                acc.fill(0.0);
+                m.fill(f32::NEG_INFINITY);
+                ssum.fill(0.0);
+                let kv_end = (q_pos + kv_offset + 1).min(kv_len);
+
+                for kv0 in (0..kv_end).step_by(KB) {
+                    let kb = KB.min(kv_end - kv0);
+
+                    // Pass 1: scores for all rk heads, each K row loaded once.
+                    for j in 0..kb {
+                        let kv_base = head_base + (kv0 + j) * 2 * d;
+                        let k_row = &kv_data[kv_base..kv_base + d];
+                        if j + 1 < kb {
+                            prefetch_read(kv_data[kv_base + 2 * d..].as_ptr());
+                        }
+                        for r in 0..rk {
+                            #[cfg(not(feature = "f16-attn-dot"))]
+                            let dot = {
+                                let q_row = &q_data[q_pos_base + r * d..q_pos_base + (r + 1) * d];
+                                dot_f32_f16(q_row, k_row)
+                            };
+                            #[cfg(feature = "f16-attn-dot")]
+                            let dot = dot_f16_f16(&qf16[r * d..(r + 1) * d], k_row);
+                            w[r * KB + j] = dot * scale;
+                        }
+                    }
+
+                    // Per head: one max/rescale per block, then batched exp.
+                    for r in 0..rk {
+                        let s = &mut w[r * KB..r * KB + kb];
+                        let bmax = s.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+                        if bmax > m[r] {
+                            let f = (m[r] - bmax).exp();
+                            if f > 0.0 {
+                                for a in &mut acc[r * d..(r + 1) * d] {
+                                    *a *= f;
+                                }
+                                ssum[r] *= f;
+                            } else {
+                                acc[r * d..(r + 1) * d].fill(0.0);
+                                ssum[r] = 0.0;
+                            }
+                            m[r] = bmax;
+                        }
+                        let mr = m[r];
+                        ssum[r] += exp_sub_sum(s, mr);
+                    }
+
+                    // Pass 2: PV, each V row loaded once for all rk heads.
+                    for j in 0..kb {
+                        let kv_base = head_base + (kv0 + j) * 2 * d;
+                        let v_row = &kv_data[kv_base + d..kv_base + 2 * d];
+                        if j + 1 < kb {
+                            prefetch_read(kv_data[kv_base + 2 * d + d..].as_ptr());
+                        }
+                        for r in 0..rk {
+                            let wj = w[r * KB + j];
+                            axpy_f16(&mut acc[r * d..(r + 1) * d], v_row, wj);
+                        }
+                    }
+                }
+
+                for r in 0..rk {
+                    let h_i = kv_h * rk + r;
+                    let inv = if ssum[r] > 0.0 { 1.0 / ssum[r] } else { 0.0 };
+                    let acc_r = &acc[r * d..(r + 1) * d];
+                    // SAFETY: each (h_i, q_pos) output row is written by exactly
+                    // one task (kv heads and q blocks partition the rows).
+                    let dst = unsafe {
+                        std::slice::from_raw_parts_mut(p.0.add(h_i * s_q * d + q_pos * d), d)
+                    };
+                    for t in 0..d {
+                        dst[t] = acc_r[t] * inv;
+                    }
+                }
+            }
+        }
+    });
 
     Tensor::from_vec(out, (h_q, s_q, d), &Device::Cpu)
 }
