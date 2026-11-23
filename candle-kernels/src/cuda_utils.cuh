@@ -2,6 +2,10 @@
 #include<stdint.h>
 #include<cmath>
 
+__device__ __forceinline__ bool is_aligned_16(const void *ptr) {
+    return (reinterpret_cast<uintptr_t>(ptr) % 16) == 0;
+}
+
 // TODO: This is often used to check that the data is contiguous so that
 // kernels can be easily mapped. However this only returns true for row
 // major, if all the inputs are column major, we could apply the fast path

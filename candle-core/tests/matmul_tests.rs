@@ -82,6 +82,30 @@ fn broadcast_matmul(device: &Device) -> Result<()> {
     Ok(())
 }
 
+// A stride-zero batch dim on the lhs, as produced by `broadcast_as`, must give the same
+// result as materializing that batch. The batches of rhs cannot be folded into the columns
+// of one matmul the way a batch-invariant rhs folds into the rows, so this exercises the
+// per-batch loop.
+fn broadcast_matmul_stride_zero_lhs(device: &Device) -> Result<()> {
+    for (b, m, n, k) in [(32, 32, 32, 32), (3, 1, 2, 5), (4, 2, 3, 1), (2, 5, 1, 3)] {
+        let lhs = Tensor::randn(0f32, 1f32, (1, m, k), device)?;
+        let rhs = Tensor::randn(0f32, 1f32, (b, k, n), device)?;
+
+        let out = lhs.broadcast_as((b, m, k))?.matmul(&rhs)?;
+        assert_eq!(out.dims(), &[b, m, n]);
+
+        // Every batch is the same lhs against that batch of rhs.
+        let lhs = lhs.i(0)?;
+        for idx in 0..b {
+            let diff = (out.i(idx)? - lhs.matmul(&rhs.i(idx)?)?)?
+                .sqr()?
+                .sum_all()?;
+            assert!(diff.to_vec0::<f32>()? < 1e-6, "batch {idx} differs");
+        }
+    }
+    Ok(())
+}
+
 fn zero_matmul(device: &Device) -> Result<()> {
     let lhs = Tensor::zeros((2, 0), DType::F32, device)?;
     let rhs = Tensor::zeros((0, 3), DType::F32, device)?;
@@ -237,6 +261,12 @@ test_device!(
     broadcast_matmul_cpu,
     broadcast_matmul_gpu,
     broadcast_matmul_metal
+);
+test_device!(
+    broadcast_matmul_stride_zero_lhs,
+    broadcast_matmul_stride_zero_lhs_cpu,
+    broadcast_matmul_stride_zero_lhs_gpu,
+    broadcast_matmul_stride_zero_lhs_metal
 );
 test_device!(
     zero_matmul,

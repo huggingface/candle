@@ -7,6 +7,7 @@ pub mod indexing;
 mod macros;
 pub mod mlx_gemm;
 pub mod quantized;
+pub mod quantized_moe;
 pub mod random;
 pub mod reduce;
 pub mod sdpa;
@@ -24,6 +25,7 @@ pub use mlx_gemm::{call_mlx_gemm, call_mlx_gemv, GemmDType};
 pub use quantized::{
     call_quantized_get_rows, call_quantized_matmul_mm_t, call_quantized_matmul_mv_t, GgmlDType,
 };
+pub use quantized_moe::*;
 pub use random::*;
 pub use reduce::*;
 pub use sdpa::{call_sdpa_full, call_sdpa_vector, call_sdpa_vector_2pass, SdpaDType};

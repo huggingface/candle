@@ -4,7 +4,7 @@ default-members = [".", "wax-metal"]
 
 [package]
 name = "candle-metal-kernels"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2021"
 
 description = "Metal kernels for Candle"

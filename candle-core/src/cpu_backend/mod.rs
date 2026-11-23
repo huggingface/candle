@@ -3,12 +3,13 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{DType, Error, IntDType, Layout, NdIter, Result, Shape, WithDType};
 use float8::F8E4M3;
-use half::{bf16, f16};
+use half::{bf16, f16, slice::HalfFloatSliceExt, vec::HalfFloatVecExt};
 use rayon::prelude::*;
 
 mod utils;
 pub use utils::{
-    binary_map, binary_map_vec, unary_map, unary_map_vec, Map1, Map1Any, Map2, Map2InPlace, Map2U8,
+    binary_map, binary_map_vec, binary_map_vec_par, unary_map, unary_map_vec, unary_map_vec_par,
+    Map1, Map1Any, Map2, Map2InPlace, Map2U8,
 };
 mod conv2d;
 use conv2d::Conv2D;
@@ -1485,12 +1486,17 @@ impl Map2 for MatMul {
             Parallelism::None
         };
         let (b, m, n, k) = if b_skip == 0 && a_skip == m * k {
+            // A batch-invariant rhs lets the batches of lhs stack into the rows of a single
+            // (b * m, k) matrix, which the destination already matches row for row.
             // a_skip and c_skip should be updated but step is always 0 so
             // it wouldn't matter.
             (1, b * m, n, k)
-        } else if a_skip == 0 && b_skip == n * k {
-            (1, m, b * n, k)
         } else {
+            // There is deliberately no mirrored fold for a batch-invariant lhs. Stacking the
+            // batches of rhs into the columns of a (k, b * n) matrix would need those columns
+            // to be adjacent, but rhs is batch-major, and the destination rows would still be
+            // n apart while each merged row is b * n wide. Both make the merged gemm write
+            // over itself, so a stride-zero batch on lhs goes through the loop below.
             (b, m, n, k)
         };
         for step in 0..b {
@@ -2536,19 +2542,19 @@ impl BackendStorage for CpuStorage {
     fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
         match self {
             Self::BF16(storage) => {
-                let data = unary_map_vec(storage, layout, B::bf16, B::bf16_vec);
+                let data = unary_map_vec_par(storage, layout, B::bf16, B::bf16_vec);
                 Ok(Self::BF16(data))
             }
             Self::F16(storage) => {
-                let data = unary_map_vec(storage, layout, B::f16, B::f16_vec);
+                let data = unary_map_vec_par(storage, layout, B::f16, B::f16_vec);
                 Ok(Self::F16(data))
             }
             Self::F32(storage) => {
-                let data = unary_map_vec(storage, layout, B::f32, B::f32_vec);
+                let data = unary_map_vec_par(storage, layout, B::f32, B::f32_vec);
                 Ok(Self::F32(data))
             }
             Self::F64(storage) => {
-                let data = unary_map_vec(storage, layout, B::f64, B::f64_vec);
+                let data = unary_map_vec_par(storage, layout, B::f64, B::f64_vec);
                 Ok(Self::F64(data))
             }
             Self::U8(storage) => {
@@ -2590,7 +2596,7 @@ impl BackendStorage for CpuStorage {
     ) -> Result<Self> {
         match (self, rhs) {
             (Self::BF16(lhs), Self::BF16(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2602,7 +2608,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::BF16(data))
             }
             (Self::F16(lhs), Self::F16(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2614,7 +2620,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F16(data))
             }
             (Self::F32(lhs), Self::F32(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2626,7 +2632,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F32(data))
             }
             (Self::F64(lhs), Self::F64(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2638,7 +2644,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F64(data))
             }
             (Self::U32(lhs), Self::U32(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2650,7 +2656,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::U32(data))
             }
             (Self::I16(lhs), Self::I16(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2662,7 +2668,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::I16(data))
             }
             (Self::I32(lhs), Self::I32(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2674,7 +2680,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::I32(data))
             }
             (Self::I64(lhs), Self::I64(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -3053,6 +3059,16 @@ impl BackendStorage for CpuStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
+        // no bf16 gemm kernel yet: widen to f32, multiply, narrow back
+        if let (Self::BF16(lhs_v), Self::BF16(rhs_v)) = (self, rhs) {
+            let lhs32 = Self::F32(lhs_v.to_f32_vec());
+            let rhs32 = Self::F32(rhs_v.to_f32_vec());
+            let out = MatMul(bmnk).map(&lhs32, lhs_l, &rhs32, rhs_l)?;
+            let Self::F32(out_v) = out else {
+                crate::bail!("matmul dtype mismatch")
+            };
+            return Ok(Self::BF16(Vec::from_f32_slice(&out_v)));
+        }
         MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)
     }
 

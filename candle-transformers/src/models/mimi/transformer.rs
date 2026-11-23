@@ -79,7 +79,9 @@ impl RotaryEmbedding {
         let qk_dtype = qk.dtype();
         let c = self.cos.narrow(0, seqlen_offset, seqlen)?;
         let s = self.sin.narrow(0, seqlen_offset, seqlen)?;
-        candle_nn::rotary_emb::rope_i(&qk.to_dtype(DType::F32)?, &c, &s)?.to_dtype(qk_dtype)
+        // The checkpoints are stored in the transformers layout, which rotates the two halves
+        // of the head dimension rather than adjacent pairs.
+        candle_nn::rotary_emb::rope(&qk.to_dtype(DType::F32)?, &c, &s)?.to_dtype(qk_dtype)
     }
 }
 
