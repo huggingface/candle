@@ -187,6 +187,42 @@ fn layer_norml(device: &Device) -> Result<()> {
     Ok(())
 }
 
+// A GGUF norm weight dequantizes to F32 while the model runs F16 activations, so
+// both norms have to align the weight instead of rejecting the pair.
+fn norm_mixed_dtype(device: &Device) -> Result<()> {
+    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
+    let xs = Tensor::new(data, device)?.to_dtype(candle::DType::F16)?;
+    let alpha = Tensor::new(&[1f32, 2., 3.], device)?;
+    let beta = Tensor::new(&[0.5f32, -0.5, 1.], device)?;
+
+    let max_diff = |a: Tensor, b: Tensor| -> Result<f32> {
+        Ok(
+            (a.to_dtype(candle::DType::F32)? - b.to_dtype(candle::DType::F32)?)?
+                .abs()?
+                .flatten_all()?
+                .max(0)?
+                .to_vec0::<f32>()?,
+        )
+    };
+    // Fused and composed round to F16 at different points, so allow an ulp at these
+    // magnitudes (2^-8 = 0.0039).
+    let tol = 5e-3;
+
+    let rms = candle_nn::ops::rms_norm(&xs, &alpha, 1e-5)?;
+    assert_eq!(rms.dtype(), candle::DType::F16);
+    let diff = max_diff(rms, candle_nn::ops::rms_norm_slow(&xs, &alpha, 1e-5)?)?;
+    assert!(diff < tol, "rms_norm: {diff}");
+
+    let ln = candle_nn::ops::layer_norm(&xs, &alpha, &beta, 1e-5)?;
+    assert_eq!(ln.dtype(), candle::DType::F16);
+    let diff = max_diff(
+        ln,
+        candle_nn::ops::layer_norm_slow(&xs, &alpha, &beta, 1e-5)?,
+    )?;
+    assert!(diff < tol, "layer_norm: {diff}");
+    Ok(())
+}
+
 #[test]
 fn softmax_numerical_stability() -> Result<()> {
     let dev = &Device::Cpu;
@@ -379,4 +415,10 @@ test_device!(
 );
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
+test_device!(
+    norm_mixed_dtype,
+    norm_mixed_dtype_cpu,
+    norm_mixed_dtype_gpu,
+    norm_mixed_dtype_metal
+);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);

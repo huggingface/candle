@@ -668,7 +668,9 @@ pub fn rms_norm_slow(x: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
     let x = x.to_dtype(internal_dtype)?;
     let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
     let x_normed = x.broadcast_div(&(norm_x + eps as f64)?.sqrt()?)?;
-    x_normed.to_dtype(x_dtype)?.broadcast_mul(alpha)
+    x_normed
+        .to_dtype(x_dtype)?
+        .broadcast_mul(&alpha.to_dtype(x_dtype)?)
 }
 
 pub fn rms_norm(xs: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
@@ -681,7 +683,10 @@ pub fn rms_norm(xs: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
             alpha.shape()
         )
     }
-    xs.apply_op2_no_bwd(alpha, &RmsNorm { eps })
+    // The fused kernels are same-dtype, so a weight stored at a different precision
+    // than the activations is aligned to them rather than rejected.
+    let alpha = alpha.to_dtype(xs.dtype())?;
+    xs.apply_op2_no_bwd(&alpha, &RmsNorm { eps })
 }
 
 #[derive(Debug, Clone)]
@@ -925,8 +930,8 @@ pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> R
     let x_normed = x.broadcast_div(&(norm_x + eps as f64)?.sqrt()?)?;
     x_normed
         .to_dtype(x_dtype)?
-        .broadcast_mul(alpha)?
-        .broadcast_add(beta)
+        .broadcast_mul(&alpha.to_dtype(x_dtype)?)?
+        .broadcast_add(&beta.to_dtype(x_dtype)?)
 }
 
 pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {
@@ -941,7 +946,11 @@ pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Resul
             beta.shape()
         )
     }
-    xs.apply_op3_no_bwd(alpha, beta, &LayerNorm { eps })
+    // The fused kernels are same-dtype, so weights stored at a different precision
+    // than the activations are aligned to them rather than rejected.
+    let alpha = alpha.to_dtype(xs.dtype())?;
+    let beta = beta.to_dtype(xs.dtype())?;
+    xs.apply_op3_no_bwd(&alpha, &beta, &LayerNorm { eps })
 }
 
 // https://pytorch.org/docs/stable/generated/torch.nn.PixelShuffle.html
