@@ -257,8 +257,10 @@ impl Tensor {
             DType::F8E4M3 => {
                 let mut data_t = vec![0u8; elem_count];
                 reader.read_exact(&mut data_t)?;
-                let data_f8: Vec<float8::F8E4M3> =
-                    data_t.into_iter().map(float8::F8E4M3::from_bits).collect();
+                let data_f8: Vec<microfloat::f8e4m3> = data_t
+                    .into_iter()
+                    .map(microfloat::f8e4m3::from_bits)
+                    .collect();
                 Tensor::from_vec(data_f8, shape, &Device::Cpu)
             }
             DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {

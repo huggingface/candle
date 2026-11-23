@@ -260,7 +260,7 @@ impl VecOps for i64 {
     }
 }
 
-impl VecOps for float8::F8E4M3 {
+impl VecOps for microfloat::f8e4m3 {
     #[inline(always)]
     fn min(self, other: Self) -> Self {
         Self::min(self, other)
