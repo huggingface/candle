@@ -317,6 +317,12 @@ extern "C" void run_mha_v3(
     params.is_causal = is_causal;
     params.window_size_left = window_size_left;
     params.window_size_right = window_size_right;
+    // The kernel launchers select the local-mask specialization from is_local,
+    // not from the window sizes. A finite window was previously passed through
+    // with is_local left false by memset, silently running global attention.
+    params.is_local = !params.is_causal &&
+        ((window_size_left >= 0 && window_size_left < int(seqlen_k)) ||
+         (window_size_right >= 0 && window_size_right < int(seqlen_k)));
 
     params.num_splits = 0;
     params.page_block_size = -1;
