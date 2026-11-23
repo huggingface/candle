@@ -2285,3 +2285,119 @@ fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
     assert_ne!(id1, id2);
     Ok(())
 }
+
+fn cast_float_to_u8_saturates(device: &Device) -> Result<()> {
+    if device.is_metal() {
+        return Ok(());
+    }
+
+    let check_u8 = |t: Tensor, expected: &[u8]| -> Result<()> {
+        let len = expected.len();
+        assert_eq!(t.to_dtype(DType::U8)?.to_vec1::<u8>()?, expected);
+        let strided = t.reshape((1, len))?.broadcast_as((2, len))?;
+        assert_eq!(
+            strided.to_dtype(DType::U8)?.to_vec2::<u8>()?,
+            [expected, expected]
+        );
+        Ok(())
+    };
+
+    let f32_vals = [
+        -10.0f32,
+        -0.5,
+        0.0,
+        42.9,
+        255.0,
+        255.9,
+        256.0,
+        448.0,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+    ];
+    let f32_expected = [0u8, 0, 0, 42, 255, 255, 255, 255, 255, 0, 0];
+    check_u8(
+        Tensor::from_slice(&f32_vals, f32_vals.len(), device)?,
+        &f32_expected,
+    )?;
+
+    let f64_vals = [
+        -10.0f64,
+        -0.5,
+        0.0,
+        42.9,
+        255.0,
+        255.9,
+        256.0,
+        1000.0,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ];
+    let f64_expected = [0u8, 0, 0, 42, 255, 255, 255, 255, 255, 0, 0];
+    check_u8(
+        Tensor::from_slice(&f64_vals, f64_vals.len(), device)?,
+        &f64_expected,
+    )?;
+
+    let f16_vals: Vec<half::f16> = [
+        -10.0f32,
+        -0.5,
+        0.0,
+        42.5,
+        255.0,
+        256.0,
+        448.0,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+    ]
+    .into_iter()
+    .map(half::f16::from_f32)
+    .collect();
+    let f16_expected = [0u8, 0, 0, 42, 255, 255, 255, 255, 0, 0];
+    check_u8(
+        Tensor::from_slice(&f16_vals, f16_vals.len(), device)?,
+        &f16_expected,
+    )?;
+
+    let bf16_vals: Vec<half::bf16> = [
+        -10.0f32,
+        -0.5,
+        0.0,
+        42.5,
+        255.0,
+        256.0,
+        448.0,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+    ]
+    .into_iter()
+    .map(half::bf16::from_f32)
+    .collect();
+    let bf16_expected = [0u8, 0, 0, 42, 255, 255, 255, 255, 0, 0];
+    check_u8(
+        Tensor::from_slice(&bf16_vals, bf16_vals.len(), device)?,
+        &bf16_expected,
+    )?;
+
+    let f8_vals: Vec<F8E4M3> = [-16.0f32, -0.5, 0.0, 40.0, 240.0, 256.0, 448.0, f32::NAN]
+        .into_iter()
+        .map(F8E4M3::from_f32)
+        .collect();
+    let f8_expected = [0u8, 0, 0, 40, 240, 255, 255, 0];
+    check_u8(
+        Tensor::from_slice(&f8_vals, f8_vals.len(), device)?,
+        &f8_expected,
+    )?;
+
+    Ok(())
+}
+
+test_device!(
+    cast_float_to_u8_saturates,
+    cast_float_to_u8_saturates_cpu,
+    cast_float_to_u8_saturates_gpu,
+    cast_float_to_u8_saturates_metal
+);
