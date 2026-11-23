@@ -1064,7 +1064,11 @@ fn simple_eval_(
             }
             "Gelu" => {
                 let input = get(&node.input[0])?;
-                let output = input.gelu_erf()?;
+                let output = match get_attr_opt::<str>(node, "approximate")?.unwrap_or("none") {
+                    "none" => input.gelu_erf()?,
+                    "tanh" => input.gelu()?,
+                    a => bail!("unsupported approximate value {a} for Gelu"),
+                };
                 values.insert(node.output[0].clone(), output);
             }
             "Relu" => {
@@ -1805,13 +1809,11 @@ fn simple_eval_(
             "Gemm" => {
                 let a = get(&node.input[0])?;
                 let b = get(&node.input[1])?;
-                let c = get(&node.input[2])?;
+                // C is optional since opset 11.
+                let c = get_opt(2).transpose()?;
 
                 let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(1.0);
                 let beta = get_attr_opt::<f32>(node, "beta")?.copied().unwrap_or(1.0);
-
-                let alpha = Tensor::full(alpha, a.shape(), &Device::Cpu)?;
-                let beta = Tensor::full(beta, c.shape(), &Device::Cpu)?;
 
                 let trans_a = get_attr_opt::<i64>(node, "transA")?.copied().unwrap_or(0);
                 let trans_b = get_attr_opt::<i64>(node, "transB")?.copied().unwrap_or(0);
@@ -1819,10 +1821,11 @@ fn simple_eval_(
                 let a = if trans_a == 0 { a.clone() } else { a.t()? };
                 let b = if trans_b == 0 { b.clone() } else { b.t()? };
 
-                let output = a
-                    .broadcast_mul(&alpha)?
-                    .broadcast_matmul(&b)?
-                    .broadcast_add(&c.broadcast_mul(&beta)?)?;
+                let output = (a.broadcast_matmul(&b)? * alpha as f64)?;
+                let output = match c {
+                    Some(c) => output.broadcast_add(&(c * beta as f64)?)?,
+                    None => output,
+                };
                 values.insert(node.output[0].clone(), output);
             }
             "LSTM" => {
