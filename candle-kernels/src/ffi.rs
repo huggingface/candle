@@ -2,6 +2,20 @@ use core::ffi::c_void;
 #[allow(dead_code)]
 #[allow(improper_ctypes)]
 extern "C" {
+    pub fn candle_argsort_f32(
+        keys_in: *const f32,
+        keys_out: *mut f32,
+        indices_in: *mut u32,
+        indices_out: *mut u32,
+        offsets: *mut i32,
+        temp_storage: *mut c_void,
+        temp_storage_bytes: *mut usize,
+        nrows: i32,
+        ncols: i32,
+        descending: i32,
+        stream: *mut c_void,
+    ) -> i32;
+
     #[cfg(feature = "cutile")]
     pub fn candle_launch_moe_align(
         topk_ids: *const i32,
