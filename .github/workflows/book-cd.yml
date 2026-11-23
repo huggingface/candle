@@ -1,0 +1,46 @@
+name: Deploy book
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "candle-book/**"
+      - ".github/workflows/book-cd.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: book-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.repository == 'huggingface/candle'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # To force-push the built book to the gh-pages branch
+    env:
+      MDBOOK_VERSION: v0.5.4
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install mdBook
+        run: |
+          url="https://github.com/rust-lang/mdBook/releases/download/${MDBOOK_VERSION}/mdbook-${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir "$RUNNER_TEMP/mdbook"
+          curl -fsSL "$url" | tar -xz --directory="$RUNNER_TEMP/mdbook"
+          echo "$RUNNER_TEMP/mdbook" >> "$GITHUB_PATH"
+      - name: Build book
+        run: mdbook build candle-book
+      - name: Deploy to gh-pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mv candle-book/book "$RUNNER_TEMP/book"
+          # Start from an empty tree so only the built book is published, with no history kept.
+          git switch --orphan gh-pages-deploy
+          cp -a "$RUNNER_TEMP/book/." .
+          git add -A
+          git commit -m "Deploy $GITHUB_SHA to gh-pages"
+          git push --force origin HEAD:refs/heads/gh-pages
