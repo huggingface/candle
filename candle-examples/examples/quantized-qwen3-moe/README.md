@@ -1,6 +1,6 @@
 # candle-quantized-qwen3-moe
 
-[Qwen3 MoE GGUF]((https://huggingface.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF)) contains the GGUF format of Qwen3 32B MoE models, developed by Alibaba Cloud.
+[Qwen3 MoE GGUF](https://huggingface.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF) contains the GGUF format of Qwen3 32B MoE models, developed by Alibaba Cloud.
 
 ## Running the example
 
