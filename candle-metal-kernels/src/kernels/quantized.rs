@@ -176,8 +176,54 @@ pub fn call_quantized_matmul_mv_t(
     Ok(())
 }
 
+/// The token tile of the quantized matrix-matrix kernel: how many tokens (rows of src1) one
+/// threadgroup multiplies by its 64 dequantized weight rows.
+///
+/// A threadgroup dequantizes its weight tile into threadgroup memory once per K step, so every
+/// weight is fetched and dequantized once per tile of tokens: `Tokens64` does that half as often
+/// as `Tokens32`. Each output element is accumulated in the same order at either tile, so the two
+/// produce byte-identical results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuantizedMmTile {
+    Tokens32,
+    Tokens64,
+}
+
+impl QuantizedMmTile {
+    /// Use the 64-token tile only when it pads no more tokens than the 32-token tile.
+    ///
+    /// `tokens` is the rows of src1 per batch entry. The rule is `tokens % 64 == 0` or
+    /// `tokens % 64 > 32`, so up to 32 tokens it is always the 32-token tile. On an M4 Pro over
+    /// the Qwen3-4B Q4_K_M projection shapes, a 64-token tile whose last tile was more padding
+    /// than the 32-token tile's ran 1.03 to 1.5 times as long (at 2 to 32, 96, 136, 160, 200,
+    /// 224 and 288 tokens); where it padded no more it ran 0.89 to 1.0 of the time.
+    pub fn for_tokens(tokens: usize) -> Self {
+        if tokens.div_ceil(64) * 64 <= tokens.div_ceil(32) * 32 {
+            Self::Tokens64
+        } else {
+            Self::Tokens32
+        }
+    }
+
+    fn tokens(self) -> usize {
+        match self {
+            Self::Tokens32 => 32,
+            Self::Tokens64 => 64,
+        }
+    }
+
+    /// Threadgroup memory: 4096 bytes of weights and `tokens x 32` floats of activations, or the
+    /// partial-tile epilogue's `64 x tokens` floats, whichever is larger.
+    fn threadgroup_memory(self) -> usize {
+        (4096 + self.tokens() * 32 * 4).max(64 * self.tokens() * 4)
+    }
+}
+
 /// - src0 is usually weight
 /// - src1 is usually xs
+///
+/// The tile is [`QuantizedMmTile::for_tokens`] of src1's rows per batch entry;
+/// [`call_quantized_matmul_mm_t_with_tile`] takes one from the caller.
 #[allow(clippy::too_many_arguments)]
 pub fn call_quantized_matmul_mm_t(
     device: &Device,
@@ -194,6 +240,44 @@ pub fn call_quantized_matmul_mm_t(
     dst_shape: &[usize],
     dst_offset: usize,
     dst: &Buffer,
+) -> Result<(), MetalKernelError> {
+    call_quantized_matmul_mm_t_with_tile(
+        device,
+        ep,
+        kernels,
+        dtype,
+        src0_shape,
+        src0_stride,
+        src0,
+        src1_shape,
+        src1_stride,
+        src1,
+        src1_offset,
+        dst_shape,
+        dst_offset,
+        dst,
+        QuantizedMmTile::for_tokens(src1_shape[src1_shape.len() - 2]),
+    )
+}
+
+/// [`call_quantized_matmul_mm_t`] at a chosen token tile.
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantized_matmul_mm_t_with_tile(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    src0_shape: &[usize],
+    src0_stride: &[usize],
+    src0: &Buffer,
+    src1_shape: &[usize],
+    src1_stride: &[usize],
+    src1: &Buffer,
+    src1_offset: usize,
+    dst_shape: &[usize],
+    dst_offset: usize,
+    dst: &Buffer,
+    tile: QuantizedMmTile,
 ) -> Result<(), MetalKernelError> {
     // Everything is in reverse
     let ne00 = src0_shape[src0_shape.len() - 1] as i64;
@@ -220,7 +304,7 @@ pub fn call_quantized_matmul_mm_t(
     let r3 = (ne13 / ne03) as u32;
 
     let thread_groups_count = MTLSize {
-        width: divide(ne11 as usize, 32),
+        width: divide(ne11 as usize, tile.tokens()),
         height: divide(ne01 as usize, 64),
         depth: (ne12 * ne13) as usize,
     };
@@ -229,22 +313,26 @@ pub fn call_quantized_matmul_mm_t(
         height: 1,
         depth: 1,
     };
-    let name = match dtype {
-        GgmlDType::Q4_0 => "kernel_mul_mm_q4_0_f32",
-        GgmlDType::Q4_1 => "kernel_mul_mm_q4_1_f32",
-        GgmlDType::Q5_0 => "kernel_mul_mm_q5_0_f32",
-        GgmlDType::Q5_1 => "kernel_mul_mm_q5_1_f32",
-        GgmlDType::Q8_0 => "kernel_mul_mm_q8_0_f32",
-        GgmlDType::Q2K => "kernel_mul_mm_q2_K_f32",
-        GgmlDType::Q3K => "kernel_mul_mm_q3_K_f32",
-        GgmlDType::Q4K => "kernel_mul_mm_q4_K_f32",
-        GgmlDType::Q5K => "kernel_mul_mm_q5_K_f32",
-        GgmlDType::Q6K => "kernel_mul_mm_q6_K_f32",
-        GgmlDType::F16 => "kernel_mul_mm_f16_f32",
-        GgmlDType::BF16 => "kernel_mul_mm_bf16_f32",
-        GgmlDType::F32 => "kernel_mul_mm_f32_f32",
+    let (name32, name64) = match dtype {
+        GgmlDType::Q4_0 => ("kernel_mul_mm_q4_0_f32", "kernel_mul_mm_q4_0_f32_n64"),
+        GgmlDType::Q4_1 => ("kernel_mul_mm_q4_1_f32", "kernel_mul_mm_q4_1_f32_n64"),
+        GgmlDType::Q5_0 => ("kernel_mul_mm_q5_0_f32", "kernel_mul_mm_q5_0_f32_n64"),
+        GgmlDType::Q5_1 => ("kernel_mul_mm_q5_1_f32", "kernel_mul_mm_q5_1_f32_n64"),
+        GgmlDType::Q8_0 => ("kernel_mul_mm_q8_0_f32", "kernel_mul_mm_q8_0_f32_n64"),
+        GgmlDType::Q2K => ("kernel_mul_mm_q2_K_f32", "kernel_mul_mm_q2_K_f32_n64"),
+        GgmlDType::Q3K => ("kernel_mul_mm_q3_K_f32", "kernel_mul_mm_q3_K_f32_n64"),
+        GgmlDType::Q4K => ("kernel_mul_mm_q4_K_f32", "kernel_mul_mm_q4_K_f32_n64"),
+        GgmlDType::Q5K => ("kernel_mul_mm_q5_K_f32", "kernel_mul_mm_q5_K_f32_n64"),
+        GgmlDType::Q6K => ("kernel_mul_mm_q6_K_f32", "kernel_mul_mm_q6_K_f32_n64"),
+        GgmlDType::F16 => ("kernel_mul_mm_f16_f32", "kernel_mul_mm_f16_f32_n64"),
+        GgmlDType::BF16 => ("kernel_mul_mm_bf16_f32", "kernel_mul_mm_bf16_f32_n64"),
+        GgmlDType::F32 => ("kernel_mul_mm_f32_f32", "kernel_mul_mm_f32_f32_n64"),
         GgmlDType::Q8_1 => Err(MetalKernelError::UnsupportedDTypeForOp("Q8_1", "qmatmul"))?,
         GgmlDType::Q8K => Err(MetalKernelError::UnsupportedDTypeForOp("Q8K", "qmatmul"))?,
+    };
+    let name = match tile {
+        QuantizedMmTile::Tokens32 => name32,
+        QuantizedMmTile::Tokens64 => name64,
     };
 
     let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
@@ -276,7 +364,7 @@ pub fn call_quantized_matmul_mm_t(
         )
     );
 
-    encoder.set_threadgroup_memory_length(0, 8192);
+    encoder.set_threadgroup_memory_length(0, tile.threadgroup_memory());
 
     encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
     Ok(())
