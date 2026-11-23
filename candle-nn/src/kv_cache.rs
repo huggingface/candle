@@ -2,6 +2,47 @@
 //!
 use candle::{DType, Device, Result, Tensor};
 
+// Check deterministic slice-write errors before any cache state is changed.
+// This does not provide rollback for allocation or backend execution failures.
+fn validate_append(
+    data: Option<&Tensor>,
+    src: &Tensor,
+    dim: usize,
+    require_contiguous: bool,
+) -> Result<()> {
+    src.dim(dim)?;
+    if require_contiguous && !src.is_contiguous() {
+        candle::bail!("cache append requires a contiguous source")
+    }
+    if let Some(data) = data {
+        if data.rank() != src.rank()
+            || data
+                .dims()
+                .iter()
+                .zip(src.dims())
+                .enumerate()
+                .any(|(i, (a, b))| i != dim && a != b)
+        {
+            candle::bail!(
+                "cache append shape mismatch: {:?} vs {:?}",
+                data.shape(),
+                src.shape()
+            )
+        }
+        if data.dtype() != src.dtype() {
+            candle::bail!(
+                "cache append dtype mismatch: {:?} vs {:?}",
+                data.dtype(),
+                src.dtype()
+            )
+        }
+        if data.device().location() != src.device().location() {
+            candle::bail!("cache append device mismatch")
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct Cache {
     // all_data is an option on a Tensor, this makes it possible to only create the actual tensor
@@ -55,7 +96,12 @@ impl Cache {
         self.all_data = None;
     }
 
+    fn validate_append(&self, src: &Tensor) -> Result<()> {
+        validate_append(self.all_data.as_ref(), src, self.dim, true)
+    }
+
     pub fn append(&mut self, src: &Tensor) -> Result<()> {
+        self.validate_append(src)?;
         let seq_len = src.dim(self.dim)?;
         // This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
         // self.all_data.get_or_insert_with.
@@ -117,6 +163,8 @@ impl KvCache {
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        self.k.validate_append(k)?;
+        self.v.validate_append(v)?;
         self.k.append(k)?;
         self.v.append(v)?;
         let out_k = self.k.current_data()?;
@@ -214,7 +262,13 @@ impl RotatingCache {
         self.all_data = None;
     }
 
+    fn validate_append(&self, src: &Tensor) -> Result<()> {
+        // append makes non-contiguous sources contiguous before slice_set.
+        validate_append(self.all_data.as_ref(), src, self.dim, false)
+    }
+
     pub fn append(&mut self, src: &Tensor) -> Result<Tensor> {
+        self.validate_append(src)?;
         let seq_len = src.dim(self.dim)?;
         // This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
         // self.all_data.get_or_insert_with.
@@ -226,13 +280,14 @@ impl RotatingCache {
         };
         let ad = self.all_data.as_mut().unwrap();
 
-        self.current_seq_len += seq_len;
+        let current_seq_len = self.current_seq_len + seq_len;
         if seq_len >= self.max_seq_len {
             let to_copy = src
                 .narrow(self.dim, seq_len - self.max_seq_len, self.max_seq_len)?
                 .contiguous()?;
             ad.slice_set(&to_copy, self.dim, 0)?;
             self.offset = 0;
+            self.current_seq_len = current_seq_len;
             // Here we return `src` rather than `ad` so that all the past can be used.
             Ok(src.clone())
         } else {
@@ -252,6 +307,7 @@ impl RotatingCache {
                 ad.slice_set(&src2, self.dim, 0)?;
                 self.offset = seq_len - rem_len;
             }
+            self.current_seq_len = current_seq_len;
             if self.current_seq_len >= self.max_seq_len {
                 Ok(ad.clone())
             } else {
@@ -370,6 +426,8 @@ impl RotatingKvCache {
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        self.k.validate_append(k)?;
+        self.v.validate_append(v)?;
         let out_k = self.k.append(k)?;
         let out_v = self.v.append(v)?;
         Ok((out_k, out_v))
@@ -727,15 +785,16 @@ impl ConcatKvCache {
         let k = k.contiguous()?.detach();
         let v = v.contiguous()?.detach();
 
-        self.k = Some(match &self.k {
+        let next_k = match &self.k {
             None => k,
             Some(k_cache) => Tensor::cat(&[k_cache, &k], self.dim)?.detach(),
-        });
-
-        self.v = Some(match &self.v {
+        };
+        let next_v = match &self.v {
             None => v,
             Some(v_cache) => Tensor::cat(&[v_cache, &v], self.dim)?.detach(),
-        });
+        };
+        self.k = Some(next_k);
+        self.v = Some(next_v);
 
         Ok((
             self.k.as_ref().unwrap().clone(),
