@@ -91,6 +91,21 @@ impl TensorInfo {
         tensor_data_offset: u64,
         device: &Device,
     ) -> Result<QTensor> {
+        let mut scratch = Vec::new();
+        self.read_into(reader, tensor_data_offset, device, &mut scratch)
+    }
+
+    /// Read with a reusable scratch buffer instead of a per-tensor heap allocation.
+    ///
+    /// The scratch buffer is resized only when necessary to accommodate the tensor size,
+    /// reducing heap fragmentation and peak memory when reading multiple tensors in sequence.
+    pub fn read_into<R: std::io::Seek + std::io::Read>(
+        &self,
+        reader: &mut R,
+        tensor_data_offset: u64,
+        device: &Device,
+        scratch: &mut Vec<u8>,
+    ) -> Result<QTensor> {
         let tensor_elems = self.shape.elem_count();
         let block_size = self.ggml_dtype.block_size();
         if !tensor_elems.is_multiple_of(block_size) {
@@ -107,12 +122,15 @@ impl TensorInfo {
                 "tensor needs {size_in_bytes} bytes at offset {tensor_start}, only {remaining} remaining in file"
             )
         }
-        let mut raw_data = vec![0u8; size_in_bytes];
+        if scratch.len() < size_in_bytes {
+            scratch.resize(size_in_bytes, 0);
+        }
+        let raw_data = &mut scratch[..size_in_bytes];
         reader.seek(std::io::SeekFrom::Start(tensor_start))?;
-        reader.read_exact(&mut raw_data)?;
+        reader.read_exact(raw_data)?;
         super::ggml_file::qtensor_from_ggml(
             self.ggml_dtype,
-            &raw_data,
+            raw_data,
             self.shape.dims().to_vec(),
             device,
         )
@@ -577,6 +595,23 @@ impl Content {
             None => crate::bail!("cannot find tensor info for {name}"),
         };
         tensor_info.read(reader, self.tensor_data_offset, device)
+    }
+
+    /// Read a tensor with a reusable scratch buffer.
+    ///
+    /// See [`TensorInfo::read_into`] for details.
+    pub fn tensor_into<R: std::io::Seek + std::io::Read>(
+        &self,
+        reader: &mut R,
+        name: &str,
+        device: &Device,
+        scratch: &mut Vec<u8>,
+    ) -> Result<QTensor> {
+        let tensor_info = match self.tensor_infos.get(name) {
+            Some(tensor_info) => tensor_info,
+            None => crate::bail!("cannot find tensor info for {name}"),
+        };
+        tensor_info.read_into(reader, self.tensor_data_offset, device, scratch)
     }
 }
 
