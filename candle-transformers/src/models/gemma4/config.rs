@@ -43,6 +43,9 @@ fn default_sliding_window_pattern() -> usize {
 fn default_global_head_dim() -> usize {
     512
 }
+fn default_attention_k_eq_v() -> bool {
+    false
+}
 fn default_use_flash_attn() -> bool {
     false
 }
@@ -104,11 +107,21 @@ pub struct Gemma4TextConfig {
     pub layer_types: Vec<String>,
     #[serde(default = "default_global_head_dim")]
     pub global_head_dim: usize,
+    #[serde(default = "default_attention_k_eq_v")]
+    pub attention_k_eq_v: bool,
     pub num_global_key_value_heads: Option<usize>,
     pub rope_parameters: Option<Gemma4RopeParameters>,
     pub use_bidirectional_attention: Option<String>,
     #[serde(default = "default_use_flash_attn")]
     pub use_flash_attn: bool,
+
+    pub vocab_size_per_layer_input: usize,
+    pub hidden_size_per_layer_input: usize,
+
+    #[serde(default)]
+    pub num_kv_shared_layers: usize,
+    #[serde(default)]
+    pub use_double_wide_mlp: bool,
 }
 
 impl Gemma4TextConfig {
