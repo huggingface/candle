@@ -290,12 +290,16 @@ impl XSoftmax {
             .broadcast_lt(&Tensor::new(&[1.0_f32], device)?)?
             .to_dtype(DType::U8)?;
 
-        let min_value_tensor = Tensor::new(&[f32::MIN], device)?.broadcast_as(input.shape())?;
+        let min_value_tensor = Tensor::new(&[f32::MIN], device)?
+            .to_dtype(input.dtype())?
+            .broadcast_as(input.shape())?;
         let mut output = rmask.where_cond(&min_value_tensor, input)?;
 
         output = candle_nn::ops::softmax(&output, dim)?;
 
-        let t_zeroes = Tensor::new(&[0f32], device)?.broadcast_as(input.shape())?;
+        let t_zeroes = Tensor::new(&[0f32], device)?
+            .to_dtype(input.dtype())?
+            .broadcast_as(input.shape())?;
         output = rmask.where_cond(&t_zeroes, &output)?;
 
         Ok(output)
@@ -608,7 +612,7 @@ impl DebertaV2DisentangledSelfAttention {
             }
         }
 
-        let mut score = Tensor::new(&[0 as f32], &self.device)?;
+        let mut score = Tensor::new(&[0f32], &self.device)?.to_dtype(query_layer.dtype())?;
 
         if self.config.pos_att_type.iter().any(|s| s == "c2p") {
             let pos_key_layer = pos_key_layer.context("c2p without pos_key_layer")?;
