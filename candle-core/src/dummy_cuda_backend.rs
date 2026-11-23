@@ -122,6 +122,16 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    fn conv3d(
+        &self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &crate::conv::ParamsConv3D,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn conv_transpose2d(
         &self,
         _l: &Layout,
