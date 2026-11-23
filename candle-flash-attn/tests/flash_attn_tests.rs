@@ -405,3 +405,48 @@ fn flash_attn_varlen() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn flash_attn_short_bf16_varlen_boundaries() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    // Exercise both sides of the short-sequence and batch-size dispatch guards.
+    for batch in [127, 128] {
+        for max_len in [32, 33] {
+            let lengths: Vec<usize> = (0..batch).map(|i| [1, 7, 16, max_len][i % 4]).collect();
+            let mut offsets = vec![0u32];
+            for &len in &lengths {
+                offsets.push(offsets.last().unwrap() + len as u32);
+            }
+            let total = *offsets.last().unwrap() as usize;
+            let q = Tensor::randn(0f32, 0.2f32, (total, 2, 64), &device)?.to_dtype(DType::BF16)?;
+            let k = Tensor::randn(0f32, 0.2f32, (total, 2, 64), &device)?.to_dtype(DType::BF16)?;
+            let v = Tensor::randn(0f32, 0.2f32, (total, 2, 64), &device)?.to_dtype(DType::BF16)?;
+            let cu = Tensor::from_vec(offsets.clone(), batch + 1, &device)?;
+            let actual = candle_flash_attn::flash_attn_varlen(
+                &q, &k, &v, &cu, &cu, max_len, max_len, 0.125, false,
+            )?;
+            for (i, &len) in lengths.iter().enumerate() {
+                let start = offsets[i] as usize;
+                let expected = fa_acausal(
+                    &q.narrow(0, start, len)?.transpose(0, 1)?,
+                    &k.narrow(0, start, len)?.transpose(0, 1)?,
+                    &v.narrow(0, start, len)?.transpose(0, 1)?,
+                    0.125,
+                )?
+                .transpose(0, 1)?;
+                let error = actual
+                    .narrow(0, start, len)?
+                    .to_dtype(DType::F32)?
+                    .sub(&expected.to_dtype(DType::F32)?)?
+                    .abs()?
+                    .max_all()?
+                    .to_scalar::<f32>()?;
+                assert!(
+                    error < 0.01,
+                    "batch={batch}, max_len={max_len}, sequence={i}: {error}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
