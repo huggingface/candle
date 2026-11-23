@@ -1770,3 +1770,26 @@ fn bench_qmatmul_prefill_cpu() -> Result<()> {
     }
     Ok(())
 }
+
+/// `QMetalStorage::from_buffer` wraps caller-provided quantized bytes: dequantizing the wrapped
+/// tensor gives the same values as the tensor quantized the usual way.
+#[cfg(feature = "metal")]
+#[test]
+fn quantized_metal_from_buffer_matches_quantize() -> Result<()> {
+    use candle_core::quantized::{metal::QMetalStorage, QStorage, QTensor};
+    let device = Device::new_metal(0)?;
+    let Device::Metal(metal) = &device else {
+        unreachable!()
+    };
+    let src = Tensor::arange(0f32, 1024f32, &Device::Cpu)?.reshape((4, 256))?;
+    let reference = QTensor::quantize(&src, GgmlDType::Q4K)?;
+    let bytes = reference.data()?;
+    let buffer = metal.new_buffer_with_data(bytes.as_ref())?;
+    let storage = QMetalStorage::from_buffer(buffer, metal.clone(), GgmlDType::Q4K);
+    let wrapped = QTensor::new(QStorage::Metal(storage), (4, 256))?;
+    let a = reference.dequantize(&Device::Cpu)?;
+    let b = wrapped.dequantize(&device)?.to_device(&Device::Cpu)?;
+    let diff = (a - b)?.abs()?.flatten_all()?.max(0)?.to_scalar::<f32>()?;
+    assert_eq!(diff, 0.0);
+    Ok(())
+}
