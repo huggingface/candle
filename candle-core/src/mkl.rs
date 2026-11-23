@@ -16,6 +16,8 @@ mod ffi {
         pub fn vdCos(n: c_int, a: *const c_double, y: *mut c_double);
         pub fn vsSqrt(n: c_int, a: *const c_float, y: *mut c_float);
         pub fn vdSqrt(n: c_int, a: *const c_double, y: *mut c_double);
+        pub fn vsErf(n: c_int, a: *const c_float, y: *mut c_float);
+        pub fn vdErf(n: c_int, a: *const c_double, y: *mut c_double);
 
         pub fn vsAdd(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
         pub fn vdAdd(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
@@ -320,6 +322,26 @@ pub fn vd_tanh(a: &[f64], y: &mut [f64]) {
     unsafe { ffi::vdTanh(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
 }
 
+#[inline]
+pub fn vs_erf(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vsErf(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vd_erf(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vdErf(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
 // The vector functions from mkl can be performed in place by using the same array for input and
 // output.
 // https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2023-2/vector-mathematical-functions.html
@@ -344,6 +366,16 @@ pub fn vd_exp_inplace(y: &mut [f64]) {
 }
 
 #[inline]
+pub fn vs_erf_inplace(y: &mut [f32]) {
+    unsafe { ffi::vsErf(y.len() as i32, y.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vd_erf_inplace(y: &mut [f64]) {
+    unsafe { ffi::vdErf(y.len() as i32, y.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
 pub fn vs_gelu(vs: &[f32], ys: &mut [f32]) {
     for (&v, y) in vs.iter().zip(ys.iter_mut()) {
         *y = (2.0f32 / std::f32::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)
@@ -362,6 +394,28 @@ pub fn vd_gelu(vs: &[f64], ys: &mut [f64]) {
     vd_tanh_inplace(ys);
     for (&v, y) in vs.iter().zip(ys.iter_mut()) {
         *y = 0.5 * v * (1.0 + *y)
+    }
+}
+
+#[inline]
+pub fn vs_gelu_erf(vs: &[f32], ys: &mut [f32]) {
+    for (&v, y) in vs.iter().zip(ys.iter_mut()) {
+        *y = v * std::f32::consts::FRAC_1_SQRT_2
+    }
+    vs_erf_inplace(ys);
+    for (&v, y) in vs.iter().zip(ys.iter_mut()) {
+        *y = (*y + 1.0) * 0.5 * v
+    }
+}
+
+#[inline]
+pub fn vd_gelu_erf(vs: &[f64], ys: &mut [f64]) {
+    for (&v, y) in vs.iter().zip(ys.iter_mut()) {
+        *y = v * std::f64::consts::FRAC_1_SQRT_2
+    }
+    vd_erf_inplace(ys);
+    for (&v, y) in vs.iter().zip(ys.iter_mut()) {
+        *y = (*y + 1.0) * 0.5 * v
     }
 }
 
