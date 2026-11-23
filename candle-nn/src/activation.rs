@@ -10,6 +10,10 @@ pub enum Activation {
     Gelu,
     #[serde(alias = "gelu_new")]
     NewGelu,
+    /// `x * sigmoid(1.702 * x)`, the activation used by the original CLIP
+    /// models. HF transformers lists it as `quick_gelu` (legacy `quickgelu`).
+    #[serde(alias = "quick_gelu")]
+    QuickGelu,
     Relu,
     Relu2,
     Relu6,
@@ -32,6 +36,7 @@ impl super::Module for Activation {
             Self::Gelu => xs.gelu_erf(),
             // https://github.com/huggingface/transformers/blob/12f043eaeaabfef6f6efea411d98e6f6d3c094b7/src/transformers/activations.py#L49-L78
             Self::NewGelu => xs.gelu(),
+            Self::QuickGelu => xs * crate::ops::sigmoid(&(xs * 1.702f64)?)?,
             Self::Relu => xs.relu(),
             Self::Relu2 => xs.relu()?.sqr(),
             Self::Relu6 => xs.clamp(0f32, 6f32),
@@ -106,4 +111,23 @@ pub fn prelu(num_channels: Option<usize>, vs: crate::VarBuilder) -> Result<PReLU
     // When using a scalar weight, the PyTorch encoding is to use a 1d vector of length 1.
     let ws = vs.get_with_hints((num_channels.unwrap_or(1),), "weight", init_ws)?;
     Ok(PReLU::new(ws, num_channels.is_none()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Module;
+    use candle::{Device, Tensor};
+
+    #[test]
+    fn quick_gelu_matches_manual_formula() {
+        let xs = Tensor::new(&[2.0f32, -0.5, 0.0], &Device::Cpu).unwrap();
+        let got = Activation::QuickGelu.forward(&xs).unwrap();
+        let raw = xs.to_vec1::<f32>().unwrap();
+        let want: Vec<f32> = raw
+            .iter()
+            .map(|&x| x * (1.0 / (1.0 + (-1.702 * x).exp())))
+            .collect();
+        assert_eq!(got.to_vec1::<f32>().unwrap(), want);
+    }
 }
