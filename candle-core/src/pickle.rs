@@ -205,6 +205,81 @@ impl Object {
         }
     }
 
+    /// Recursively walk this object tree, collecting all tensors with hierarchical
+    /// dot-separated names.  Handles nested Dicts, Lists (indexed by position),
+    /// Build nodes (whose args are typically a Dict of attributes), and Reduce
+    /// nodes that represent `_rebuild_tensor_v2` calls.
+    pub fn extract_tensor_infos(
+        self,
+        prefix: &str,
+        dir_name: &std::path::Path,
+        out: &mut Vec<TensorInfo>,
+    ) {
+        match self {
+            Object::Dict(entries) => {
+                for (key, value) in entries {
+                    if let Object::Unicode(k) = key {
+                        // The synthetic __reduce_class__ key holds the original
+                        // Reduce that was converted to Dict by the SetItem/SetItems
+                        // handler.  Its constructor args may contain objects that
+                        // were modified *after* being memo-put (e.g. DynamicCache
+                        // whose BUILD data is lost in memo copies).  Process it
+                        // with the PARENT prefix so tensors inside get correct
+                        // hierarchical names based on the Reduce args structure.
+                        if k == "__reduce_class__" {
+                            value.extract_tensor_infos(prefix, dir_name, out);
+                            continue;
+                        }
+                        let child_prefix = if prefix.is_empty() {
+                            k.clone()
+                        } else {
+                            format!("{prefix}.{k}")
+                        };
+                        value.extract_tensor_infos(&child_prefix, dir_name, out);
+                    }
+                }
+            }
+            Object::List(items) | Object::Tuple(items) => {
+                for (idx, item) in items.into_iter().enumerate() {
+                    let child_prefix = if prefix.is_empty() {
+                        format!("{idx}")
+                    } else {
+                        format!("{prefix}.{idx}")
+                    };
+                    item.extract_tensor_infos(&child_prefix, dir_name, out);
+                }
+            }
+            Object::Build { callable, args } => {
+                // Build { callable: Reduce{Class, ()}, args: Dict{attrs} }
+                // The args dict typically contains the object's attributes.
+                args.extract_tensor_infos(prefix, dir_name, out);
+                // Also recurse into callable in case it holds tensors.
+                callable.extract_tensor_infos(prefix, dir_name, out);
+            }
+            Object::Reduce { callable, args } => {
+                // Check if this is a tensor-rebuilding Reduce first.
+                let is_tensor = matches!(
+                    callable.as_ref(),
+                    Object::Class { module_name, class_name }
+                        if (module_name == "torch._utils" && class_name == "_rebuild_tensor_v2")
+                            || (module_name == "torch._tensor" && class_name == "_rebuild_from_type_v2")
+                            || (module_name == "torch._utils" && class_name == "_rebuild_parameter")
+                );
+                if is_tensor {
+                    let reduce = Object::Reduce { callable, args };
+                    let name_obj = Object::Unicode(prefix.to_string());
+                    if let Ok(Some(ti)) = reduce.into_tensor_info(name_obj, dir_name) {
+                        out.push(ti);
+                    }
+                } else {
+                    // Not a tensor – recurse into args to find nested tensors.
+                    args.extract_tensor_infos(prefix, dir_name, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn into_tensor_info(
         self,
         name: Self,
@@ -534,7 +609,15 @@ impl Stack {
                 let value = self.pop()?;
                 let key = self.pop()?;
                 let pydict = self.last()?;
-                if let Object::Dict(d) = pydict {
+                // Handle dict-like objects created via REDUCE (e.g., OrderedDict
+                // subclasses like transformers' BaseModelOutputWithPast).
+                if matches!(pydict, Object::Reduce { .. }) {
+                    let prev = std::mem::replace(pydict, Object::Dict(vec![]));
+                    if let Object::Dict(d) = pydict {
+                        d.push((Object::Unicode("__reduce_class__".to_string()), prev));
+                        d.push((key, value));
+                    }
+                } else if let Object::Dict(d) = pydict {
                     d.push((key, value))
                 } else {
                     crate::bail!("expected a dict, got {pydict:?}")
@@ -543,6 +626,14 @@ impl Stack {
             OpCode::SetItems => {
                 let mut objs = self.pop_to_marker()?;
                 let pydict = self.last()?;
+                // Handle dict-like objects created via REDUCE (e.g., OrderedDict
+                // subclasses like transformers' BaseModelOutputWithPast).
+                if matches!(pydict, Object::Reduce { .. }) {
+                    let prev = std::mem::replace(pydict, Object::Dict(vec![]));
+                    if let Object::Dict(d) = pydict {
+                        d.push((Object::Unicode("__reduce_class__".to_string()), prev));
+                    }
+                }
                 if let Object::Dict(d) = pydict {
                     if objs.len() % 2 != 0 {
                         crate::bail!("setitems: not an even number of objects")
@@ -838,4 +929,109 @@ pub fn read_all_with_key<P: AsRef<std::path::Path>>(
 /// * `path` - Path to the pth file.
 pub fn read_all<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<(String, Tensor)>> {
     read_all_with_key(path, None)
+}
+
+/// Read tensor info by recursively walking the pickle object tree.
+/// This handles .pt files that contain nested Python objects (e.g.,
+/// `BaseModelOutputWithPast` with `DynamicCache`) rather than flat state dicts.
+/// Tensor names are built from the hierarchical path (e.g., `past_key_values.key_cache.0`).
+pub fn read_pth_tensor_info_recursive<P: AsRef<std::path::Path>>(
+    file: P,
+    verbose: bool,
+) -> Result<Vec<TensorInfo>> {
+    let file = std::fs::File::open(file)?;
+    let zip_reader = std::io::BufReader::new(file);
+    let mut zip = zip::ZipArchive::new(zip_reader)?;
+    let zip_file_names = zip
+        .file_names()
+        .map(|f| f.to_string())
+        .collect::<Vec<String>>();
+
+    let mut tensor_infos = vec![];
+    for file_name in zip_file_names.iter() {
+        if !file_name.ends_with("data.pkl") {
+            continue;
+        }
+        let dir_name =
+            std::path::PathBuf::from(file_name.strip_suffix(".pkl").context("no .pkl")?);
+        let reader = zip.by_name(file_name)?;
+        let mut reader = std::io::BufReader::new(reader);
+        let mut stack = Stack::empty();
+        stack.read_loop(&mut reader)?;
+        let obj = stack.finalize()?;
+        if VERBOSE || verbose {
+            println!("{obj:#?}");
+        }
+
+        obj.extract_tensor_infos("", &dir_name, &mut tensor_infos);
+    }
+    Ok(tensor_infos)
+}
+
+/// Read all tensors from a .pt file by recursively walking nested Python objects.
+/// Unlike `read_all`, this handles files containing complex objects such as
+/// `BaseModelOutputWithPast` or `DynamicCache` from the transformers library.
+pub fn read_all_recursive<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<(String, Tensor)>> {
+    let tensor_infos = read_pth_tensor_info_recursive(path.as_ref(), false)?;
+    let info_map: HashMap<String, TensorInfo> = tensor_infos
+        .into_iter()
+        .map(|ti| (ti.name.clone(), ti))
+        .collect();
+    let mut tensors = Vec::with_capacity(info_map.len());
+    for (name, ti) in &info_map {
+        use std::io::Read;
+        let zip_reader = std::io::BufReader::new(std::fs::File::open(path.as_ref())?);
+        let mut zip = zip::ZipArchive::new(zip_reader)?;
+        let mut reader = zip.by_name(&ti.path)?;
+        let rank = ti.layout.shape().rank();
+        let start_offset = ti.layout.start_offset();
+        if start_offset > 0 {
+            std::io::copy(
+                &mut reader.by_ref().take(start_offset as u64),
+                &mut std::io::sink(),
+            )?;
+        }
+        let tensor = if ti.layout.is_contiguous() {
+            Tensor::from_reader(ti.layout.shape().clone(), ti.dtype, &mut reader)?
+        } else if rank > 1 && ti.layout.is_fortran_contiguous() {
+            let tensor = Tensor::from_reader(ti.layout.shape().clone(), ti.dtype, &mut reader)?;
+            let shape_reversed: Vec<_> = ti.layout.dims().iter().rev().cloned().collect();
+            let tensor = tensor.reshape(shape_reversed)?;
+            let dim_indices_reversed: Vec<_> = (0..rank).rev().collect();
+            tensor.permute(dim_indices_reversed)?
+        } else if rank > 1 {
+            // Non-contiguous tensor (e.g. transposed KV cache).  Determine
+            // the storage order from strides, read as contiguous in that
+            // order, then permute back to the target shape.
+            let dims = ti.layout.dims();
+            let strides = ti.layout.stride();
+            // Sort dimension indices by stride descending → storage order.
+            let mut perm: Vec<usize> = (0..rank).collect();
+            perm.sort_by(|&a, &b| strides[b].cmp(&strides[a]));
+            // Storage-contiguous shape (dims reordered by stride).
+            let storage_shape: Vec<usize> = perm.iter().map(|&d| dims[d]).collect();
+            let storage_numel: usize = storage_shape.iter().product();
+            // Read raw storage (may be larger than numel due to padding).
+            let storage_size = ti.storage_size * ti.dtype.size_in_bytes();
+            let read_numel = storage_numel.min(ti.storage_size);
+            let storage_shape_for_read: crate::Shape = storage_shape.clone().into();
+            let _ = storage_size; // just for clarity
+            let tensor = Tensor::from_reader(
+                crate::Shape::from(vec![read_numel]),
+                ti.dtype,
+                &mut reader,
+            )?;
+            let tensor = tensor.reshape(storage_shape_for_read)?;
+            // Compute inverse permutation: inv_perm[perm[i]] = i
+            let mut inv_perm = vec![0usize; rank];
+            for (i, &p) in perm.iter().enumerate() {
+                inv_perm[p] = i;
+            }
+            tensor.permute(inv_perm)?
+        } else {
+            Tensor::from_reader(ti.layout.shape().clone(), ti.dtype, &mut reader)?
+        };
+        tensors.push((name.clone(), tensor));
+    }
+    Ok(tensors)
 }
