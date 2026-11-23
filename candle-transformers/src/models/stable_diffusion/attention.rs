@@ -166,7 +166,9 @@ impl CrossAttention {
             let xs = nn::ops::softmax(&xs, D::Minus1)?.matmul(&value.i(start_idx..end_idx)?)?;
             hidden_states.push(xs)
         }
-        let hidden_states = Tensor::stack(&hidden_states, 0)?.to_dtype(in_dtype)?;
+        // Each slice is (slice_size, seq_len, head_dim): concatenate along the batch*heads axis, as the
+        // non-sliced path does. `stack` would add a new leading axis and yield a rank-4 tensor.
+        let hidden_states = Tensor::cat(&hidden_states, 0)?.to_dtype(in_dtype)?;
         self.reshape_batch_dim_to_heads(&hidden_states)
     }
 
