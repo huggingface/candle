@@ -13,6 +13,9 @@ torch.save(o, "test.pt")
 # Write a trivial tensor to a pt file with a key
 torch.save({"model_state_dict": o}, "test_with_key.pt")
 
+# Put the same state dictionary at a nonzero tuple index.
+torch.save((None, o), "test_with_tuple.pt")
+
 ############################################################################################################
 # Create a tensor with fortran contiguous memory layout
 import numpy as np
