@@ -26,6 +26,14 @@ impl Qwen3VLModel {
         Ok(Self { text, vision })
     }
 
+    /// Reset every layer's KV cache so the model can start a new sequence.
+    ///
+    /// Without this a model instance is single-use: a second generation decodes
+    /// against the previous conversation's keys and values.
+    pub fn clear_kv_cache(&self) {
+        self.text.clear_kv_cache();
+    }
+
     fn prepare_decoder_attention_mask(
         &self,
         b_size: usize,
