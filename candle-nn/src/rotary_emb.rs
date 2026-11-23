@@ -16,6 +16,20 @@ impl candle::CustomOp3 for RotaryEmbI {
         "rotary-emb-int"
     }
 
+    fn bwd(
+        &self,
+        _xs: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+        _res: &Tensor,
+        grad_res: &Tensor,
+    ) -> Result<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
+        // The rotation is linear in xs, so the gradient is the same rotation
+        // applied with the angle negated: cos stays, sin flips sign.
+        let grad_xs = rope_i(&grad_res.contiguous()?, cos, &sin.neg()?)?;
+        Ok((Some(grad_xs), None, None))
+    }
+
     fn cpu_fwd(
         &self,
         s1: &CpuStorage,
@@ -284,7 +298,7 @@ pub fn rope_i(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     if !sin.is_contiguous() {
         candle::bail!("sin has to be contiguous in rope")
     }
-    xs.apply_op3_no_bwd(cos, sin, &RotaryEmbI)
+    xs.apply_op3(cos, sin, RotaryEmbI)
 }
 
 pub fn rope_i_slow(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
@@ -314,6 +328,20 @@ struct RotaryEmb;
 impl candle::CustomOp3 for RotaryEmb {
     fn name(&self) -> &'static str {
         "rotary-emb"
+    }
+
+    fn bwd(
+        &self,
+        _xs: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+        _res: &Tensor,
+        grad_res: &Tensor,
+    ) -> Result<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
+        // The rotation is linear in xs, so the gradient is the same rotation
+        // applied with the angle negated: cos stays, sin flips sign.
+        let grad_xs = rope(&grad_res.contiguous()?, cos, &sin.neg()?)?;
+        Ok((Some(grad_xs), None, None))
     }
 
     fn cpu_fwd(
@@ -577,7 +605,7 @@ pub fn rope(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     if !sin.is_contiguous() {
         candle::bail!("sin has to be contiguous in rope")
     }
-    xs.apply_op3_no_bwd(cos, sin, &RotaryEmb)
+    xs.apply_op3(cos, sin, RotaryEmb)
 }
 
 fn rotate_half(xs: &Tensor) -> Result<Tensor> {
@@ -605,6 +633,20 @@ struct RotaryEmbThd;
 impl candle::CustomOp3 for RotaryEmbThd {
     fn name(&self) -> &'static str {
         "rotary-emb"
+    }
+
+    fn bwd(
+        &self,
+        _xs: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+        _res: &Tensor,
+        grad_res: &Tensor,
+    ) -> Result<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
+        // The rotation is linear in xs, so the gradient is the same rotation
+        // applied with the angle negated: cos stays, sin flips sign.
+        let grad_xs = rope_thd(&grad_res.contiguous()?, cos, &sin.neg()?)?;
+        Ok((Some(grad_xs), None, None))
     }
 
     fn cpu_fwd(
@@ -852,5 +894,5 @@ pub fn rope_thd(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     if !sin.is_contiguous() {
         candle::bail!("sin has to be contiguous in rope")
     }
-    xs.apply_op3_no_bwd(cos, sin, &RotaryEmbThd)
+    xs.apply_op3(cos, sin, RotaryEmbThd)
 }
