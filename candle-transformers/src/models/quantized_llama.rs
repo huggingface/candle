@@ -153,7 +153,8 @@ struct LayerWeights {
     ffn_norm: RmsNorm,
     n_head: usize,
     n_kv_head: usize,
-    head_dim: usize,
+    k_dim: usize,
+    v_dim: usize,
     /// RoPE convention: true = NEOX (non-interleaved, pairs i with i+d/2),
     /// false = NORM (interleaved, pairs 2i with 2i+1).
     /// Must match the model architecture — using the wrong convention corrupts
@@ -195,19 +196,19 @@ impl LayerWeights {
         index_pos: usize,
     ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
-        let (b_sz, seq_len, n_embd) = x.dims3()?;
+        let (b_sz, seq_len, _) = x.dims3()?;
         let q = self.attention_wq.forward(x)?;
         let k = self.attention_wk.forward(x)?;
         let v = self.attention_wv.forward(x)?;
 
         let q = q
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+            .reshape((b_sz, seq_len, self.n_head, self.k_dim))?
             .transpose(1, 2)?;
         let k = k
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+            .reshape((b_sz, seq_len, self.n_kv_head, self.k_dim))?
             .transpose(1, 2)?;
         let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+            .reshape((b_sz, seq_len, self.n_kv_head, self.v_dim))?
             .transpose(1, 2)?
             // This call to contiguous ensures that the fast kernel can be called below. It's
             // actually a no-op except when processing the initial prompt so has no significant
@@ -233,21 +234,13 @@ impl LayerWeights {
 
         let y = if q.device().is_metal() && seq_len == 1 {
             // SDPA will do MQA for us
-            candle_nn::ops::sdpa(
-                &q,
-                &k,
-                &v,
-                None,
-                false,
-                1. / (self.head_dim as f32).sqrt(),
-                1.,
-            )?
+            candle_nn::ops::sdpa(&q, &k, &v, None, false, 1. / (self.v_dim as f32).sqrt(), 1.)?
         } else {
             // Support for MQA, useful for 70B models and mistral.
             let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
             let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+            let att = (q.matmul(&k.t()?)? / (self.k_dim as f64).sqrt())?;
             let att = match mask {
                 None => att,
                 Some(mask) => {
@@ -260,7 +253,9 @@ impl LayerWeights {
             att.matmul(&v.contiguous()?)?
         };
 
-        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
+        let y = y
+            .transpose(1, 2)?
+            .reshape(&[b_sz, seq_len, self.n_head * self.k_dim])?;
         let y = self.attention_wo.forward(&y)?;
         Ok(y)
     }
@@ -340,7 +335,8 @@ impl ModelWeights {
                 ffn_norm: RmsNorm::from_qtensor(ffn_norm, 1e-5)?,
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
-                head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
+                k_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
+                v_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
                 rope_is_neox: false, // GGML format = standard Llama = interleaved
                 cos: cos.clone(),
                 sin: sin.clone(),
@@ -381,10 +377,18 @@ impl ModelWeights {
         let n_expert_used = md_get("llama.expert_used_count")
             .and_then(|v| v.to_u32())
             .unwrap_or(0) as usize;
-        let head_count = md_get("llama.attention.head_count")?.to_u32()? as usize;
-        let head_count_kv = md_get("llama.attention.head_count_kv")?.to_u32()? as usize;
         let block_count = md_get("llama.block_count")?.to_u32()? as usize;
         let embedding_length = md_get("llama.embedding_length")?.to_u32()? as usize;
+        let head_count = md_get("llama.attention.head_count")?.to_u32()? as usize;
+        let head_count_kv = md_get("llama.attention.head_count_kv")?.to_u32()? as usize;
+        let key_length = md_get("llama.attention.key_length")
+            .and_then(|m| m.to_u32())
+            .and_then(|m| Ok(m as usize))
+            .unwrap_or(embedding_length / head_count);
+        let value_length = md_get("llama.attention.value_length")
+            .and_then(|m| m.to_u32())
+            .and_then(|m| Ok(m as usize))
+            .unwrap_or(embedding_length / head_count);
         let rope_dim = md_get("llama.rope.dimension_count")?.to_u32()? as usize;
         // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
         let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
@@ -499,7 +503,8 @@ impl ModelWeights {
                 ffn_norm: RmsNorm::from_qtensor(ffn_norm, rms_norm_eps)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
-                head_dim: embedding_length / head_count,
+                k_dim: key_length,
+                v_dim: value_length,
                 rope_is_neox,
                 cos: cos.clone(),
                 sin: sin.clone(),

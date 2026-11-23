@@ -55,6 +55,8 @@ enum Which {
     SmolLM2_135M,
     #[value(name = "SmoLM2-135M-Instruct")]
     SmolLM2_135MInstruct,
+    #[value(name = "mn-violet-lotus")]
+    MNVioletLotus,
 }
 
 #[derive(Parser, Debug)]
@@ -166,6 +168,7 @@ fn main() -> Result<()> {
                 Which::SmolLM2_360MInstruct => "HuggingFaceTB/SmolLM2-360M-Instruct",
                 Which::SmolLM2_1B => "HuggingFaceTB/SmolLM2-1.7B",
                 Which::SmolLM2_1BInstruct => "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+                Which::MNVioletLotus => "FallenMerick/MN-Violet-Lotus-12B",
             };
             str.to_string()
         });
@@ -187,7 +190,8 @@ fn main() -> Result<()> {
             | Which::V31Instruct
             | Which::V32_3b
             | Which::V32_3bInstruct
-            | Which::Solar10_7B => {
+            | Which::Solar10_7B
+            | Which::MNVioletLotus => {
                 candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?
             }
             Which::SmolLM2_360M
