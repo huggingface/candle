@@ -58,18 +58,18 @@ pub enum PositionEmbeddingType {
 pub struct Config {
     pub vocab_size: usize,
     pub dim: usize,
-    n_layers: usize,
-    n_heads: usize,
-    hidden_dim: usize,
-    activation: HiddenAct,
-    max_position_embeddings: usize,
-    initializer_range: f64,
+    pub n_layers: usize,
+    pub n_heads: usize,
+    pub hidden_dim: usize,
+    pub activation: HiddenAct,
+    pub max_position_embeddings: usize,
+    pub initializer_range: f64,
     pub pad_token_id: usize,
     #[serde(default)]
-    position_embedding_type: PositionEmbeddingType,
+    pub position_embedding_type: PositionEmbeddingType,
     #[serde(default)]
-    use_cache: bool,
-    model_type: Option<String>,
+    pub use_cache: bool,
+    pub model_type: Option<String>,
 }
 
 impl Default for Config {
@@ -77,7 +77,7 @@ impl Default for Config {
         Self {
             vocab_size: 30522,
             dim: 768,
-            n_layers: 12,
+            n_layers: 6,
             n_heads: 12,
             hidden_dim: 3072,
             activation: HiddenAct::Gelu,
