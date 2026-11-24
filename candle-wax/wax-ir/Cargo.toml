@@ -16,5 +16,5 @@ thiserror = { workspace = true }
 [dev-dependencies]
 wax-frontend = { path = "../wax-frontend" }
 wax-macro = { path = "../wax-macro" }
-cutile = { package = "cutile-dsl", git = "https://github.com/ivarflakstad/cutile-rs", branch = "dev" }
+cutile = { package = "cutile-dsl", git = "https://github.com/ivarflakstad/cuda-rust", branch = "cutile-refactor-no-toolkit" }
 syn = { version = "2", features = ["full", "parsing", "extra-traits"] }

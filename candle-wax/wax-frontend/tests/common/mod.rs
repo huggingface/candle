@@ -3,7 +3,7 @@
 /// Entry functions are excluded. Walk starts at their regions.
 pub fn all_ops(m: &wax_ir::Module) -> Vec<pliron::context::Ptr<pliron::operation::Operation>> {
     use pliron::graph::walkers::{IRNode, WalkConfig, uninterruptible::immutable::walk_region};
-    use pliron::operation::Operation;
+    
 
     let mut out = Vec::new();
     for f in m.entries() {

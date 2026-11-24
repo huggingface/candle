@@ -53,6 +53,7 @@ fn scalar(s: &cir::ScalarType) -> wax::ScalarType {
         C::F8E5M2 => wax::ScalarType::F8E5M2,
         C::F8E8M0FNU => wax::ScalarType::F8E8M0FNU,
         C::F4E2M1FN => wax::ScalarType::F4E2M1FN,
+        C::F8E5M3FNU => panic!("wax does not mirror cuda_tile 13.4's `F8E5M3FNU` yet"),
     }
 }
 
@@ -80,6 +81,10 @@ fn tensor_view(t: &cir::TensorViewType) -> wax::TensorViewType {
 fn ty(t: &cir::Type) -> wax::Type {
     use cir::Type as C;
     match t {
+        C::WithPointerAttribute(inner, cir::PointerAttribute::None) => ty(inner),
+        C::WithPointerAttribute(_, a) => {
+            panic!("wax has no pointer classification to map `{a:?}` onto yet")
+        }
         C::Scalar(s) => wax::Type::Scalar(scalar(s)),
         C::Pointer(p) => wax::Type::Pointer(pointer(p)),
         C::Tile(t) => wax::Type::Tile(wax::TileType {
@@ -128,6 +133,7 @@ fn padding(p: &cir::PaddingValue) -> wax::PaddingValue {
 fn attr(a: &cir::Attribute) -> wax::Attribute {
     use cir::Attribute as C;
     match a {
+        C::PreviewConstArg(_) => panic!("wax does not implement cuda_tile's `preview$call` yet"),
         C::Integer(i, t) => wax::Attribute::Integer(*i, ty(t)),
         // The only conversion. cutile uses a f64, we use the bit pattern.
         C::Float(f, t) => wax::Attribute::Float(wax::FloatBits::new(*f), ty(t)),

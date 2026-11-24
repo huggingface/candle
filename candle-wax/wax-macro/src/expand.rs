@@ -11,8 +11,8 @@ use cutile_expand::shadow_dispatch::{
 use cutile_expand::validate_dsl_syntax::{
     validate_entry_attribute, validate_entry_point_parameters,
 };
-use cutile_syn_utils::syn_utils::{clear_attributes, get_meta_list, get_meta_list_by_last_segment};
-use cutile_syn_utils::type_aliases::{collect_type_aliases, normalize_item_fn_param_type_aliases};
+use cutile_frontend::syn_utils::{clear_attributes, get_meta_list, get_meta_list_by_last_segment};
+use cutile_frontend::type_aliases::{collect_type_aliases, normalize_item_fn_param_type_aliases};
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{ToTokens, quote};
 use std::collections::{HashMap, HashSet};
