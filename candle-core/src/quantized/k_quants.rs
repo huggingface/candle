@@ -912,9 +912,7 @@ impl GgmlType for BlockQ2K {
                 }
                 block.d = f16::from_f32(max_scale / Q4SCALE);
             } else {
-                for j in 0..QK_K / 16 {
-                    block.scales[j] = 0;
-                }
+                block.scales[..QK_K / 16].fill(0);
                 block.d = f16::from_f32(0.0);
             }
 
