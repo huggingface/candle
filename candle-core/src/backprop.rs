@@ -282,18 +282,19 @@ impl Tensor {
                     } => {
                         // The output height for conv_transpose2d is:
                         // (i_h - 1) * stride - 2 * padding + dilation * (k_h - 1) + out_padding + 1
-                        let grad_h = grad.dim(2)?;
-                        let k_h = kernel.dim(2)?;
-                        let out_size =
-                            (grad_h - 1) * stride + dilation * (k_h - 1) + 1 - 2 * padding;
-                        let out_padding = arg.dim(2)? - out_size;
-                        let grad_arg = grad.conv_transpose2d(
-                            kernel,
-                            *padding,
-                            out_padding,
-                            *stride,
-                            *dilation,
-                        )?;
+                        // conv_transpose2d takes a single out_padding for both spatial dims but
+                        // height and width can need different ones, so use the larger of the two
+                        // and narrow the result back to the input size.
+                        let (_, _, i_h, i_w) = arg.dims4()?;
+                        let (_, _, grad_h, grad_w) = grad.dims4()?;
+                        let (_, _, k_h, k_w) = kernel.dims4()?;
+                        let out_h = (grad_h - 1) * stride + dilation * (k_h - 1) + 1 - 2 * padding;
+                        let out_w = (grad_w - 1) * stride + dilation * (k_w - 1) + 1 - 2 * padding;
+                        let out_padding = usize::max(i_h - out_h, i_w - out_w);
+                        let grad_arg = grad
+                            .conv_transpose2d(kernel, *padding, out_padding, *stride, *dilation)?
+                            .narrow(2, 0, i_h)?
+                            .narrow(3, 0, i_w)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
 
