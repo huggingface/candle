@@ -127,6 +127,51 @@ pub struct TensorViewType {
     pub strides: Vec<i64>,
 }
 
+impl TensorViewType {
+    /// Caller provides strides, kernel provides shape. Here we ensure they agree.
+    ///
+    /// Only verifies static values. A [`DYNAMIC`] extent or stride is a launch-time obligation,
+    /// and a zero stride is a deliberate broadcast, so both are skipped here.
+    pub fn verify_strides(&self) -> Result<(), String> {
+        if self.shape.len() != self.strides.len() {
+            return Err(format!(
+                "tensor_view has {} dimensions but {} strides",
+                self.shape.len(),
+                self.strides.len()
+            ));
+        }
+        let mut axes: Vec<(usize, i64, i64)> = self
+            .shape
+            .iter()
+            .zip(&self.strides)
+            .enumerate()
+            .map(|(axis, (&extent, &stride))| (axis, extent, stride))
+            .filter(|&(_, extent, stride)| {
+                extent > 1 && stride > 0 && extent != DYNAMIC && stride != DYNAMIC
+            })
+            .collect();
+        axes.sort_by_key(|&(_, _, stride)| stride);
+
+        let mut span: i64 = 1;
+        for (axis, extent, stride) in axes {
+            if stride < span {
+                return Err(format!(
+                    "tensor_view<{:?}, strides {:?}> aliases: axis {axis} has stride {stride}, \
+                     but the axes below it span {span} elements",
+                    self.shape, self.strides
+                ));
+            }
+            span = stride.checked_mul(extent).ok_or_else(|| {
+                format!(
+                    "tensor_view<{:?}, strides {:?}> overflows i64 on axis {axis}",
+                    self.shape, self.strides
+                )
+            })?;
+        }
+        Ok(())
+    }
+}
+
 /// A view into a tensor where tiles are laid out in a grid pattern.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PartitionViewType {
@@ -185,6 +230,20 @@ pub enum Type {
     StridedView(StridedViewType),
     Func(FuncType),
     Token,
+}
+
+impl Type {
+    pub fn verify(&self) -> Result<(), String> {
+        match self {
+            Self::TensorView(tv) => tv.verify_strides(),
+            Self::PartitionView(pv) => pv.tensor_view.verify_strides(),
+            Self::GatherScatterView(gv) => gv.tensor_view.verify_strides(),
+            Self::StridedView(sv) => sv.tensor_view.verify_strides(),
+            Self::Scalar(_) | Self::Pointer(_) | Self::Tile(_) | Self::Func(_) | Self::Token => {
+                Ok(())
+            }
+        }
+    }
 }
 
 impl From<ScalarType> for Type {

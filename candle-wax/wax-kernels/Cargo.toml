@@ -11,6 +11,6 @@ license.workspace = true
 [dependencies]
 wax-macro = { path = "../wax-macro" }
 wax-frontend = { path = "../wax-frontend" }
-# Use `cuda-rust/cuda-tile` once refactoring is upstreamed.
+# Use `cuda-rust/cutile-rs` main once features are upstreamed.
 cutile = { package = "cutile-dsl", git = "https://github.com/ivarflakstad/cuda-rust", branch = "cutile-refactor-no-toolkit" }
 syn = { workspace = true }

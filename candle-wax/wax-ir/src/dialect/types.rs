@@ -5,16 +5,18 @@
 //!
 //! When interfacing with the DSL pliron's type system gives us some implicit confidence in correctness, and it let's us easily
 //! parse and print for debugging purposes.
-// TODO: Add improved verification (over verifier = "succ").
 use crate::Type;
+use pliron::common_traits::Verify;
 use pliron::context::Context;
 use pliron::derive::pliron_type;
 use pliron::parsable::{Parsable, ParseResult, StateStream};
 use pliron::printable::{self, Printable};
+use pliron::result::Result;
 use pliron::r#type::{TypeHandle, TypedHandle};
+use pliron::verify_err_noloc;
 
 /// A tile-level type.
-#[pliron_type(name = "wax.ty", generate_get = true, verifier = "succ")]
+#[pliron_type(name = "wax.ty", generate_get = true)]
 #[derive(Hash, PartialEq, Eq, Debug)]
 pub struct TileTy {
     ty: Type,
@@ -23,6 +25,19 @@ pub struct TileTy {
 impl TileTy {
     pub fn ty(&self) -> &Type {
         &self.ty
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct TileTyErr(String);
+
+impl Verify for TileTy {
+    fn verify(&self, _ctx: &Context) -> Result<()> {
+        match self.ty.verify() {
+            Ok(()) => Ok(()),
+            Err(e) => verify_err_noloc!(TileTyErr(e)),
+        }
     }
 }
 
