@@ -830,8 +830,8 @@ mod stats {
                 k = 0;
             } else {
                 k = 4;
-                for i in 1..5 {
-                    if x < self.q[i] {
+                for (i, &q) in self.q.iter().enumerate().skip(1) {
+                    if x < q {
                         k = i;
                         break;
                     }
@@ -841,8 +841,8 @@ mod stats {
                 }
             };
 
-            for i in k..5 {
-                self.n[i] += 1;
+            for n in self.n.iter_mut().skip(k) {
+                *n += 1;
             }
             for i in 0..5 {
                 self.m[i] += self.dm[i];

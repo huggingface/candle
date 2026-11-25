@@ -252,12 +252,12 @@ fn cascaded_group_attn(
 
     let mut dws = Vec::with_capacity(heads);
     let mut qkvs = Vec::with_capacity(heads);
-    for i in 0..heads {
+    for (i, &kernel) in cfg.kernels.iter().enumerate().take(heads) {
         dws.push(depthwise_conv(
             key_dim,
-            cfg.kernels[i],
+            kernel,
             1,
-            cfg.kernels[i] / 2,
+            kernel / 2,
             vb.pp(format!("dws.{i}")),
         )?);
 
