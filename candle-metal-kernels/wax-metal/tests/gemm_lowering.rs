@@ -69,14 +69,14 @@ fn blocked(
 fn gemm_module() -> wax_ir::Module {
     blocked(
         &["f32", "32", "32", "8", "64"],
-        &[("z", &[32, 1]), ("x", &[64, 1]), ("y", &[32, 1])],
+        &[("z", &[4096, 1]), ("x", &[64, 1]), ("y", &[4096, 1])],
     )
 }
 
 fn gemm_module_f16() -> wax_ir::Module {
     blocked(
         &["f16", "32", "32", "8", "256"],
-        &[("z", &[32, 1]), ("x", &[256, 1]), ("y", &[32, 1])],
+        &[("z", &[4096, 1]), ("x", &[256, 1]), ("y", &[4096, 1])],
     )
 }
 
@@ -129,13 +129,18 @@ fn sgmma_shapes_lowers_kernel_as_written() {
         got.kernel.launch.grid,
         (1024usize.div_ceil(32), 8usize.div_ceil(32), 1)
     );
+    assert_eq!(
+        got.kernel.launch.threadgroup,
+        (32, 1, 1),
+        "a fragment kernel dispatches one SIMD group"
+    );
 }
 
 #[test]
 fn gemv_t_lowers_correctly() {
     let gemv_blocked = blocked(
         &["f32", "1", "32", "1", "64"],
-        &[("z", &[32, 1]), ("x", &[64, 1]), ("y", &[32, 1])],
+        &[("z", &[4096, 1]), ("x", &[64, 1]), ("y", &[4096, 1])],
     );
     for (name, m) in [
         ("gemm blocked", gemm_module()),
@@ -185,7 +190,7 @@ fn mid_band_should_lower_to_gemv() {
 fn unrealisable_gemm_shape_falls_back_correctly() {
     let m48 = blocked(
         &["f16", "32", "32", "8", "48"],
-        &[("z", &[32, 1]), ("x", &[48, 1]), ("y", &[32, 1])],
+        &[("z", &[512, 1]), ("x", &[48, 1]), ("y", &[512, 1])],
     );
     let result = lower_gemm(
         &m48,
@@ -223,7 +228,7 @@ fn unrealisable_gemm_shape_falls_back_correctly() {
 fn gemm_module_k4096() -> wax_ir::Module {
     blocked(
         &["f16", "32", "32", "8", "4096"],
-        &[("z", &[32, 1]), ("x", &[4096, 1]), ("y", &[32, 1])],
+        &[("z", &[512, 1]), ("x", &[4096, 1]), ("y", &[512, 1])],
     )
 }
 

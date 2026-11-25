@@ -16,7 +16,7 @@ pub fn specialise(
     use wax_metal::gemm::{GemmSpec, realise};
 
     let spec = GemmSpec {
-        trans_b: false,
+        trans_b: trans_b_of(module),
         m: m as usize,
         n: n as usize,
         k: 0,
@@ -26,6 +26,19 @@ pub fn specialise(
     let r = realise(module, sg, splits, &spec).ok()?;
     r.rewritten.launch.as_ref()?;
     Some((r.module, r.rewritten))
+}
+
+fn trans_b_of(module: &wax_ir::Module) -> bool {
+    use wax_ir::passes::{AnalysisManager, gemm_analysis::GemmAnalysis};
+
+    let Some(&func) = module.entries().first() else {
+        return false;
+    };
+    let mut analyses = AnalysisManager::default();
+    match analyses.get_analysis::<GemmAnalysis>(func, &module.ctx) {
+        Ok(a) => a.pattern.as_ref().map(|p| p.trans_b).unwrap_or(false),
+        Err(_) => false,
+    }
 }
 
 pub fn profile() -> wax_metal::TargetProfile {

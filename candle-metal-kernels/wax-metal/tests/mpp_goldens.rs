@@ -118,6 +118,7 @@ fn air_realisation_matches_goldens() {
                 args: &abi.args,
                 body: res_body,
                 pinned_types: abi.pinned_types.clone(),
+                threads: None,
             }],
             &[],
             &profile,

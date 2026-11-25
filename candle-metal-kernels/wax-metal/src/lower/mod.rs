@@ -49,8 +49,26 @@ impl std::fmt::Debug for ImmVal {
 /// Errors if the module holds more than one entry.
 // TODO: `module.entries()` is pub. The default behaviour of `lower_to_metallib` should be to
 // compile all declared entry functions.
-pub fn lower_to_metallib(module: &mut WaxModule) -> Result<Vec<u8>, LowerError> {
+pub fn lower_to_metallib(module: &mut WaxModule) -> Result<Lowered, LowerError> {
     lower_to_metallib_for(module, &TargetProfile::host())
+}
+
+/// A lowered metallib with compiler settled dispatch information.
+#[derive(Debug, Clone)]
+pub struct Lowered {
+    /// The container, ready for `newLibraryWithData`.
+    pub metallib: Vec<u8>,
+    /// Threads per threadgroup on the x axis, one per kernel entry.
+    /// `None` implies unknown launch geometry. For example a fragment kernel whose thread domain
+    /// is a SIMD group rather than a tile, and gets launch geometry from [`crate::gemm`].
+    pub threads: Vec<Option<usize>>,
+}
+
+impl Lowered {
+    /// Threads for entry `i`.
+    pub fn entry_threads(&self, i: usize) -> Option<usize> {
+        self.threads.get(i).copied().flatten()
+    }
 }
 
 /// Max amount of full optimization loops. Avoids two passes that undo each other spinning.
@@ -72,7 +90,7 @@ fn optimize(ctx: &mut pliron::context::Context, func: wax_ir::OpId) -> Result<()
 pub fn lower_to_metallib_for(
     module: &mut WaxModule,
     profile: &TargetProfile,
-) -> Result<Vec<u8>, LowerError> {
+) -> Result<Lowered, LowerError> {
     if module.entries().len() != 1 {
         return Err(LowerError::MalformedIr(format!(
             "lower_to_metallib: expected exactly one entry function, found {}",
@@ -83,8 +101,37 @@ pub fn lower_to_metallib_for(
     optimize(&mut module.ctx, func)?;
     let args = kernel_args_for_module(module, func)
         .ok_or_else(|| LowerError::MalformedIr("entry function has no entry block".into()))?;
-    crate::wax_to_air::lower_to_metallib_via_conversion(module, &args, profile)
-        .map_err(LowerError::Unimplemented)
+    let (metallib, threads) =
+        crate::wax_to_air::lower_to_metallib_via_conversion(module, &args, profile)
+            .map_err(LowerError::Unimplemented)?;
+    validate_launch_geometry(threads, profile, &kernel_name(module, func))?;
+    Ok(Lowered {
+        metallib,
+        threads: vec![(threads > 0).then_some(threads)],
+    })
+}
+
+/// A name for diagnostics. Falls back to the entry's position when it carries no symbol.
+fn kernel_name(module: &WaxModule, func: wax_ir::OpId) -> String {
+    crate::wax_to_air::kernel_symbol(module, func).unwrap_or_else(|| "entry".to_string())
+}
+
+/// Validates launch geometry.
+///
+/// Currently only checks that supplied threads does not exceed max threads per threadgroup.
+fn validate_launch_geometry(
+    threads: usize,
+    profile: &TargetProfile,
+    name: &str,
+) -> Result<(), LowerError> {
+    let max = profile.max_threads_per_threadgroup();
+    if threads > max {
+        return Err(LowerError::ExceedsTarget(format!(
+            "{name} puts one thread on each of {threads} tile elements, but a threadgroup holds \
+             at most {max}. Partition into tiles of at most {max} elements"
+        )));
+    }
+    Ok(())
 }
 
 /// [`lower_to_metallib_for`] for a module with multiple entry functions.
@@ -93,12 +140,19 @@ pub fn lower_to_metallib_entries(
     module: &mut WaxModule,
     entries: &[EntryUnit],
     profile: &TargetProfile,
-) -> Result<Vec<u8>, LowerError> {
+) -> Result<Lowered, LowerError> {
     for e in entries {
         optimize(&mut module.ctx, e.func)?;
     }
-    crate::wax_to_air::lower_to_metallib_multi(module, entries, profile)
-        .map_err(LowerError::Unimplemented)
+    let (metallib, threads) = crate::wax_to_air::lower_to_metallib_multi(module, entries, profile)
+        .map_err(LowerError::Unimplemented)?;
+    for (unit, threads) in entries.iter().zip(&threads) {
+        validate_launch_geometry(*threads, profile, &unit.kernel_symbol)?;
+    }
+    Ok(Lowered {
+        metallib,
+        threads: threads.into_iter().map(|t| (t > 0).then_some(t)).collect(),
+    })
 }
 
 /// Wax IR scalar of a buffer parameter.

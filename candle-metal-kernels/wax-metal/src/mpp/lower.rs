@@ -30,12 +30,15 @@ pub fn lower_mpp_gemm_air(
         &|_| None,
     )
     .map_err(unsupported)?;
+    // MPP owns the thread domain of the launch geometry.
+    // Left `None` until MPP reports it like the tile path does.
     bm.add_kernel_pinning(
         cfg.entry.as_str(),
         abi.entry_params.clone(),
         &abi.args,
         body,
         abi.pinned_types.clone(),
+        None,
     );
     let bc = bm.finish().map_err(unsupported)?;
     Ok(lowered(cfg, &bc, &[&cfg.entry], None, profile))
@@ -103,8 +106,9 @@ pub fn lower_mpp_gemm_splitk(
         &abi.args,
         body_p,
         abi.pinned_types.clone(),
+        None,
     );
-    bm.add_kernel(reduce_entry, param_r.clone(), &args_r, body_r);
+    bm.add_kernel(reduce_entry, param_r.clone(), &args_r, body_r, None);
     let bc = bm.finish().map_err(unsupported)?;
 
     Ok(lowered(

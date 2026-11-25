@@ -56,14 +56,14 @@ fn gemv_module(g: &[&str]) -> wax_ir::Module {
     from_src(
         "gemm",
         g,
-        &[("z", &[32, 1]), ("x", &[64, 1]), ("y", &[32, 1])],
+        &[("z", &[4096, 1]), ("x", &[64, 1]), ("y", &[4096, 1])],
     )
 }
 fn convert_module(g: &[&str]) -> wax_ir::Module {
     from_src(
         "gemm_convert",
         g,
-        &[("z", &[32, 1]), ("x", &[64, 1]), ("y", &[32, 1])],
+        &[("z", &[4096, 1]), ("x", &[64, 1]), ("y", &[4096, 1])],
     )
 }
 const CONVERT: [(&str, &[&str]); 3] = [
@@ -185,7 +185,9 @@ fn lower_both(m: &mut wax_ir::Module) -> Vec<u8> {
             args: wax_metal::lower::kernel_args_for_module(m, f).expect("args"),
         })
         .collect();
-    wax_metal::lower::lower_to_metallib_entries(m, &units, &profile()).expect("lowers")
+    wax_metal::lower::lower_to_metallib_entries(m, &units, &profile())
+        .expect("lowers")
+        .metallib
 }
 
 #[test]

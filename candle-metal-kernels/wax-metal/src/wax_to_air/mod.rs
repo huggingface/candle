@@ -101,6 +101,9 @@ pub(crate) struct Control {
     pub tp: Option<Value>,
     /// `%_tg`, the threadgroup position.
     pub tg: Option<Value>,
+    /// One thread per element from largest tile conversion decomposed over `tp`.
+    /// An exception is matrix fragments requiring threads >= SIMD_WIDTH, see [`run_conversion`].
+    pub threads: usize,
     /// Loops this conversion built, as (body, latch).
     pub loops: Vec<(Ptr<BasicBlock>, Ptr<BasicBlock>)>,
     /// Back-edge branches to be applied. Finished in `finish_pending_back_edges`.
@@ -490,6 +493,11 @@ pub fn run_conversion(ctx: &mut Context, func: Ptr<Operation>) -> Result<(WaxToA
             .get_analysis::<wax_ir::passes::fragment_set::FragmentValues>(func, ctx)?
             .values
             .clone();
+        // A matrix fragment is an 8x8 tile spread across the 32 lanes of one SIMD group.
+        // Thus a kernel using matrix fragments needs at least a SIMD group worth of threads.
+        if !c.frags.fragments.is_empty() {
+            c.control.threads = c.control.threads.max(crate::gemm::SIMD_WIDTH as usize);
+        }
         c.reduce.divergent = analyses
             .get_analysis::<wax_ir::passes::uniformity::DivergentValues>(func, ctx)?
             .values
@@ -584,7 +592,7 @@ pub fn lower_to_metallib_via_conversion(
     module: &wax_ir::Module,
     args: &[crate::bitcode::metadata::KernelArg],
     profile: &crate::profile::TargetProfile,
-) -> std::result::Result<Vec<u8>, String> {
+) -> std::result::Result<(Vec<u8>, usize), String> {
     use crate::lower::to_bitcode::Callee;
 
     // Clone fresh module since conversion rewrites in-place.
@@ -604,6 +612,7 @@ pub fn lower_to_metallib_via_conversion(
         param_types,
         callees,
         tg_globals,
+        threads,
     } = convert_kernel(&mut m, func)?;
 
     // Debug hook. The converted function in air text, for when a diff is structural.
@@ -633,13 +642,22 @@ pub fn lower_to_metallib_via_conversion(
         &|n| bm.global_idx(n),
     )
     .map_err(|e| format!("bitcode body: {e}"))?;
-    bm.add_kernel(&kernel_name, param_types, args, body);
+    bm.add_kernel(
+        &kernel_name,
+        param_types,
+        args,
+        body,
+        (threads > 0).then_some(threads),
+    );
     let bc = bm.finish().map_err(|e| format!("bitcode: {e}"))?;
 
-    Ok(crate::metallib::wrap(
-        &bc,
-        &[crate::metallib::Function::kernel(&kernel_name)],
-        profile,
+    Ok((
+        crate::metallib::wrap(
+            &bc,
+            &[crate::metallib::Function::kernel(&kernel_name)],
+            profile,
+        ),
+        threads,
     ))
 }
 
@@ -648,6 +666,8 @@ pub(crate) struct ConvertedKernel {
     pub(crate) param_types: Vec<Ty>,
     pub(crate) callees: Vec<(String, Ty, Vec<Ty>)>,
     pub(crate) tg_globals: Vec<(String, Ty, u32)>,
+    /// See [`Control::threads`].
+    pub(crate) threads: usize,
 }
 
 /// Convert one function in place and hand back [`ConvertedKernel`].
@@ -667,6 +687,7 @@ pub(crate) fn convert_kernel(
         param_types,
         callees,
         tg_globals: c.reduce.tg_globals,
+        threads: c.control.threads,
     })
 }
 
@@ -805,7 +826,7 @@ pub fn lower_to_metallib_multi(
     module: &wax_ir::Module,
     units: &[EntryUnit],
     profile: &crate::profile::TargetProfile,
-) -> std::result::Result<Vec<u8>, String> {
+) -> std::result::Result<(Vec<u8>, Vec<usize>), String> {
     if units.is_empty() {
         return Err("no entry kernels to lower".to_string());
     }
@@ -813,6 +834,7 @@ pub fn lower_to_metallib_multi(
     // New module that all functions will be cloned into.
     let mut m = wax_ir::Module::new(&units[0].kernel_symbol);
 
+    let mut thread_domains: Vec<usize> = Vec::new();
     let mut collected_globals: Vec<Vec<(String, Ty, u32)>> = Vec::new();
     let mut airs: Vec<AirFunc> = Vec::new();
     let mut param_lists: Vec<Vec<Ty>> = Vec::new();
@@ -829,8 +851,10 @@ pub fn lower_to_metallib_multi(
             param_types,
             callees,
             tg_globals,
+            threads,
         } = convert_kernel(&mut m, f).map_err(|e| format!("{}: {e}", u.kernel_symbol))?;
 
+        thread_domains.push(threads);
         collected_globals.push(tg_globals);
         airs.push(air);
         param_lists.push(param_types);
@@ -861,18 +885,22 @@ pub fn lower_to_metallib_multi(
             param_lists[i].clone(),
             u.args.as_slice(),
             body,
+            (thread_domains[i] > 0).then_some(thread_domains[i]),
         );
     }
 
     let bc = bm.finish().map_err(|e| format!("bitcode: {e}"))?;
 
-    Ok(crate::metallib::wrap(
-        &bc,
-        &units
-            .iter()
-            .map(|u| crate::metallib::Function::kernel(&u.kernel_symbol))
-            .collect::<Vec<_>>(),
-        profile,
+    Ok((
+        crate::metallib::wrap(
+            &bc,
+            &units
+                .iter()
+                .map(|u| crate::metallib::Function::kernel(&u.kernel_symbol))
+                .collect::<Vec<_>>(),
+            profile,
+        ),
+        thread_domains,
     ))
 }
 

@@ -52,16 +52,22 @@ fn with_rows(m: &mut wax_ir::Module, rows: i32) {
 
 #[test]
 fn attribute_binds_and_128_rows_is_default() {
-    let default = wax_metal::lower_to_metallib(&mut col_reduce()).expect("col_reduce lowers");
+    let default = wax_metal::lower_to_metallib(&mut col_reduce())
+        .expect("col_reduce lowers")
+        .metallib;
 
     let mut m = col_reduce();
     with_rows(&mut m, 128);
-    let same = wax_metal::lower_to_metallib(&mut m).expect("lowers with attribute");
+    let same = wax_metal::lower_to_metallib(&mut m)
+        .expect("lowers with attribute")
+        .metallib;
     assert_eq!(same, default, "128 rows is the default");
 
     let mut m = col_reduce();
     with_rows(&mut m, 1);
-    let one_row = wax_metal::lower_to_metallib(&mut m).expect("lowers with the attribute");
+    let one_row = wax_metal::lower_to_metallib(&mut m)
+        .expect("lowers with the attribute")
+        .metallib;
     assert_ne!(one_row, default, "attribute did not change output");
 }
 
@@ -69,11 +75,11 @@ fn attribute_binds_and_128_rows_is_default() {
 fn smaller_scratch_costs_instructions() {
     let mut small = col_reduce();
     with_rows(&mut small, 1);
-    let small = wax_metal::lower_to_metallib(&mut small).unwrap();
+    let small = wax_metal::lower_to_metallib(&mut small).unwrap().metallib;
 
     let mut big = col_reduce();
     with_rows(&mut big, 128);
-    let big = wax_metal::lower_to_metallib(&mut big).unwrap();
+    let big = wax_metal::lower_to_metallib(&mut big).unwrap().metallib;
 
     assert!(
         small.len() > big.len(),

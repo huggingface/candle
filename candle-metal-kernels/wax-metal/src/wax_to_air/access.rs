@@ -529,12 +529,14 @@ impl WaxToAir {
         rank: usize,
         f: impl FnMut(usize, Value, &mut Context, &mut DialectConversionRewriter) -> Refused<()>,
     ) -> Refused<()> {
-        if tile_shape.iter().product::<i64>() <= 1 {
+        let elems = tile_shape.iter().product::<i64>();
+        if elems <= 1 {
             return Ok(());
         }
         let Some(tp) = self.control.tp else {
             return Err("no thread position parameter");
         };
+        self.control.threads = self.control.threads.max(elems as usize);
         lane_decompose(ctx, rewriter, tile_shape, rank, tp, f)
     }
 

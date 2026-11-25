@@ -83,7 +83,8 @@ fn combine_op_names_the_simd_intrinsic() {
             let want = format!("air.{base}.{suf}");
             let mut m = reduce_kernel("reduce_probe", elem, combine);
             let bytes = wax_metal::lower_to_metallib(&mut m)
-                .unwrap_or_else(|e| panic!("{want}: did not lower: {e}"));
+                .unwrap_or_else(|e| panic!("{want}: did not lower: {e}"))
+                .metallib;
             let bc =
                 wax_metal::metallib::bitcode_of(&bytes).unwrap_or_else(|e| panic!("{want}: {e}"));
             let p = wax_llvm_utils::parse(bc).unwrap_or_else(|e| panic!("{want}: {e}"));
@@ -100,7 +101,9 @@ fn combine_op_names_the_simd_intrinsic() {
 fn simd_reduce_intrinsic_is_convergent() {
     // Intrinsic must be `convergent` so that it is not moved across control flow during optim.
     let mut m = reduce_kernel("reduce_probe", ScalarType::F32, Opcode::AddF);
-    let bytes = wax_metal::lower_to_metallib(&mut m).expect("lowers");
+    let bytes = wax_metal::lower_to_metallib(&mut m)
+        .expect("lowers")
+        .metallib;
     let bc = wax_metal::metallib::bitcode_of(&bytes).expect("a metallib");
     let p = wax_llvm_utils::parse(bc).expect("LLVM reads it");
     let f = p
@@ -114,7 +117,9 @@ fn simd_reduce_intrinsic_is_convergent() {
 fn entry_defined_air_intrinsics_declared() {
     // Entry functions should be `define`, air intrinsics should be `declare` (prototypes).
     let mut m = reduce_kernel("reduce_probe", ScalarType::F32, Opcode::AddF);
-    let bytes = wax_metal::lower_to_metallib(&mut m).expect("lowers");
+    let bytes = wax_metal::lower_to_metallib(&mut m)
+        .expect("lowers")
+        .metallib;
     let bc = wax_metal::metallib::bitcode_of(&bytes).expect("a metallib");
     let p = wax_llvm_utils::parse(bc).expect("LLVM reads it");
 

@@ -48,4 +48,8 @@ pub enum LowerError {
     TypeError(String),
     #[error("malformed AIR: {0}")]
     MalformedIr(String),
+    #[error("the spec does not describe this module: {0}")]
+    Precondition(String),
+    #[error("the target cannot run this kernel: {0}")]
+    ExceedsTarget(String),
 }

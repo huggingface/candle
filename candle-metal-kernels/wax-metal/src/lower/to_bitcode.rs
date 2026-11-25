@@ -126,8 +126,9 @@ impl<'a> BitcodeModuleAssembler<'a> {
         param_types: Vec<Ty>,
         args: &'a [KernelArg],
         body: Body,
+        threads: Option<usize>,
     ) {
-        self.add_kernel_pinning(name, param_types, args, body, vec![Ty::Int(64)]);
+        self.add_kernel_pinning(name, param_types, args, body, vec![Ty::Int(64)], threads);
     }
 
     pub fn add_kernel_pinning(
@@ -137,6 +138,7 @@ impl<'a> BitcodeModuleAssembler<'a> {
         args: &'a [KernelArg],
         body: Body,
         pinned_types: Vec<Ty>,
+        threads: Option<usize>,
     ) {
         self.kernels.push(BuiltKernel {
             name,
@@ -144,6 +146,7 @@ impl<'a> BitcodeModuleAssembler<'a> {
             args,
             body,
             pinned_types,
+            threads,
         });
     }
 
@@ -166,6 +169,8 @@ pub struct BuiltKernel<'a> {
     pub body: Body,
     /// Type table is ordered by usage. Pinning types allows us to ensure correct ordering.
     pub pinned_types: Vec<Ty>,
+    /// See [`KernelMetadata::threads`].
+    pub threads: Option<usize>,
 }
 
 // TODO: Only used in tests. Remove.
@@ -267,6 +272,7 @@ pub fn build_bitcode_module(
             language_version: profile.language_version,
             limits: profile.limits,
             producer: "wax-metal",
+            threads: k.threads,
         };
         let mut md = std::mem::take(&mut m.md);
         let mut consts = std::mem::take(&mut m.consts);
@@ -312,6 +318,7 @@ mod tests {
             args: &[],
             body: empty_body(),
             pinned_types: vec![Ty::Int(64)],
+            threads: None,
         }
     }
 

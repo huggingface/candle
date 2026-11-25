@@ -491,7 +491,7 @@ pub fn lower_gemm(
     let (kernel, mut fell_back) = match routing.plan {
         // MPP kernel substitution
         Plan::Mpp { bm, bn, splits } => {
-            let mut r = recognise(module)?;
+            let mut r = recognise(module, spec)?;
             match realise_mpp(&r.module, r.func, &r.pattern, spec, p, (bm, bn, splits))? {
                 Realised::Kernel { kernel, note } => (kernel, note),
                 Realised::Declined(why) => (
@@ -631,7 +631,42 @@ struct Recognised {
     analyses: AnalysisManager,
 }
 
-fn recognise(module: &wax_ir::Module) -> Result<Recognised, crate::LowerError> {
+/// The spec must describe the tensors the module declares.
+fn precondition(p: &Pattern, spec: &GemmSpec) -> Result<(), crate::LowerError> {
+    use wax_ir::types::TensorViewType;
+
+    if p.trans_b != spec.trans_b {
+        return Err(crate::LowerError::Precondition(format!(
+            "the module declares trans_b = {} and the spec declares {}",
+            p.trans_b, spec.trans_b
+        )));
+    }
+    let (m, n, k) = (spec.m as i64, spec.n as i64, spec.k as i64);
+    let view = |shape: Vec<i64>, strides: Vec<i64>| TensorViewType {
+        element_type: p.elem_t.clone(),
+        shape,
+        strides,
+    };
+    let implied = [
+        ("A", view(vec![m, k], vec![p.lda, 1])),
+        (
+            "B",
+            if p.trans_b {
+                view(vec![k, n], vec![1, p.ldb])
+            } else {
+                view(vec![k, n], vec![p.ldb, 1])
+            },
+        ),
+        ("C", view(vec![m, n], vec![p.ldc, 1])),
+    ];
+    for (name, tv) in implied {
+        tv.verify_strides()
+            .map_err(|e| crate::LowerError::Precondition(format!("{name}: {e}")))?;
+    }
+    Ok(())
+}
+
+fn recognise(module: &wax_ir::Module, spec: &GemmSpec) -> Result<Recognised, crate::LowerError> {
     // `working_copy` currently only supports a single entry fn.
     if module.entries().len() != 1 {
         return Err(crate::LowerError::MalformedIr(format!(
@@ -647,6 +682,9 @@ fn recognise(module: &wax_ir::Module) -> Result<Recognised, crate::LowerError> {
         .map_err(|e| crate::LowerError::MalformedIr(format!("gemm analysis: {e:?}")))?
         .pattern
         .clone();
+    if let Ok(p) = &pattern {
+        precondition(p, spec)?;
+    }
     Ok(Recognised {
         module: owned,
         func,
@@ -673,7 +711,7 @@ pub fn realise(
         func,
         pattern,
         mut analyses,
-    } = recognise(module)?;
+    } = recognise(module, spec)?;
 
     // Apply passes
     let facts = gemv_t::Facts {
@@ -721,31 +759,44 @@ fn lower(
 ) -> Result<crate::LoweredKernel, crate::LowerError> {
     // The two-pass form carries its own reduce dispatch and scratch, from the same metallib.
     let reduce_fn = reduce.and_then(|r| named_entry(owned, &r.entry));
+    let (metallib, threads, reduce_threads) = match reduce_fn {
+        None => {
+            let l = crate::lower::lower_to_metallib_for(owned, profile)?;
+            let primary = l.entry_threads(0);
+            (l.metallib, primary, None)
+        }
+        Some(reduce_fn) => {
+            let units = [entry_unit(owned, func)?, entry_unit(owned, reduce_fn)?];
+            let l = crate::lower::lower_to_metallib_entries(owned, &units, profile)?;
+            let (primary, secondary) = (l.entry_threads(0), l.entry_threads(1));
+            (l.metallib, primary, secondary)
+        }
+    };
     let second = reduce
         .zip(reduce_fn)
         .map(|(r, refn)| crate::launch::SecondaryDispatch {
             entry: r.entry.clone(),
-            launch: crate::Launch::from_tile_blocks(r.block, &r.tile),
+            launch: with_threads(
+                crate::Launch::from_tile_blocks(r.block, &r.tile),
+                reduce_threads,
+            ),
             scalar_args: shape_scalars(&crate::lower::promoted_scalars_for(owned, refn), spec),
         });
-    let metallib = match reduce_fn {
-        None => crate::lower::lower_to_metallib_for(owned, profile)?,
-        Some(reduce_fn) => {
-            let units = [entry_unit(owned, func)?, entry_unit(owned, reduce_fn)?];
-            crate::lower::lower_to_metallib_entries(owned, &units, profile)?
-        }
-    };
     let grid = match launch {
         Some(l) => crate::Launch::from_tile_blocks(l.block, &l.tile),
         // An unrecognised kernel keeps the caller's grid.
+        // `with_threads` updates the threadgroup if conversion has inferred threads, otherwise
+        // we fall back to a single SIMD group.
         None => {
             let (bm, bn) = match pattern {
                 Ok(p) => (p.bm as usize, p.bn as usize),
                 Err(_) => (spec.m.max(1), spec.n.max(1)),
             };
-            crate::Launch::new((spec.m.div_ceil(bm), spec.n.div_ceil(bn), 1), (32, 1, 1))
+            let simd = SIMD_WIDTH as usize;
+            crate::Launch::new((spec.m.div_ceil(bm), spec.n.div_ceil(bn), 1), (simd, 1, 1))
         }
     };
+    let grid = with_threads(grid, threads);
     Ok(crate::LoweredKernel {
         metallib,
         entry: gemm_entry_name(owned, func),
@@ -849,6 +900,14 @@ fn realise_mpp(
         )?,
         note: None,
     })
+}
+
+/// Apply threads to launch threadgroup if present.
+fn with_threads(launch: crate::Launch, threads: Option<usize>) -> crate::Launch {
+    match threads {
+        Some(t) => crate::Launch::new(launch.grid, (t, 1, 1)),
+        None => launch,
+    }
 }
 
 /// Binds the module's promoted shape scalars to the spec's dimensions.

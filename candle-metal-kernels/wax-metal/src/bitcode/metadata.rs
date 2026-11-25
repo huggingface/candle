@@ -237,6 +237,9 @@ pub struct KernelMetadata<'a> {
     pub language_version: (u32, u32, u32),
     pub limits: crate::profile::Limits,
     pub producer: &'a str,
+    /// Required threads per threadgroup for this kernel.
+    /// Caller can use `maxTotalThreadsPerThreadgroup` to get number from pipeline.
+    pub threads: Option<usize>,
 }
 
 /// AIR buffer access pattern.
@@ -383,7 +386,15 @@ impl KernelMetadata<'_> {
         let empty = md.node(vec![]);
         let arg_list = md.tuple(&arg_nodes);
         let entry = md.value(self.entry_fn_ptr_ty.clone(), self.entry_value_id);
-        let kernel = md.tuple(&[entry, empty, arg_list]);
+        let kernel = match self.threads {
+            Some(n) => {
+                let key = md.string("air.max_work_group_size");
+                let v = int(md, consts, n as i64);
+                let cap = md.tuple(&[key, v]);
+                md.tuple(&[entry, empty, arg_list, cap])
+            }
+            None => md.tuple(&[entry, empty, arg_list]),
+        };
         md.named("air.kernel", &[kernel]);
 
         // AIR module flags. 1 = error, 2 = warning, 7 = max.

@@ -323,6 +323,11 @@ impl TargetProfile {
         self.os
     }
 
+    /// Threads one threadgroup may hold. Architectural ceiling on every Apple GPU since A11.
+    pub fn max_threads_per_threadgroup(&self) -> usize {
+        1024
+    }
+
     /// The 12 bytes at offset 0x04 of a `.metallib` header: format word, constant 2,
     /// format code, platform tag, and the deployment target.
     pub(crate) fn container_header(&self) -> [u8; 12] {

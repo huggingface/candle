@@ -77,8 +77,9 @@ mod broadcast {
     #[test]
     fn broadcast_along_last_dim_is_a_forward() {
         let mut m = module("bcast", &[("out", &[32, 1]), ("x", &[32, 1])]);
-        let lib =
-            wax_metal::lower_to_metallib(&mut m).expect("every lane already holds its element");
+        let lib = wax_metal::lower_to_metallib(&mut m)
+            .expect("every lane already holds its element")
+            .metallib;
         let needle = b"_tg_user_scratch";
         assert!(
             !lib.windows(needle.len()).any(|w| w == needle),
@@ -89,7 +90,9 @@ mod broadcast {
     #[test]
     fn broadcast_with_redistribution_uses_scratch() {
         let mut m = module("bcast_redist", &[("out", &[8, 1]), ("x", &[1, 1])]);
-        let lib = wax_metal::lower_to_metallib(&mut m).expect("redistribution is a lowering");
+        let lib = wax_metal::lower_to_metallib(&mut m)
+            .expect("redistribution is a lowering")
+            .metallib;
         let needle = b"_tg_user_scratch";
         assert!(
             lib.windows(needle.len()).any(|w| w == needle),
@@ -303,7 +306,9 @@ mod nested_if {
     #[test]
     fn nested_if_lowers() {
         let mut m = nested_module("nested_guard");
-        let bytes = wax_metal::lower_to_metallib(&mut m).expect("nested `if` lowers");
+        let bytes = wax_metal::lower_to_metallib(&mut m)
+            .expect("nested `if` lowers")
+            .metallib;
         assert!(!bytes.is_empty(), "empty metallib");
     }
 
@@ -323,8 +328,9 @@ mod nested_if {
     #[test]
     fn nested_value_producing_if_lowers() {
         let mut m = nested_module("nested_select");
-        let bytes =
-            wax_metal::lower_to_metallib(&mut m).expect("nested value-producing `if` lowers");
+        let bytes = wax_metal::lower_to_metallib(&mut m)
+            .expect("nested value-producing `if` lowers")
+            .metallib;
         assert!(!bytes.is_empty(), "empty metallib");
     }
 }

@@ -45,7 +45,9 @@ fn lower(generics: &'static [&'static str]) -> Vec<u8> {
         &[("z", &[64, 1]), ("x", &[64, 1]), ("y", &[64, 1])],
     );
     let profile = wax_metal::TargetProfile::new(wax_metal::Platform::MacOS, 26, 0);
-    wax_metal::lower::lower_to_metallib_for(&mut module, &profile).expect("lowers")
+    wax_metal::lower::lower_to_metallib_for(&mut module, &profile)
+        .expect("lowers")
+        .metallib
 }
 
 #[test]
