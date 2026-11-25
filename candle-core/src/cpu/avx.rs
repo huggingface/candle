@@ -217,3 +217,175 @@ impl CpuBF16 for CurrentCpuBF16 {
         *y = _mm_cvtss_f32(_mm_hadd_ps(t1, t1));
     }
 }
+
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn vec_dot_f32(a_row: *const f32, b_row: *const f32, c: *mut f32, k: usize) {
+    let mut sum = CurrentCpu::zero_array();
+    let mut i = 0;
+    while i + CurrentCpu::STEP <= k {
+        for j in 0..CurrentCpu::ARR {
+            sum[j] = CurrentCpu::vec_fma(
+                sum[j],
+                CurrentCpu::load(a_row.add(i + j * CurrentCpu::EPR)),
+                CurrentCpu::load(b_row.add(i + j * CurrentCpu::EPR)),
+            );
+        }
+        i += CurrentCpu::STEP;
+    }
+    CurrentCpu::vec_reduce(sum, c);
+    while i < k {
+        *c += *a_row.add(i) * (*b_row.add(i));
+        i += 1;
+    }
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn vec_sum(row: *const f32, b: *mut f32, k: usize) {
+    let np = k & !(CurrentCpu::STEP - 1);
+    let mut sum = CurrentCpu::zero_array();
+    let mut x = CurrentCpu::zero_array();
+    for i in (0..np).step_by(CurrentCpu::STEP) {
+        for j in 0..CurrentCpu::ARR {
+            x[j] = CurrentCpu::load(row.add(i + j * CurrentCpu::EPR));
+            sum[j] = CurrentCpu::vec_add(sum[j], x[j]);
+        }
+    }
+    CurrentCpu::vec_reduce(sum, b);
+    for i in np..k {
+        *b += *row.add(i)
+    }
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f32, k: usize) {
+    let mut sumf = 0.0f32;
+    let mut sum = CurrentCpuF16::zero_array();
+    let mut steps_since_flush = 0usize;
+    let mut i = 0;
+    while i + CurrentCpuF16::STEP <= k {
+        for j in 0..CurrentCpuF16::ARR {
+            sum[j] = CurrentCpuF16::vec_fma(
+                sum[j],
+                CurrentCpuF16::load(a_row.add(i + j * CurrentCpuF16::EPR)),
+                CurrentCpuF16::load(b_row.add(i + j * CurrentCpuF16::EPR)),
+            );
+        }
+        steps_since_flush += 1;
+        if steps_since_flush == CurrentCpuF16::FLUSH_INTERVAL {
+            let mut partial = 0.0f32;
+            CurrentCpuF16::vec_reduce(sum, &mut partial);
+            sumf += partial;
+            sum = CurrentCpuF16::zero_array();
+            steps_since_flush = 0;
+        }
+        i += CurrentCpuF16::STEP;
+    }
+    let mut partial = 0.0f32;
+    CurrentCpuF16::vec_reduce(sum, &mut partial);
+    sumf += partial;
+    while i < k {
+        sumf += (*a_row.add(i)).to_f32() * (*b_row.add(i)).to_f32();
+        i += 1;
+    }
+    *c = sumf;
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut f32, k: usize) {
+    let mut sum = CurrentCpuBF16::zero_array();
+    let mut i = 0;
+    while i + CurrentCpuBF16::STEP <= k {
+        for j in 0..CurrentCpuBF16::ARR {
+            sum[j] = CurrentCpuBF16::vec_fma(
+                sum[j],
+                CurrentCpuBF16::load(a_row.add(i + j * CurrentCpuBF16::EPR)),
+                CurrentCpuBF16::load(b_row.add(i + j * CurrentCpuBF16::EPR)),
+            );
+        }
+        i += CurrentCpuBF16::STEP;
+    }
+    CurrentCpuBF16::vec_reduce(sum, c);
+    while i < k {
+        *c += (*a_row.add(i)).to_f32() * (*b_row.add(i)).to_f32();
+        i += 1;
+    }
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn vec_add_f16(a_row: *const f16, b_row: *const f16, c: *mut f16, k: usize) {
+    let mut i = 0;
+    while i + CurrentCpuF16::STEP <= k {
+        for j in 0..CurrentCpuF16::ARR {
+            CurrentCpuF16::vec_store(
+                c.add(i + j * CurrentCpuF16::EPR),
+                CurrentCpuF16::vec_add(
+                    CurrentCpuF16::load(a_row.add(i + j * CurrentCpuF16::EPR)),
+                    CurrentCpuF16::load(b_row.add(i + j * CurrentCpuF16::EPR)),
+                ),
+            );
+        }
+        i += CurrentCpuF16::STEP;
+    }
+    for j in i..k {
+        *c.add(j) = *a_row.add(j) + *b_row.add(j);
+    }
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn vec_add_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut bf16, k: usize) {
+    let mut i = 0;
+    while i + CurrentCpuBF16::STEP <= k {
+        for j in 0..CurrentCpuBF16::ARR {
+            CurrentCpuBF16::vec_store(
+                c.add(i + j * CurrentCpuBF16::EPR),
+                CurrentCpuBF16::vec_add(
+                    CurrentCpuBF16::load(a_row.add(i + j * CurrentCpuBF16::EPR)),
+                    CurrentCpuBF16::load(b_row.add(i + j * CurrentCpuBF16::EPR)),
+                ),
+            );
+        }
+        i += CurrentCpuBF16::STEP;
+    }
+    for j in i..k {
+        *c.add(j) = *a_row.add(j) + *b_row.add(j);
+    }
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn vec_scalar_add_f16(scalar: f16, xs: *const f16, ys: *mut f16, k: usize) {
+    let sv = CurrentCpuF16::from_f32(scalar.to_f32());
+    let mut i = 0;
+    while i + CurrentCpuF16::STEP <= k {
+        for j in 0..CurrentCpuF16::ARR {
+            CurrentCpuF16::vec_store(
+                ys.add(i + j * CurrentCpuF16::EPR),
+                CurrentCpuF16::vec_add(CurrentCpuF16::load(xs.add(i + j * CurrentCpuF16::EPR)), sv),
+            );
+        }
+        i += CurrentCpuF16::STEP;
+    }
+    for j in i..k {
+        *ys.add(j) = *xs.add(j) + scalar;
+    }
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn vec_scalar_add_bf16(scalar: bf16, xs: *const bf16, ys: *mut bf16, k: usize) {
+    let sv = CurrentCpuBF16::from_f32(scalar.to_f32());
+    let mut i = 0;
+    while i + CurrentCpuBF16::STEP <= k {
+        for j in 0..CurrentCpuBF16::ARR {
+            CurrentCpuBF16::vec_store(
+                ys.add(i + j * CurrentCpuBF16::EPR),
+                CurrentCpuBF16::vec_add(
+                    CurrentCpuBF16::load(xs.add(i + j * CurrentCpuBF16::EPR)),
+                    sv,
+                ),
+            );
+        }
+        i += CurrentCpuBF16::STEP;
+    }
+    for j in i..k {
+        *ys.add(j) = *xs.add(j) + scalar;
+    }
+}

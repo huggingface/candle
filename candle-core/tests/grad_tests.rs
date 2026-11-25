@@ -1,7 +1,7 @@
 #![allow(clippy::approx_constant)]
 use anyhow::{Context, Result};
 use candle_core::{
-    backprop::GradStore, test_device, test_utils, DType, Device, Shape, Tensor, Var,
+    backprop::GradStore, test_device, test_utils, DType, Device, IndexOp, Shape, Tensor, Var,
 };
 
 fn simple_grad(device: &Device) -> Result<()> {
@@ -568,6 +568,22 @@ fn binary_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn index_select_strided_ids_grad(device: &Device) -> Result<()> {
+    let w = Var::new(&[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]], device)?;
+    let all_ids = Tensor::new(&[[0u32, 1], [2, 1]], device)?;
+    let ids = all_ids.i((.., 0))?;
+    assert!(!ids.is_contiguous());
+
+    let y = w.index_select(&ids, 0)?;
+    let grads = y.sum_all()?.backward()?;
+    let grad_w = grads.get(&w).context("no grad for w")?;
+    assert_eq!(
+        grad_w.to_vec2::<f32>()?,
+        [[1., 1., 1.], [0., 0., 0.], [1., 1., 1.]]
+    );
+    Ok(())
+}
+
 #[test]
 fn test_flip_backprop() -> Result<()> {
     let device = &Device::Cpu;
@@ -635,4 +651,11 @@ test_device!(
     binary_grad_cpu,
     binary_grad_gpu,
     binary_grad_metal
+);
+
+test_device!(
+    index_select_strided_ids_grad,
+    index_select_strided_ids_grad_cpu,
+    index_select_strided_ids_grad_gpu,
+    index_select_strided_ids_grad_metal
 );

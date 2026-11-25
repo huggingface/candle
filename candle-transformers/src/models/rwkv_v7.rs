@@ -890,8 +890,13 @@ impl Model {
             let emb_normalized = layer_norm(emb_raw, ln0_weight, ln0_bias, 1e-5)?;
 
             // DeepEmbed merges (FFN s_emb)
-            for i in 0..cfg.num_hidden_layers {
-                if let Some(de) = &mut model.blocks[i].ffn.deep_embed {
+            for (i, block) in model
+                .blocks
+                .iter_mut()
+                .enumerate()
+                .take(cfg.num_hidden_layers)
+            {
+                if let Some(de) = &mut block.ffn.deep_embed {
                     // s_emb += normalized_emb @ s_emb_x^T
                     let s_emb_x = vb_b.pp(i).pp("ffn").get((1024, c), "s_emb_x.weight")?;
                     de.s_emb = (&de.s_emb + emb_normalized.matmul(&s_emb_x.t()?)?)?;
@@ -900,8 +905,13 @@ impl Model {
 
             // DEA merges (v7b only)
             if cfg.version == ModelVersion::V7b {
-                for i in 0..cfg.num_hidden_layers {
-                    if let Some(dea) = &mut model.blocks[i].dea {
+                for (i, block) in model
+                    .blocks
+                    .iter_mut()
+                    .enumerate()
+                    .take(cfg.num_hidden_layers)
+                {
+                    if let Some(dea) = &mut block.dea {
                         let k_emb_x = vb_b.pp(i).pp("qkv").get((256, c), "k_emb_x.weight")?;
                         dea.k_emb = (&dea.k_emb + emb_normalized.matmul(&k_emb_x.t()?)?)?;
 

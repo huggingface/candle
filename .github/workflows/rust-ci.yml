@@ -10,8 +10,12 @@ env:
   # Incremental compilation would just be overhead, so we can disable it entirely.
   CARGO_INCREMENTAL: 0
 
+permissions: {}
+
 jobs:
   check:
+    permissions:
+      contents: read
     name: Check
     runs-on: ${{ matrix.os }}
     strategy:
@@ -19,17 +23,32 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04, windows-latest, macOS-latest, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
       - name: Remove cargo config (macOS ring crate fix)
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249  # stable
+      - name: Detect runner CPU for the cache key
+        id: cpu
+        shell: bash
+        run: |
+          # .cargo/config.toml builds with target-cpu=native, which also applies to
+          # build scripts and proc macros. Those only run on the CPU that built them,
+          # so a cache primed on one runner model must not be restored on another.
+          case "$RUNNER_OS" in
+            Linux) model=$(lscpu | grep -m1 'Model name' | cut -d: -f2) ;;
+            macOS) model=$(sysctl -n machdep.cpu.brand_string) ;;
+            Windows) model=$(powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name") ;;
+          esac
+          model=$(printf '%s' "$model" | tr -cd '[:alnum:]' | head -c 40)
+          echo "Runner CPU: $model"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
-          key: ${{ matrix.os }}
+          key: ${{ matrix.os }}-${{ steps.cpu.outputs.model }}
           # Save only from main
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -54,6 +73,8 @@ jobs:
           cargo check --workspace --all-targets
 
   test:
+    permissions:
+      contents: read
     name: Test Suite
     runs-on: ${{ matrix.os }}
     strategy:
@@ -68,17 +89,32 @@ jobs:
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           df -h
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
       - name: Remove cargo config (macOS ring crate fix)
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249  # stable
+      - name: Detect runner CPU for the cache key
+        id: cpu
+        shell: bash
+        run: |
+          # .cargo/config.toml builds with target-cpu=native, which also applies to
+          # build scripts and proc macros. Those only run on the CPU that built them,
+          # so a cache primed on one runner model must not be restored on another.
+          case "$RUNNER_OS" in
+            Linux) model=$(lscpu | grep -m1 'Model name' | cut -d: -f2) ;;
+            macOS) model=$(sysctl -n machdep.cpu.brand_string) ;;
+            Windows) model=$(powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name") ;;
+          esac
+          model=$(printf '%s' "$model" | tr -cd '[:alnum:]' | head -c 40)
+          echo "Runner CPU: $model"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
-          key: ${{ matrix.os }}
+          key: ${{ matrix.os }}-${{ steps.cpu.outputs.model }}
           # Save only from main
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install lld (Linux only)
@@ -98,24 +134,44 @@ jobs:
           cargo test --workspace --doc
 
   fmt:
+    permissions:
+      contents: read
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249  # stable
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
   clippy:
+    permissions:
+      contents: read
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249  # stable
         with:
           components: clippy
+      - name: Detect runner CPU for the cache key
+        id: cpu
+        shell: bash
+        run: |
+          # .cargo/config.toml builds with target-cpu=native, which also applies to
+          # build scripts and proc macros. Those only run on the CPU that built them,
+          # so a cache primed on one runner model must not be restored on another.
+          case "$RUNNER_OS" in
+            Linux) model=$(lscpu | grep -m1 'Model name' | cut -d: -f2) ;;
+            macOS) model=$(sysctl -n machdep.cpu.brand_string) ;;
+            Windows) model=$(powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name") ;;
+          esac
+          model=$(printf '%s' "$model" | tr -cd '[:alnum:]' | head -c 40)
+          echo "Runner CPU: $model"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
         with:
+          key: ${{ steps.cpu.outputs.model }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --tests --examples --benches -- -D warnings

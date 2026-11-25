@@ -28,7 +28,7 @@
 //! ```
 //!
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
-use candle::{DType, Error, Module, Result, Tensor, D};
+use candle::{DType, Module, Result, Tensor, D};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerNormConfig {
@@ -150,23 +150,24 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
 ) -> Result<LayerNorm> {
     let config = config.into();
 
-    // Convert old format to new format if needed from a PyTorch state_dict
-    // Safetensors not always in new weight/bias format
+    // Convert old format to new format if needed from a PyTorch state_dict.
+    // Safetensors are not always in the newer weight/bias format.
     // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_utils.py#L575
-    let weight_tensor_name = ["weight", "gamma"]
-        .iter()
-        .find(|&name| vb.contains_tensor(name))
-        .ok_or_else(|| Error::Msg("Failed to find weight tensor".into()))?;
-
-    let weight = vb.get_with_hints(size, weight_tensor_name, crate::Init::Const(1.))?;
-
-    let bias_tensor_name = ["bias", "beta"]
-        .iter()
-        .find(|&name| vb.contains_tensor(name))
-        .ok_or_else(|| Error::Msg("Failed to find weight tensor".into()))?;
+    // Prefer an existing alias when present; otherwise default to "weight"/"bias" so
+    // VarMap-backed builders can still lazily Init missing tensors. Bias is only
+    // probed when config.affine is true (rms_norm / layer_norm_no_bias).
+    let weight_name = ["weight", "gamma"]
+        .into_iter()
+        .find(|name| vb.contains_tensor(name))
+        .unwrap_or("weight");
+    let weight = vb.get_with_hints(size, weight_name, crate::Init::Const(1.))?;
 
     let bias = if config.affine {
-        Some(vb.get_with_hints(size, bias_tensor_name, crate::Init::Const(0.))?)
+        let bias_name = ["bias", "beta"]
+            .into_iter()
+            .find(|name| vb.contains_tensor(name))
+            .unwrap_or("bias");
+        Some(vb.get_with_hints(size, bias_name, crate::Init::Const(0.))?)
     } else {
         None
     };
