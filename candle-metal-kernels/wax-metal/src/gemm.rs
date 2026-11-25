@@ -76,6 +76,9 @@ pub enum Reason {
     Ragged,
     /// Enough work to justify MPP fixed setup cost.
     EnoughWork,
+    /// No SGMMA tile divides the shape, so the tile loop would run on 8x8 fragments.
+    /// See [`MPP_COLLAPSED_TILE_WORK_FLOOR`].
+    TileCollapsed,
     /// Large per-threadgroup stream in fp32. If unable to split-K then SGMMA wins over MPP.
     Fp32WorkingSet,
     /// Large working set. Split work on K and reduce.
@@ -253,6 +256,9 @@ const WORKING_SET_MAX: usize = 2_500_000;
 const FP32_MPP_WORKING_SET_MAX: usize = 1 << 20;
 /// Minimum amount of work for MPP to be beneficial.
 const MPP_WORK_FLOOR: usize = 1 << 30;
+/// Work floor for a shape no SGMMA tile divides, which falls through [`sgmma_tile_aligned`] to
+/// an 8x8 fragment.
+const MPP_COLLAPSED_TILE_WORK_FLOOR: usize = 12 << 20;
 /// K splits used when the working set size forces a split. Measured. 2 and 8 are both worse.
 // TODO: sweep for both different split-k problems and splits.
 const SPLITS: i32 = 4;
@@ -399,35 +405,37 @@ pub fn route(spec: &GemmSpec) -> Routing {
     }
 
     if is_aligned && is_f32 && working_set >= FP32_MPP_WORKING_SET_MAX {
-        // Not necessarily too much for one pass, but for fairly large aligned f32 problems
-        // we chose MPP split-k > SGMMA > MPP.
-        if work >= MPP_WORK_FLOOR {
-            return Routing {
-                plan: Plan::Mpp {
-                    bm,
-                    bn,
-                    splits: SPLITS,
-                },
-                reason: Reason::Fp32WorkingSet,
-            };
-        }
-        return sgmma(Reason::Fp32WorkingSet);
+        return Routing {
+            plan: Plan::Mpp {
+                bm,
+                bn,
+                splits: SPLITS,
+            },
+            reason: Reason::Fp32WorkingSet,
+        };
     }
 
+    // A shape no tile divides gets the collapsed floor.
+    let collapsed = sgmma_tile_aligned(spec) == (8, 8);
+    let floor = if collapsed {
+        MPP_COLLAPSED_TILE_WORK_FLOOR
+    } else {
+        MPP_WORK_FLOOR
+    };
     // The setup cost of MPP is not worth it if the work is below the floor, with the exception
     // of small aligned f32 squares.
-    // TODO: There may be a lower floor for small aligned f32 squares.
-    if work < MPP_WORK_FLOOR && is_aligned && !is_f32 {
+    if work < floor && is_aligned && !is_f32 {
         return sgmma(Reason::NotEnoughWork);
     }
 
     // Single-pass MPP.
+    let rerouted = collapsed && is_aligned && !is_f32 && work < MPP_WORK_FLOOR;
     Routing {
         plan: Plan::Mpp { bm, bn, splits: 1 },
-        reason: if !is_aligned {
-            Reason::Ragged
-        } else {
-            Reason::EnoughWork
+        reason: match (is_aligned, rerouted) {
+            (false, _) => Reason::Ragged,
+            (true, true) => Reason::TileCollapsed,
+            (true, false) => Reason::EnoughWork,
         },
     }
 }
@@ -1348,13 +1356,22 @@ mod fp32_working_set_tests {
     }
 
     #[test]
-    fn fp32_clause_falls_back_to_sgmma_when_it_cannot_split() {
-        // Below `MPP_WORK_FLOOR`
+    fn fp32_clause_splits_regardless_of_work() {
+        // Small work, and split-K still wins.
         let r = route4(256, 256, 8192);
         assert_eq!(r.reason, Reason::Fp32WorkingSet);
-        assert_eq!(r.plan, Plan::Lower { sg: 0, splits: 1 });
+        assert!(matches!(r.plan, Plan::Mpp { splits: SPLITS, .. }));
 
-        // Strided dst above the floor splits correctly.
+        // `is_aligned` -> `k % 8 == 0`, so `SPLITS` always divides K here.
+        for &(m, n, k) in &[(192, 192, 8192), (384, 384, 4096), (224, 448, 8192)] {
+            assert!(k % SPLITS as usize == 0, "{m}x{n}x{k}");
+            assert!(
+                matches!(route4(m, n, k).plan, Plan::Mpp { .. }),
+                "{m}x{n}x{k}"
+            );
+        }
+
+        // Strided dst splits correctly
         let r = route(&GemmSpec::with_ldc(2048, 2048, 8192, 4, 4096));
         assert_eq!(r.reason, Reason::Fp32WorkingSet);
         assert!(matches!(r.plan, Plan::Mpp { .. }));
