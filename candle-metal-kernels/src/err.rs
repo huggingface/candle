@@ -18,7 +18,7 @@ pub enum MetalKernelError {
     InvalidInput(String),
     #[error("Failed to create metal resource: {0}")]
     FailedToCreateResource(String),
-    #[error("Failed to create pipeline")]
+    #[error("Failed to create pipeline: {0}")]
     FailedToCreatePipeline(String),
     #[error("Invalid matmul arguments {lhs_stride:?} {rhs_stride:?} {mnk:?}")]
     MatMulNonContiguous {
