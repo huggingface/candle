@@ -258,9 +258,35 @@ fn qmm_batch(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+/// The input is a contiguous view that starts inside its buffer, e.g. rows 2..5 of a 6-row tensor.
+/// The result has to equal the result for the same rows rebuilt from host data, on the
+/// matrix-vector path (one row) and on the matrix-matrix path (several rows).
+fn qmm_input_offset(dev: &Device) -> Result<()> {
+    let (lhs, rhs, _mm) = get_random_tensors(6, 256, 6, dev)?;
+    let rhs = quantized::QTensor::quantize(&rhs, GgmlDType::Q8_0)?;
+    let rhs = quantized::QMatMul::from_qtensor(rhs)?;
+    for (start, len) in [(2, 3), (4, 1), (1, 5)] {
+        let view = lhs.narrow(0, start, len)?;
+        assert!(view.is_contiguous());
+        // Not `view.copy()`: on metal it shares the source buffer, offset included.
+        let rows = Tensor::new(view.to_vec2::<f32>()?, dev)?;
+        let got = rhs.forward(&view)?;
+        let want = rhs.forward(&rows)?;
+        let diff = (got - want)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+        assert_eq!(diff, 0.0, "rows {start}..{}", start + len);
+    }
+    Ok(())
+}
+
 test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal);
 test_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal);
 test_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal);
+test_device!(
+    qmm_input_offset,
+    qmm_input_offset_cpu,
+    qmm_input_offset_cuda,
+    qmm_input_offset_metal
+);
 
 fn embedding_weight(device: &Device) -> Result<Tensor> {
     let values = (0..(8 * 256))
