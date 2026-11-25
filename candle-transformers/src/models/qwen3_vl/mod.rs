@@ -26,6 +26,11 @@ impl Qwen3VLModel {
         Ok(Self { text, vision })
     }
 
+    /// Reset every text layer's KV cache at an episode boundary.
+    pub fn reset_kv_cache(&self) {
+        self.text.reset_kv_cache();
+    }
+
     fn prepare_decoder_attention_mask(
         &self,
         b_size: usize,
@@ -67,17 +72,13 @@ impl Qwen3VLModel {
         seqlen_offsets: &[usize],
     ) -> Result<Tensor> {
         let (bs, seqlen) = input_ids.dims2()?;
-        let attention_mask = if seqlen <= 1 {
-            Some(self.prepare_decoder_attention_mask(
-                bs,
-                seqlen,
-                seqlen_offsets[0],
-                self.text.dtype,
-                input_ids.device(),
-            )?)
-        } else {
-            None
-        };
+        let attention_mask = Some(self.prepare_decoder_attention_mask(
+            bs,
+            seqlen,
+            seqlen_offsets[0],
+            self.text.dtype,
+            input_ids.device(),
+        )?);
 
         let mut input_embeds = self.text.embed_tokens(input_ids)?;
         let (batch_size, seq_len, hidden_dim) = input_embeds.dims3()?;

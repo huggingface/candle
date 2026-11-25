@@ -145,6 +145,11 @@ impl Attention {
         })
     }
 
+    /// Reset this layer's KV cache at an episode boundary.
+    pub fn reset_kv_cache(&self) {
+        self.kv_cache.lock().expect("kv cache lock").reset();
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
@@ -298,6 +303,14 @@ impl Qwen3VLTextModel {
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
         self.embed_tokens.forward(input_ids)
+    }
+
+    /// Reset every layer's KV cache. Call at each episode boundary (one
+    /// episode = one prompt plus its generated completion).
+    pub fn reset_kv_cache(&self) {
+        for layer in &self.layers {
+            layer.self_attn.reset_kv_cache();
+        }
     }
 
     pub fn forward_embeds(
