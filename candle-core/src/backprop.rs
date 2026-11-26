@@ -349,9 +349,15 @@ impl Tensor {
                             crate::bail!("backward not supported for avgpool2d if ksize {kernel_size:?} != stride {stride:?}")
                         }
                         let (_n, _c, h, w) = arg.dims4()?;
-                        let grad_arg = grad.upsample_nearest2d(h, w)?;
+                        // The windows only cover the first out_h * k_h rows and out_w * k_w
+                        // columns, the remaining ones do not contribute to the output.
+                        let (_n, _c, out_h, out_w) = grad.dims4()?;
+                        let (cov_h, cov_w) = (out_h * kernel_size.0, out_w * kernel_size.1);
+                        let grad_arg = grad.upsample_nearest2d(cov_h, cov_w)?;
                         let grad_arg =
                             (grad_arg * (1f64 / (kernel_size.0 * kernel_size.1) as f64))?;
+                        let grad_arg = grad_arg.pad_with_zeros(2, 0, h - cov_h)?;
+                        let grad_arg = grad_arg.pad_with_zeros(3, 0, w - cov_w)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
                     }
@@ -364,14 +370,21 @@ impl Tensor {
                             crate::bail!("backward not supported for maxpool2d if ksize {kernel_size:?} != stride {stride:?}")
                         }
                         let (_n, _c, h, w) = arg.dims4()?;
+                        // The windows only cover the first out_h * k_h rows and out_w * k_w
+                        // columns, the remaining ones do not contribute to the output.
+                        let (_n, _c, out_h, out_w) = node.dims4()?;
+                        let (cov_h, cov_w) = (out_h * kernel_size.0, out_w * kernel_size.1);
+                        let arg_cov = arg.narrow(2, 0, cov_h)?.narrow(3, 0, cov_w)?;
                         // For computing the max-pool gradient, we compute a mask where a 1 means
                         // that the element is the maximum, then we apply this mask to the
                         // upsampled gradient (taking into account that multiple max may exist so
                         // we scale the gradient for this case).
-                        let node_upsampled = node.upsample_nearest2d(h, w)?;
-                        let mask = arg.eq(&node_upsampled)?.to_dtype(arg.dtype())?;
+                        let node_upsampled = node.upsample_nearest2d(cov_h, cov_w)?;
+                        let mask = arg_cov.eq(&node_upsampled)?.to_dtype(arg.dtype())?;
                         let avg = mask.avg_pool2d_with_stride(*kernel_size, *stride)?;
-                        let grad_arg = ((grad * avg)?.upsample_nearest2d(h, w)? * mask)?;
+                        let grad_arg = ((grad * avg)?.upsample_nearest2d(cov_h, cov_w)? * mask)?;
+                        let grad_arg = grad_arg.pad_with_zeros(2, 0, h - cov_h)?;
+                        let grad_arg = grad_arg.pad_with_zeros(3, 0, w - cov_w)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
                     }

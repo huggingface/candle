@@ -584,6 +584,45 @@ fn index_select_strided_ids_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn pool2d_grad_uneven_input(device: &Device) -> Result<()> {
+    // With a 3x3 input and a 2x2 kernel, only the top-left 2x2 window is pooled.
+    let x = Var::new(&[[[[1f32, 2., 9.], [3., 4., 9.], [9., 9., 9.]]]], device)?;
+    let grads = x.avg_pool2d(2)?.sum_all()?.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(
+        grad_x.squeeze(0)?.squeeze(0)?.to_vec2::<f32>()?,
+        [[0.25, 0.25, 0.], [0.25, 0.25, 0.], [0., 0., 0.]]
+    );
+
+    // The gradient for a 5x7 input must match the one of its pooled 4x6 part, padded
+    // with zeros for the rows and columns that no window covers.
+    let xs: Vec<f32> = (0..35u32).map(|i| ((i * 17) % 35) as f32).collect();
+    let xs = Tensor::from_vec(xs, (1, 1, 5, 7), device)?;
+    let w = Tensor::new(&[[[[1f32, 2., 3.], [4., 5., 6.]]]], device)?;
+    for max in [false, true] {
+        let pool = |x: &Tensor| {
+            if max {
+                x.max_pool2d(2)
+            } else {
+                x.avg_pool2d(2)
+            }
+        };
+        let x = Var::from_tensor(&xs)?;
+        let grads = (pool(&x)? * &w)?.sum_all()?.backward()?;
+        let grad_x = grads.get(&x).context("no grad for x")?;
+        let x_cov = Var::from_tensor(&xs.narrow(2, 0, 4)?.narrow(3, 0, 6)?.contiguous()?)?;
+        let grads = (pool(&x_cov)? * &w)?.sum_all()?.backward()?;
+        let grad_cov = grads.get(&x_cov).context("no grad for x_cov")?;
+        let expected = grad_cov.pad_with_zeros(2, 0, 1)?.pad_with_zeros(3, 0, 1)?;
+        assert_eq!(
+            grad_x.flatten_all()?.to_vec1::<f32>()?,
+            expected.flatten_all()?.to_vec1::<f32>()?,
+            "max: {max}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn test_flip_backprop() -> Result<()> {
     let device = &Device::Cpu;
@@ -658,4 +697,10 @@ test_device!(
     index_select_strided_ids_grad_cpu,
     index_select_strided_ids_grad_gpu,
     index_select_strided_ids_grad_metal
+);
+test_device!(
+    pool2d_grad_uneven_input,
+    pool2d_grad_uneven_input_cpu,
+    pool2d_grad_uneven_input_gpu,
+    pool2d_grad_uneven_input_metal
 );
