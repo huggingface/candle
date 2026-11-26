@@ -1031,6 +1031,31 @@ fn quantize_q8k(device: &Device) -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn quantize_constant_sub_blocks() -> Result<()> {
+    let device = &Device::Cpu;
+    for dtype in [GgmlDType::Q2K, GgmlDType::Q4K, GgmlDType::Q5K] {
+        for value in [1.0f32, -0.25, 0.0] {
+            // A fully constant tensor, e.g. a norm weight initialized to ones.
+            let src = Tensor::full(value, (2, 256), device)?;
+            let dst = quantized::QTensor::quantize(&src, dtype)?.dequantize(device)?;
+            let src = src.flatten_all()?.to_vec1::<f32>()?;
+            let dst = dst.flatten_all()?.to_vec1::<f32>()?;
+            compare_with_error(&dst, &src, 0.01);
+        }
+
+        // A single constant sub-block within an otherwise varying block.
+        let mut src = get_test_vector2(1.0, 256, device)?.to_vec1::<f32>()?;
+        src[..32].fill(-1.0);
+        let src = Tensor::new(src, device)?;
+        let dst = quantized::QTensor::quantize(&src, dtype)?.dequantize(device)?;
+        let src = src.to_vec1::<f32>()?;
+        let dst = dst.to_vec1::<f32>()?;
+        compare_with_error(&dst[..32], &src[..32], 0.1);
+    }
+    Ok(())
+}
+
 test_device!(
     quantize_q4_0,
     quantize_q4_0_cpu,

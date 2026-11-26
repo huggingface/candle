@@ -235,13 +235,14 @@ pub(super) fn make_qkx1_quants(nmax: i32, ntry: usize, x: &[f32]) -> (f32, f32) 
         .unwrap_or(&x[0]);
     let max = *x.iter().max_by(|a, b| a.total_cmp(b)).unwrap_or(&x[0]);
 
-    // If min == max, all values are the same => nothing to do here
-    if max == min {
-        return (0.0, 0.0);
-    }
-
     // Ensure min <= 0.0
     let mut min = min.min(0.);
+
+    // All values are the same non-positive value => it is represented by the min alone. This is
+    // checked after clamping so that positive constants go through the regular path.
+    if max == min {
+        return (0.0, -min);
+    }
 
     // Compute scale and inverse scale
     let mut iscale = nmax as f32 / (max - min);
