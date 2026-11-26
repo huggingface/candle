@@ -584,6 +584,29 @@ fn index_select_strided_ids_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn upsample_nearest_grad_accumulates(device: &Device) -> Result<()> {
+    // The input is also used outside of the upsampling op, the gradients from
+    // both uses have to be accumulated whatever the order they are processed in.
+    let x = Var::new(&[[[1f32, 2.]]], device)?;
+    let up = x.upsample_nearest1d(4)?.sum_all()?;
+    let other = (x.as_tensor() * 5.)?.sum_all()?;
+    for loss in [(&up + &other)?, (&other + &up)?] {
+        let grads = loss.backward()?;
+        let grad_x = grads.get(&x).context("no grad for x")?;
+        assert_eq!(grad_x.flatten_all()?.to_vec1::<f32>()?, [7., 7.]);
+    }
+
+    let x = Var::new(&[[[[1f32, 2.], [3., 4.]]]], device)?;
+    let up = x.upsample_nearest2d(4, 4)?.sum_all()?;
+    let other = (x.as_tensor() * 5.)?.sum_all()?;
+    for loss in [(&up + &other)?, (&other + &up)?] {
+        let grads = loss.backward()?;
+        let grad_x = grads.get(&x).context("no grad for x")?;
+        assert_eq!(grad_x.flatten_all()?.to_vec1::<f32>()?, [9., 9., 9., 9.]);
+    }
+    Ok(())
+}
+
 #[test]
 fn test_flip_backprop() -> Result<()> {
     let device = &Device::Cpu;
@@ -658,4 +681,10 @@ test_device!(
     index_select_strided_ids_grad_cpu,
     index_select_strided_ids_grad_gpu,
     index_select_strided_ids_grad_metal
+);
+test_device!(
+    upsample_nearest_grad_accumulates,
+    upsample_nearest_grad_accumulates_cpu,
+    upsample_nearest_grad_accumulates_gpu,
+    upsample_nearest_grad_accumulates_metal
 );
