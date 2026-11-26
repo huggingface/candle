@@ -504,9 +504,10 @@ impl candle::CustomOp2 for RmsNorm {
                     })
                     .sum::<f32>();
                 let m = (sum2 / n as f32 + eps).sqrt();
-                let m = T::from_f32(m).unwrap_or_else(T::nan);
                 for ((d, s), alpha) in dst.iter_mut().zip(src.iter()).zip(alpha) {
-                    *d = *s / m * *alpha
+                    // Match rms_norm_slow: round the normalized value before weighting.
+                    let normalized = T::from_f32(s.as_() / m).unwrap_or_else(T::nan);
+                    *d = normalized * *alpha
                 }
             }
 
