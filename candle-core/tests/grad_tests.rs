@@ -584,6 +584,34 @@ fn index_select_strided_ids_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn max_pool2d_grad(device: &Device) -> Result<()> {
+    #[rustfmt::skip]
+    let x = Var::new(
+        &[[[
+            [1f32, 2., 3., 3.],
+            [5., 6., 3., 3.],
+            [9., 10., 11., 12.],
+            [13., 14., 15., 16.],
+        ]]],
+        device,
+    )?;
+    let y = x.max_pool2d(2)?;
+    let w = Tensor::new(&[[[[1f32, 2.], [3., 4.]]]], device)?;
+    let grads = (y * w)?.sum_all()?.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    // Each window routes its gradient to its max, ties share it evenly.
+    assert_eq!(
+        grad_x.squeeze(0)?.squeeze(0)?.to_vec2::<f32>()?,
+        [
+            [0., 0., 0.5, 0.5],
+            [0., 1., 0.5, 0.5],
+            [0., 0., 0., 0.],
+            [0., 3., 0., 4.],
+        ]
+    );
+    Ok(())
+}
+
 #[test]
 fn test_flip_backprop() -> Result<()> {
     let device = &Device::Cpu;
@@ -658,4 +686,10 @@ test_device!(
     index_select_strided_ids_grad_cpu,
     index_select_strided_ids_grad_gpu,
     index_select_strided_ids_grad_metal
+);
+test_device!(
+    max_pool2d_grad,
+    max_pool2d_grad_cpu,
+    max_pool2d_grad_gpu,
+    max_pool2d_grad_metal
 );
