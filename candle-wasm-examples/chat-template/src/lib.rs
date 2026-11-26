@@ -34,7 +34,7 @@
 //! let prompt2 = conv.user_turn("How are you?").unwrap(); // includes history
 //! ```
 
-use minijinja::{context, Environment};
+use minijinja::{context, value::Serde, Environment};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "wasm")]
@@ -463,7 +463,7 @@ impl ChatTemplate {
 
         let result = template
             .render(context! {
-                messages => messages,
+                messages => Serde(messages),
                 add_generation_prompt => options.add_generation_prompt,
                 continue_final_message => options.continue_final_message,
                 enable_thinking => options.enable_thinking,
