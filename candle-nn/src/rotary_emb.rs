@@ -259,6 +259,16 @@ fn rope_check_cs(cs: &Tensor, b_sz: usize) -> Result<(usize, usize)> {
     }
 }
 
+/// The kernels index batched (3D) cos/sin tables assuming they hold exactly `seq_len`
+/// positions per batch element, so trim longer tables to the positions actually used.
+fn rope_narrow_cs(cs: &Tensor, seq_len: usize) -> Result<Tensor> {
+    if cs.rank() == 3 && cs.dim(1)? != seq_len {
+        cs.narrow(1, 0, seq_len)?.contiguous()
+    } else {
+        Ok(cs.clone())
+    }
+}
+
 pub fn rope_i(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     let (b_sz, _n_head, seq_len, n_embd) = xs.dims4()?;
     let (cos_seq_len, cos_n_embd) = rope_check_cs(cos, b_sz)?;
@@ -275,6 +285,8 @@ pub fn rope_i(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
             sin.shape()
         )
     }
+    let cos = rope_narrow_cs(cos, seq_len)?;
+    let sin = rope_narrow_cs(sin, seq_len)?;
     if !xs.is_contiguous() {
         candle::bail!("xs has to be contiguous in rope")
     }
@@ -284,7 +296,7 @@ pub fn rope_i(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     if !sin.is_contiguous() {
         candle::bail!("sin has to be contiguous in rope")
     }
-    xs.apply_op3_no_bwd(cos, sin, &RotaryEmbI)
+    xs.apply_op3_no_bwd(&cos, &sin, &RotaryEmbI)
 }
 
 pub fn rope_i_slow(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
@@ -568,6 +580,8 @@ pub fn rope(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
             sin.shape()
         )
     }
+    let cos = rope_narrow_cs(cos, seq_len)?;
+    let sin = rope_narrow_cs(sin, seq_len)?;
     if !xs.is_contiguous() {
         candle::bail!("xs has to be contiguous in rope")
     }
@@ -577,7 +591,7 @@ pub fn rope(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     if !sin.is_contiguous() {
         candle::bail!("sin has to be contiguous in rope")
     }
-    xs.apply_op3_no_bwd(cos, sin, &RotaryEmb)
+    xs.apply_op3_no_bwd(&cos, &sin, &RotaryEmb)
 }
 
 fn rotate_half(xs: &Tensor) -> Result<Tensor> {
@@ -843,6 +857,8 @@ pub fn rope_thd(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
             sin.shape()
         )
     }
+    let cos = rope_narrow_cs(cos, seq_len)?;
+    let sin = rope_narrow_cs(sin, seq_len)?;
     if !xs.is_contiguous() {
         candle::bail!("xs has to be contiguous in rope")
     }
@@ -852,5 +868,5 @@ pub fn rope_thd(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     if !sin.is_contiguous() {
         candle::bail!("sin has to be contiguous in rope")
     }
-    xs.apply_op3_no_bwd(cos, sin, &RotaryEmbThd)
+    xs.apply_op3_no_bwd(&cos, &sin, &RotaryEmbThd)
 }
