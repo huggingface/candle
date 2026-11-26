@@ -217,6 +217,10 @@ impl QuantizedAttention {
 
         self.attention_wo.forward(&reshaped_ctx.to_dtype(in_dtype)?)
     }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.kv_cache.reset();
+    }
 }
 
 struct LayerWeights {
@@ -229,6 +233,10 @@ struct LayerWeights {
 impl LayerWeights {
     fn forward_attn(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         self.self_attn.forward(x, mask, offset)
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.self_attn.clear_kv_cache();
     }
 }
 
@@ -426,5 +434,11 @@ impl GGUFQWenMoE {
         let xs = xs.narrow(1, l - 1, 1)?;
         let xs = self.norm.forward(&xs)?;
         self.output.forward(&xs)?.to_dtype(DType::F32)?.squeeze(1)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in &mut self.layers {
+            layer.clear_kv_cache();
+        }
     }
 }
