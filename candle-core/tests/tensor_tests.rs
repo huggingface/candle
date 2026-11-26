@@ -2224,6 +2224,28 @@ fn tensor_norm() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn bf16_binary_rounding() -> Result<()> {
+    // Contiguous bf16 add/mul use vectorized kernels, their results should be rounded to
+    // nearest like computing in f32 and converting to bf16.
+    let device = &Device::Cpu;
+    let a = Tensor::arange(0u32, 64, device)?.to_dtype(DType::F32)?;
+    let a = ((a * 0.37)?.sin()? * 10.)?.to_dtype(DType::BF16)?;
+    let b = Tensor::arange(0u32, 64, device)?.to_dtype(DType::F32)?;
+    let b = ((b * 0.71)?.cos()? * 3.)?.to_dtype(DType::BF16)?;
+    let s = Tensor::new(&[half::bf16::from_f32(0.1)], device)?;
+    let f32_ = |t: &Tensor| t.to_dtype(DType::F32);
+    let bf16_vec = |t: &Tensor| t.to_vec1::<half::bf16>();
+
+    let expected = (f32_(&a)? + f32_(&b)?)?.to_dtype(DType::BF16)?;
+    assert_eq!(bf16_vec(&(&a + &b)?)?, bf16_vec(&expected)?);
+    let expected = (f32_(&a)? * f32_(&b)?)?.to_dtype(DType::BF16)?;
+    assert_eq!(bf16_vec(&(&a * &b)?)?, bf16_vec(&expected)?);
+    let expected = f32_(&a)?.broadcast_add(&f32_(&s)?)?.to_dtype(DType::BF16)?;
+    assert_eq!(bf16_vec(&a.broadcast_add(&s)?)?, bf16_vec(&expected)?);
+    Ok(())
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 fn transfers_cuda_to_device() -> Result<()> {
