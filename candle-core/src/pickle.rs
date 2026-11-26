@@ -224,6 +224,7 @@ impl Object {
                 class_name,
             } if module_name == "torch._tensor" && class_name == "_rebuild_from_type_v2" => {
                 let mut args = args.tuple()?;
+                check_len(&args, 3, "_rebuild_from_type_v2")?;
                 let callable = args.remove(0);
                 let args = args.remove(1);
                 (callable, args)
@@ -233,6 +234,7 @@ impl Object {
                 class_name,
             } if module_name == "torch._utils" && class_name == "_rebuild_parameter" => {
                 let mut args = args.tuple()?;
+                check_len(&args, 1, "_rebuild_parameter")?;
                 args.remove(0).reduce()?
             }
             _ => (callable, args),
@@ -621,15 +623,29 @@ impl From<Object> for E {
     }
 }
 
+// The argument tuples below come from the pickle stream, so check their length before
+// destructuring them with `Vec::remove`, which panics on out of bounds indexes.
+fn check_len(args: &[Object], min_len: usize, what: &str) -> Result<()> {
+    if args.len() < min_len {
+        crate::bail!(
+            "{what} expects at least {min_len} arguments, got {}",
+            args.len()
+        )
+    }
+    Ok(())
+}
+
 // https://github.com/pytorch/pytorch/blob/4eac43d046ded0f0a5a5fa8db03eb40f45bf656e/torch/_utils.py#L198
 // Arguments: storage, storage_offset, size, stride, requires_grad, backward_hooks
 fn rebuild_args(args: Object) -> Result<(Layout, DType, String, usize)> {
     let mut args = args.tuple()?;
+    check_len(&args, 4, "_rebuild_tensor_v2")?;
     let stride = Vec::<usize>::try_from(args.remove(3))?;
     let size = Vec::<usize>::try_from(args.remove(2))?;
-    let offset = args.remove(1).int_or_long()? as usize;
+    let offset = args.remove(1).int_or_long()?;
     let storage = args.remove(0).persistent_load()?;
     let mut storage = storage.tuple()?;
+    check_len(&storage, 5, "persistent storage")?;
     let storage_size = storage.remove(4).int_or_long()? as usize;
     let path = storage.remove(2).unicode()?;
     let (_module_name, class_name) = storage.remove(1).class()?;
@@ -644,11 +660,11 @@ fn rebuild_args(args: Object) -> Result<(Layout, DType, String, usize)> {
             crate::bail!("unsupported storage type {other}")
         }
     };
-    let layout = Layout::new(
-        crate::Shape::from(size),
-        stride,
-        offset * dtype.size_in_bytes(),
-    );
+    let offset = usize::try_from(offset)
+        .ok()
+        .and_then(|offset| offset.checked_mul(dtype.size_in_bytes()))
+        .with_context(|| format!("invalid storage offset {offset}"))?;
+    let layout = Layout::new(crate::Shape::from(size), stride, offset);
     Ok((layout, dtype, path, storage_size))
 }
 
@@ -838,4 +854,113 @@ pub fn read_all_with_key<P: AsRef<std::path::Path>>(
 /// * `path` - Path to the pth file.
 pub fn read_all<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<(String, Tensor)>> {
     read_all_with_key(path, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Object;
+
+    fn class(module_name: &str, class_name: &str) -> Object {
+        Object::Class {
+            module_name: module_name.to_string(),
+            class_name: class_name.to_string(),
+        }
+    }
+
+    fn reduce(callable: Object, args: Object) -> Object {
+        Object::Reduce {
+            callable: Box::new(callable),
+            args: Box::new(args),
+        }
+    }
+
+    fn tensor_info(value: Object) -> crate::Result<Option<super::TensorInfo>> {
+        value.into_tensor_info(
+            Object::Unicode("w".to_string()),
+            std::path::Path::new("archive/data"),
+        )
+    }
+
+    // Arguments to `torch._utils._rebuild_tensor_v2`, as written by `torch.save`.
+    fn rebuild_tensor_args(storage: Vec<Object>, offset: Object) -> Object {
+        Object::Tuple(vec![
+            Object::PersistentLoad(Box::new(Object::Tuple(storage))),
+            offset,
+            Object::Tuple(vec![Object::Int(2), Object::Int(3)]),
+            Object::Tuple(vec![Object::Int(3), Object::Int(1)]),
+            Object::Bool(false),
+            Object::Dict(vec![]),
+        ])
+    }
+
+    fn storage() -> Vec<Object> {
+        vec![
+            Object::Unicode("storage".to_string()),
+            class("torch", "FloatStorage"),
+            Object::Unicode("0".to_string()),
+            Object::Unicode("cpu".to_string()),
+            Object::Int(6),
+        ]
+    }
+
+    #[test]
+    fn tensor_info_from_rebuild_tensor_v2() {
+        let value = reduce(
+            class("torch._utils", "_rebuild_tensor_v2"),
+            rebuild_tensor_args(storage(), Object::Int(0)),
+        );
+        let info = tensor_info(value).unwrap().unwrap();
+        assert_eq!(info.name, "w");
+        assert_eq!(info.dtype, crate::DType::F32);
+        assert_eq!(info.layout.dims(), &[2, 3]);
+        assert_eq!(info.path, "archive/data/0");
+        assert_eq!(info.storage_size, 6);
+    }
+
+    #[test]
+    fn short_rebuild_tensor_args_are_an_error() {
+        for n_args in 0..4 {
+            let value = reduce(
+                class("torch._utils", "_rebuild_tensor_v2"),
+                Object::Tuple(vec![Object::Int(0); n_args]),
+            );
+            assert!(tensor_info(value).is_err(), "{n_args} args");
+        }
+    }
+
+    #[test]
+    fn short_storage_tuple_is_an_error() {
+        let mut storage = storage();
+        storage.truncate(4);
+        let value = reduce(
+            class("torch._utils", "_rebuild_tensor_v2"),
+            rebuild_tensor_args(storage, Object::Int(0)),
+        );
+        assert!(tensor_info(value).is_err());
+    }
+
+    #[test]
+    fn negative_storage_offset_is_an_error() {
+        let value = reduce(
+            class("torch._utils", "_rebuild_tensor_v2"),
+            rebuild_tensor_args(storage(), Object::Long(-1)),
+        );
+        assert!(tensor_info(value).is_err());
+    }
+
+    #[test]
+    fn short_wrapper_args_are_an_error() {
+        for (module_name, class_name) in [
+            ("torch._utils", "_rebuild_parameter"),
+            ("torch._tensor", "_rebuild_from_type_v2"),
+        ] {
+            for n_args in 0..3 {
+                let value = reduce(
+                    class(module_name, class_name),
+                    Object::Tuple(vec![Object::None; n_args]),
+                );
+                assert!(tensor_info(value).is_err(), "{class_name} {n_args} args");
+            }
+        }
+    }
 }
