@@ -1869,6 +1869,10 @@ fn zero_dim(device: &Device) -> Result<()> {
     assert_eq!(t_mm.dims3()?, (4, 0, 3));
     let t_mm = t.t()?.matmul(&t)?;
     assert_eq!(t_mm.dims3()?, (4, 1, 1));
+    let t = Tensor::from_vec(Vec::<f32>::new(), (2, 0), device)?;
+    assert_eq!(t.to_vec2::<f32>()?, [[], []] as [[f32; 0]; 2]);
+    let t = Tensor::zeros((0, 3), DType::U32, &Device::Cpu)?.to_device(device)?;
+    assert_eq!(t.dims2()?, (0, 3));
     Ok(())
 }
 
