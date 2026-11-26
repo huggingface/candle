@@ -536,6 +536,18 @@ pub(crate) unsafe fn vec_add_f16(a_row: *const f16, b_row: *const f16, c: *mut f
     }
 }
 
+/// Narrows four f32 lanes to bf16, rounding to nearest even like `bf16::from_f32` does.
+#[inline(always)]
+unsafe fn f32_to_bf16(v: float32x4_t) -> uint16x4_t {
+    let bits = vreinterpretq_u32_f32(v);
+    let lsb = vandq_u32(vshrq_n_u32::<16>(bits), vdupq_n_u32(1));
+    let rounded = vaddq_u32(bits, vaddq_u32(lsb, vdupq_n_u32(0x7fff)));
+    // Rounding could turn a NaN into an infinity, keep it as a quiet NaN instead.
+    let is_nan = vmvnq_u32(vceqq_f32(v, v));
+    let nan = vorrq_u32(bits, vdupq_n_u32(0x0040_0000));
+    vshrn_n_u32::<16>(vbslq_u32(is_nan, nan, rounded))
+}
+
 pub(crate) unsafe fn vec_add_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut bf16, k: usize) {
     // Widen to f32, add, narrow. The bfdot-specialized CurrentCpuBF16 keeps raw bf16 bits in
     // its Unit and its vec_add interprets them as f32 lanes, so it must not be used here.
@@ -547,8 +559,8 @@ pub(crate) unsafe fn vec_add_bf16(a_row: *const bf16, b_row: *const bf16, c: *mu
         let a_hi = vreinterpretq_f32_u32(vshll_high_n_u16::<16>(a));
         let b_lo = vreinterpretq_f32_u32(vshll_n_u16::<16>(vget_low_u16(b)));
         let b_hi = vreinterpretq_f32_u32(vshll_high_n_u16::<16>(b));
-        let lo = vshrn_n_u32::<16>(vreinterpretq_u32_f32(vaddq_f32(a_lo, b_lo)));
-        let hi = vshrn_n_u32::<16>(vreinterpretq_u32_f32(vaddq_f32(a_hi, b_hi)));
+        let lo = f32_to_bf16(vaddq_f32(a_lo, b_lo));
+        let hi = f32_to_bf16(vaddq_f32(a_hi, b_hi));
         vst1q_u16(c.add(i) as *mut u16, vcombine_u16(lo, hi));
         i += 8;
     }
@@ -583,8 +595,8 @@ pub(crate) unsafe fn vec_mul_bf16(a_row: *const bf16, b_row: *const bf16, c: *mu
         let a_hi = vreinterpretq_f32_u32(vshll_high_n_u16::<16>(a));
         let b_lo = vreinterpretq_f32_u32(vshll_n_u16::<16>(vget_low_u16(b)));
         let b_hi = vreinterpretq_f32_u32(vshll_high_n_u16::<16>(b));
-        let lo = vshrn_n_u32::<16>(vreinterpretq_u32_f32(vmulq_f32(a_lo, b_lo)));
-        let hi = vshrn_n_u32::<16>(vreinterpretq_u32_f32(vmulq_f32(a_hi, b_hi)));
+        let lo = f32_to_bf16(vmulq_f32(a_lo, b_lo));
+        let hi = f32_to_bf16(vmulq_f32(a_hi, b_hi));
         vst1q_u16(c.add(i) as *mut u16, vcombine_u16(lo, hi));
         i += 8;
     }
@@ -600,8 +612,8 @@ pub(crate) unsafe fn vec_scalar_add_bf16(scalar: bf16, xs: *const bf16, ys: *mut
         let x = vld1q_u16(xs.add(i) as *const u16);
         let x_lo = vreinterpretq_f32_u32(vshll_n_u16::<16>(vget_low_u16(x)));
         let x_hi = vreinterpretq_f32_u32(vshll_high_n_u16::<16>(x));
-        let lo = vshrn_n_u32::<16>(vreinterpretq_u32_f32(vaddq_f32(x_lo, sv)));
-        let hi = vshrn_n_u32::<16>(vreinterpretq_u32_f32(vaddq_f32(x_hi, sv)));
+        let lo = f32_to_bf16(vaddq_f32(x_lo, sv));
+        let hi = f32_to_bf16(vaddq_f32(x_hi, sv));
         vst1q_u16(ys.add(i) as *mut u16, vcombine_u16(lo, hi));
         i += 8;
     }
