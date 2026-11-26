@@ -72,7 +72,7 @@ extern "C" __global__ void asort_desc_##RUST_NAME(  \
     k_argsort<SORT_ORDER_DESC>(x, dst, ncols, ncols_pad); \
 } \
  
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800 || defined(CANDLE_CUDA_BF16_FALLBACK)
 ASORT_OP(__nv_bfloat16, bf16)
 
 // NOTE: No sort ops for f8

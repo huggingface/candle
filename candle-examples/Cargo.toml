@@ -65,6 +65,8 @@ hf-hub = { workspace = true, optional = true }
 
 [features]
 default = []
+# Forward SM61 BF16 support to candle-core when examples select this feature.
+cuda-legacy-bf16 = ["cuda", "candle/cuda-legacy-bf16"]
 accelerate = [
     "dep:accelerate-src",
     "candle/accelerate",
