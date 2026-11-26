@@ -731,6 +731,17 @@ fn max(device: &Device) -> Result<()> {
     Ok(())
 }
 
+// The reduced dim is not the last one, but the only dims after it have size 1.
+fn argmax_argmin_size_one_dims(device: &Device) -> Result<()> {
+    let tensor = Tensor::new(&[[[1f32], [9.], [3.]], [[7.], [2.], [5.]]], device)?;
+    assert_eq!(tensor.argmax(1)?.to_vec2::<u32>()?, &[[1], [0]]);
+    assert_eq!(tensor.argmin(1)?.to_vec2::<u32>()?, &[[0], [1]]);
+    let tensor = Tensor::new(&[[5f32, 7., 6.]], device)?;
+    assert_eq!(tensor.argmax(0)?.to_vec1::<u32>()?, &[0, 0, 0]);
+    assert_eq!(tensor.argmin(0)?.to_vec1::<u32>()?, &[0, 0, 0]);
+    Ok(())
+}
+
 fn argmin(device: &Device) -> Result<()> {
     let data = &[[[3u32, 1, 4], [1, 5, 9]], [[2, 1, 7], [8, 2, 8]]];
     let tensor = Tensor::new(data, device)?;
@@ -1888,6 +1899,12 @@ test_device!(min, min_cpu, min_gpu, min_metal);
 test_device!(max, max_cpu, max_gpu, max_metal);
 test_device!(argmax, argmax_cpu, argmax_gpu, argmax_metal);
 test_device!(argmin, argmin_cpu, argmin_gpu, argmin_metal);
+test_device!(
+    argmax_argmin_size_one_dims,
+    argmax_argmin_size_one_dims_cpu,
+    argmax_argmin_size_one_dims_gpu,
+    argmax_argmin_size_one_dims_metal
+);
 test_device!(transpose, transpose_cpu, transpose_gpu, transpose_metal);
 test_device!(unary_op, unary_op_cpu, unary_op_gpu, unary_op_metal);
 test_device!(binary_op, binary_op_cpu, binary_op_gpu, binary_op_metal);
