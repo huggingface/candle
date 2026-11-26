@@ -975,6 +975,46 @@ fn conv2d_grad_noncontiguous_kernel(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+// With stride 2 the height (3) and width (4) below need different output paddings when
+// the gradient is mapped back through conv_transpose2d.
+fn conv2d_grad_stride_uneven_hw(dev: &Device) -> Result<()> {
+    use candle_core::Var;
+    let input_data: Vec<f32> = (1..=12).map(|v| v as f32 * 0.1).collect();
+    let kernel_data: Vec<f32> = (1..=9).map(|v| v as f32 * 0.1).collect();
+    let input = Var::from_slice(&input_data, (1, 1, 3, 4), dev)?;
+    let kernel = Var::from_slice(&kernel_data, (1, 1, 3, 3), dev)?;
+    let res = input.conv2d(&kernel, 1, 2, 1, 1)?;
+    assert_eq!(
+        test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+        [1.11, 2.17, 1.33, 2.11]
+    );
+    let grads = res.sqr()?.sum_all()?.backward()?;
+    let grad_input = grads.get(&input).unwrap();
+    let grad_kernel = grads.get(&kernel).unwrap();
+    assert_eq!(grad_input.dims(), [1, 1, 3, 4]);
+    assert_eq!(
+        test_utils::to_vec1_round(&grad_input.flatten_all()?, 3)?,
+        [1.11, 3.068, 2.17, 2.604, 2.308, 6.256, 4.316, 5.172, 1.33, 3.284, 2.11, 2.532]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(&grad_kernel.flatten_all()?, 3)?,
+        [2.532, 4.284, 4.972, 5.088, 8.56, 9.904, 2.604, 4.148, 4.804]
+    );
+
+    // Same check with height and width swapped.
+    let input_t = Var::from_tensor(&input.transpose(2, 3)?.contiguous()?)?;
+    let kernel_t = Var::from_tensor(&kernel.transpose(2, 3)?.contiguous()?)?;
+    let res_t = input_t.conv2d(&kernel_t, 1, 2, 1, 1)?;
+    let grads_t = res_t.sqr()?.sum_all()?.backward()?;
+    let grad_input_t = grads_t.get(&input_t).unwrap();
+    assert_eq!(grad_input_t.dims(), [1, 1, 4, 3]);
+    assert_eq!(
+        test_utils::to_vec1_round(&grad_input_t.transpose(2, 3)?.flatten_all()?, 3)?,
+        test_utils::to_vec1_round(&grad_input.flatten_all()?, 3)?,
+    );
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
@@ -1018,4 +1058,10 @@ test_device!(
     conv2d_grad_noncontiguous_kernel_cpu,
     conv2d_grad_noncontiguous_kernel_gpu,
     conv2d_grad_noncontiguous_kernel_metal
+);
+test_device!(
+    conv2d_grad_stride_uneven_hw,
+    conv2d_grad_stride_uneven_hw_cpu,
+    conv2d_grad_stride_uneven_hw_gpu,
+    conv2d_grad_stride_uneven_hw_metal
 );
