@@ -383,6 +383,6 @@ impl RNN for GRU {
 
     fn states_to_tensor(&self, states: &[Self::State]) -> Result<Tensor> {
         let states = states.iter().map(|s| s.h.clone()).collect::<Vec<_>>();
-        Tensor::cat(&states, 1)
+        Tensor::stack(&states, 1)
     }
 }

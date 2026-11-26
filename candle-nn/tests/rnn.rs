@@ -99,3 +99,35 @@ fn gru() -> Result<()> {
     assert_eq!(to_vec2_round(h, 4)?, &[[0.0579, 0.8836, -0.9991]]);
     Ok(())
 }
+
+#[test]
+fn gru_states_to_tensor() -> Result<()> {
+    let cpu = &Device::Cpu;
+    let w_ih = Tensor::arange(0f32, 18f32, cpu)?.reshape((9, 2))?.cos()?;
+    let w_hh = Tensor::arange(0f32, 27f32, cpu)?.reshape((9, 3))?.sin()?;
+    let b_ih = Tensor::new(&[-1f32, 1., -0.5, 2., -1., 1., -0.5, 2., -1.], cpu)?;
+    let b_hh = b_ih.cos()?;
+    let tensors: std::collections::HashMap<_, _> = [
+        ("weight_ih_l0".to_string(), w_ih),
+        ("weight_hh_l0".to_string(), w_hh),
+        ("bias_ih_l0".to_string(), b_ih),
+        ("bias_hh_l0".to_string(), b_hh),
+    ]
+    .into_iter()
+    .collect();
+    let vb = candle_nn::VarBuilder::from_tensors(tensors, DType::F32, cpu);
+    let gru = candle_nn::gru(2, 3, Default::default(), vb)?;
+    // (batch, seq_len, features) input, as for the LSTM.
+    let inp = Tensor::arange(0f32, 28f32, cpu)?.reshape((2, 7, 2))?;
+    let states = gru.seq(&inp)?;
+    let out = gru.states_to_tensor(&states)?;
+    // Same layout as the LSTM: (batch, seq_len, hidden_dim).
+    assert_eq!(out.dims(), &[2, 7, 3]);
+    let last = out.narrow(1, 6, 1)?.squeeze(1)?;
+    let diff = (last - states[6].h())?
+        .abs()?
+        .sum_all()?
+        .to_scalar::<f32>()?;
+    assert_eq!(diff, 0.);
+    Ok(())
+}
