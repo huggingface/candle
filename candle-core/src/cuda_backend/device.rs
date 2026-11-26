@@ -58,6 +58,7 @@ pub struct ModuleStore {
 #[derive(Clone)]
 pub struct CudaDevice {
     id: DeviceId,
+    multiprocessor_count: usize,
     context: Arc<cudarc::driver::CudaContext>,
     modules: Arc<std::sync::RwLock<ModuleStore>>,
     custom_modules: Arc<std::sync::RwLock<HashMap<String, Arc<cudarc::driver::CudaModule>>>>,
@@ -311,6 +312,10 @@ impl CudaDevice {
         self.id
     }
 
+    pub(crate) fn multiprocessor_count(&self) -> usize {
+        self.multiprocessor_count
+    }
+
     pub fn get_or_load_custom_func(
         &self,
         fn_name: &str,
@@ -372,6 +377,14 @@ impl CudaDevice {
         context: Arc<cudarc::driver::CudaContext>,
         stream: Arc<cudarc::driver::CudaStream>,
     ) -> Result<Self> {
+        // Cache launch-heuristic properties before any CUDA Graph capture.
+        let multiprocessor_count = context
+            .attribute(
+                cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
+            )
+            .w()?
+            .try_into()
+            .unwrap_or(0);
         let blas = cudarc::cublas::CudaBlas::new(stream.clone()).w()?;
         let curand = cudarc::curand::CudaRng::new(299792458, stream.clone()).w()?;
         let module_store = ModuleStore {
@@ -379,6 +392,7 @@ impl CudaDevice {
         };
         Ok(Self {
             id: DeviceId::new(),
+            multiprocessor_count,
             context,
             stream,
             blas: Arc::new(blas),
