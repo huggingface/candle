@@ -244,7 +244,11 @@ fn causal_decode_f32(
 
         for h_i in start_h..end_h {
             let out_chunk = std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(h_i * d), d);
-            let slope = 2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32);
+            let slope = if max_bias > 0.0 {
+                2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+            } else {
+                0.0
+            };
             let k_head_off = (h_i / rk) * d;
             let v_head_off = (h_i / rv) * d;
             let q_row = &q_data[h_i * d..(h_i + 1) * d];

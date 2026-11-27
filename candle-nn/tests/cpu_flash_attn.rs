@@ -169,6 +169,37 @@ fn causal_decode_gqa() -> Result<()> {
     assert_close(&out, &expected, 1e-5, "causal_decode_gqa")
 }
 
+// Causal decode with logit soft-capping and no ALiBi
+
+#[test]
+fn causal_decode_softcap_b1() -> Result<()> {
+    let (h, d, kv_len) = (4, 16, 32);
+    let scale = 1.0 / (d as f32).sqrt();
+    let softcap = 5.0f32;
+    let dev = &Device::Cpu;
+
+    let q = Tensor::randn(0f32, 1f32, (1, h, 1, d), dev)?;
+    let k = Tensor::randn(0f32, 1f32, (1, h, kv_len, d), dev)?;
+    let v = Tensor::randn(0f32, 1f32, (1, h, kv_len, d), dev)?;
+
+    // Reference: softmax(softcap * tanh(Q @ K^T * scale / softcap)) @ V
+    let att = (q.clone() * scale as f64)?.matmul(&k.clone().t()?)?;
+    let att = ((att / softcap as f64)?.tanh()? * softcap as f64)?;
+    let expected = candle_nn::ops::softmax_last_dim(&att)?.matmul(&v)?;
+
+    let out = flash_attn::<f32>(
+        &q.transpose(1, 2)?,
+        &k.transpose(1, 2)?,
+        &v.transpose(1, 2)?,
+        scale,
+        AttnMask::causal_with_offset(kv_len - 1),
+        None,
+        Some(softcap),
+    )?;
+
+    assert_close(&out, &expected, 1e-5, "causal_decode_softcap_b1")
+}
+
 // Standard (no mask)
 
 #[test]
