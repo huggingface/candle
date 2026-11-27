@@ -3,13 +3,21 @@ use candle_core::cpu_backend;
 use candle_core::test_utils::to_vec1_round;
 use candle_core::{CpuStorage, CustomOp1, DType, Device, Error, Layout, Result, Shape, Tensor};
 
-fn fwd<T: num_traits::Float>(v: T, alpha: f64) -> T {
-    if v.is_sign_positive() {
-        v
+fn fwd<T>(v: T, alpha: f64) -> T
+where
+    T: num_traits::ToPrimitive
+        + num_traits::FromPrimitive
+        + num_traits::Zero
+        + num_traits::One
+        + Copy,
+{
+    let v_f64 = v.to_f64().unwrap_or(f64::NAN);
+    let result = if v_f64.is_sign_positive() {
+        v_f64
     } else {
-        let alpha = T::from(alpha).unwrap_or(T::nan());
-        (v.exp() - T::one()) * alpha
-    }
+        (v_f64.exp() - 1.0) * alpha
+    };
+    T::from_f64(result).unwrap_or_else(T::zero)
 }
 
 struct Elu {
@@ -46,13 +54,21 @@ fn custom_op1_no_backward() -> Result<()> {
 }
 
 // Define a similar struct as Elu but with backward support.
-fn bwd<T: num_traits::Float>(v: T, alpha: f64) -> T {
-    if v.is_sign_positive() {
-        T::one()
+fn bwd<T>(v: T, alpha: f64) -> T
+where
+    T: num_traits::ToPrimitive
+        + num_traits::FromPrimitive
+        + num_traits::Zero
+        + num_traits::One
+        + Copy,
+{
+    let v_f64 = v.to_f64().unwrap_or(f64::NAN);
+    let result = if v_f64.is_sign_positive() {
+        1.0
     } else {
-        let alpha = T::from(alpha).unwrap_or(T::nan());
-        v.exp() * alpha
-    }
+        v_f64.exp() * alpha
+    };
+    T::from_f64(result).unwrap_or_else(T::zero)
 }
 
 struct EluBackward {
