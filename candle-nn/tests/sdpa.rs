@@ -184,4 +184,92 @@ mod metal_sdpa_tests {
         assert!(error <= 0.0013, "{}", error);
         Ok(())
     }
+
+    #[test]
+    fn sdpa_head_dim_48_full() -> Result<()> {
+        const BS: usize = 2;
+        const R: usize = 16;
+        const L: usize = 16;
+        const DK: usize = 48;
+        const H: usize = 4;
+
+        let scale: f64 = f64::from(DK as u32).sqrt().recip();
+        let device = Device::new_metal(0)?;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1048);
+        let q = randn(&mut rng, (BS, H, R, DK), &device)?;
+        let k = randn(&mut rng, (BS, H, L, DK), &device)?;
+        let v = randn(&mut rng, (BS, H, L, DK), &device)?;
+        let ground_truth = {
+            let att = (q.clone() * scale)?.matmul(&k.clone().t()?)?;
+            let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
+                .to_dtype(q.dtype())?;
+            att.matmul(&v.clone())?
+        };
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, 1.)?;
+        assert_eq!(ground_truth.shape(), sdpa_output.shape());
+        let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
+            .sum_all()?
+            .to_scalar()?;
+        assert!(error <= 0.02, "{}", error);
+        Ok(())
+    }
+
+    #[test]
+    fn sdpa_head_dim_48_qseq_1() -> Result<()> {
+        // Issue #4021: attentive poolers with q_seq = 1, head_dim = 48
+        const BS: usize = 2;
+        const R: usize = 1;
+        const L: usize = 64;
+        const DK: usize = 48;
+        const H: usize = 4;
+
+        let scale: f64 = f64::from(DK as u32).sqrt().recip();
+        let device = Device::new_metal(0)?;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(2048);
+        let q = randn(&mut rng, (BS, H, R, DK), &device)?;
+        let k = randn(&mut rng, (BS, H, L, DK), &device)?;
+        let v = randn(&mut rng, (BS, H, L, DK), &device)?;
+        let ground_truth = {
+            let att = (q.clone() * scale)?.matmul(&k.clone().t()?)?;
+            let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
+                .to_dtype(q.dtype())?;
+            att.matmul(&v.clone())?
+        };
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, 1.)?;
+        assert_eq!(ground_truth.shape(), sdpa_output.shape());
+        let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
+            .sum_all()?
+            .to_scalar()?;
+        assert!(error <= 0.02, "{}", error);
+        Ok(())
+    }
+
+    #[test]
+    fn sdpa_head_dim_72_qseq_1() -> Result<()> {
+        const BS: usize = 2;
+        const R: usize = 1;
+        const L: usize = 32;
+        const DK: usize = 72;
+        const H: usize = 2;
+
+        let scale: f64 = f64::from(DK as u32).sqrt().recip();
+        let device = Device::new_metal(0)?;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(3072);
+        let q = randn(&mut rng, (BS, H, R, DK), &device)?;
+        let k = randn(&mut rng, (BS, H, L, DK), &device)?;
+        let v = randn(&mut rng, (BS, H, L, DK), &device)?;
+        let ground_truth = {
+            let att = (q.clone() * scale)?.matmul(&k.clone().t()?)?;
+            let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
+                .to_dtype(q.dtype())?;
+            att.matmul(&v.clone())?
+        };
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, 1.)?;
+        assert_eq!(ground_truth.shape(), sdpa_output.shape());
+        let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
+            .sum_all()?
+            .to_scalar()?;
+        assert!(error <= 0.02, "{}", error);
+        Ok(())
+    }
 }
