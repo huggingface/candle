@@ -480,9 +480,19 @@ impl Stack {
                 self.push(Object::Float(arg))
             }
             OpCode::BinUnicode => {
-                let len = r.read_u32::<LittleEndian>()?;
-                let mut data = vec![0u8; len as usize];
-                r.read_exact(&mut data)?;
+                let len = r.read_u32::<LittleEndian>()? as usize;
+                // Read incrementally so that the allocation is bounded by the bytes
+                // actually present instead of the untrusted declared length (CWE-770):
+                // a 12-byte pickled string declaring a 4 GiB length previously forced a
+                // 4 GiB zeroed allocation before a single byte of it was read.
+                let mut data = Vec::new();
+                r.by_ref().take(len as u64).read_to_end(&mut data)?;
+                if data.len() != len {
+                    crate::bail!(
+                        "unicode string is truncated, expected {len} bytes, got {}",
+                        data.len()
+                    )
+                }
                 let data = String::from_utf8(data).map_err(E::wrap)?;
                 self.push(Object::Unicode(data))
             }
@@ -838,4 +848,44 @@ pub fn read_all_with_key<P: AsRef<std::path::Path>>(
 /// * `path` - Path to the pth file.
 pub fn read_all<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<(String, Tensor)>> {
     read_all_with_key(path, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binunicode(len: u32, payload: &[u8]) -> Vec<u8> {
+        let mut v = vec![OpCode::BinUnicode as u8];
+        v.extend_from_slice(&len.to_le_bytes());
+        v.extend_from_slice(payload);
+        v.push(OpCode::Stop as u8);
+        v
+    }
+
+    #[test]
+    fn binunicode_roundtrip() {
+        let data = binunicode(5, b"hello");
+        let mut unpickler = Stack::empty();
+        unpickler
+            .read_loop(&mut std::io::Cursor::new(&data[..]))
+            .unwrap();
+        match unpickler.finalize().unwrap() {
+            Object::Unicode(s) => assert_eq!(s, "hello"),
+            other => panic!("unexpected object {other:?}"),
+        }
+    }
+
+    // A string whose declared length is far larger than the bytes actually present
+    // must be reported as truncated. The parser reads incrementally, so the
+    // allocation is bounded by the real payload rather than by the untrusted
+    // declared length (CWE-770).
+    #[test]
+    fn binunicode_truncated_is_an_error() {
+        let data = binunicode(u32::MAX, b"AAAAAAAA");
+        let mut unpickler = Stack::empty();
+        let err = unpickler
+            .read_loop(&mut std::io::Cursor::new(&data[..]))
+            .unwrap_err();
+        assert!(err.to_string().contains("truncated"), "{err}");
+    }
 }
