@@ -78,9 +78,11 @@ pub fn mpp_abi(cfg: &MppGemm, _profile: &TargetProfile) -> MppAbi {
     // Tensor descriptor ABI, as defined in the Metal's tensor.metallib.
     let t_desc_size = (i16t.clone(), tys![i16t, i16t]);
     let t_simd_size = (i32t.clone(), vec![]);
-    let t_init = (Ty::Void, tys![p0i8, i16t, p1i8, p0i8, p0i8, i8t]);
-    let t_extent = (i32t.clone(), tys![p0i8, i16t, i16t]);
-    let t_slice = (Ty::Void, tys![p0i8, p0i8, i16t, p0i8, p0i8]);
+    let pt = Ty::ptr(Ty::Opaque(crate::air_dialect::types::TENSOR_T), 0);
+    let pd = Ty::ptr(Ty::Opaque(crate::air_dialect::types::MATMUL2D_DESC), 0);
+    let t_init = (Ty::Void, tys![pt, i16t, p1i8, p0i8, p0i8, i8t]);
+    let t_extent = (i32t.clone(), tys![pt, i16t, i16t]);
+    let t_slice = (Ty::Void, tys![pt, pt, i16t, p0i8, p0i8]);
     let t_smin = (i32t.clone(), tys![i32t, i32t]);
 
     // The `air.externally_defined` matmul ABI.
@@ -91,7 +93,7 @@ pub fn mpp_abi(cfg: &MppGemm, _profile: &TargetProfile) -> MppAbi {
     coop_init_p.extend(tys![p0i8, i32t, i32t, i32t, i32t]);
     let mut coop_ep_p = dfields();
     coop_ep_p.extend(tys![p0i8, i16t, i32t, i32t, i32t]);
-    let run_p = tys![p0i8, p0i8, i32t, p0i8, i32t, p0i8, i32t];
+    let run_p = tys![pd, p0i8, i32t, p0i8, i32t, p0i8, i32t];
     let mut store_p = dfields();
     store_p.extend(tys![p0i8, p0i8, i32t, i32t, i32t, i32t]);
 

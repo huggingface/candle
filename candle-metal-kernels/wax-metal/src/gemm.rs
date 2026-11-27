@@ -170,10 +170,8 @@ pub fn sgmma_tile_aligned(spec: &GemmSpec) -> (usize, usize) {
     } else if tiles32 <= 8192 || spec.k < 256 {
         if thin >= 192 {
             &[(32, 32), (32, 64), (16, 32), (16, 16), (8, 8)]
-        } else if spec.k >= THIN_DEEP_K {
-            &[(16, 32), (32, 64), (32, 32), (16, 16), (8, 8)]
         } else {
-            &[(32, 64), (16, 32), (32, 32), (16, 16), (8, 8)]
+            &[(16, 32), (32, 64), (32, 32), (16, 16), (8, 8)]
         }
     } else {
         if thin >= 192 {
@@ -219,9 +217,6 @@ const SQUARISH_MAX_TILES: usize = 1024;
 const SQUARISH_MIN_TILES_PER_DIM: usize = 16;
 /// Largest aligned fp32 square allowed past the thin-N floor.
 const SMALL_SQUARE_MAX: usize = 256;
-/// Given a thin gemm shape (`min(M,N) < 192`), this is the limit at or above which a smaller
-/// SGMMA tile is preferred.
-const THIN_DEEP_K: usize = 4096;
 /// Threadgroup-count lower limit for taking the full 32x32 MPP tile on a deep-K fp32 shape.
 /// Below this `MPP_TILE_SMALL` or `MPP_TILE_TINY` is preferred.
 const MPP_FULL_TILE_MIN_TILES: usize = 128;
@@ -280,6 +275,8 @@ const MPP_COLLAPSED_TILE_WORK_FLOOR: usize = 12 << 20;
 /// K splits used when the working set size forces a split. Measured. 2 and 8 are both worse.
 // TODO: sweep for both different split-k problems and splits.
 const SPLITS: i32 = 4;
+/// Tile count at which an f32 deep-K grid already fills the device, so split-K stops paying.
+const FP32_SPLIT_MAX_TILES: usize = 512;
 
 /// SIMD groups for the transposed `gemv_t` layout at a short K, where each group owns one
 /// output column and the grid is `n / sg`.
@@ -413,11 +410,7 @@ fn route_inner(spec: &GemmSpec) -> Routing {
     }
 
     // Consider thin-M case
-    if spec.m >= MPP_THIN_M_MIN
-        && spec.m < MPP_THIN_MAX
-        && spec.n >= MPP_THIN_MAX
-        && spec.elem_bytes <= 2
-    {
+    if spec.m >= MPP_THIN_M_MIN && spec.m < MPP_THIN_MAX && spec.n >= MPP_THIN_MAX {
         let (bm, bn) = MPP_THIN_M_TILE;
         return Routing {
             plan: Plan::Mpp { bm, bn, splits: 1 },
@@ -456,12 +449,14 @@ fn route_inner(spec: &GemmSpec) -> Routing {
     }
 
     if is_aligned && is_f32 && working_set >= FP32_MPP_WORKING_SET_MAX {
+        let tiles = spec.m.div_ceil(bm as usize) * spec.n.div_ceil(bn as usize);
+        let splits = if tiles >= FP32_SPLIT_MAX_TILES {
+            1
+        } else {
+            SPLITS
+        };
         return Routing {
-            plan: Plan::Mpp {
-                bm,
-                bn,
-                splits: SPLITS,
-            },
+            plan: Plan::Mpp { bm, bn, splits },
             reason: Reason::Fp32WorkingSet,
         };
     }
@@ -493,18 +488,18 @@ fn route_inner(spec: &GemmSpec) -> Routing {
 
 /// Calculates the [`GemmSpec`]'s `(BM, BN, BK)` for the unsubstituted GEMM.
 ///
-/// Same output as `sgmma_tile`, except when `M = 1`. Returns `None` if `K % BK != 0`,
-/// because otherwise a `K / BK` loop would silently drop part of the reduction.
-pub fn module_tile(spec: &GemmSpec) -> Option<(usize, usize, usize)> {
+/// Same output as `sgmma_tile`, except when `M = 1`.
+/// `K % BK != 0` is handled by `padding::Zero`. Surplus lanes read zero.
+pub fn module_tile(spec: &GemmSpec) -> (usize, usize, usize) {
     if spec.m == 1 {
-        return Some((1, 32, 1));
+        return (1, 32, 1);
     }
     let (bm, bn, bk) = sgmma_tile(spec);
-    if spec.k.is_multiple_of(bk) {
-        return Some((bm, bn, bk));
+    // A K below one block takes `BK = 1`, which divides everything.
+    if spec.k < bk {
+        return (1, 32, 1);
     }
-    // Here `K` is not a multiple of `BK`, so we only accept `K <= SGMMA_BK`.
-    (spec.k <= SGMMA_BK).then_some((1, 32, 1))
+    (bm, bn, bk)
 }
 
 /// A lowered GEMM kernel
@@ -853,18 +848,10 @@ fn lower(
         // `with_threads` updates the threadgroup if conversion has inferred threads, otherwise
         // we fall back to a single SIMD group.
         None => {
-            let (bm, bn) = match pattern {
-                Ok(p) => (p.bm as usize, p.bn as usize),
-                Err(_) => {
-                    let (bm, bn, _) = module_tile(spec).ok_or_else(|| {
-                        crate::LowerError::MalformedIr(format!(
-                            "no tile accepts {}x{}x{}, so an unrecognised kernel has no grid",
-                            spec.m, spec.n, spec.k
-                        ))
-                    })?;
-                    (bm, bn)
-                }
-            };
+            let (bm, bn, _bk) = pattern
+                .as_ref()
+                .map(|p| (p.bm as usize, p.bn as usize, p.bk as usize))
+                .unwrap_or_else(|_| module_tile(spec));
             let simd = SIMD_WIDTH as usize;
             crate::Launch::new((spec.m.div_ceil(bm), spec.n.div_ceil(bn), 1), (simd, 1, 1))
         }
@@ -925,7 +912,7 @@ fn realise_mpp(
         dtype,
         m: spec.m as i32,
         n: spec.n as i32,
-        k: p.k() as i32,
+        k: spec.k as i32,
         lda: p.lda as i32,
         ldb: p.ldb as i32,
         // First split-k step writes contiguous partials (`ldc == n`).
@@ -1053,11 +1040,7 @@ mod module_tile_tests {
     #[test]
     fn gemv_t_guard() {
         for k in [1usize, 64, 2048, 8192] {
-            assert_eq!(
-                module_tile(&GemmSpec::new(1, 2, k, 3)),
-                Some((1, 32, 1)),
-                "k={k}"
-            );
+            assert_eq!(module_tile(&GemmSpec::new(1, 2, k, 3)), (1, 32, 1), "k={k}");
         }
     }
 
@@ -1065,22 +1048,18 @@ mod module_tile_tests {
     fn should_equal_sgmma_selector() {
         for m in [2usize, 64, 2048, 8192] {
             let spec = GemmSpec::new(m, 2048, 4096, 4);
-            assert_eq!(module_tile(&spec), Some(sgmma_tile(&spec)));
+            assert_eq!(module_tile(&spec), sgmma_tile(&spec));
         }
     }
 
-    /// K not divisible by BK is rejected
     #[test]
-    fn indivisible_k_is_rejected() {
-        assert_eq!(
-            module_tile(&GemmSpec::new(128, 2048, 12, 2)),
-            None,
-            "12 % 8 != 0"
-        );
+    fn indivisible_k_is_masked() {
+        let spec = GemmSpec::new(128, 2048, 12, 2);
+        assert_eq!(module_tile(&spec), sgmma_tile(&spec));
         // A K the deep block (32) would break is fine. `sgmma_tile` falls back to BK = 8.
         let spec = GemmSpec::new(128, 2048, 40, 2);
         let (bm, bn, _) = sgmma_tile(&spec);
-        assert_eq!(module_tile(&spec), Some((bm, bn, 8)), "40 % 8 == 0");
+        assert_eq!(module_tile(&spec), (bm, bn, 8), "40 % 8 == 0");
     }
 }
 
@@ -1125,8 +1104,8 @@ mod tests {
     fn tiny_indivisible_k_takes_the_bk1_tile() {
         for k in 1..=SGMMA_BK {
             let spec = GemmSpec::new(131072, 32, k, 2);
-            let got = module_tile(&spec).unwrap_or_else(|| panic!("K={k} refused"));
-            // Either a block divides K, or the BK=1 tile takes it. Never `None`.
+            let got = module_tile(&spec);
+            // Either a block divides K, or the BK=1 tile takes it.
             assert!(
                 k.is_multiple_of(got.2),
                 "K={k} tile {got:?} drops part of the reduction"
@@ -1134,10 +1113,10 @@ mod tests {
         }
     }
 
-    // TODO: Improve.
     #[test]
-    fn large_indivisible_k_is_rejected() {
-        assert_eq!(module_tile(&GemmSpec::new(2048, 2048, 1023, 2)), None);
+    fn large_indivisible_k_is_masked() {
+        let spec = GemmSpec::new(2048, 2048, 1023, 2);
+        assert_eq!(module_tile(&spec), sgmma_tile(&spec));
     }
 
     #[test]
@@ -1298,7 +1277,7 @@ mod tests {
 
     #[test]
     fn few_tiles_do_not_split_k() {
-        for (m, n, k) in [(1024, 1024, 1024), (1023, 1023, 1023), (511, 511, 511)] {
+        for (m, n, k) in [(1024, 1024, 1024), (1023, 1023, 1024), (511, 511, 512)] {
             let got = r(m, n, k, 2);
             assert!(
                 matches!(got.plan, Plan::Mpp { .. }),
@@ -1371,9 +1350,10 @@ mod tests {
         );
 
         // The bypassed floor must hold for everything that is not a small aligned f32 square.
-        assert_eq!(r(128, 4096, 4096, 4).reason, Reason::ThinN);
+        assert_eq!(r(4096, 128, 4096, 4).reason, Reason::ThinN);
+        assert_eq!(r(128, 4096, 4096, 4).reason, Reason::ThinM);
         assert_eq!(r(128, 128, 128, 2).reason, Reason::ThinN);
-        assert_eq!(r(129, 129, 129, 4).reason, Reason::ThinN);
+        assert_eq!(r(129, 129, 128, 4).reason, Reason::ThinN);
         assert_eq!(r(384, 384, 384, 4).reason, Reason::EnoughWork);
     }
 }

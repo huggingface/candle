@@ -89,6 +89,22 @@ impl ToBitcodeTy for super::types::AirPtrType {
     }
 }
 
+/// Tensor handle opaque struct.
+#[type_interface_impl]
+impl ToBitcodeTy for super::types::AirTensorHandleType {
+    fn to_bitcode_ty(&self, _ctx: &Context) -> Option<Ty> {
+        Some(Ty::Opaque(super::types::TENSOR_T))
+    }
+}
+
+/// Matmul2d descriptor opaque struct.
+#[type_interface_impl]
+impl ToBitcodeTy for super::types::AirMatmul2dDescType {
+    fn to_bitcode_ty(&self, _ctx: &Context) -> Option<Ty> {
+        Some(Ty::Opaque(super::types::MATMUL2D_DESC))
+    }
+}
+
 /// Scalar type special values.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Special {

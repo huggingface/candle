@@ -41,12 +41,14 @@ const TYPE_CODE_VOID: u32 = 2;
 const TYPE_CODE_FLOAT: u32 = 3;
 const TYPE_CODE_DOUBLE: u32 = 4;
 const TYPE_CODE_LABEL: u32 = 5;
+const TYPE_CODE_OPAQUE: u32 = 6;
 const TYPE_CODE_INTEGER: u32 = 7;
 const TYPE_CODE_POINTER: u32 = 8;
 const TYPE_CODE_HALF: u32 = 10;
 const TYPE_CODE_ARRAY: u32 = 11;
 const TYPE_CODE_VECTOR: u32 = 12;
 const TYPE_CODE_METADATA: u32 = 16;
+const TYPE_CODE_STRUCT_NAME: u32 = 19;
 const TYPE_CODE_FUNCTION: u32 = 21;
 const TYPE_CODE_BFLOAT: u32 = 23;
 
@@ -66,6 +68,8 @@ pub enum Ty {
     /// `pointee addrspace(space)*`
     Ptr(Box<Ty>, u32),
     Vector(u32, Box<Ty>),
+    /// Opaque struct `%name = type opaque`
+    Opaque(&'static str),
     Array(u64, Box<Ty>),
     Func {
         ret: Box<Ty>,
@@ -160,6 +164,11 @@ impl TypeTable {
                 Ty::Ptr(p, space) => {
                     let pi = self.index[p.as_ref()] as u64;
                     w.record(TYPE_CODE_POINTER, &[pi, *space as u64]);
+                }
+                Ty::Opaque(name) => {
+                    let chars: Vec<u64> = name.bytes().map(u64::from).collect();
+                    w.record(TYPE_CODE_STRUCT_NAME, &chars);
+                    w.record(TYPE_CODE_OPAQUE, &[0]);
                 }
                 Ty::Vector(n, e) => {
                     let ei = self.index[e.as_ref()] as u64;

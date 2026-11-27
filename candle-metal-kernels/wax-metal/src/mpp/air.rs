@@ -48,6 +48,25 @@ impl<'a> MppAir<'a> {
         t::ptr_ty(self.ctx, pointee, addrspace)
     }
 
+    /// `%struct._tensor_t*`. Required by tensor intrinsics.
+    fn tensor_ptr(&mut self) -> TypeHandle {
+        let h = crate::air_dialect::types::AirTensorHandleType::get(self.ctx).into();
+        self.ptr(h, 0)
+    }
+
+    /// Reinterpret descriptor as `matmul2d_descriptor` struct pointer.
+    fn as_desc(&mut self, v: Value) -> Value {
+        let h = crate::air_dialect::types::AirMatmul2dDescType::get(self.ctx).into();
+        let ty = self.ptr(h, 0);
+        self.cast(ty, v, CastOpAttr::Bitcast)
+    }
+
+    /// Reinterpret an `i8*` tensor allocation as the tensor handle.
+    fn as_tensor(&mut self, v: Value) -> Value {
+        let ty = self.tensor_ptr();
+        self.cast(ty, v, CastOpAttr::Bitcast)
+    }
+
     /// Output element type of this kernel.
     fn oelem(&self) -> TypeHandle {
         elem_ty(self.ctx, self.cfg.out_dtype)
@@ -155,6 +174,9 @@ impl<'a> MppAir<'a> {
     }
 
     /// The matmul2d descriptor. BM, BN, BK, transA, transB, relaxed, mode.
+    ///
+    /// We use `relaxed = 1`. Apple defaults to 0. Measured faster at no precision cost.
+    /// Worth knowing about in case gemm precision becomes an issue.
     fn desc_args(&mut self) -> Vec<Value> {
         vec![
             self.const_i(32, self.cfg.bm),
@@ -290,7 +312,6 @@ pub fn mpp_air(cfg: &MppGemm, ctx: &mut Context) -> FuncOp {
     };
 
     // Common consts used below.
-    let i8_2 = e.const_i(8, 2);
     let i16_0 = e.const_i(16, 0);
     let i16_1 = e.const_i(16, 1);
     let i16_2 = e.const_i(16, 2);
@@ -351,13 +372,16 @@ pub fn mpp_air(cfg: &MppGemm, ctx: &mut Context) -> FuncOp {
     let (a_arg, b_arg, cbase) = e.batch_window(tg_arg, a_arg, b_arg, cbase);
 
     // Initialise the three full tensor descriptors.
-    for (tp, buf, ev, sv) in [
-        (ta, a_arg, ea, sla),
-        (tb, b_arg, eb, slb),
-        (tc, cbase, ec, slc),
+    let in_code = e.const_i(8, cfg.dtype.elem_code());
+    let out_code = e.const_i(8, cfg.out_dtype.elem_code());
+    for (tp, buf, ev, sv, code) in [
+        (ta, a_arg, ea, sla, in_code),
+        (tb, b_arg, eb, slb, in_code),
+        (tc, cbase, ec, slc, out_code),
     ] {
         let i8p = e.cast(e.ptr(i8_t, 1), buf, CastOpAttr::Bitcast);
-        e.call_void(abi::INIT_STRIDED, vec![tp, i16_2, i8p, ev, sv, i8_2]);
+        let tph = e.as_tensor(tp);
+        e.call_void(abi::INIT_STRIDED, vec![tph, i16_2, i8p, ev, sv, code]);
     }
 
     let (m_off, n_off) = e.tile_origin(tg_arg);
@@ -381,8 +405,9 @@ pub fn mpp_air(cfg: &MppGemm, ctx: &mut Context) -> FuncOp {
         (sc, tc, n_off, m_off, Some(n_off), Some(m_off), 2),
     ] {
         let origin = e.mk_pair(o0, o1);
-        let x0 = e.call(abi::EXTENT, i32_t, vec![src, i16_2, i16_0]);
-        let x1 = e.call(abi::EXTENT, i32_t, vec![src, i16_2, i16_1]);
+        let srch = e.as_tensor(src);
+        let x0 = e.call(abi::EXTENT, i32_t, vec![srch, i16_2, i16_0]);
+        let x1 = e.call(abi::EXTENT, i32_t, vec![srch, i16_2, i16_1]);
         let e0 = if let Some(off) = shrink0 {
             e.bin(i32_t, x0, off, BinKind::Sub)
         } else if let Some(kext) = k_extent.filter(|_| split_dim == 0) {
@@ -398,7 +423,8 @@ pub fn mpp_air(cfg: &MppGemm, ctx: &mut Context) -> FuncOp {
             x1
         };
         let extent = e.mk_pair(e0, e1);
-        e.call_void(abi::SLICE, vec![dst, src, i16_2, origin, extent]);
+        let dsth = e.as_tensor(dst);
+        e.call_void(abi::SLICE, vec![dsth, srch, i16_2, origin, extent]);
     }
 
     // Cooperative destination tensor, the matmul, then the store.
@@ -414,9 +440,10 @@ pub fn mpp_air(cfg: &MppGemm, ctx: &mut Context) -> FuncOp {
     ep_args.extend([coop, i32_neg1, const_tag, const_tag, const_out_tag]);
     let dst_ptr = e.call(abi::COOP_EP, e.ptr(i8_t, 0), ep_args);
 
+    let desc_p = e.as_desc(desc_i8);
     e.call_void(
         &abi::run(cfg.dtype, cfg.out_dtype),
-        vec![desc_i8, sa, i32_2, sb, i32_2, dst_ptr, sg],
+        vec![desc_p, sa, i32_2, sb, i32_2, dst_ptr, sg],
     );
 
     let mut store_args = e.desc_args();

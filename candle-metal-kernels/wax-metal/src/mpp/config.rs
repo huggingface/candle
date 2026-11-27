@@ -35,6 +35,15 @@ impl MppDtype {
         }
     }
 
+    /// `air.init_strided_private_tensor`'s element type.
+    pub(super) fn elem_code(self) -> i32 {
+        match self {
+            MppDtype::F32 => 0,
+            MppDtype::F16 => 1,
+            MppDtype::BF16 => 2,
+        }
+    }
+
     pub fn size(self) -> u32 {
         match self {
             MppDtype::BF16 | MppDtype::F16 => 2,

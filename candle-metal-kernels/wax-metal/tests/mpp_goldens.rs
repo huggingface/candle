@@ -133,6 +133,9 @@ fn air_realisation_matches_goldens() {
                 continue;
             }
         };
+        if let Ok(dir) = std::env::var("WAX_GOLDEN_OUT") {
+            let _ = std::fs::write(format!("{dir}/{name}.bc"), &res);
+        }
         if res != expected {
             failed.push(format!(
                 "{name}: {} bytes vs golden {}",

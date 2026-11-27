@@ -27,7 +27,7 @@ pub mod kernels {
         let part_y = y.partition(const_shape![BK, BN]);
         let pid: (i32, i32, i32) = get_tile_block_id();
         let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-        for i in 0i32..(K / BK) {
+        for i in 0i32..((K + BK - 1) / BK) {
             let tile_x = part_x.load([pid.0, i]);
             let tile_y = part_y.load([i, pid.1]);
             acc = mmaf(tile_x, tile_y, acc);
@@ -54,7 +54,7 @@ pub mod kernels {
         let xp = x.partition(const_shape![BM, BK]);
         let yp = y.partition(const_shape![BK, BN]);
         let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-        for i in 0i32..(K / BK) {
+        for i in 0i32..((K + BK - 1) / BK) {
             acc = mmaf(xp.load([pid.0, i]), yp.load([i, pid.1]), acc);
         }
         let ztok: Token = get_tensor_token(z);
@@ -84,7 +84,7 @@ pub mod kernels {
         let part_x = x.partition(const_shape![1, BM, BK]);
         let part_y = y.partition(const_shape![1, BK, BN]);
         let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-        for i in 0i32..(K / BK) {
+        for i in 0i32..((K + BK - 1) / BK) {
             let tile_x: Tile<E, { [BM, BK] }> = part_x
                 .load([batch_idx, m_idx, i])
                 .reshape(const_shape![BM, BK]);
@@ -114,7 +114,7 @@ pub mod kernels {
         let part_x = x.partition(const_shape![1, BM, BK]);
         let part_y = y.partition(const_shape![1, BK, BN]);
         let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-        for i in 0i32..(K / BK) {
+        for i in 0i32..((K + BK - 1) / BK) {
             let tile_x: Tile<E, { [BM, BK] }> =
                 part_x.load([pid.0, pid.1, i]).reshape(const_shape![BM, BK]);
             let tile_y: Tile<E, { [BK, BN] }> =

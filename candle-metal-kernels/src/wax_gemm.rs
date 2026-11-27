@@ -184,12 +184,7 @@ fn lower_kernel(key: &PlanKey) -> Result<wax_metal::LoweredKernel, MetalKernelEr
         a_batch: key.a_batch.max(0) as usize,
         b_batch: key.b_batch.max(0) as usize,
     };
-    let Some((bm, bn, bk)) = wax_metal::gemm::module_tile(&spec) else {
-        return Err(MetalKernelError::LoadLibraryError(format!(
-            "wax gemm: K={} is not a multiple of any K block the tile loop accepts",
-            key.k,
-        )));
-    };
+    let (bm, bn, bk) = wax_metal::gemm::module_tile(&spec);
     // The plain store is only correct when the tiling divides the shape. Padded uses masked
     // stores.
     // CompileKey is made up of the entire input to the frontend. M and N etc are provided at

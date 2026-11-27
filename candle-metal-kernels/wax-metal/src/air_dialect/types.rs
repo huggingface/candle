@@ -12,6 +12,24 @@ use pliron::context::Context;
 use pliron::derive::pliron_type;
 use pliron::r#type::TypeHandle;
 
+pub const TENSOR_T: &str = "struct._tensor_t";
+pub const MATMUL2D_DESC: &str = "struct.mpp::tensor_ops::matmul2d_descriptor";
+
+/// MPP tensor handle. `%struct._tensor_t = type opaque`.
+#[pliron_type(name = "air.tensor_t", format, generate_get = true, verifier = "succ")]
+#[derive(Hash, PartialEq, Eq, Debug)]
+pub struct AirTensorHandleType;
+
+/// MPP `matmul2d`'s descriptor struct.
+#[pliron_type(
+    name = "air.matmul2d_desc",
+    format,
+    generate_get = true,
+    verifier = "succ"
+)]
+#[derive(Hash, PartialEq, Eq, Debug)]
+pub struct AirMatmul2dDescType;
+
 /// A pointer that knows its pointee and address space (1 device, 2 constant, 3 threadgroup).
 #[pliron_type(
     name = "air.ptr",
