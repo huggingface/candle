@@ -12,6 +12,7 @@ use pliron::builtin::op_interfaces::{
     RegionBranchOpInterface, RegionBranchPoint, RegionEdge, RegionSuccessor,
 };
 use pliron::builtin::types::{IntegerType, Signedness};
+use pliron::common_traits::Verify;
 use pliron::context::{Context, Ptr};
 use pliron::derive::pliron_op;
 use pliron::op::Op;
@@ -20,7 +21,9 @@ use pliron::region::Region;
 use pliron::r#type::TypeHandle;
 use pliron::utils::apint::APInt;
 use pliron::value::Value;
+use pliron::verify_err_noloc;
 use std::result::Result;
+use thiserror::Error;
 
 pliron::dict_key!(
     /// Key for the operator/predicate an op carries.
@@ -264,10 +267,52 @@ pub struct LoadViewOp;
 #[pliron_op(
     name = "wax.store_view",
     operands = (val, view, rest),
-    format,
-    verifier = "succ"
+    format
 )]
 pub struct StoreViewOp;
+
+#[derive(Debug, Error)]
+#[error("Store where tile dim {dim} does not divide extent {extent}, and has no padding.")]
+pub struct UnboundedStoreErr {
+    dim: usize,
+    extent: i64,
+}
+
+impl Verify for StoreViewOp {
+    /// A ragged store requires padding so it can be masked. Store defaults to `padding::None`, so
+    /// this is a real risk, however we only consider fully static shapes as we can not prove a
+    /// store with unknown `DYNAMIC` strides needs padding.
+    fn verify(&self, ctx: &Context) -> pliron::result::Result<()> {
+        let view = {
+            let op = self.get_operation().deref(ctx);
+            let Some(v) = op.operands().nth(1) else {
+                return Ok(());
+            };
+            v
+        };
+        let Some(crate::Type::PartitionView(pv)) = crate::dialect::source::value_type(ctx, view)
+        else {
+            return Ok(());
+        };
+        match unbounded_dim(&pv) {
+            Some((dim, extent)) => verify_err_noloc!(UnboundedStoreErr { dim, extent }),
+            None => Ok(()),
+        }
+    }
+}
+
+/// The first axis a store would write past. A tile that does not divide a static extent, with no
+/// padding to mask the remainder. `DYNAMIC` extents are unknown.
+fn unbounded_dim(pv: &crate::types::PartitionViewType) -> Option<(usize, i64)> {
+    if pv.padding_value.is_some() {
+        return None;
+    }
+    pv.tile_shape.iter().enumerate().find_map(|(d, &tile)| {
+        let &ext = pv.tensor_view.shape.get(d)?;
+        let ragged = ext != crate::DYNAMIC && ext > 0 && tile > 0 && ext % i64::from(tile) != 0;
+        ragged.then_some((d, ext))
+    })
+}
 
 /// A range/divisibility assumption the frontend proved.
 ///
@@ -888,5 +933,87 @@ impl RegionBranchOpInterface for IfOp {
             });
         }
         edges
+    }
+}
+
+#[cfg(test)]
+mod store_bounds {
+    use super::unbounded_dim;
+    use crate::types::{PaddingValue, PartitionViewType, ScalarType, TensorViewType};
+
+    fn pv(tile: &[i32], shape: &[i64], pad: Option<PaddingValue>) -> PartitionViewType {
+        PartitionViewType {
+            tile_shape: tile.to_vec(),
+            tensor_view: TensorViewType {
+                element_type: ScalarType::F32,
+                shape: shape.to_vec(),
+                strides: vec![1; shape.len()],
+            },
+            dim_map: (0..shape.len() as i32).collect(),
+            padding_value: pad,
+        }
+    }
+
+    #[test]
+    fn unbounded_dim_produces_expected_results() {
+        // Divides correctly
+        assert_eq!(unbounded_dim(&pv(&[1, 32], &[8, 128], None)), None);
+        // Does not divide.
+        assert_eq!(
+            unbounded_dim(&pv(&[1, 32], &[8, 100], None)),
+            Some((1, 100))
+        );
+        // Does not divide - has padding.
+        assert_eq!(
+            unbounded_dim(&pv(&[1, 32], &[8, 100], Some(PaddingValue::Zero))),
+            None
+        );
+        // Can not be proven unbounded.
+        assert_eq!(
+            unbounded_dim(&pv(&[1, 32], &[8, crate::DYNAMIC], None)),
+            None
+        );
+    }
+
+    /// Emits a real `wax.store_view` through a `[1, lanes]` view of `[8, cols]`.
+    fn emit(cols: i64, lanes: i64, pad: Option<PaddingValue>) -> Result<(), String> {
+        use crate::passes::utils::{
+            at_end_of, const_i32, const_scalar, make_token, partition_view, ptr_tile, store_view,
+            tensor_view, terminator, tile,
+        };
+        let mut m = crate::Module::new("store_bounds");
+        let module_op = m.module_op();
+        let elem = ScalarType::F32;
+        let (_f, entry, args) =
+            crate::build::begin_function_in(&mut m.ctx, module_op, "s", &[ptr_tile(&elem)])
+                .unwrap();
+        let tv = TensorViewType {
+            element_type: elem.clone(),
+            shape: vec![8, cols],
+            strides: vec![cols, 1],
+        };
+        let ins = &mut at_end_of(entry);
+        let view = tensor_view(&mut m.ctx, ins, args[0], &tv).unwrap();
+        let pv = partition_view(&mut m.ctx, ins, view, &[1, lanes as i32], &tv, pad).unwrap();
+        let row = tile(&[1, lanes], elem.clone());
+        let value = const_scalar(&mut m.ctx, ins, &row, ScalarType::F32, [0, 0, 0, 0]).unwrap();
+        let tok = make_token(&mut m.ctx, ins).unwrap();
+        let i0 = const_i32(&mut m.ctx, ins, 0).unwrap();
+        let i1 = const_i32(&mut m.ctx, ins, 0).unwrap();
+        // The op verifier runs on emission, so an unbounded store is refused right here.
+        store_view(&mut m.ctx, ins, value, pv, i0, i1, tok).map_err(|e| format!("{e:?}"))?;
+        terminator(&mut m.ctx, ins, crate::Opcode::Return, &[]).unwrap();
+        m.verify()
+    }
+
+    #[test]
+    fn unbounded_store_is_refused() {
+        let e = emit(100, 32, None).expect_err("100 is not a multiple of 32");
+        assert!(e.contains("UnboundedStoreErr"), "{e}");
+    }
+
+    #[test]
+    fn masked_store_is_accepted() {
+        emit(100, 32, Some(PaddingValue::Zero)).expect("masked ragged store is fine");
     }
 }

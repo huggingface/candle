@@ -216,6 +216,11 @@ pub fn sgmma_dims(ty: &Type) -> Option<(usize, usize)> {
         }) => (shape, s),
         _ => return None,
     };
+    let shape: Vec<i64> = if shape.len() <= 2 {
+        shape.clone()
+    } else {
+        shape.iter().copied().filter(|&d| d != 1).collect()
+    };
     if shape.len() != 2 || shape[0] <= 0 || shape[0] % 8 != 0 || shape[1] <= 0 || shape[1] % 8 != 0
     {
         return None;

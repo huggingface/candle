@@ -11,6 +11,7 @@ use crate::air_dialect::type_interfaces::bitcode_ty;
 use crate::air_dialect::types as t;
 use crate::bitcode::Ty;
 use crate::lower::to_bitcode::{BitcodeModuleAssembler, Callee};
+use crate::wax_to_air::wax_operand_ty;
 use pliron::basic_block::BasicBlock;
 use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{
@@ -303,6 +304,21 @@ impl DialectConversion for WaxToAir {
         let Some(code) = opcode_of(ctx, op) else {
             return Ok(());
         };
+        // A reshape that only adds or drops 1's does not move elements, and can be considered a
+        // noop / identity.
+        let unit_axis_reshape = code == Opcode::Reshape && {
+            let strip_ones = |s: Vec<_>| -> Vec<_> { s.into_iter().filter(|&d| d != 1).collect() };
+            let shape_of = |v| match wax_operand_ty(ctx, operands_info, v) {
+                Some(WaxType::Tile(tt)) => Some(strip_ones(tt.shape)),
+                _ => None,
+            };
+            let o = op.deref(ctx);
+            let a = o.operands().next();
+            let b = (o.get_num_results() == 1).then(|| o.get_result(0));
+            a.zip(b)
+                .and_then(|(a, b)| Some(shape_of(a)? == shape_of(b)?))
+                .unwrap_or(false)
+        };
         // If operands are registered as using the fragment grid, then we also ensure that the
         // op code is actually one that interact with it.
         // TODO: This check should at the very least not be defined here. Additionally it seems
@@ -310,10 +326,11 @@ impl DialectConversion for WaxToAir {
         if !matches!(
             code,
             Opcode::MmaF | Opcode::StoreViewTko | Opcode::For | Opcode::Reduce | Opcode::FToF
-        ) && op
-            .deref(ctx)
-            .operands()
-            .any(|v| self.frags.grids.contains_key(&v))
+        ) && !unit_axis_reshape
+            && op
+                .deref(ctx)
+                .operands()
+                .any(|v| self.frags.grids.contains_key(&v))
         {
             return self.refuse(code, "consumes a fragment grid");
         }

@@ -245,6 +245,9 @@ fn as_written_runs_the_pipeline_and_realises_nothing() {
         k: 0,
         elem_bytes: 4,
         ldc: 4096,
+        batch: 1,
+        a_batch: 0,
+        b_batch: 0,
     };
 
     let as_written = realise(&m, 0, 1, &spec).expect("pipeline runs");
@@ -325,6 +328,9 @@ fn multi_entry_module_is_rejected() {
         elem_bytes: 4,
         trans_b: false,
         ldc: 4096,
+        batch: 1,
+        a_batch: 0,
+        b_batch: 0,
     };
     match wax_metal::gemm::realise(&two, 8, 1, &spec) {
         Err(e) => assert!(

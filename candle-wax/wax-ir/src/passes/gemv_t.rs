@@ -114,6 +114,10 @@ fn applies(p: &GemmPattern, facts: &Facts) -> bool {
     if facts.m != 1 || facts.sg < 1 || facts.lanes < 1 {
         return false;
     }
+    // Requires row-major A.
+    if p.trans_a {
+        return false;
+    }
     // The wax gemv_t kernel tiles N in lane-wide chunks. `N < lanes` does not apply.
     if facts.n < facts.lanes {
         return false;

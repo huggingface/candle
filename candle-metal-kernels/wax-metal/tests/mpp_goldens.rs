@@ -4,6 +4,9 @@ mod common;
 
 fn cfg(name: &str) -> MppGemm {
     MppGemm {
+        batch: 1,
+        a_batch: 0,
+        b_batch: 0,
         entry: name.to_string(),
         dtype: MppDtype::F32,
         m: 256,
@@ -17,6 +20,7 @@ fn cfg(name: &str) -> MppGemm {
         out_dtype: MppDtype::F32,
         splits: 1,
         trans_b: false,
+        trans_a: false,
         simdgroups: 1,
     }
 }

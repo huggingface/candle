@@ -88,6 +88,9 @@ fn spec(m: usize, n: usize, k: usize) -> GemmSpec {
         k,
         elem_bytes: 4,
         ldc: n,
+        batch: 1,
+        a_batch: 0,
+        b_batch: 0,
     }
 }
 
@@ -172,6 +175,9 @@ fn mid_band_should_lower_to_gemv() {
             k: 256,
             elem_bytes: 2,
             ldc: 4096,
+            batch: 1,
+            a_batch: 0,
+            b_batch: 0,
         },
         &profile(),
     )
@@ -201,6 +207,9 @@ fn unrealisable_gemm_shape_falls_back_correctly() {
             k: 48,
             elem_bytes: 2,
             ldc: 512,
+            batch: 1,
+            a_batch: 0,
+            b_batch: 0,
         },
         &profile(),
     )
@@ -244,6 +253,9 @@ fn split_k_realises_scratch_and_second_dispatch() {
             k: 4096,
             elem_bytes: 2,
             ldc: 512,
+            batch: 1,
+            a_batch: 0,
+            b_batch: 0,
         },
         &profile(),
     )
@@ -277,6 +289,9 @@ fn unsplittable_split_k_downgrades_to_single_pass() {
             k: 4096,
             elem_bytes: 2,
             ldc: 96,
+            batch: 1,
+            a_batch: 0,
+            b_batch: 0,
         },
         &profile(),
     )
@@ -343,6 +358,9 @@ fn padded_gemm_lowers_correctly() {
         k: 2048,
         elem_bytes: 2,
         ldc: 4096,
+        batch: 1,
+        a_batch: 0,
+        b_batch: 0,
     };
     let result = lower_gemm(&m, &spec, &profile()).expect("lowers");
     assert!(

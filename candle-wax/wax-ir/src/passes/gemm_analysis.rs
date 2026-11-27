@@ -108,8 +108,10 @@ pub struct GemmPattern {
     pub accum_t: crate::types::ScalarType,
     // Element type of C.
     pub dst_t: crate::types::ScalarType,
-    // Indicates B is `[N, K]` and `C = A @ B.t()`. Typical `Linear` weight layout.
+    // B is `[N, K]` and `C = A @ B.t()`. Typical `Linear` weight layout.
     pub trans_b: bool,
+    // A is `[M, K]` and `C = A.t() @ B`.
+    pub trans_a: bool,
     pub epilogue: Epilogue,
 }
 
@@ -123,6 +125,79 @@ impl GemmPattern {
 // Ops that have no effect on the output.
 fn is_noise(op: Opcode) -> bool {
     matches!(op, Opcode::Constant | Opcode::Assume | Opcode::MakeToken)
+}
+
+/// Strip unit axes non-destructively.
+fn strip_unit(s: &[i64]) -> Vec<i64> {
+    if s.len() <= 2 {
+        return s.to_vec();
+    }
+    let stripped: Vec<i64> = s.iter().copied().filter(|&d| d != 1).collect();
+    if stripped.len() >= 2 {
+        stripped
+    } else {
+        s.to_vec()
+    }
+}
+
+/// A reshape that only adds or drops 1's moves no data, and is a noop / identity.
+fn is_unit_reshape(ctx: &Context, op: Ptr<Operation>) -> bool {
+    if opcode(ctx, op) != Some(Opcode::Reshape) {
+        return false;
+    }
+    let (Some(a), Some(b)) = (operands_of(ctx, op).first().copied(), op_result(ctx, op, 0)) else {
+        return false;
+    };
+    match (tile_shape(ctx, a), tile_shape(ctx, b)) {
+        (Some(x), Some(y)) => strip_unit(&x) == strip_unit(&y),
+        _ => false,
+    }
+}
+
+/// Consumers of `v`, seeing through unit axes reshapes.
+fn consumers_through_unit_reshapes(
+    ctx: &Context,
+    v: Value,
+    top: &[(Ptr<Operation>, Opcode)],
+) -> Vec<(Ptr<Operation>, Opcode)> {
+    let mut out = Vec::new();
+    let mut stack = vec![v];
+    let mut steps = 0usize;
+    while let Some(cur) = stack.pop() {
+        steps += 1;
+        if steps > 64 {
+            break;
+        }
+        for &(o, c) in top
+            .iter()
+            .filter(|(o, _)| operands_of(ctx, *o).contains(&cur))
+        {
+            if is_unit_reshape(ctx, o) {
+                if let Some(r) = op_result(ctx, o, 0) {
+                    stack.push(r);
+                }
+            } else {
+                out.push((o, c));
+            }
+        }
+    }
+    out
+}
+
+/// Follow a value back through unit axes reshapes to the value that produced the data.
+fn through_unit_reshapes(ctx: &Context, mut v: Value, ops: &[(Ptr<Operation>, Opcode)]) -> Value {
+    loop {
+        let Some((op, _)) = ops
+            .iter()
+            .find(|(o, _)| op_result(ctx, *o, 0) == Some(v) && is_unit_reshape(ctx, *o))
+        else {
+            return v;
+        };
+        match operands_of(ctx, *op).first().copied() {
+            Some(a) => v = a,
+            None => return v,
+        }
+    }
 }
 
 fn tile_shape(ctx: &Context, v: Value) -> Option<Vec<i64>> {
@@ -157,9 +232,20 @@ fn view_facts(ctx: &Context, view: Value) -> Option<(Layout, i64, crate::types::
         return None;
     };
     let st = &pv.tensor_view.strides;
-    if st.len() != 2 {
+    let axes: Vec<usize> = if pv.tile_shape.len() <= 2 {
+        (0..pv.tile_shape.len()).collect()
+    } else {
+        (0..pv.tile_shape.len())
+            .filter(|&d| pv.tile_shape[d] != 1)
+            .collect()
+    };
+    let [r, c] = axes[..] else {
+        return None;
+    };
+    if st.len() <= r || st.len() <= c {
         return None;
     }
+    let st = [st[r], st[c]];
     let elem = pv.tensor_view.element_type;
     match (st[0], st[1]) {
         (ld, 1) => Some((Layout::RowMajor, ld, elem)),
@@ -270,10 +356,14 @@ pub fn match_gemm(ctx: &Context, root: Ptr<Operation>) -> Result<GemmPattern, &'
 
     // Significant ops of the fn body, in order. Two loads, one mma, terminator.
     // TODO: Extend pattern.
-    let body_ops: Vec<(Ptr<Operation>, Opcode)> = block_ops(ctx, body)
+    let all_body_ops: Vec<(Ptr<Operation>, Opcode)> = block_ops(ctx, body)
         .into_iter()
         .filter_map(|o| opcode(ctx, o).map(|c| (o, c)))
-        .filter(|(_, c)| !is_noise(*c))
+        .collect();
+    let body_ops: Vec<(Ptr<Operation>, Opcode)> = all_body_ops
+        .iter()
+        .copied()
+        .filter(|(o, c)| !is_noise(*c) && !is_unit_reshape(ctx, *o))
         .collect();
     if body_ops.len() != 4 {
         return Err("loop body is not exactly two loads, an mma and a terminator");
@@ -290,8 +380,10 @@ pub fn match_gemm(ctx: &Context, root: Ptr<Operation>) -> Result<GemmPattern, &'
     // `mma(a, b, carry)`
     let mma_ops = operands_of(ctx, mma.0);
     if mma_ops.len() != 3
-        || Some(mma_ops[0]) != op_result(ctx, a_load.0, 0)
-        || Some(mma_ops[1]) != op_result(ctx, b_load.0, 0)
+        || Some(through_unit_reshapes(ctx, mma_ops[0], &all_body_ops))
+            != op_result(ctx, a_load.0, 0)
+        || Some(through_unit_reshapes(ctx, mma_ops[1], &all_body_ops))
+            != op_result(ctx, b_load.0, 0)
         || mma_ops[2] != carry
     {
         return Err("mma does not consume (a, b, carry)");
@@ -312,6 +404,8 @@ pub fn match_gemm(ctx: &Context, root: Ptr<Operation>) -> Result<GemmPattern, &'
         op_result(ctx, b_load.0, 0).ok_or("B load has no result")?,
     )
     .ok_or("B is not a tile")?;
+    let a_shape = strip_unit(&a_shape);
+    let b_shape = strip_unit(&b_shape);
     if a_shape.len() != 2 || b_shape.len() != 2 {
         return Err("A or B is not a 2D tile");
     }
@@ -335,11 +429,6 @@ pub fn match_gemm(ctx: &Context, root: Ptr<Operation>) -> Result<GemmPattern, &'
     )
     .ok_or("B view has no leading dimension")?;
 
-    // Currently we only support transposed B. Cases with transposed A or C are rejected.
-    // TODO: Support more cases
-    if a_layout != Layout::RowMajor {
-        return Err("A is transposed");
-    }
     if elem_t != b_elem {
         return Err("A and B have different element types");
     }
@@ -347,11 +436,7 @@ pub fn match_gemm(ctx: &Context, root: Ptr<Operation>) -> Result<GemmPattern, &'
     // The result must be consumed by exactly one store. A GEMM substitution would drop any
     // additional store.
     let for_res = op_result(ctx, for_op, 0).ok_or("loop result is unused")?;
-    let consumers: Vec<(Ptr<Operation>, Opcode)> = top
-        .iter()
-        .filter(|(o, _)| operands_of(ctx, *o).contains(&for_res))
-        .copied()
-        .collect();
+    let consumers = consumers_through_unit_reshapes(ctx, for_res, &top);
     if consumers.len() != 1 {
         return Err("the product has more than one consumer");
     }
@@ -361,11 +446,7 @@ pub fn match_gemm(ctx: &Context, root: Ptr<Operation>) -> Result<GemmPattern, &'
         (op, Opcode::StoreViewTko) => (op, Epilogue::None),
         (cast, Opcode::FToF) => {
             let cast_res = op_result(ctx, cast, 0).ok_or("the convert after the loop is unused")?;
-            let after: Vec<(Ptr<Operation>, Opcode)> = top
-                .iter()
-                .filter(|(o, _)| operands_of(ctx, *o).contains(&cast_res))
-                .copied()
-                .collect();
+            let after = consumers_through_unit_reshapes(ctx, cast_res, &top);
             if after.len() != 1 || after[0].1 != Opcode::StoreViewTko {
                 return Err("the convert after the loop is not consumed by one store");
             }
@@ -381,7 +462,7 @@ pub fn match_gemm(ctx: &Context, root: Ptr<Operation>) -> Result<GemmPattern, &'
     )
     .ok_or("C view has no leading dimension")?;
     if c_layout != Layout::RowMajor {
-        return Err("C is transposed, which no backend expresses");
+        return Err("C is transposed, currently unsupported.");
     }
 
     Ok(GemmPattern {
@@ -401,6 +482,7 @@ pub fn match_gemm(ctx: &Context, root: Ptr<Operation>) -> Result<GemmPattern, &'
         accum_t,
         dst_t,
         trans_b: b_layout == Layout::Transposed,
+        trans_a: a_layout == Layout::Transposed,
         epilogue,
     })
 }

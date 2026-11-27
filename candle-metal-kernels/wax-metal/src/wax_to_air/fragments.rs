@@ -121,16 +121,31 @@ pub(crate) fn sgmma_frag_scalar(
     crate::types::float_elem(ctx, e).map(|(t, _)| t)
 }
 
+/// The two axes carrying the fragment. `[1, BM, BK]` == `[BM, BK]`.
+fn frag_axes(pv: &wax_ir::types::PartitionViewType) -> Option<(usize, usize)> {
+    if pv.tile_shape.len() <= 2 {
+        return (pv.tile_shape.len() == 2).then_some((0, 1));
+    }
+    let non_unit: Vec<usize> = (0..pv.tile_shape.len())
+        .filter(|&d| pv.tile_shape[d] != 1)
+        .collect();
+    match non_unit.as_slice() {
+        [r, c] => Some((*r, *c)),
+        _ => None,
+    }
+}
+
 /// `(tile_h, tile_w), (row_stride, col_stride)`. Fragments are 2D by construction.
 fn frag_geometry(pv: &wax_ir::types::PartitionViewType) -> Option<((i64, i64), (i64, i64))> {
+    let (r, c) = frag_axes(pv)?;
     Some((
         (
-            i64::from(*pv.tile_shape.first()?),
-            i64::from(*pv.tile_shape.get(1)?),
+            i64::from(*pv.tile_shape.get(r)?),
+            i64::from(*pv.tile_shape.get(c)?),
         ),
         (
-            pv.tensor_view.strides.first().copied()?,
-            pv.tensor_view.strides.get(1).copied()?,
+            pv.tensor_view.strides.get(r).copied()?,
+            pv.tensor_view.strides.get(c).copied()?,
         ),
     ))
 }
@@ -171,6 +186,7 @@ impl EdgeGrid {
         index_ops: &[Value],
         tile_h: i64,
         tile_w: i64,
+        (row_axis, col_axis): (usize, usize),
     ) -> Self {
         // The extents, materialized from the planned bounds: a fixed ragged extent is a
         // constant, a dynamic one the promoted parameter the prologue loaded.
@@ -183,8 +199,8 @@ impl EdgeGrid {
                     Bound::Fixed(n) => air_const_i32(ctx, *n),
                 })
         };
-        let row_extent = ext(0);
-        let col_extent = ext(1);
+        let row_extent = ext(row_axis);
+        let col_extent = ext(col_axis);
         // The block's own origin, added once rather than per sub-tile.
         let mut org = |b: Option<&Value>, tile: i64| {
             b.map(|&b| {
@@ -192,8 +208,8 @@ impl EdgeGrid {
                 air_bin_i32(ctx, rewriter, b, t, BinKind::Mul)
             })
         };
-        let row_origin = org(index_ops.first(), tile_h);
-        let col_origin = org(index_ops.get(1), tile_w);
+        let row_origin = org(index_ops.get(row_axis), tile_h);
+        let col_origin = org(index_ops.get(col_axis), tile_w);
         Self {
             row_extent,
             col_extent,
@@ -442,6 +458,18 @@ impl WaxToAir {
         };
         let ptr_ty = view.get_type(ctx);
 
+        // Extract fragment axes.
+        let Some((row_axis, col_axis)) = frag_axes(pv) else {
+            return self.refuse(code, "fragment view is not 2D").map(|_| None);
+        };
+        // Validate dynamic strides against fragment axes.
+        for (d, s) in pv.tensor_view.strides.iter().enumerate() {
+            if *s == wax_ir::DYNAMIC && d != row_axis && d != col_axis {
+                return self
+                    .refuse(code, "dynamic stride outside the fragment axes")
+                    .map(|_| None);
+            }
+        }
         // Calculate base pointer from index ops.
         // Block indices scale by the full tile dim.
         // Dynamic stride multiplies by stride value, then tile scale.
@@ -451,11 +479,15 @@ impl WaxToAir {
         } else {
             let i32_ty = t::i32_ty(ctx);
             let mut off = None;
-            for (d, &idx) in index_ops.iter().enumerate().take(2) {
-                let (s, t, sd) = if d == 0 {
+            for (d, &idx) in index_ops.iter().enumerate() {
+                let (s, t, sd) = if d == row_axis {
                     (row_stride, tile_h, row_d)
-                } else {
+                } else if d == col_axis {
                     (col_stride, tile_w, col_d)
+                } else {
+                    let s = pv.tensor_view.strides.get(d).copied().unwrap_or(0);
+                    let t = i64::from(pv.tile_shape.get(d).copied().unwrap_or(1));
+                    (s, t, None)
                 };
                 let term = match sd {
                     Some(reg) => {
@@ -728,7 +760,16 @@ impl WaxToAir {
             emit_op(ctx, rewriter, u)
         };
 
-        let grid = EdgeGrid::new(ctx, rewriter, &p, &bounds, index_ops, tile_h, tile_w);
+        let grid = EdgeGrid::new(
+            ctx,
+            rewriter,
+            &p,
+            &bounds,
+            index_ops,
+            tile_h,
+            tile_w,
+            frag_axes(pv).unwrap_or((0, 1)),
+        );
         // TODO: Prefer no magic strings
         let emask_name = format!("@llvm.agx3.load.with.emask.global.v2{int_suf}");
         let mut frags = Vec::with_capacity(nr * nc);
@@ -995,7 +1036,16 @@ impl WaxToAir {
             bytes_i16,
             ..
         } = p;
-        let grid = EdgeGrid::new(ctx, rewriter, &p, &bounds, index_ops, tile_h, tile_w);
+        let grid = EdgeGrid::new(
+            ctx,
+            rewriter,
+            &p,
+            &bounds,
+            index_ops,
+            tile_h,
+            tile_w,
+            frag_axes(pv).unwrap_or((0, 1)),
+        );
 
         let u = air::UndefOp::new(ctx, pair_frag_ty);
         let undef_pair = emit_op(ctx, rewriter, u);

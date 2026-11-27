@@ -160,7 +160,7 @@ impl<'a> MppAir<'a> {
             self.const_i(32, self.cfg.bm),
             self.const_i(32, self.cfg.bn),
             self.const_i(32, -1),
-            self.const_i(8, 0),
+            self.const_i(8, i32::from(self.cfg.trans_a)),
             self.const_i(8, i32::from(self.cfg.trans_b)),
             self.const_i(8, 1),
             self.const_i(32, 0),
@@ -189,6 +189,30 @@ impl<'a> MppAir<'a> {
         (Some(k0), Some(kext), cb)
     }
 
+    /// Applies batch offsets to `a`, `b`, and `c`.
+    fn batch_window(&mut self, tg: Value, a: Value, b: Value, c: Value) -> (Value, Value, Value) {
+        if self.cfg.batch <= 1 {
+            return (a, b, c);
+        }
+        let two_idx = self.const_i(32, 2);
+        let z = self.extract(self.i32_t(), tg, two_idx);
+        let ielem = elem_ty(self.ctx, self.cfg.dtype);
+        let oelem = self.oelem();
+        let shift = |me: &mut Self, p: Value, stride: i32, elem: TypeHandle| -> Value {
+            if stride == 0 {
+                return p;
+            }
+            let s = me.const_i(32, stride);
+            let o = me.bin(me.i32_t(), z, s, BinKind::Mul);
+            let pt = me.ptr(elem, 1);
+            me.gep_el(pt, p, o, elem)
+        };
+        let a = shift(self, a, self.cfg.a_batch, ielem);
+        let b = shift(self, b, self.cfg.b_batch, ielem);
+        let c = shift(self, c, self.cfg.m * self.cfg.n, oelem);
+        (a, b, c)
+    }
+
     /// Tile origin as `(m_off, n_off)`. Grid x indexes N, y indexes M.
     fn tile_origin(&mut self, tg: Value) -> (Value, Value) {
         let zero_idx = self.const_i(32, 0);
@@ -209,7 +233,7 @@ impl<'a> MppAir<'a> {
             self.cfg.bm,
             self.cfg.bn,
             -1,
-            0x0001_0000 | (i32::from(self.cfg.trans_b) << 8),
+            0x0001_0000 | (i32::from(self.cfg.trans_b) << 8) | i32::from(self.cfg.trans_a),
             0,
         ];
         for (i, wv) in words.iter().enumerate() {
@@ -308,7 +332,11 @@ pub fn mpp_air(cfg: &MppGemm, ctx: &mut Context) -> FuncOp {
     let d_lda = e.const_i(32, cfg.lda);
     let d_ldb = e.const_i(32, cfg.ldb);
     let d_ldc = e.const_i(32, cfg.ldc);
-    let ea = e.mk_pair(d_k, d_m);
+    let ea = if cfg.trans_a {
+        e.mk_pair(d_m, d_k)
+    } else {
+        e.mk_pair(d_k, d_m)
+    };
     let sla = e.mk_pair(i32_1, d_lda);
     let eb = if cfg.trans_b {
         e.mk_pair(d_k, d_n)
@@ -320,6 +348,7 @@ pub fn mpp_air(cfg: &MppGemm, ctx: &mut Context) -> FuncOp {
     let slc = e.mk_pair(i32_1, d_ldc);
 
     let (k_origin, k_extent, cbase) = e.split_window(tg_arg, c_arg);
+    let (a_arg, b_arg, cbase) = e.batch_window(tg_arg, a_arg, b_arg, cbase);
 
     // Initialise the three full tensor descriptors.
     for (tp, buf, ev, sv) in [
@@ -336,13 +365,18 @@ pub fn mpp_air(cfg: &MppGemm, ctx: &mut Context) -> FuncOp {
     // Slices. Extents run from origin to end of tensor. Op clamps to its own BM/BN, so edge tiles
     // need no special case.
     let k_o = k_origin.unwrap_or(i32_0);
+    let (a_o0, a_o1, a_s0, a_s1, a_kdim) = if cfg.trans_a {
+        (m_off, k_o, Some(m_off), None, 1usize)
+    } else {
+        (k_o, m_off, None, Some(m_off), 0usize)
+    };
     let (b_o0, b_o1, b_s0, b_s1, b_kdim) = if cfg.trans_b {
         (k_o, n_off, None, Some(n_off), 0usize)
     } else {
         (n_off, k_o, Some(n_off), None, 1)
     };
     for (dst, src, o0, o1, shrink0, shrink1, split_dim) in [
-        (sa, ta, k_o, m_off, None, Some(m_off), 0usize),
+        (sa, ta, a_o0, a_o1, a_s0, a_s1, a_kdim),
         (sb, tb, b_o0, b_o1, b_s0, b_s1, b_kdim),
         (sc, tc, n_off, m_off, Some(n_off), Some(m_off), 2),
     ] {

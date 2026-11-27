@@ -6,7 +6,7 @@
 //! If lowering fails we fall back to [`crate::call_mlx_gemm`].
 
 use crate::metal::ComputePipeline;
-use crate::utils::EncoderProvider;
+use crate::utils::{BufferOffset, EncoderProvider};
 use crate::wax_metal_cache::persistent_cache;
 use crate::{Buffer, ComputeCommandEncoder, Device, MetalKernelError};
 use std::rc::Rc;
@@ -28,6 +28,13 @@ struct PlanKey {
     lda: i32,
     ldb: i32,
     trans_b: bool,
+    trans_a: bool,
+    /// Batch count
+    batch: usize,
+    /// A batch strides
+    a_batch: i32,
+    /// B batch strides
+    b_batch: i32,
 }
 
 /// Dispatch specification ready to launch.
@@ -53,9 +60,9 @@ impl BufferRole {
         &self,
         enc: &crate::metal::encoder::ComputeCommandEncoder,
         scratch: Option<&crate::metal::Buffer>,
-        lhs: &crate::metal::Buffer,
-        rhs: &crate::metal::Buffer,
-        out: &crate::metal::Buffer,
+        lhs: BufferOffset,
+        rhs: BufferOffset,
+        out: BufferOffset,
     ) {
         match self {
             BufferRole::Primary { dest_is_scratch } => {
@@ -64,18 +71,47 @@ impl BufferRole {
                         enc.set_output_buffer(0, Some(s), 0);
                     }
                 } else {
-                    enc.set_output_buffer(0, Some(out), 0);
+                    enc.set_output_buffer(0, Some(out.buffer), out.offset_in_bytes);
                 }
-                enc.set_input_buffer(1, Some(lhs), 0);
-                enc.set_input_buffer(2, Some(rhs), 0);
+                enc.set_input_buffer(1, Some(lhs.buffer), lhs.offset_in_bytes);
+                enc.set_input_buffer(2, Some(rhs.buffer), rhs.offset_in_bytes);
             }
             BufferRole::Reduce => {
-                enc.set_output_buffer(0, Some(out), 0);
+                enc.set_output_buffer(0, Some(out.buffer), out.offset_in_bytes);
                 if let Some(s) = scratch {
                     enc.set_input_buffer(1, Some(s), 0);
                 }
             }
         }
+    }
+}
+
+/// `[b, M, K] @ [K, N]` is the same as `[b*M, K] @ [K, N]`.
+fn collapse_batch(
+    b: usize,
+    m: usize,
+    k: usize,
+    trans_a: bool,
+    lhs_stride: &[usize],
+    rhs_stride: &[usize],
+) -> Option<usize> {
+    if b <= 1 || trans_a {
+        return None;
+    }
+    let a_batch = if lhs_stride.len() > 2 {
+        lhs_stride[lhs_stride.len() - 3]
+    } else {
+        m * k
+    };
+    (a_batch == m * k && batch_stride(rhs_stride) == 0).then_some(b * m)
+}
+
+/// Batch stride in elements, or 0 when the operand has no batch dimension and is broadcast.
+fn batch_stride(stride: &[usize]) -> usize {
+    if stride.len() > 2 {
+        stride[stride.len() - 3]
+    } else {
+        0
     }
 }
 
@@ -144,6 +180,9 @@ fn lower_kernel(key: &PlanKey) -> Result<wax_metal::LoweredKernel, MetalKernelEr
             2
         },
         ldc: key.n,
+        batch: key.batch,
+        a_batch: key.a_batch.max(0) as usize,
+        b_batch: key.b_batch.max(0) as usize,
     };
     let Some((bm, bn, bk)) = wax_metal::gemm::module_tile(&spec) else {
         return Err(MetalKernelError::LoadLibraryError(format!(
@@ -157,15 +196,55 @@ fn lower_kernel(key: &PlanKey) -> Result<wax_metal::LoweredKernel, MetalKernelEr
     // runtime, and thus are not part of the key. This means one wax gemm module serves every
     // combination of M and N.
     let padded = !key.m.is_multiple_of(bm) || !key.n.is_multiple_of(bn);
+    // Pick correct gemm entry.
+    let entry = match (key.batch > 1, padded) {
+        (true, true) => wax_kernels::gemm::ENTRY_BATCHED_PADDED,
+        (true, false) => wax_kernels::gemm::ENTRY_BATCHED,
+        (false, true) => wax_kernels::gemm::ENTRY_PADDED,
+        (false, false) => wax_kernels::gemm::ENTRY,
+    };
+    debug_assert!(
+        !padded
+            || entry == wax_kernels::gemm::ENTRY_PADDED
+            || entry == wax_kernels::gemm::ENTRY_BATCHED_PADDED,
+        "ragged {}x{} on tile {bm}x{bn} chose unpadded entry {entry}",
+        key.m,
+        key.n
+    );
+    let (z, x, y) = if key.batch > 1 {
+        (
+            vec![(key.m * key.n) as i32, key.n as i32, 1],
+            if key.trans_a {
+                vec![key.a_batch, 1, key.lda]
+            } else {
+                vec![key.a_batch, key.lda, 1]
+            },
+            if key.trans_b {
+                vec![key.b_batch, 1, key.ldb]
+            } else {
+                vec![key.b_batch, key.ldb, 1]
+            },
+        )
+    } else {
+        (
+            vec![key.n as i32, 1],
+            if key.trans_a {
+                vec![1, key.lda]
+            } else {
+                vec![key.lda, 1]
+            },
+            if key.trans_b {
+                vec![1, key.ldb]
+            } else {
+                vec![key.ldb, 1]
+            },
+        )
+    };
     let ckey = CompileKey {
         source_hash: wax_kernels::gemm::SOURCE_HASH,
         module: wax_kernels::gemm::MODULE_NAME,
-        entry: if padded {
-            wax_kernels::gemm::ENTRY_PADDED
-        } else {
-            wax_kernels::gemm::ENTRY
-        },
-        // <E, BM, BN, BK, K> for both entries.
+        entry,
+        // <E, BM, BN, BK, K> for all entries.
         generics: vec![
             dtype_tag(key.dtype).to_string(),
             bm.to_string(),
@@ -175,19 +254,8 @@ fn lower_kernel(key: &PlanKey) -> Result<wax_metal::LoweredKernel, MetalKernelEr
         ],
         // `z` is dst, packed. Leading dim is `n`.
         // `[1, ld]` is read as `Layout::Transposed` by `gemm_pattern::view_facts`. Recogniser
-        // derives `trans_b` from the module.
-        strides: vec![
-            ("z".into(), vec![key.n as i32, 1]),
-            ("x".into(), vec![key.lda, 1]),
-            (
-                "y".into(),
-                if key.trans_b {
-                    vec![1, key.ldb]
-                } else {
-                    vec![key.ldb, 1]
-                },
-            ),
-        ],
+        // derives `trans_a`/`trans_b` from the module.
+        strides: vec![("z".into(), z), ("x".into(), x), ("y".into(), y)],
     };
     let profile = wax_metal::TargetProfile::host();
     let cache_key = format!("{ckey:?}|{spec:?}|{profile:?}").into_bytes();
@@ -296,6 +364,10 @@ pub fn call_wax_gemm(
     rhs_buffer: &Buffer,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
+    if b == 0 || m == 0 || n == 0 || k == 0 {
+        return Ok(());
+    }
+
     let unsupported = |msg: &str| {
         // Use `CANDLE_WAX_TRACE=1` to enable wax tracing
         if std::env::var_os("CANDLE_WAX_TRACE").is_some() {
@@ -309,11 +381,10 @@ pub fn call_wax_gemm(
     if std::env::var("CANDLE_WAX_GEMM").ok().as_deref() == Some("0") {
         return unsupported("disabled by CANDLE_WAX_GEMM=0");
     }
-    if b != 1 {
-        return unsupported("batched matmul not supported");
-    }
-    if lhs_offset != 0 || rhs_offset != 0 {
-        return unsupported("a non-zero buffer offset has no expression in the kernel's views");
+
+    // Metal requires buffer offsets to be 4-byte aligned.
+    if !lhs_offset.is_multiple_of(4) || !rhs_offset.is_multiple_of(4) {
+        return unsupported("buffer offset is not 4-byte aligned");
     }
 
     // Get leading dimension
@@ -329,9 +400,12 @@ pub fn call_wax_gemm(
     let (Some((lda, a_trans)), Some((ldb, trans_b))) = (ld(lhs_stride), ld(rhs_stride)) else {
         return unsupported("operands are not row-major nor a plain transpose");
     };
-    if a_trans {
-        return unsupported("transposed left operand has no expression in the kernel's views");
-    }
+    // Collapse batch into M before anything else looks at the shape.
+    let (b, m) = match collapse_batch(b, m, k, a_trans, lhs_stride, rhs_stride) {
+        Some(collapsed) => (1, collapsed),
+        None => (b, m),
+    };
+    // One dispatch. The batch rides grid x in the tile loop and grid z in MPP.
     let key = PlanKey {
         dtype,
         m,
@@ -340,6 +414,10 @@ pub fn call_wax_gemm(
         lda,
         ldb,
         trans_b,
+        trans_a: a_trans,
+        batch: b,
+        a_batch: batch_stride(lhs_stride) as i32,
+        b_batch: batch_stride(rhs_stride) as i32,
     };
     let plan = ready(device, &key)?;
     // Two-pass (split-K) writes f32 partials which the the reduce pass then sums.
@@ -358,12 +436,27 @@ pub fn call_wax_gemm(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
+    // batched + split-k is not supported.
+    if b > 1 && plan.is_two_pass() {
+        return unsupported("a batched split-K would share one scratch buffer across batches");
+    }
+
     // The plan's dispatches launched in order.
     for dispatch in &plan.dispatches {
         encoder.set_compute_pipeline_state(&dispatch.pipeline);
-        dispatch
-            .role
-            .apply(encoder, scratch.as_ref(), lhs_buffer, rhs_buffer, output);
+        dispatch.role.apply(
+            encoder,
+            scratch.as_ref(),
+            BufferOffset {
+                buffer: lhs_buffer,
+                offset_in_bytes: lhs_offset,
+            },
+            BufferOffset {
+                buffer: rhs_buffer,
+                offset_in_bytes: rhs_offset,
+            },
+            BufferOffset::zero_offset(output),
+        );
         for (i, v) in dispatch.scalars.iter().enumerate() {
             encoder.set_bytes(3 + i, v);
         }
@@ -405,6 +498,9 @@ pub fn split_k_scratch_elems(
             2
         },
         ldc: n,
+        batch: 1,
+        a_batch: 0,
+        b_batch: 0,
     };
     // `splits > 1` implies split-k approach.
     match route(&spec).plan {

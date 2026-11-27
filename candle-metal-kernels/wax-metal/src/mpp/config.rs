@@ -63,8 +63,15 @@ pub struct MppGemm {
     /// Split-K factor.
     pub splits: i32,
     pub trans_b: bool,
+    pub trans_a: bool,
     // TODO: Sweep. Currently hardcoded to 1.
     pub simdgroups: i32,
+    /// Batch count.
+    pub batch: i32,
+    /// A batch stride.
+    pub a_batch: i32,
+    /// B batch stride.
+    pub b_batch: i32,
 }
 
 impl MppGemm {
@@ -74,7 +81,8 @@ impl MppGemm {
         (
             (self.n as usize).div_ceil(self.bn as usize),
             (self.m as usize).div_ceil(self.bm as usize),
-            self.splits.max(1) as usize,
+            // MPP does not realise split-K and batch simultaneously. `splits * 1` or `1 * batch`.
+            self.splits.max(1) as usize * self.batch.max(1) as usize,
         )
     }
 

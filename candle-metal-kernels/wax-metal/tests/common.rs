@@ -22,6 +22,9 @@ pub fn specialise(
         k: 0,
         elem_bytes: 4,
         ldc: n as usize,
+        batch: 1,
+        a_batch: 0,
+        b_batch: 0,
     };
     let r = realise(module, sg, splits, &spec).ok()?;
     r.rewritten.launch.as_ref()?;

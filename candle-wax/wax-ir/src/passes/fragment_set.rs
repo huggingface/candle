@@ -116,9 +116,20 @@ pub fn fragment_values(ctx: &Context, root: Ptr<Operation>) -> HashSet<Value> {
         ) {
             continue;
         }
-        // Joining tiles
+        // Joining tiles. A reshape that only adds or drops 1's moves no data, so operand
+        // and result are one fragment. `[1, BM, BK]` == `[BM, BK]`.
+        let joins = |a: &[i64], b: &[i64]| -> bool {
+            if a == b {
+                return true;
+            }
+            if opcode != Some(Opcode::Reshape) {
+                return false;
+            }
+            let strip = |s: &[i64]| -> Vec<i64> { s.iter().copied().filter(|&d| d != 1).collect() };
+            strip(a) == strip(b)
+        };
         for i in 1..touched.len() {
-            if touched[i].1 == touched[0].1 {
+            if joins(&touched[i].1, &touched[0].1) {
                 uf.union(touched[0].0, touched[i].0);
             }
         }

@@ -18,6 +18,12 @@ pub struct GemmSpec {
     /// Row stride of the destination in elements. `n` means packed.
     /// Split-k reduce uses `ldc` as its row stride.
     pub ldc: usize,
+    /// Batch count.
+    pub batch: usize,
+    /// A batch stride.
+    pub a_batch: usize,
+    /// B batch stride.
+    pub b_batch: usize,
 }
 
 impl GemmSpec {
@@ -30,6 +36,9 @@ impl GemmSpec {
             elem_bytes,
             trans_b: false,
             ldc: n,
+            batch: 1,
+            a_batch: 0,
+            b_batch: 0,
         }
     }
 
@@ -41,6 +50,9 @@ impl GemmSpec {
             elem_bytes,
             trans_b: false,
             ldc,
+            batch: 1,
+            a_batch: 0,
+            b_batch: 0,
         }
     }
 
@@ -76,6 +88,8 @@ pub enum Reason {
     Ragged,
     /// Enough work to justify MPP fixed setup cost.
     EnoughWork,
+    /// GEMM is batched.
+    Batched,
     /// No SGMMA tile divides the shape, so the tile loop would run on 8x8 fragments.
     /// See [`MPP_COLLAPSED_TILE_WORK_FLOOR`].
     TileCollapsed,
@@ -256,6 +270,10 @@ const WORKING_SET_MAX: usize = 2_500_000;
 const FP32_MPP_WORKING_SET_MAX: usize = 1 << 20;
 /// Minimum amount of work for MPP to be beneficial.
 const MPP_WORK_FLOOR: usize = 1 << 30;
+/// Max batch count for batched MPP.
+const MPP_BATCHED_MAX_BATCH: usize = 4;
+/// Smallest per batch work worth giving batched MPP.
+const MPP_BATCHED_WORK_FLOOR: usize = 128 << 20;
 /// Work floor for a shape no SGMMA tile divides, which falls through [`sgmma_tile_aligned`] to
 /// an 8x8 fragment.
 const MPP_COLLAPSED_TILE_WORK_FLOOR: usize = 12 << 20;
@@ -298,6 +316,39 @@ const MPP_THIN_M_TILE: (i32, i32) = (16, 32);
 
 /// Choose a GEMM impl based on the provided [`GemmSpec`].
 pub fn route(spec: &GemmSpec) -> Routing {
+    if spec.batch > 1 {
+        if spec.m == 1 {
+            return Routing {
+                plan: Plan::Lower { sg: 0, splits: 1 },
+                reason: Reason::Batched,
+            };
+        }
+        let unbatched = GemmSpec {
+            batch: 1,
+            ..spec.clone()
+        };
+        // MMP is eligible for batched gemm, but only for narrow problems.
+        let per_batch_work = spec.m * spec.n * spec.k;
+        let mpp_band =
+            spec.batch <= MPP_BATCHED_MAX_BATCH && per_batch_work >= MPP_BATCHED_WORK_FLOOR;
+        let plan = match route_inner(&unbatched).plan {
+            Plan::Mpp { bm, bn, .. } => Plan::Mpp { bm, bn, splits: 1 },
+            Plan::Lower { .. } if mpp_band => {
+                let (bm, bn) = mpp_tile(spec);
+                Plan::Mpp { bm, bn, splits: 1 }
+            }
+            // Batching fills occupancy fast, hence `sg: 0`.
+            Plan::Lower { .. } => Plan::Lower { sg: 0, splits: 1 },
+        };
+        return Routing {
+            plan,
+            reason: Reason::Batched,
+        };
+    }
+    route_inner(spec)
+}
+
+fn route_inner(spec: &GemmSpec) -> Routing {
     let (bm, bn) = mpp_tile(spec);
     let sgmma = |reason| Routing {
         plan: Plan::Lower { sg: 0, splits: 1 },
@@ -656,7 +707,14 @@ fn precondition(p: &Pattern, spec: &GemmSpec) -> Result<(), crate::LowerError> {
         strides,
     };
     let implied = [
-        ("A", view(vec![m, k], vec![p.lda, 1])),
+        (
+            "A",
+            if p.trans_a {
+                view(vec![m, k], vec![1, p.lda])
+            } else {
+                view(vec![m, k], vec![p.lda, 1])
+            },
+        ),
         (
             "B",
             if p.trans_b {
@@ -792,17 +850,30 @@ fn lower(
         });
     let grid = match launch {
         Some(l) => crate::Launch::from_tile_blocks(l.block, &l.tile),
-        // An unrecognised kernel keeps the caller's grid.
         // `with_threads` updates the threadgroup if conversion has inferred threads, otherwise
         // we fall back to a single SIMD group.
         None => {
             let (bm, bn) = match pattern {
                 Ok(p) => (p.bm as usize, p.bn as usize),
-                Err(_) => (spec.m.max(1), spec.n.max(1)),
+                Err(_) => {
+                    let (bm, bn, _) = module_tile(spec).ok_or_else(|| {
+                        crate::LowerError::MalformedIr(format!(
+                            "no tile accepts {}x{}x{}, so an unrecognised kernel has no grid",
+                            spec.m, spec.n, spec.k
+                        ))
+                    })?;
+                    (bm, bn)
+                }
             };
             let simd = SIMD_WIDTH as usize;
             crate::Launch::new((spec.m.div_ceil(bm), spec.n.div_ceil(bn), 1), (simd, 1, 1))
         }
+    };
+    let grid = if spec.batch > 1 {
+        let (x, y, _) = grid.grid;
+        crate::Launch::new((spec.batch, x, y), grid.threadgroup)
+    } else {
+        grid
     };
     let grid = with_threads(grid, threads);
     Ok(crate::LoweredKernel {
@@ -843,8 +914,14 @@ fn realise_mpp(
     };
     let entry = gemm_entry_name(module, func);
     let two_pass = splits > 1;
+    if spec.batch > 1 && two_pass {
+        return Ok(Realised::Declined("batch and split-k both want grid z"));
+    }
     let cfg = crate::mpp::MppGemm {
         entry: entry.clone(),
+        batch: spec.batch as i32,
+        a_batch: spec.a_batch as i32,
+        b_batch: spec.b_batch as i32,
         dtype,
         m: spec.m as i32,
         n: spec.n as i32,
@@ -867,6 +944,7 @@ fn realise_mpp(
         },
         splits,
         trans_b: p.trans_b,
+        trans_a: p.trans_a,
         simdgroups: 1,
     };
     if !two_pass {
@@ -922,9 +1000,12 @@ fn with_threads(launch: crate::Launch, threads: Option<usize>) -> crate::Launch 
 fn shape_scalars(promoted: &[crate::lower::PromotedScalar], spec: &GemmSpec) -> Vec<i32> {
     promoted
         .iter()
-        .map(|p| match (p.param, p.dim) {
-            (0, 0) => spec.m as i32,
-            (0, 1) => spec.n as i32,
+        .map(|p| match (p.param, p.dim, spec.batch > 1) {
+            (0, 0, true) => spec.batch as i32,
+            (0, 1, true) => spec.m as i32,
+            (0, 2, true) => spec.n as i32,
+            (0, 0, false) => spec.m as i32,
+            (0, 1, false) => spec.n as i32,
             _ => 0,
         })
         .collect()
