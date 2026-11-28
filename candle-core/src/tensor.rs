@@ -1550,6 +1550,48 @@ impl Tensor {
         Ok(from_storage(storage, c_shape, op, false))
     }
 
+    /// `self @ rhs + bias` in one dispatch on Metal.
+    ///
+    /// Both operands must be 2D and `bias` must be a `[n]` row. On Metal the bias is
+    /// applied by the GEMM kernel's epilogue (no separate add dispatch); elsewhere this
+    /// is `self.matmul(rhs)?.broadcast_add(bias)`. The fused path is only taken when no
+    /// tensor of the three tracks gradients, so autograd keeps the two-op form.
+    pub fn matmul_with_bias(&self, rhs: &Self, bias: &Self) -> Result<Self> {
+        #[cfg(feature = "metal")]
+        if !self.track_op() && !rhs.track_op() && !bias.track_op() {
+            if let (2, 2, 1) = (self.rank(), rhs.rank(), bias.rank()) {
+                let (m, k) = self.shape().dims2()?;
+                let (k2, n) = rhs.shape().dims2()?;
+                if k == k2 && m > 1 && n > 1 && bias.shape().dims() == [n] {
+                    let lhs_storage = self.storage();
+                    let rhs_storage = rhs.storage();
+                    let bias_storage = bias.storage();
+                    if let (
+                        Storage::Metal(lhs_s),
+                        Storage::Metal(rhs_s),
+                        Storage::Metal(bias_s),
+                    ) = (&*lhs_storage, &*rhs_storage, &*bias_storage)
+                    {
+                        let storage = lhs_s.matmul_with_bias(
+                            rhs_s,
+                            bias_s,
+                            self.layout(),
+                            rhs.layout(),
+                            bias.layout(),
+                        )?;
+                        return Ok(from_storage(
+                            Storage::Metal(storage),
+                            Shape::from(&[m, n][..]),
+                            BackpropOp::none(),
+                            false,
+                        ));
+                    }
+                }
+            }
+        }
+        self.matmul(rhs)?.broadcast_add(bias)
+    }
+
     /// Matrix-multiplication with broadcasting support.
     ///
     /// Compared to `matmul` the two matrixes are allowed to have different dimensions as long as
