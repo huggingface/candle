@@ -392,27 +392,12 @@ fn prepare_decoder_attention_mask(
     b_size: usize,
     tgt_len: usize,
     seqlen_offset: usize,
-    sliding_window: Option<usize>,
     dtype: DType,
     device: &Device,
 ) -> Result<Tensor> {
-    let mask: Vec<_> = if let Some(sliding_window) = sliding_window {
-        (0..tgt_len)
-            .flat_map(|i| {
-                (0..tgt_len).map(move |j| {
-                    if i < j || j + sliding_window < i {
-                        f32::NEG_INFINITY
-                    } else {
-                        0.
-                    }
-                })
-            })
-            .collect()
-    } else {
-        (0..tgt_len)
-            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0f32 }))
-            .collect()
-    };
+    let mask: Vec<_> = (0..tgt_len)
+        .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0f32 }))
+        .collect();
     let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), device)?;
     let mask = if seqlen_offset > 0 {
         let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, device)?;
@@ -434,7 +419,6 @@ pub struct Model {
     device: Device,
     dtype: DType,
     hidden_size: usize,
-    sliding_window: usize,
 }
 
 impl Model {
@@ -465,7 +449,6 @@ impl Model {
             device: vb.device().clone(),
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
-            sliding_window: cfg.sliding_window,
         })
     }
 
@@ -483,21 +466,35 @@ impl Model {
             batch_size,
             seq_len,
             seqlen_offset,
-            None,
             self.dtype,
             &self.device,
         )?;
 
-        let sliding_mask = prepare_decoder_attention_mask(
-            batch_size,
-            seq_len,
-            seqlen_offset,
-            Some(self.sliding_window),
-            self.dtype,
-            &self.device,
-        )?;
+        // The sliding layers use a rotating kv-cache that only returns the last `sliding_window`
+        // entries, in ring order once it is full, so their mask has to come from that cache.
+        let rotating_cache = self
+            .layers
+            .iter()
+            .find_map(|layer| match &layer.self_attn.kv_cache {
+                KvCache::Rotating(cache) => Some(cache),
+                KvCache::Normal(_) => None,
+            });
+        let sliding_mask = match rotating_cache {
+            Some(cache) => cache.attn_mask(seq_len, &self.device)?,
+            None => None,
+        };
+        let sliding_mask = sliding_mask
+            .map(|mask| {
+                let zero = Tensor::new(0f32, &self.device)?.broadcast_as(mask.shape())?;
+                let neg_inf =
+                    Tensor::new(f32::NEG_INFINITY, &self.device)?.broadcast_as(mask.shape())?;
+                mask.where_cond(&neg_inf, &zero)?
+                    .expand((batch_size, 1, seq_len, mask.dim(1)?))?
+                    .to_dtype(self.dtype)
+            })
+            .transpose()?;
 
-        Ok((Some(mask), Some(sliding_mask)))
+        Ok((Some(mask), sliding_mask))
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
