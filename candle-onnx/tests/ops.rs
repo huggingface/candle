@@ -7150,6 +7150,41 @@ fn test_trilu_operation() -> Result<()> {
 }
 
 #[test]
+fn test_trilu_non_finite_and_batched() -> Result<()> {
+    // Causal mask pattern: torch.triu(torch.full((n, n), -inf), diagonal=1)
+    {
+        let manual_graph = make_graph_helper("Trilu", &[INPUT_X, INPUT_Y], &[OUTPUT_Z], vec![]);
+        let x = Tensor::full(f32::NEG_INFINITY, (3, 3), &Device::Cpu)?;
+        let k = Tensor::new(1i64, &Device::Cpu)?;
+        let inputs = HashMap::from_iter([(INPUT_X.to_string(), x), (INPUT_Y.to_string(), k)]);
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        let inf = f32::NEG_INFINITY;
+        assert_eq!(
+            z.to_vec2::<f32>()?,
+            vec![vec![0., inf, inf], vec![0., 0., inf], vec![0., 0., 0.]]
+        );
+    }
+
+    // Batched input: the mask applies to each matrix in the last two dims
+    {
+        let manual_graph = make_graph_helper("Trilu", &[INPUT_X], &[OUTPUT_Z], vec![]);
+        let x = Tensor::arange(1i64, 13, &Device::Cpu)?.reshape((2, 2, 3))?;
+        let inputs = HashMap::from_iter([(INPUT_X.to_string(), x)]);
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        assert_eq!(
+            z.to_vec3::<i64>()?,
+            vec![
+                vec![vec![1, 2, 3], vec![0, 5, 6]],
+                vec![vec![7, 8, 9], vec![0, 11, 12]]
+            ]
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn test_one_hot() -> Result<()> {
     // Tests based on: https://github.com/onnx/onnx/blob/main/docs/Operators.md#OneHot
     {

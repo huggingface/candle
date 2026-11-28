@@ -2393,21 +2393,21 @@ fn simple_eval_(
 
                 // Handle the diagonal offset k
                 let mask = if k != 0 {
-                    let mut data = vec![0u32; n * m];
+                    let mut data = vec![0u8; n * m];
                     for i in 0..n {
                         for j in 0..m {
                             if (upper != 0 && (j as i64) >= (i as i64) + k)
                                 || (upper == 0 && (j as i64) <= (i as i64) + k)
                             {
-                                data[i * m + j] = 1u32;
+                                data[i * m + j] = 1u8;
                             }
                         }
                     }
-                    Tensor::from_vec(data, (n, m), input.device())?.to_dtype(input.dtype())?
+                    Tensor::from_vec(data, (n, m), input.device())?
                 } else if upper == 0 {
-                    Tensor::tril2(max_dim, input.dtype(), input.device())?
+                    Tensor::tril2(max_dim, DType::U8, input.device())?
                 } else {
-                    Tensor::triu2(max_dim, input.dtype(), input.device())?
+                    Tensor::triu2(max_dim, DType::U8, input.device())?
                 };
 
                 let final_mask = if n != m {
@@ -2416,7 +2416,10 @@ fn simple_eval_(
                     mask
                 };
 
-                let output = (input * &final_mask)?;
+                // Select instead of multiplying: inf * 0 and NaN * 0 are NaN, not 0.
+                let output = final_mask
+                    .broadcast_as(input.shape())?
+                    .where_cond(input, &input.zeros_like()?)?;
 
                 values.insert(node.output[0].clone(), output);
             }
